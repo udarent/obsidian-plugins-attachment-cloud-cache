@@ -17,6 +17,12 @@ export type CacheLayout =
 	/** 镜像对象存储里的 key 结构（单一心智模型，默认）。 */
 	| "mirror";
 
+export const CACHE_LAYOUTS: readonly CacheLayout[] = ["flat", "byExt", "mirror"];
+
+export function isCacheLayout(value: unknown): value is CacheLayout {
+	return typeof value === "string" && (CACHE_LAYOUTS as readonly string[]).includes(value);
+}
+
 /** 上传成功后对**本地原文件**的处理。 */
 export type LocalFileAction =
 	/** 移入缓存目录 —— 默认，也是"离线可用"的前提。 */
@@ -27,6 +33,12 @@ export type LocalFileAction =
 	| "trash"
 	/** 每次询问。 */
 	| "ask";
+
+export const LOCAL_FILE_ACTIONS: readonly LocalFileAction[] = ["cache", "keep", "trash", "ask"];
+
+export function isLocalFileAction(value: unknown): value is LocalFileAction {
+	return typeof value === "string" && (LOCAL_FILE_ACTIONS as readonly string[]).includes(value);
+}
 
 export interface S3Config {
 	/** 服务端点，如 `https://abc.r2.cloudflarestorage.com`。 */

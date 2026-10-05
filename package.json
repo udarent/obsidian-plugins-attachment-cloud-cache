@@ -9,7 +9,7 @@
 		"build": "tsc --noEmit && node esbuild.config.mjs production",
 		"test": "node esbuild.config.mjs production && node scripts/run-tests.mjs",
 		"test:unit": "node scripts/run-tests.mjs",
-		"mutate": "node scripts/mutate-settings.mjs && node scripts/mutate-object-key.mjs",
+		"mutate": "node scripts/mutate-settings.mjs && node scripts/mutate-object-key.mjs && node scripts/mutate-cache-path.mjs",
 		"lint": "eslint .",
 		"manifest": "node scripts/check-manifest.mjs",
 		"check": "npm run build && npm run lint && npm run manifest && npm run test:unit",

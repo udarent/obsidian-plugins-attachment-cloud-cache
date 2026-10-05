@@ -26,7 +26,11 @@
  * 完全看不到密钥字段 —— 这是刻意的。
  */
 
-import { CacheLayout, LocalFileAction, PluginSettings, S3Config } from "./types";
+import { PluginSettings, S3Config, isCacheLayout, isLocalFileAction } from "./types";
+
+// 枚举类型守卫定义在 types.ts（与枚举本身同处一地，避免两个模块各存一份）。
+// 这里转出去，让"读设置的模块"同时就是"拿守卫的模块"。
+export { isCacheLayout, isLocalFileAction };
 
 /** 默认启用的图片格式。 */
 const DEFAULT_IMAGE_EXTENSIONS = [
@@ -70,17 +74,6 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 };
 
 /** 缓存目录名不得与常见附件目录冲突，也不该太深（移动端小文件代价明显）。 */
-export const CACHE_LAYOUTS: readonly CacheLayout[] = ["flat", "byExt", "mirror"];
-export const LOCAL_FILE_ACTIONS: readonly LocalFileAction[] = ["cache", "keep", "trash", "ask"];
-
-export function isCacheLayout(value: unknown): value is CacheLayout {
-	return typeof value === "string" && (CACHE_LAYOUTS as readonly string[]).includes(value);
-}
-
-export function isLocalFileAction(value: unknown): value is LocalFileAction {
-	return typeof value === "string" && (LOCAL_FILE_ACTIONS as readonly string[]).includes(value);
-}
-
 // ─────────────────────────── 逐字段取值助手 ───────────────────────────
 //
 // 每个都遵循同一约定：**类型不符就回落默认值**，绝不把可疑值透传下去。
