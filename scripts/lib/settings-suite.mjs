@@ -137,6 +137,45 @@ export function runSettingsSuite(mod) {
 	assert.equal(s3Merged.s3.endpoint, "https://s3.example.com", "s3.endpoint 必须能往返");
 	assert.equal(s3Merged.s3.region, "us-west-2", "s3.region 必须能往返");
 
+	// ⚠️ 嵌套对象也要**动态推导**，不能只硬写上面那三个字段。
+	// 手写清单的缝隙正是上一轮缺陷的来源：新增字段没人记得加进清单，
+	// 于是"存得进、读不出"能一路绿灯。
+	const s3Scalars = Object.entries(DEFAULT_SETTINGS.s3).filter(
+		([, v]) => typeof v === "boolean" || typeof v === "number" || typeof v === "string"
+	);
+	assert.ok(
+		s3Scalars.length >= 6,
+		`推导出 ${s3Scalars.length} 个 s3 标量字段，数量异常 —— 疑似 DEFAULT_S3 结构被改动`
+	);
+	for (const [key, def] of s3Scalars) {
+		let custom;
+		if (typeof def === "boolean") custom = !def;
+		else if (typeof def === "number") custom = def + 3;
+		else custom = def === "changed" ? "changed-2" : "changed";
+
+		const merged = roundTrip({ ...DEFAULT_SETTINGS, s3: { ...DEFAULT_SETTINGS.s3, [key]: custom } });
+		assert.deepEqual(merged.s3[key], custom, `s3.${key} 必须能往返持久化，不能被重置为默认值`);
+	}
+
+	// 寻址方式默认必须是 path-style：R2 的 S3 端点不支持 virtual-host，
+	// 默认成 virtual-host 会让"按文档填完 R2 配置"直接不可用。
+	assert.equal(
+		DEFAULT_SETTINGS.s3.forcePathStyle,
+		true,
+		"默认应为 path-style —— R2/MinIO/B2/Wasabi/AWS 都接受它，反过来则 R2 不可用"
+	);
+
+	// s3 里坏类型同样要回落
+	const s3Wrong = mergeSettings(DEFAULT_SETTINGS, {
+		s3: { forcePathStyle: "yes", objectKeyTemplate: 42 },
+	});
+	assert.equal(s3Wrong.s3.forcePathStyle, true, "s3.forcePathStyle 非布尔应回落默认");
+	assert.equal(
+		s3Wrong.s3.objectKeyTemplate,
+		DEFAULT_SETTINGS.s3.objectKeyTemplate,
+		"s3.objectKeyTemplate 非字符串应回落默认"
+	);
+
 	// ============================================================
 	// 4. 坏输入必须安全降级（不抛错、不产生畸形状态）
 	// ============================================================

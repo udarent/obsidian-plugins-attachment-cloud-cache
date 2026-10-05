@@ -53,6 +53,8 @@ export const DEFAULT_S3: S3Config = {
 	publicUrlBase: "",
 	accessKeyIdRef: "attachment-cloud-cache-access-key-id",
 	secretAccessKeyRef: "attachment-cloud-cache-secret-access-key",
+	// path-style 默认开：R2 的 S3 端点不支持 virtual-host，而其余各家都接受 path-style
+	forcePathStyle: true,
 	// 内容寻址的单段模板：同一张图只存一份，且缓存路径与桶内结构一一对应
 	objectKeyTemplate: "{hash}.{ext}",
 };
@@ -122,6 +124,7 @@ function mergeS3(loaded: unknown): S3Config {
 		publicUrlBase: pickString(data.publicUrlBase, DEFAULT_S3.publicUrlBase),
 		accessKeyIdRef: pickNonEmptyString(data.accessKeyIdRef, DEFAULT_S3.accessKeyIdRef),
 		secretAccessKeyRef: pickNonEmptyString(data.secretAccessKeyRef, DEFAULT_S3.secretAccessKeyRef),
+		forcePathStyle: pickBoolean(data.forcePathStyle, DEFAULT_S3.forcePathStyle),
 		objectKeyTemplate: pickNonEmptyString(data.objectKeyTemplate, DEFAULT_S3.objectKeyTemplate),
 	};
 }

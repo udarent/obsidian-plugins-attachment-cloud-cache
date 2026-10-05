@@ -53,6 +53,15 @@ export interface S3Config {
 	accessKeyIdRef: string;
 	/** SecretStorage 中存放 Secret Access Key 的**引用名**。 */
 	secretAccessKeyRef: string;
+	/**
+	 * 是否用 path-style 寻址（`端点/桶/键`）。
+	 *
+	 * 默认 `true`。理由：R2 的 S3 端点**不支持** virtual-host（`桶.账号.r2...`），
+	 * 而 MinIO / B2 / Wasabi / AWS S3 都接受 path-style —— 于是
+	 * "默认 true"在四类存储上都成立，反之则在 R2 上直接不可用。
+	 * 需要 virtual-host 的场景（如 AWS 上的桶、要求按子域解析的 CDN）再关掉。
+	 */
+	forcePathStyle: boolean;
 	/** 对象 key 模板，支持 `{hash} {ext} {hash2} {filename} {date}`。 */
 	objectKeyTemplate: string;
 }

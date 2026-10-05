@@ -37,7 +37,16 @@ await runMutations({
 			name: "布尔校验被去掉（坏值直接透传）",
 			from: 'return typeof value === "boolean" ? value : fallback;',
 			to: "return value;",
-			expect: "应回落到默认",
+			// 报错来自 s3 子对象的布尔字段（`s3.forcePathStyle`）—— 它排在顶层
+			// 那几条之前。两者守的是同一条规则（布尔校验），所以这里如实写清
+			// 到底是哪一处先红，而不是笼统写"应回落默认"。
+			expect: "非布尔应回落默认",
+		},
+		{
+			name: "新增的 s3.forcePathStyle 漏合并（新字段最容易忘的一步）",
+			from: "forcePathStyle: pickBoolean(data.forcePathStyle, DEFAULT_S3.forcePathStyle),",
+			to: "forcePathStyle: DEFAULT_S3.forcePathStyle,",
+			expect: "s3.forcePathStyle 必须能往返持久化",
 		},
 		{
 			name: "枚举校验被去掉（非法值透传）",
