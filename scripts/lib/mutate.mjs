@@ -43,6 +43,11 @@ import { build } from "esbuild";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { installHostGlobals } from "./host-globals.mjs";
+
+// 与 load-ts.mjs 同理：变异验证也要在同样的宿主环境下跑套件，
+// 否则"变异前的基线"会因为环境差异而红，结论就不可比了。
+installHostGlobals();
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..");
@@ -84,7 +89,7 @@ async function loadFresh(sourcePath) {
 /**
  * @param {{
  *   source: string,                    相对仓库根的 TS 路径
- *   suite: (mod: any) => void,         断言套件（抛错 = 失败）
+ *   suite: (mod: any) => void | Promise<void>,   断言套件（抛错 = 失败）
  *   mutations: Array<{ name: string, from: string, to: string, expect: string }>,
  * }} options
  */
@@ -92,9 +97,13 @@ export async function runMutations({ source, suite, mutations }) {
 	const sourcePath = join(REPO_ROOT, source);
 	const original = readFileSync(sourcePath, "utf8");
 
+	// ⚠️ 必须 await：签名与网络类的套件是 async 的（要起 mock S3 服务、
+	// 要 await crypto）。若漏掉 await，套件返回的 Promise 被丢弃，
+	// 里面的断言失败会变成**未处理的拒绝**，而这里看到的是"通过" ——
+	// 又是一次"从未发生的验证被当成通过"。
 	const attempt = async () => {
 		try {
-			suite(await loadFresh(sourcePath));
+			await suite(await loadFresh(sourcePath));
 			return { failed: false, message: "" };
 		} catch (error) {
 			return { failed: true, message: String(error?.message ?? error) };

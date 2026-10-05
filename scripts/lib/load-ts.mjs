@@ -25,6 +25,10 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { installHostGlobals } from "./host-globals.mjs";
+
+// 补齐宿主有、Node 没有的浏览器全局（如 window）。理由见该模块的说明。
+installHostGlobals();
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..");

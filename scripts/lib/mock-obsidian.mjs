@@ -526,6 +526,21 @@ export function createAppMock(rootDir, opts = {}) {
  * 这是为了让"离线时还发请求"这类缺陷**必然暴露**：
  * 忘了放开就红，而不是静默走真实网络（那样测试会变得不确定且慢）。
  */
+/**
+ * `requestUrl` 的**模块级**替身。
+ *
+ * 存在的理由只是"让 `import { requestUrl } from "obsidian"` 能链接成功"：
+ * esbuild 把 `obsidian` 标为 external，若这门导出不存在，模块会在链接期
+ * 直接报 "does not provide an export named"，连测试都跑不起来。
+ *
+ * 行为上**一律抛错**，刻意不实现 —— 因为测试必须**显式注入 transport**
+ * （见 `lib/mock-s3.mjs` 的 `nodeTransport`）。若这里悄悄做点"像样的"事，
+ * 会让人误以为真的验证过了网络路径。
+ */
+export async function requestUrl() {
+	throw new Error("requestUrl 替身未实现；测试请显式注入 transport（见 scripts/lib/mock-s3.mjs）");
+}
+
 export function createRequestUrlMock() {
 	const log = [];
 	let allowAll = false;
