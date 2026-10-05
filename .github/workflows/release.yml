@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # 闸门：tag 必须与 manifest.json / package.json 的版本号相等，否则拒绝发布。
+      #
+      # 为什么需要：工作流对**任意** tag 触发，而版本号不匹配的 tag 会发出一个
+      # "看起来正常、实则版本错乱"的 release —— 用户装上的是别的版本。
+      # 顺带这也是 Obsidian 自身的规范：release tag 与 manifest version 完全相等（不带 v）。
+      #
+      # 脚本只用 Node 内置模块，所以放在 npm ci **之前** ——
+      # 没理由先花几分钟装依赖，再去拒绝一个注定不合法的 tag。
+      - name: Verify tag matches the plugin version
+        run: node scripts/check-manifest.mjs --expect-version "$GITHUB_REF_NAME" --skip-assets
+
+      - run: npm ci --ignore-scripts
+
+      - name: Build plugin
+        run: npm run build
+
+      # 构建后再完整校验一次：把此前跳过的"发布资产齐备"补上
+      - name: Verify release assets exist
+        run: node scripts/check-manifest.mjs --expect-version "$GITHUB_REF_NAME"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            main.js
+            manifest.json
+            styles.css

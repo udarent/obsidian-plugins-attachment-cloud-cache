@@ -1,0 +1,21 @@
+# Build output (按官方标准：main.js 不入库，由 CI 挂到 GitHub Release)
+main.js
+*.map
+
+# Dependencies
+node_modules/
+
+# Tooling caches
+eslintcache
+
+# 验证脚本产物（截图与原始结果）
+_verify/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp

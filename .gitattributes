@@ -1,0 +1,16 @@
+# 统一行尾为 LF。
+#
+# 本仓库在 Windows 上开发，Git for Windows 默认会把文本文件检出成 CRLF，
+# 而 .editorconfig 声明的是 lf；不锁定会出现「LF will be replaced by CRLF」的
+# 持续噪声，跨平台协作者也会拿到不同行尾。
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+main.js -diff linguist-generated
+package-lock.json -diff linguist-generated

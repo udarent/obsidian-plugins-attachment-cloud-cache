@@ -1,0 +1,48 @@
+{
+	"name": "attachment-cloud-cache",
+	"version": "0.1.0",
+	"description": "Upload attachments to your own S3-compatible storage and keep a local cache so images still render offline.",
+	"main": "main.js",
+	"type": "module",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc --noEmit && node esbuild.config.mjs production",
+		"test": "node esbuild.config.mjs production && node scripts/run-tests.mjs",
+		"test:unit": "node scripts/run-tests.mjs",
+		"lint": "eslint .",
+		"manifest": "node scripts/check-manifest.mjs",
+		"check": "npm run build && npm run lint && npm run manifest && npm run test:unit",
+		"version": "node version-bump.mjs && git add manifest.json versions.json"
+	},
+	"keywords": [
+		"s3",
+		"minio",
+		"cloudflare-r2",
+		"image-hosting",
+		"offline",
+		"cache",
+		"attachments"
+	],
+	"author": "udarent",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/udarent/obsidian-plugins-attachment-cloud-cache.git"
+	},
+	"homepage": "https://github.com/udarent/obsidian-plugins-attachment-cloud-cache#readme",
+	"bugs": {
+		"url": "https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues"
+	},
+	"devDependencies": {
+		"@eslint/js": "^9.39.5",
+		"@types/node": "^20.11.0",
+		"esbuild": "0.20.0",
+		"eslint": "^9.39.4",
+		"eslint-plugin-obsidianmd": "^0.4.2",
+		"globals": "^17.13.0",
+		"jiti": "^2.7.0",
+		"obsidian": "^1.13.0",
+		"typescript": "5.3.3",
+		"typescript-eslint": "^8.71.0"
+	}
+}

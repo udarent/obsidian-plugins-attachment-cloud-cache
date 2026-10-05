@@ -1,0 +1,35 @@
+name: Build and test
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [20.x, 22.x]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+
+      # --ignore-scripts: esbuild 的平台二进制是独立包，不需要 postinstall；
+      # 跳过它可以避免在某些环境里因派生进程受限而安装失败。
+      - run: npm ci --ignore-scripts
+
+      - run: npm run build
+      - run: npm run lint
+      - run: npm run test:unit
+
+      - name: Verify manifest
+        run: node scripts/check-manifest.mjs
