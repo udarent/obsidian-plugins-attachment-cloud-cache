@@ -61,6 +61,28 @@ export function runSettingsSuite(mod) {
 		"s3 配置应只保存指向 SecretStorage 的**引用**（*Ref）"
 	);
 
+	// ⚠️ 只检查 DEFAULT_SETTINGS 是不够的 —— 真正会漏的是**合并后的输出**：
+	// 用户旧版本留下的 data.json 里可能就有明文密钥，合并时必须把它丢掉，
+	// 而不是保留下来。这条断言正是为"合并结果也不能带凭据"而设。
+	const credentialFields = ["accessKeyId", "secretAccessKey", "accessKey", "secretKey", "password"];
+	const mergedWithLegacyCreds = mergeSettings(DEFAULT_SETTINGS, {
+		...DEFAULT_SETTINGS,
+		s3: {
+			...DEFAULT_SETTINGS.s3,
+			accessKeyId: "AKIA-LEAKED",
+			secretAccessKey: "leaked-secret",
+			password: "hunter2",
+		},
+	});
+	for (const forbidden of credentialFields) {
+		assert.ok(
+			!(forbidden in mergedWithLegacyCreds.s3),
+			`合并结果不得保留凭据字段 "${forbidden}" —— 旧 data.json 里的明文密钥必须被丢弃`
+		);
+	}
+	// 也不能因为丢弃凭据而把整个 s3 配置弄坏
+	assert.equal(mergedWithLegacyCreds.s3.bucket, DEFAULT_SETTINGS.s3.bucket, "丢弃凭据不应影响其它字段");
+
 	// ============================================================
 	// 3. ⭐ 动态往返：从 DEFAULT_SETTINGS 推导，而不是手写清单
 	//
