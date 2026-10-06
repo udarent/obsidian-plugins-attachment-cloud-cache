@@ -22,7 +22,7 @@ export const I18N: Record<string, Locale> = {
 		settingsUpload: "Upload",
 
 		// 出错
-		uploadFailed: "S3 upload failed ({status}): {text}",
+		uploadFailed: "The storage rejected this upload ({status}): {text}",
 		hookUploadFailedKeptLocal:
 			"Upload failed, so the image was kept locally instead: {error}",
 		hookLocalFallbackFailed: "Could not save the file locally either: {error}",
@@ -36,7 +36,7 @@ export const I18N: Record<string, Locale> = {
 		settingsCache: "缓存",
 		settingsUpload: "上传",
 
-		uploadFailed: "S3 上传失败（{status}）：{text}",
+		uploadFailed: "对象存储拒绝了这次上传（{status}）：{text}",
 		hookUploadFailedKeptLocal: "上传失败，已改为保留本地文件：{error}",
 		hookLocalFallbackFailed: "本地文件也没能保存：{error}",
 	},
@@ -57,11 +57,22 @@ export function detectLocale(language: string | undefined): "en" | "zh" {
  *
  * 返回 null 让调用方**保留 `{name}` 原样**：提示里会明显看出有个占位符没填上，
  * 比静默显示一段废话更容易定位。
+ *
+ * 用 `switch` 而不是一串 `if`：这样"哪些类型可格式化"是一张**看得见的清单**，
+ * 将来加类型（比如 `bigint`）时不会漏在某个 `||` 的缝隙里。
  */
 function formatParam(value: unknown): string | null {
-	if (typeof value === "string") return value;
-	if (typeof value === "number" || typeof value === "boolean") return String(value);
-	return null;
+	switch (typeof value) {
+		case "string":
+			return value;
+		case "number":
+		case "boolean":
+			return String(value);
+		default:
+			// 对象、数组、null、undefined、symbol、bigint、function……
+			// 一律不替换 —— 见上面"看得见"的理由
+			return null;
+	}
 }
 
 /**

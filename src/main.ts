@@ -8,12 +8,12 @@
 
 import { Notice, Plugin, getLanguage } from "obsidian";
 
-import { DEFAULT_SETTINGS, mergeSettings } from "./settings";
+import { SETTINGS_DEFAULTS, mergePluginSettings } from "./settings";
 import { PluginSettings } from "./types";
 import { I18N, detectLocale, translate } from "./i18n";
 
 export default class AttachmentCloudCachePlugin extends Plugin {
-	settings: PluginSettings = { ...DEFAULT_SETTINGS };
+	settings: PluginSettings = { ...SETTINGS_DEFAULTS };
 	locale = "en";
 
 	async onload(): Promise<void> {
@@ -31,14 +31,14 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	}
 
 	/** 供各模块统一的文案查询入口。 */
-	t(key: string, params: Record<string, unknown> = {}): string {
-		return translate(this.locale, key, params);
+	t(key: string, params?: Record<string, unknown>): string {
+		return translate(this.locale, key, params ?? {});
 	}
 
 	async loadSettings(): Promise<void> {
-		// ⚠️ 走 mergeSettings 而不是直接赋值：data.json 可能是手改的、
+		// ⚠️ 走 mergePluginSettings 而不是直接赋值：data.json 可能是手改的、
 		// 旧版本的、或被别的工具写坏的，必须逐字段校验后再用。
-		this.settings = mergeSettings(DEFAULT_SETTINGS, await this.loadData());
+		this.settings = mergePluginSettings(SETTINGS_DEFAULTS, await this.loadData());
 	}
 
 	async saveSettings(): Promise<void> {

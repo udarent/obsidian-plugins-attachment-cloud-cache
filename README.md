@@ -125,6 +125,11 @@ The plugin is not in the Community directory yet (it is under development). Manu
 - This is an **independent implementation**, written from scratch. It is not a fork of, and shares
   no code with, any other plugin. The feature comparison in
   [docs/SCOPE.md](./docs/SCOPE.md) is based on publicly documented behaviour of other plugins.
+- How that independence was actually checked — the method, the result, and the parts that could
+  not be verified — is recorded in [docs/INDEPENDENCE.md](./docs/INDEPENDENCE.md). The short
+  version: a line-by-line comparison against the upstream sources finds **zero** shared lines, and
+  none of upstream's function names appear here. The document also states plainly what a line
+  comparison cannot prove.
 
 ## Development
 

@@ -29,9 +29,10 @@
  * 把索引混进设置里会让"读设置"这件事随附件数变慢 —— 而设置是启动路径上的东西。
  */
 
+import { isPlainRecord } from "../records";
+
 /** 索引文件的结构版本。将来改结构时用它决定要不要做迁移。 */
 export const CACHE_INDEX_VERSION = 1;
-
 export interface CacheEntry {
 	/** 对象 key（桶内的唯一标识）。 */
 	key: string;
@@ -68,10 +69,6 @@ export interface CacheIndexLoadResult {
 	skipped: SkippedEntry[];
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 /** 非空字符串，否则给默认值。 */
 function pickString(value: unknown, fallback = ""): string {
 	return typeof value === "string" ? value : fallback;
@@ -92,7 +89,7 @@ function pickNonNegativeNumber(value: unknown, fallback = 0): number {
  * 这与 `settings.ts` 的纪律一致：**宁可少一条记录，也不要一条半坏的记录。**
  */
 export function normalizeEntry(raw: unknown): CacheEntry | null {
-	if (!isObject(raw)) return null;
+	if (!isPlainRecord(raw)) return null;
 
 	const key = pickString(raw.key).trim();
 	if (!key) return null;
@@ -221,7 +218,7 @@ export class CacheIndex {
 		let rawEntries: unknown;
 		if (Array.isArray(value)) {
 			rawEntries = value;
-		} else if (isObject(value) && Array.isArray(value.entries)) {
+		} else if (isPlainRecord(value) && Array.isArray(value.entries)) {
 			rawEntries = value.entries;
 		} else if (value === null || value === undefined) {
 			// 没有索引文件是正常状态（首次运行），不算"跳过"

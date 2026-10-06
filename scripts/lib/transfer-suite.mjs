@@ -125,9 +125,9 @@ async function makeHarness(mod, options = {}) {
 	);
 
 	const settings = {
-		...mod.DEFAULT_SETTINGS,
+		...mod.SETTINGS_DEFAULTS,
 		...options.settings,
-		s3: { ...mod.DEFAULT_SETTINGS.s3, ...options.settings?.s3 },
+		s3: { ...mod.SETTINGS_DEFAULTS.s3, ...options.settings?.s3 },
 	};
 	const index = new mod.CacheIndex();
 	const notices = makeNotices();
@@ -184,7 +184,7 @@ export async function runTransferSuite(mod) {
 		processTransfer,
 	} = mod;
 
-	const settings = { ...mod.DEFAULT_SETTINGS };
+	const settings = { ...mod.SETTINGS_DEFAULTS };
 	const png = () => makeFile("shot.png", "image/png");
 	const pdf = () => makeFile("doc.pdf", "application/pdf");
 

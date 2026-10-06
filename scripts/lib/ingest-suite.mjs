@@ -84,9 +84,9 @@ async function makeHarness(mod, options = {}) {
 	);
 
 	const settings = {
-		...mod.DEFAULT_SETTINGS,
+		...mod.SETTINGS_DEFAULTS,
 		...options.settings,
-		s3: { ...mod.DEFAULT_SETTINGS.s3, ...options.settings?.s3 },
+		s3: { ...mod.SETTINGS_DEFAULTS.s3, ...options.settings?.s3 },
 	};
 
 	const index = new mod.CacheIndex();

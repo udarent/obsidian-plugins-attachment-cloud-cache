@@ -63,12 +63,12 @@ await withLoadedTs("src/i18n.ts", (mod) => {
 	// ============================================================
 	assert.equal(
 		translate("en", "uploadFailed", { status: 403, text: "Forbidden" }),
-		"S3 upload failed (403): Forbidden",
+		"The storage rejected this upload (403): Forbidden",
 		"应替换全部占位符"
 	);
 	assert.equal(
 		translate("zh", "uploadFailed", { status: 403, text: "Forbidden" }),
-		"S3 上传失败（403）：Forbidden"
+		"对象存储拒绝了这次上传（403）：Forbidden"
 	);
 
 	// 未知 key → 返回 key 本身（一眼看出漏了哪条），而不是空串
@@ -81,32 +81,32 @@ await withLoadedTs("src/i18n.ts", (mod) => {
 	// `params` 是 Record<string, unknown>，类型系统保护不了 —— 必须在此断言钉住。
 	assert.equal(
 		translate("en", "uploadFailed", { status: {}, text: "x" }),
-		"S3 upload failed ({status}): x",
+		"The storage rejected this upload ({status}): x",
 		"对象参数应保持占位符原样，而不是渲染成 [object Object]"
 	);
 	assert.equal(
 		translate("en", "uploadFailed", { status: [1, 2], text: "x" }),
-		"S3 upload failed ({status}): x",
+		"The storage rejected this upload ({status}): x",
 		"数组参数同理"
 	);
 	assert.equal(
 		translate("en", "uploadFailed", { status: null, text: "x" }),
-		"S3 upload failed ({status}): x",
+		"The storage rejected this upload ({status}): x",
 		"null 参数应保持占位符原样"
 	);
 	assert.equal(
 		translate("en", "uploadFailed", { status: undefined, text: "x" }),
-		"S3 upload failed ({status}): x",
+		"The storage rejected this upload ({status}): x",
 		"未提供的占位符应保持原样（看得见），而不是变空"
 	);
 	// 标量都要能正常替换
-	assert.equal(translate("en", "uploadFailed", { status: 0, text: "t" }), "S3 upload failed (0): t");
-	assert.equal(translate("en", "uploadFailed", { status: false, text: "t" }), "S3 upload failed (false): t");
+	assert.equal(translate("en", "uploadFailed", { status: 0, text: "t" }), "The storage rejected this upload (0): t");
+	assert.equal(translate("en", "uploadFailed", { status: false, text: "t" }), "The storage rejected this upload (false): t");
 
 	// 未知语言 → 回落英文而不是崩溃
 	assert.equal(
 		translate("de", "uploadFailed", { status: 1, text: "t" }),
-		"S3 upload failed (1): t",
+		"The storage rejected this upload (1): t",
 		"未知语言应回落英文"
 	);
 

@@ -21,6 +21,8 @@
  * 所以这里对每条外发文案做一次**无条件脱敏**，而不是相信上游。
  */
 
+import { isPlainRecord } from "../records";
+
 /** 错误的性质。UI 据此给不同的处置建议。 */
 export type S3ErrorKind =
 	/** 没拿到 HTTP 响应：断网、DNS、TLS、超时、连接被重置。 */
@@ -225,11 +227,6 @@ function decodeXmlEntities(text: string): string {
 		.replace(/&amp;/g, "&");
 }
 
-/** 是否是"可当对象读属性"的值（排除 null 与数组）。 */
-function isObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 /**
  * 把"被抛出来的东西"转成一句能读的话。
  *
@@ -250,7 +247,7 @@ function describeThrown(error: unknown, raw: { message?: unknown } | undefined):
 	}
 	if (typeof error === "symbol") return error.toString();
 	if (Array.isArray(error)) return `数组（长度 ${error.length}）`;
-	if (isObject(error)) {
+	if (isPlainRecord(error)) {
 		const keys = Object.keys(error);
 		return keys.length > 0 ? `对象（字段：${keys.slice(0, 8).join(", ")}）` : "空对象";
 	}
@@ -265,7 +262,7 @@ export function networkError(init: {
 	attempts: number;
 	secrets?: string[];
 }): S3Error {
-	const raw = isObject(init.error) ? (init.error as { message?: unknown; name?: unknown; code?: unknown }) : undefined;
+	const raw = isPlainRecord(init.error) ? (init.error as { message?: unknown; name?: unknown; code?: unknown }) : undefined;
 	const name = typeof raw?.name === "string" ? raw.name : "";
 	const text = describeThrown(init.error, raw);
 	const code = typeof raw?.code === "string" ? raw.code : "";

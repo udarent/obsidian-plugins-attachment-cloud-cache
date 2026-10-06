@@ -299,7 +299,9 @@ const DEFAULT_MAX_DELAY_MS = 2_000;
 function defaultSleep(ms: number): Promise<void> {
 	// 用 `window.setTimeout` 而不是裸 `setTimeout`：弹出窗口（popout window）里
 	// 两者的定时器不同源，用裸的会在 popout 场景下行为不一致（Obsidian 官方 lint 也这么要求）。
-	return new Promise((resolve) => window.setTimeout(resolve, ms));
+	return new Promise<void>((resolve) => {
+		window.setTimeout(resolve, ms);
+	});
 }
 
 export class S3Client {
