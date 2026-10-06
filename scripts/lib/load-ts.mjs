@@ -66,14 +66,31 @@ export async function writeObsidianShim(dir) {
  * 导出它是为了让**变异验证**用同一套打包逻辑 —— 编排层的套件需要
  * `ingest` 与 `S3Client` 在同一个 bundle 里（否则 `instanceof` 跨副本恒为 false），
  * 若变异脚本自己再实现一遍打包，两边迟早分叉。
+ *
+ * ## ⚠️ `reexportDefault`：`export *` **不含 default**
+ *
+ * 这是 ESM 的规范行为，不是 esbuild 的怪癖：`export * from "m"` 只转发**具名**导出。
+ * 于是"默认导出型模块"（插件入口 `src/main.ts` 就是这样）用这种 barrel 打包后
+ * **一个东西都拿不到** —— 症状是一句很难联想到原因的
+ * `PluginClass is not a constructor`（拿到的是模块命名空间对象）。
+ *
+ * 所以需要 default 时在这里显式再导一次。做成**可选参数**而不是默认行为：
+ * 给没有默认导出的模块加 `export { default }` 会让 esbuild 直接构建失败
+ * （`No matching export`），那会波及全部既有套件。
  */
-export async function bundleEntries(entries, outfile) {
+export async function bundleEntries(entries, outfile, options = {}) {
 	const list = Array.isArray(entries) ? entries : [entries];
 	if (list.length === 0) throw new Error("至少需要一个入口");
 
+	const defaults = (options.reexportDefault ? (Array.isArray(options.reexportDefault) ? options.reexportDefault : [options.reexportDefault]) : [])
+		.map((entry) => String(entry).replace(/\\/g, "/").replace(/\.ts$/, ""));
+
 	// 用 stdin + resolveDir 而不是写一个临时 barrel 文件：少一次落盘，
 	// 崩了也不会在仓库里留垃圾。resolveDir 设成仓库根，于是 `./src/...` 能解析。
-	const contents = list.map((entry) => `export * from ${JSON.stringify(`./${entry}`)};`).join("\n");
+	const contents = [
+		...list.map((entry) => `export * from ${JSON.stringify(`./${entry}`)};`),
+		...defaults.map((entry) => `export { default } from ${JSON.stringify(`./${entry}`)};`),
+	].join("\n");
 
 	await build({
 		stdin: { contents, resolveDir: REPO_ROOT, sourcefile: "acc-test-barrel.js", loader: "js" },

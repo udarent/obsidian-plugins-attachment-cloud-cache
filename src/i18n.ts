@@ -85,6 +85,17 @@ export const I18N: Record<string, Locale> = {
 		uploadFailed: "The storage rejected this upload ({status}): {text}",
 		hookUploadFailedKeptLocal: "Upload failed, so the file was kept locally instead: {error}",
 		hookLocalFallbackFailed: "Could not save the file locally either: {error}",
+		// 未配置就粘贴：**没有接管**，图由 Obsidian 照常保存。
+		// 文案要说清这两件事 —— 否则用户会以为图丢了，而其实它好好地躺在附件目录里。
+		hookNotConfigured: "Not uploaded ({problem}). The file was saved to your vault as usual. — {where}",
+		hookFixConnection: "Fill in the storage connection settings.",
+		hookFixCredentials: "Pick your access keys in the storage connection settings.",
+		hookLostFiles: "⚠️ {count} file(s) could not be saved anywhere — neither uploaded nor kept locally.",
+		hookUnexpectedFailure: "Image upload failed unexpectedly: {error}",
+
+		// ── 缓存索引 ──
+		indexLoadFailed: "Local-copy index could not be read, so offline copies will be rebuilt: {error}",
+		indexSkipped: "{count} entries in the local-copy index were unusable and have been dropped.",
 	},
 	zh: {
 		sectionStorage: "存储连接",
@@ -145,6 +156,13 @@ export const I18N: Record<string, Locale> = {
 		uploadFailed: "对象存储拒绝了这次上传（{status}）：{text}",
 		hookUploadFailedKeptLocal: "上传失败，已改为保留本地文件：{error}",
 		hookLocalFallbackFailed: "本地文件也没能保存：{error}",
+		hookNotConfigured: "未上传（{problem}）。文件已按 Obsidian 的原有方式保存，不会丢。— {where}",
+		hookFixConnection: "请到「存储连接」里补全设置。",
+		hookFixCredentials: "请到「存储连接」里选择访问密钥。",
+		hookLostFiles: "⚠️ 有 {count} 个文件既没能上传、也没能保存到本地。",
+		hookUnexpectedFailure: "图片上传出现未预期的错误：{error}",
+		indexLoadFailed: "本地副本索引读取失败，离线副本将被重建：{error}",
+		indexSkipped: "本地副本索引里有 {count} 条记录无法使用，已丢弃。",
 	},
 };
 

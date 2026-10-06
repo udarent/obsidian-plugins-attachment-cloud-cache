@@ -172,6 +172,128 @@ export class MarkdownRenderChild extends Component {
 	}
 }
 
+// ─────────────────────────── 插件基类与设置页 ───────────────────────────
+//
+// ## 为什么这些也必须有替身
+//
+// 前面的套件都是"直接 import 模块、手动拼 deps"，从来不需要 `Plugin`。
+// 但**入口验收**（`test-load-acceptance.mjs`）要跑真实构建产物的 `onload()`，
+// 而那里面第一件事就是 `class X extends Plugin` —— 没有这个基类，产物连加载都过不去。
+//
+// ## 它们必须**记账**
+//
+// 一个只提供空方法的 `Plugin` 能让 `onload()` 顺利跑完，然后你对"它到底注册了什么"
+// 一无所知 —— 这正是本项目漂移了一整个阶段都没被发现的原因。
+// 所以每一个注册类方法都往 `plugin.registrations` 里记一条，
+// 让验收测试能断言"粘贴/拖拽钩子真的挂上了"，而不是只断言"没抛异常"。
+
+/** 记录一次注册（名字 + 参数），供验收断言。 */
+function record(plugin, kind, detail) {
+	plugin.registrations.push({ kind, detail });
+}
+
+export class Plugin extends Component {
+	constructor(app, manifest) {
+		super();
+		this.app = app;
+		this.manifest = manifest ?? {};
+		/** 全部注册动作，按发生顺序。验收测试读它。 */
+		this.registrations = [];
+		/** 注册的设置页实例。 */
+		this.settingTabs = [];
+		/** `registerEvent` 拿到的引用，供断言"卸载时能自动注销"。 */
+		this.eventRefs = [];
+		/** 命令 / ribbon 图标（当前未使用，留着让"忘了接线"能被测出来）。 */
+		this.commands = [];
+		this.ribbonIcons = [];
+		this.postProcessors = [];
+		/** 内存里的 data.json 内容；测试可覆写成固定值。 */
+		this._data = {};
+	}
+
+	registerEvent(ref) {
+		this.eventRefs.push(ref);
+		if (ref?.name) record(this, "event", ref.name);
+		return ref;
+	}
+
+	addSettingTab(tab) {
+		this.settingTabs.push(tab);
+		record(this, "settingTab", tab?.constructor?.name ?? "(匿名)");
+		return tab;
+	}
+
+	addCommand(command) {
+		this.commands.push(command);
+		record(this, "command", command?.id ?? "(无 id)");
+		return command;
+	}
+
+	addRibbonIcon(icon, title) {
+		const el = { addClass: () => {}, setAttribute: () => {}, addEventListener: () => {} };
+		this.ribbonIcons.push({ icon, title, el });
+		record(this, "ribbon", title);
+		return el;
+	}
+
+	registerMarkdownPostProcessor(processor) {
+		this.postProcessors.push(processor);
+		record(this, "postProcessor", "(渲染钩子)");
+		return processor;
+	}
+
+	async loadData() {
+		return this._data;
+	}
+
+	async saveData(data) {
+		this._data = data;
+	}
+}
+
+/** 设置页基类。`containerEl` 只需要能被 `empty()` 与建元素即可。 */
+export class PluginSettingTab {
+	constructor(app, plugin) {
+		this.app = app;
+		this.plugin = plugin;
+		this.containerEl = {
+			empty: () => {},
+			createEl: () => ({ setText: () => {}, addClass: () => {}, createEl: () => ({}) }),
+			createDiv: () => ({ createEl: () => ({}) }),
+			addClass: () => {},
+		};
+	}
+	display() {}
+	hide() {}
+}
+
+/** 具名密钥选择器：链式方法返回自身，测试可读 `lastValue`。 */
+export class SecretComponent {
+	constructor(app, containerEl) {
+		this.app = app;
+		this.containerEl = containerEl;
+		this.value = null;
+		Object.assign(this, fakeComponent());
+	}
+	setValue(value) {
+		this.value = value;
+		return this;
+	}
+	onChange(cb) {
+		this.changeHandler = cb;
+		return this;
+	}
+}
+
+/** 宿主语言。默认英文；测试可调 `setLanguage` 验证中英切换。 */
+let hostLanguage = "en";
+export function getLanguage() {
+	return hostLanguage;
+}
+export function setHostLanguage(language) {
+	hostLanguage = language;
+}
+
 // ─────────────────────────── 平台 ───────────────────────────
 
 export const Platform = {
@@ -447,10 +569,43 @@ export function createAppMock(rootDir, opts = {}) {
 		},
 		getActiveFile: () => null,
 		getActiveViewOfType: () => null,
-		on() {
-			return {};
+		/**
+		 * ⚠️ 这里必须**真的记录**处理器，不能返回一个空对象了事。
+		 *
+		 * 之前的实现是 `on() { return {}; }` —— 注册被静默吞掉。
+		 * 后果不只是"测不了"，而是**掩盖了一整类缺陷**：插件入口若忘了注册
+		 * 粘贴钩子，测试里毫无异常、注册调用也"成功"返回，
+		 * 于是一个功能上完全没接线的插件也能让全套测试变绿。
+		 * 验收测试要断言"钩子真的挂上了"，前提就是这个替身愿意记账。
+		 *
+		 * `registered` 按事件名分组（断言"注册了哪几类"），
+		 * `onCalls` 保持调用顺序（断言"确实调用过"）。
+		 */
+		registered: new Map(),
+		onCalls: [],
+		on(name, callback) {
+			workspace.onCalls.push(name);
+			if (!workspace.registered.has(name)) workspace.registered.set(name, []);
+			workspace.registered.get(name).push(callback);
+			const ref = { name, callback };
+			workspace.refs.push(ref);
+			return ref;
 		},
-		trigger() {},
+		refs: [],
+		offref(ref) {
+			const list = workspace.registered.get(ref?.name);
+			if (!list) return;
+			const i = list.indexOf(ref.callback);
+			if (i >= 0) list.splice(i, 1);
+			const j = workspace.refs.indexOf(ref);
+			if (j >= 0) workspace.refs.splice(j, 1);
+		},
+		/** 触发某个事件，返回处理器被调用的次数。 */
+		trigger(name, ...args) {
+			const list = workspace.registered.get(name) ?? [];
+			for (const cb of list) cb(...args);
+			return list.length;
+		},
 	};
 	const layoutReadyCallbacks = [];
 
@@ -535,12 +690,35 @@ export function createAppMock(rootDir, opts = {}) {
  * esbuild 把 `obsidian` 标为 external，若这门导出不存在，模块会在链接期
  * 直接报 "does not provide an export named"，连测试都跑不起来。
  *
- * 行为上**一律抛错**，刻意不实现 —— 因为测试必须**显式注入 transport**
+ * 默认行为**一律抛错**，刻意不实现 —— 因为模块级套件必须**显式注入 transport**
  * （见 `lib/mock-s3.mjs` 的 `nodeTransport`）。若这里悄悄做点"像样的"事，
  * 会让人误以为真的验证过了网络路径。
+ *
+ * ## 为什么做成"可替换的实现"而不是写死的抛错
+ *
+ * 入口验收要跑**真实构建产物**，而那里面用的是宿主自带的 `requestUrl`，
+ * 我们插不进 transport（也不能改产品代码来方便测试）。
+ * 唯一诚实的做法是替换**这一门实现**为"真的发一次 HTTP"——
+ * 那不是"假响应"，服务端照旧独立重算签名。
+ *
+ * ⚠️ 所以 `setRequestUrlImpl` 只该由那一条验收测试调用，且要传一个**真发请求**的实现；
+ * 传一个返回固定响应的桩会把"网络路径已验证"变成谎话。
  */
-export async function requestUrl() {
+let requestUrlImpl = async () => {
 	throw new Error("requestUrl 替身未实现；测试请显式注入 transport（见 scripts/lib/mock-s3.mjs）");
+};
+
+/** 换掉 `requestUrl` 的实现。传 `null` 可恢复默认（抛错）。 */
+export function setRequestUrlImpl(impl) {
+	requestUrlImpl =
+		impl ??
+		(async () => {
+			throw new Error("requestUrl 替身未实现；测试请显式注入 transport（见 scripts/lib/mock-s3.mjs）");
+		});
+}
+
+export async function requestUrl(options) {
+	return requestUrlImpl(options);
 }
 
 export function createRequestUrlMock() {

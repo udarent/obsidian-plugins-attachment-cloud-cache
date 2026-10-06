@@ -66,14 +66,17 @@ installBrokenPipeGuard();
  * 是另一个环境里的行为。顺便也保证了多入口进同一个 bundle
  * （跨模块 `instanceof` 才不会恒为 false）。
  */
-async function loadFresh(entries) {
+async function loadFresh(entries, reexportDefault) {
 	const dir = await mkdtemp(join(tmpdir(), "acc-mut-"));
 	const outfile = join(dir, "bundle.mjs");
 
 	// 统一成"相对仓库根、不带扩展名"的写法（`bundleEntries` 的约定）
 	const list = (Array.isArray(entries) ? entries : [entries]).map(stripToEntrySpec);
+	// 入口若是「默认导出型模块」（如 src/main.ts），必须显式再导一次 default ——
+	// `export *` 按规范不含它，否则套件拿到的是模块命名空间而不是插件类。
+	const defaults = reexportDefault ? (Array.isArray(reexportDefault) ? reexportDefault : [reexportDefault]).map(stripToEntrySpec) : undefined;
 
-	await bundleEntries(list, outfile);
+	await bundleEntries(list, outfile, { reexportDefault: defaults });
 	await writeObsidianShim(dir);
 
 	const mod = await import(`${pathToFileURL(outfile).href}?mut=${Math.random()}`);
@@ -173,11 +176,15 @@ function installRestoreHandlers(sourcePath, original) {
  *   source: string,                    相对仓库根的 TS 路径（要被改坏的那个文件）
  *   entries?: string[],                打包入口；默认就是 source 本身。
  *                                      需要跨模块断言（如 `instanceof`）时传多个
+ *   reexportDefault?: string[],        需要拿到 **default 导出**的入口（如插件入口）。
+ *                                      barrell 是 `export *`，按规范**不含 default**，
+ *                                      不显式列出就会拿到模块命名空间而非那个类
+ *                                      （症状：`X is not a constructor`）。
  *   suite: (mod: any) => void | Promise<void>,   断言套件（抛错 = 失败）
  *   mutations: Array<{ name: string, from: string, to: string, expect: string }>,
  * }} options
  */
-export async function runMutations({ source, entries, suite, mutations }) {
+export async function runMutations({ source, entries, reexportDefault, suite, mutations }) {
 	const sourcePath = join(REPO_ROOT, source);
 
 	// ⭐ 先自愈：上次若被强杀在变异中途，源码会停在"已变异"状态。
@@ -202,7 +209,7 @@ export async function runMutations({ source, entries, suite, mutations }) {
 	// 又是一次"从未发生的验证被当成通过"。
 	const attempt = async () => {
 		try {
-			await suite(await loadFresh(loadEntries));
+			await suite(await loadFresh(loadEntries, reexportDefault));
 			return { failed: false, message: "" };
 		} catch (error) {
 			return { failed: true, message: String(error?.message ?? error) };
