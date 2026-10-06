@@ -51,21 +51,49 @@ file first, it would already have removed the local copy, and there would be not
 - **No Node built-ins.** Only APIs available on both desktop and mobile are used, because on mobile
   the Node modules simply are not there. This is enforced by lint, not just by convention.
 
+### What happens when you paste or drag an image in
+
+1. The bytes are written into your attachment folder **first**. Only then is an upload attempted.
+   This order matters because the plugin has already cancelled Obsidian's own handling of that
+   paste — so from that moment the image survives only if the plugin persists it. Writing first
+   means the worst case is "the image is here, it just was not uploaded", rather than a lost image.
+2. The image is uploaded, and on success the local file is **moved** into the cache folder (not
+   copied, and never deleted).
+3. If the upload fails you get a local embed link plus an explicit notice saying why, so the note is
+   still usable and nothing is silently lost.
+
+Two safeguards are deliberate and worth knowing about:
+
+- **Pasting the same image twice makes no network request.** Keys are derived from the content
+  hash, so the object is already there.
+- **A same-named file is never overwritten.** Names are made unique (`a.png` → `a 1.png`) by
+  consulting both Obsidian's index and the real disk, since each lags the other.
+
+When the plugin cannot be sure about your intent, it stays out of the way. A paste that also
+carries text is left to Obsidian (you are probably pasting text), and dragging inside the vault is
+left to Obsidian (you are probably moving a note). If a paste contains any file type the plugin
+does not handle, the whole batch is passed through rather than handling part of it — handling part
+of it would mean the rest gets discarded with nothing to put back.
+
 ## Verified scope (read this before trusting it)
 
 Being precise about what has actually been exercised matters more than a long feature list:
 
 | Area | How it is verified |
 |---|---|
-| Signing, key/path derivation, settings merging | Exhaustive unit tests, plus mutation checks that each rule fails for its own reason |
+| Signing, key/path derivation, settings merging, cache index, file naming | Exhaustive unit tests, plus mutation checks that each rule fails for its own reason |
 | SigV4 correctness | Three published AWS vectors (including an S3 example with query ordering and `$`-encoding) |
-| Upload/download/HEAD/DELETE, retries, offline-path request counts | A real local HTTP server that **independently recomputes** the signature — not the plugin's own code |
+| Upload/download/HEAD/DELETE and the retry policy | A real local HTTP server that **independently recomputes** the signature — not the plugin's own code |
+| The upload chain: byte-identical content, exactly one PUT and zero GETs, the local file being moved rather than copied, a failed upload keeping the bytes, same-name files never clobbered | The same real HTTP server plus a real filesystem |
+| Paste/drop decisions | Exhaustive boundary tests over the decision alone, since misjudging one can swallow your content |
+| Paste/drop execution | A recording editor stub asserting what text is inserted, where it is inserted, and that nothing was lost |
 | Hashing | Cross-checked byte-for-byte against `node:crypto` over padding and key-length boundaries |
 
 **Not yet verified:** no real S3 provider (R2/MinIO/AWS) has been exercised end-to-end yet, and
 **iOS has not been tested at all** — it cannot be tested on this machine. The code avoids APIs
 known to be missing there and falls back when optional APIs are absent, but that is reasoning, not
-evidence. Android and desktop real-device verification is still pending too.
+evidence. Android and desktop real-device verification is still pending too, including how the
+paste/drop hooks behave in a real editor on a real device.
 
 ## Installation
 
@@ -103,7 +131,7 @@ The plugin is not in the Community directory yet (it is under development). Manu
 ```bash
 npm install
 npm run dev          # watch build
-npm run check        # type-check + build + lint + manifest validation + all tests
+npm run check        # type-check + build + lint + manifest + verifier-consistency + all tests
 npm run test:unit    # tests only
 npm run mutate       # mutation-check that every rule's assertions actually have teeth
 ```
@@ -119,10 +147,15 @@ each rule in the source, reloads it, and requires that the suite goes red **for 
 reason** — not merely that it goes red. If a rule can be disabled without any test noticing, the
 run fails and reports the rule.
 
-This is not ceremony. It has already paid for itself several times in this project, catching
-assertions that were unreachable behind an earlier check, a backoff cap that no test could reach,
-and — most usefully — a real double-encoding bug where an already-encoded path got encoded again,
-producing uploads that succeeded but links that would not open.
+This is not ceremony. It has already paid for itself several times, catching assertions that were
+unreachable behind an earlier check, a backoff cap no test could reach, a de-duplication rule that
+would have collapsed every pasted file into one, and — most usefully — a real double-encoding bug
+where an already-encoded path got encoded again, producing uploads that succeeded but links that
+would not open.
 
-The same loader lives in `scripts/lib/`, and each suite is shared between the test file and the
-mutation script (`scripts/lib/*-suite.mjs`) so the two can never drift apart.
+Because that kind of assurance is easy to lose by accident, `npm run check` also runs
+`scripts/check-mutate-files.mjs`. It statically verifies that each mutation script makes exactly one
+`runMutations` call (a second one would never execute, because the first exits the process — and the
+output would still look successful), that every mutation script is actually listed in
+`npm run mutate`, and that every shared assertion suite is used by both a test and a mutation
+script. A check that silently stops running is worse than no check, so the wiring is verified too.

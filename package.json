@@ -9,10 +9,11 @@
 		"build": "tsc --noEmit && node esbuild.config.mjs production",
 		"test": "node esbuild.config.mjs production && node scripts/run-tests.mjs",
 		"test:unit": "node scripts/run-tests.mjs",
-		"mutate": "node scripts/mutate-settings.mjs && node scripts/mutate-object-key.mjs && node scripts/mutate-cache-path.mjs && node scripts/mutate-vault-files.mjs && node scripts/mutate-cache-index.mjs && node scripts/mutate-hash.mjs && node scripts/mutate-sigv4.mjs && node scripts/mutate-s3-errors.mjs && node scripts/mutate-s3-client.mjs && node scripts/mutate-ingest.mjs",
+		"mutate": "node scripts/mutate-settings.mjs && node scripts/mutate-object-key.mjs && node scripts/mutate-cache-path.mjs && node scripts/mutate-vault-files.mjs && node scripts/mutate-cache-index.mjs && node scripts/mutate-hash.mjs && node scripts/mutate-sigv4.mjs && node scripts/mutate-s3-errors.mjs && node scripts/mutate-s3-client.mjs && node scripts/mutate-ingest.mjs && node scripts/mutate-editor-hooks.mjs && node scripts/mutate-transfer.mjs",
 		"lint": "eslint .",
 		"manifest": "node scripts/check-manifest.mjs",
-		"check": "npm run build && npm run lint && npm run manifest && npm run test:unit",
+		"check:mutate-files": "node scripts/check-mutate-files.mjs",
+		"check": "npm run build && npm run lint && npm run manifest && npm run check:mutate-files && npm run test:unit",
 		"version": "node version-bump.mjs && git add manifest.json versions.json"
 	},
 	"keywords": [

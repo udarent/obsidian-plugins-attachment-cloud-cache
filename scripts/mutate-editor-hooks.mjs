@@ -1,0 +1,152 @@
+import { runMutations } from "./lib/mutate.mjs";
+import { runTransferSuite } from "./lib/transfer-suite.mjs";
+
+/**
+ * 变异验证：粘贴 / 拖拽判定与执行。
+ *
+ * ⚠️ 这一层每一条都对应一种**用户内容消失**或**链接坏掉**的后果，
+ * 而不是"功能少了一点"：
+ * - 接管了纯文字粘贴 → 用户粘的文字没了；
+ * - 接管了库内拖动 → "移动笔记"变成什么都没发生；
+ * - 只接管认识的文件 → 同批里不认识的那些被吞掉；
+ * - 传了 InsertPoint 却不用 → 图插到用户已经移开的光标处；
+ * - 降级时不插入 → 图虽然保住了，但笔记里什么都没有。
+ *
+ * 覆盖两个源文件。`ingest`/`client` 一并进同一个 bundle，因为执行部分的用例
+ * 要真的跑通"写盘 + 上传"，分成两次 build 会让 `instanceof` 跨副本失败。
+ */
+const entries = [
+	"src/editor/editor-hooks",
+	"src/core/transfer",
+	"src/core/ingest",
+	"src/s3/client",
+	"src/settings",
+	"src/cache/index",
+	"src/vault-files",
+];
+
+// ── 判定层（纯函数）──
+await runMutations({
+	source: "src/editor/editor-hooks.ts",
+	entries,
+	suite: runTransferSuite,
+	mutations: [
+		{
+			name: "插件禁用后仍然接管（用户关掉了插件却还在被改笔记）",
+			from: "if (!settings.enabled) return refuse(\"插件未启用\");",
+			to: "if (false) return refuse(\"插件未启用\");",
+			expect: "插件禁用后不该接管",
+		},
+		{
+			name: "粘贴开关被忽略（用户关掉自动上传仍然被接管）",
+			from: 'if (!settings.pasteUpload) return refuse("粘贴自动上传已关闭");',
+			to: 'if (false) return refuse("粘贴自动上传已关闭");',
+			expect: "关闭后不该接管",
+		},
+		{
+			name: "拖拽开关被忽略",
+			from: 'if (!settings.dropUpload) return refuse("拖拽自动上传已关闭");',
+			to: 'if (false) return refuse("拖拽自动上传已关闭");',
+			expect: "关闭后不该接管",
+		},
+		{
+			name: "剪贴板有文本时也接管（⭐ 用户粘的文字会消失）",
+			from: "if (hasText(transfer)) return refuse(\"剪贴板里同时有文本，可能是用户在粘文字\");",
+			to: "if (false) return refuse(\"剪贴板里同时有文本，可能是用户在粘文字\");",
+			expect: "同时有文本时不该接管",
+		},
+		{
+			name: "读不到文本时当成『有文本』（功能会静默失效且极难发现）",
+			from: "\t\treturn false;\n\t}\n}",
+			to: "\t\treturn true;\n\t}\n}",
+			expect: "getData 抛错时同样按",
+		},
+		{
+			name: "拖拽不检查 files（⭐ 接管库内拖动，『移动笔记』变成什么都没发生）",
+			from: "\tconst rawFiles = toArray(transfer?.files);\n\tif (rawFiles.length === 0) {",
+			to: "\tconst rawFiles = toArray(transfer?.files);\n\tif (false) {",
+			expect: "原因必须点明是『库内拖动』",
+		},
+		{
+			name: "混合载荷只放行不认识的文件（⭐ 那些文件会被一起吞掉）",
+			from: "\tconst unknown = files.filter((file) => !isHookableFile(file, settings));\n\tif (unknown.length > 0) {",
+			to: "\tconst unknown = files.filter((file) => !isHookableFile(file, settings));\n\tif (false) {",
+			expect: "整批放行",
+		},
+		{
+			name: "不认识的扩展名也被当成可处理（顺手把用户的其它工作流也管了）",
+			from: "if (!ext) return false;\n\treturn settings.enabledExtensions.includes(ext);",
+			to: "if (!ext) return true;\n\treturn true;",
+			expect: "pdf 不在默认启用列表里",
+		},
+		{
+			name: "去重按对象引用（同一文件出现在两处 → 重复上传 + 插两条链接）",
+			from: "\t\tconst identity = fileIdentity(file);\n\t\tif (identity !== null) {\n\t\t\tif (seen.has(identity)) return;\n\t\t\tseen.add(identity);\n\t\t}",
+			to: "\t\tif (seen.has(JSON.stringify(file))) return;\n\t\tseen.add(JSON.stringify(file));",
+			expect: "两个不同的文件都必须保留",
+		},
+		{
+			name: "没有任何字段时也硬凑身份串（⭐ 两张无名字的图被当成同一张 → 少传一张）",
+			from: "\tif (!hasName && !hasSize && !hasType) return null;",
+			to: "\t// 变异：不再拒绝空描述",
+			expect: "没有任何可用字段时不该给出身份",
+		},
+		{
+			name: "只看 files 不看 items（粘贴时整体漏掉文件）",
+			from: "\tfor (const item of toArray(transfer?.items)) {",
+			to: "\tfor (const item of []) {",
+			expect: "只有 items 时也要能取到文件",
+		},
+		{
+			name: "items 里不检查 kind（把 text/plain 也当文件处理）",
+			from: '\t\tif (item.kind !== "file") continue;',
+			to: "\t\t// 变异：不检查 kind",
+			expect: "应跳过",
+		},
+		{
+			name: "getAsFile 抛错时不收住（一次失效条目让整次粘贴失败）",
+			from: "\t\ttry {\n\t\t\tpush(item.getAsFile());\n\t\t} catch {",
+			to: "\t\t{\n\t\t\tpush(item.getAsFile());\n\t\t} if (false) {",
+			expect: "必须**继续处理其余条目**",
+		},
+		{
+			name: "远端链接里的 % 被再编一次（⭐ 链接能生成但打不开）",
+			from: "return `![${text}](${String(url ?? \"\").trim()})`;",
+			// 刻意用"只把 % 换成 %25"这种**针对性**的二次编码，
+			// 而不是 `encodeURIComponent(整个 URL)`：后者会让整串形状都变，
+			// 于是先被"链接形状"那条断言拦住，报错就说不到"二次编码"这件事上。
+			to: "return `![${text}](${String(url ?? \"\").trim().replace(/%/g, \"%25\")})`;",
+			expect: "百分号编码必须原样保留",
+		},
+		{
+			name: "alt 里的方括号不清（⭐ 会提前闭合 alt，整段语法废掉）",
+			from: "\treturn alt\n\t\t.replace(/[[\\]]/g, \" \")",
+			to: "\treturn alt",
+			expect: "方括号必须清掉",
+		},
+		{
+			name: "alt 里的换行不清（一条链接被拆成两条）",
+			from: "\t\t.replace(/[\\r\\n]+/g, \" \")",
+			to: "\t\t.replace(/[\\r\\n]+/g, \"\\n\")",
+			expect: "换行必须清掉",
+		},
+		{
+			name: "非字符串 alt 被字符串化（渲染出 [object Object]）",
+			from: '\tif (typeof alt !== "string") return "";',
+			to: "\tif (false) return \"\";",
+			expect: "必须被当成空串",
+		},
+		{
+			name: "alt 取整个文件名而不是主干（链接被时间戳撑长）",
+			from: '\treturn dot > 0 ? raw.slice(0, dot) : raw;',
+			to: "\treturn raw;",
+			expect: "alt 取主干",
+		},
+		{
+			name: "库内嵌入不归一化反斜杠（Windows 路径原样进链接）",
+			from: 'const path = String(vaultPath ?? "").replace(/\\\\/g, "/").replace(/^\\/+/, "").trim();',
+			to: 'const path = String(vaultPath ?? "").trim();',
+			expect: "反斜杠要归一化",
+		},
+	],
+});

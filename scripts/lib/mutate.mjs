@@ -81,6 +81,18 @@ function stripToEntrySpec(entry) {
 	return String(entry).replace(/\\/g, "/").replace(/\.ts$/, "");
 }
 
+/*
+ * ⚠️ 关于"一个文件只能调一次 runMutations"
+ *
+ * 它在结束时会 `process.exit()`，所以同一个文件里的**第二次调用永远不会执行** ——
+ * 而第一次的"全部被捕获"照样打印，于是"一半的验证从没跑过"被当成"全部通过"。
+ * （实测踩过：判定层与执行层写在一个文件里，执行层的 8 条一条都没跑。）
+ *
+ * 这里**故意不加运行时守卫**：进程已经 `exit` 了，守卫根本没有机会执行 ——
+ * 加了也只会给人一种"已经防住了"的错觉。改用**静态检查**
+ * （`scripts/check-mutate-files.mjs`），在 `npm run check` 里挡住这类写法。
+ */
+
 /**
  * @param {{
  *   source: string,                    相对仓库根的 TS 路径（要被改坏的那个文件）
