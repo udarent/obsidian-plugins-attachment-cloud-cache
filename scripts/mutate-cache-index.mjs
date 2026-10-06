@@ -56,20 +56,23 @@ await runMutations({
 		},
 		{
 			name: "remove 永远返回 true（调用方无法知道其实没删掉）",
-			from: "\tremove(key: string): boolean {\n\t\treturn this.entries.delete(key);",
+			// ⚠️  现在走 （entries 与 byUrl 两个视图一起维护，
+			// 否则换域名后会在派生映射里留下指向已消失条目的幽灵记录）。
+			from: "\tremove(key: string): boolean {\n\t\treturn this.erase(key);",
 			to: "\tremove(key: string): boolean {\n\t\tthis.entries.delete(key);\n\t\treturn true;",
 			expect: "重复删除应返回 false",
 		},
 		{
 			name: "pruneMissing 不再真的删除（索引持续指向不存在的文件）",
-			from: "\t\t\t\tthis.entries.delete(entry.key);\n\t\t\t\tremoved.push(entry.key);",
+			from: "\t\t\t\tthis.erase(entry.key);\n\t\t\t\tremoved.push(entry.key);",
 			to: "\t\t\t\tremoved.push(entry.key);",
 			expect: "留下的应是本地确实存在的那条",
 		},
 		{
 			name: "URL 比较退回逐字相等（尾斜杠/域名大小写一变就找不到缓存）",
-			from: "return this.toArray().find((entry) => normalizeUrl(entry.remoteUrl) === target);",
-			to: "return this.toArray().find((entry) => entry.remoteUrl === url);",
+			// ⚠️  现在走 O(1) 的派生映射（渲染路径上每张图都会调它）。
+			from: "\t\treturn this.byUrl.get(target);",
+			to: "\t\treturn [...this.entries.values()].find((entry) => entry.remoteUrl === url);",
 			expect: "尾斜杠差异不应影响命中",
 		},
 		{

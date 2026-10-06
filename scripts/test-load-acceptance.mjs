@@ -11,7 +11,10 @@ import { runLoadAcceptance } from "./lib/load-acceptance-suite.mjs";
 const result = await runLoadAcceptance();
 
 console.log(
-	`Load acceptance passed (built main.js loads, registers ${JSON.stringify(result.registrations)}; ` +
-		`a real paste went through: 1 PUT + cached copy byte-identical + link inserted; ` +
-		"a second identical paste issued 0 PUT; unconfigured paste is left to Obsidian)."
+	`Load acceptance passed (built main.js loads and registers ${JSON.stringify(result.registrations)}; ` +
+		"a real paste went through: 1 PUT + cached copy byte-identical + link inserted, a second identical paste " +
+		"issued 0 PUT; rendering rewrote the src to the local copy with **zero** requests in both reading view and " +
+		"live preview, while a third-party image was left alone; clean-cache moved only the orphan to trash " +
+		"(a referenced copy survived, and cancelling touched nothing); batch upload rewrote both link forms and " +
+		"kept the originals; an unconfigured paste is left to Obsidian)."
 );

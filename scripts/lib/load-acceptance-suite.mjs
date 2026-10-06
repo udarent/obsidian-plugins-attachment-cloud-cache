@@ -34,7 +34,7 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -130,6 +130,16 @@ function loadBuiltBundle() {
 	return moduleObject.exports;
 }
 
+/** 磁盘上是否存在（用来断言删掉了/没动它）。 */
+async function existsOnDisk(root, vaultPath) {
+	try {
+		await stat(join(root, vaultPath));
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 /** 轮询等待一个条件成立（比固定 sleep 更稳，也更快）。 */
 async function waitFor(predicate, what, timeoutMs = 10000, diagnose = () => "") {
 	const deadline = Date.now() + timeoutMs;
@@ -143,6 +153,54 @@ async function waitFor(predicate, what, timeoutMs = 10000, diagnose = () => "") 
 		}
 		await new Promise((r) => setTimeout(r, 10));
 	}
+}
+
+/** 一个够用的假 `<img>`：记录每一次赋值（用于断言"远端地址是否被写过"）。 */
+function makeFakeImage(src) {
+	return {
+		attrs: { src },
+		getAttribute(name) {
+			return name === "src" ? (this.attrs.src ?? null) : null;
+		},
+		setAttribute(name, value) {
+			if (name === "src") this.attrs.src = value;
+		},
+		addEventListener() {},
+	};
+}
+
+/** 只有 querySelectorAll 的容器替身。 */
+function makeFakeContainer(images) {
+	return { querySelectorAll: (selector) => (selector === "img" ? images : []) };
+}
+
+/**
+ * 在 `globalThis` 上装一个假的 `HTMLImageElement`。
+ *
+ * ⚠️ `src` 必须定义在**原型上、且是访问器**（getter/setter）：
+ * 被替换成普通属性的假元素会让被测代码里的 prototype 拦截无从生效
+ * （`Object.getOwnPropertyDescriptor` 拿不到 setter，patch 会静默跳过）——
+ * 于是"实时预览可用"成了一句空话，而测试仍然全绿。
+ */
+function installFakeImageElement() {
+	const proto = {
+		get src() {
+			return this._src;
+		},
+		set src(value) {
+			this._src = value;
+		},
+		getAttribute(name) {
+			return name === "src" ? this._src ?? null : null;
+		},
+		setAttribute(name, value) {
+			if (name === "src") this._src = value;
+		},
+		addEventListener() {},
+	};
+	const ctor = function HTMLImageElement() {};
+	ctor.prototype = proto;
+	globalThis.HTMLImageElement = ctor;
 }
 
 /** 一个够用的编辑器替身：记录插入了什么、插到哪。 */
@@ -224,6 +282,12 @@ export async function runLoadAcceptance(options = {}) {
 
 	const bundle = loadPluginClass();
 	const PluginClass = bundle.default ?? bundle;
+
+	// ⚠️ 实时预览的 `src` 拦截靠 `window.HTMLImageElement.prototype` ——
+	// 而 `installHostGlobals()` 把 `window` 指到 `globalThis`，那里**没有**这类 DOM 构造器。
+	// 不装一个假的，入口就会走"拿不到 prototype → 静默跳过"那条路，
+	// 于是"实时预览离线可用"这件事在验收里**根本没被验证**（而它看起来是绿的）。
+	installFakeImageElement();
 
 	// ── 插件实例 ──
 	const plugin = new PluginClass(app, { id: "attachment-cloud-cache", dir: ".obsidian/plugins/attachment-cloud-cache" });
@@ -346,7 +410,56 @@ export async function runLoadAcceptance(options = {}) {
 		);
 
 		// ============================================================
-		// 3. 反向：已被别的插件处理过的载荷，我们**不得**再接管
+		// 3. 渲染路径 A：阅读视图（后处理器）
+		//
+		// ⭐ 这是 P0 #4「断网后图片仍能解码、且对远端零请求」在**接线层面**的证据：
+		// 用一个指向 mock 服务的 `<img>` 走一遍真正注册的那个后处理器，
+		// 断言 `src` 被换成本地资源、且**一次 GET 都没有**。
+		// ============================================================
+		const getsBeforeRender = server.countByMethod("GET");
+		const remoteImg = makeFakeImage(entry.remoteUrl);
+		for (const processor of plugin.postProcessors) {
+			processor(makeFakeContainer([remoteImg]), { sourcePath: "notes/未命名.md" });
+		}
+		assert.ok(plugin.postProcessors.length >= 1, "★ 必须注册渲染后处理器（否则阅读视图不享受本地副本）");
+		assert.equal(
+			remoteImg.getAttribute("src"),
+			`app://local/${entry.cachePath}`,
+			"★ 阅读视图里的图片应改用本地副本（断网也看得到）"
+		);
+		assert.equal(
+			server.countByMethod("GET"),
+			getsBeforeRender,
+			"★ 渲染时不该发出任何请求 —— 本地副本已经在磁盘上"
+		);
+
+		// 站外图一个字都不该动（红线：不碰别人的图）
+		const foreignImg = makeFakeImage("https://third-party.example.net/x.png");
+		for (const processor of plugin.postProcessors) processor(makeFakeContainer([foreignImg]), {});
+		assert.equal(
+			foreignImg.getAttribute("src"),
+			"https://third-party.example.net/x.png",
+			"★ 站外图必须原样保留（既不下载也不改写）"
+		);
+
+		// ============================================================
+		// 4. 渲染路径 B：实时预览（`src` setter 拦截）
+		//
+		// 这一层是"编辑态离线可用"的关键：Live Preview 的 `<img>` 是编辑器自己造的，
+		// 后处理器碰不到。断言"赋进去的是远端地址、元素上留下的是本地地址"。
+		// ============================================================
+		const { HTMLImageElement } = globalThis;
+		assert.equal(typeof HTMLImageElement, "function", "（测试环境应已装上假的 HTMLImageElement）");
+		const previewImg = new HTMLImageElement();
+		previewImg.src = entry.remoteUrl;
+		assert.equal(
+			previewImg.getAttribute("src"),
+			`app://local/${entry.cachePath}`,
+			"★ 实时预览里赋远端地址，元素上应当是本地地址（远端地址从未进入元素）"
+		);
+
+		// ============================================================
+		// 5. 反向：已被别的插件处理过的载荷，我们**不得**再接管
 		// ============================================================
 		const taken = makePasteEvent([makeFile("x.png", HOSTILE_BYTES)]);
 		taken.preventDefault(); // 模拟另一个插件先处理了
@@ -356,7 +469,7 @@ export async function runLoadAcceptance(options = {}) {
 		assert.equal(editor3.replaced.length, 0, "★ 别人已处理的事件不得重复插入链接");
 
 		// ============================================================
-		// 4. 未配置：**放行**（图留给宿主保存）+ 给出提示
+		// 6. 未配置：**放行**（图留给宿主保存）+ 给出提示
 		// ============================================================
 		plugin.settings.s3.bucket = "";
 		mockObsidian.Notice.instances.length = 0;
@@ -377,8 +490,114 @@ export async function runLoadAcceptance(options = {}) {
 			"提示必须说明文件已被照常保存，否则用户会以为图丢了"
 		);
 
+		// ⚠️ 把桶名恢复回去：上面这一节故意清空了它来验证"未配置"路径，
+		// 而后续的维护命令需要能真的连上（不恢复的话，批量上传会以
+		// "not set up yet" 失败，看起来像功能坏了）。
+		plugin.settings.s3.bucket = BUCKET;
+		app.secretStorage.setSecret("acc-test-ak", ACCESS_KEY_ID);
+		app.secretStorage.setSecret("acc-test-sk", SECRET_ACCESS_KEY);
+
 		// ============================================================
-		// 5. 卸载：事件引用必须能被宿主注销（否则热重载后每粘一次插两条）
+		// 8. 维护命令（P1 #8/#9/#10）：注册 + 真的在真实磁盘上跑一遍
+		//
+		// ⚠️ 这些命令会**删文件**与**改笔记**，所以在验收里也要真的跑，
+		// 而不是只断言"命令注册了"。确认框通过 `confirmMaintenance` 这个
+		// 可替换接缝自动确认 —— 真弹窗点不了，而那正是"确认后执行"这条路径。
+		// ============================================================
+		const commandIds = plugin.commands.map((command) => command.id).sort();
+		assert.deepEqual(
+			commandIds,
+			["audit-cache", "clean-cache", "repair-index", "upload-attachments"],
+			"★ 四条维护命令都要注册（少一条就是「功能写了但用户找不到」）"
+		);
+
+		const runCommand = (id) => {
+			const command = plugin.commands.find((c) => c.id === id);
+			assert.ok(command, `命令 ${id} 应存在`);
+			command.callback?.();
+		};
+
+		// ⚠️ 先把粘贴产生的链接**真的写进一篇笔记**。
+		// 之前这一步缺失，于是"引用扫描"看到的是一个没有任何笔记引用的副本 ——
+		// 清理把它删掉是**正确行为**，而我的断言以为它不该被删。
+		// 补上这篇笔记之后，这条断言才在验"引用扫描真的生效"（而不是在验一个错前提）。
+		const noteWithLink = "notes/未命名.md";
+		await mkdir(join(root, "notes"), { recursive: true });
+		await writeFile(join(root, noteWithLink), `这是笔记\n\n${text}\n`);
+		await harness.refreshPathCache();
+
+		// 造一个孤儿文件（磁盘上有、索引里没有）—— 它是"可清理"的那一类
+		const orphanVaultPath = "_attachment-cache/orphan.png";
+		await mkdir(join(root, "_attachment-cache"), { recursive: true });
+		await writeFile(join(root, orphanVaultPath), Buffer.from([1, 2, 3]));
+		// 让宿主的文件索引看到它（`refreshPathCache` 模拟 Obsidian 重新索引）
+		await harness.refreshPathCache();
+
+		const referencedCopy = entry.cachePath; // 仍被笔记引用的那份
+
+		plugin.confirmMaintenance = async () => true; // 自动确认（"确认后执行"这条路径）
+		mockObsidian.Notice.instances.length = 0;
+		runCommand("clean-cache");
+		// 等**提示**（它在清理之后才发）而不是等文件消失 —— 后者会在命令还没收尾时就返回
+		await waitFor(
+			() => mockObsidian.Notice.instances.some((n) => /Cleaned|清理/.test(n.message)),
+			"清理完成并给出汇报",
+			5000,
+			diagnose
+		);
+
+		assert.ok(await existsOnDisk(root, orphanVaultPath) === false, "★ 孤儿文件应被移入回收站");
+		assert.ok(
+			await existsOnDisk(root, referencedCopy),
+			"★ 仍被笔记引用的副本**绝不能**被清理（那是离线可用的依赖）"
+		);
+
+		// 取消时不执行任何清理 —— 这条路径最容易被漏测（用户点错命令时全靠它）
+		const secondOrphan = "_attachment-cache/orphan2.png";
+		await writeFile(join(root, secondOrphan), Buffer.from([4, 5, 6]));
+		await harness.refreshPathCache();
+		plugin.confirmMaintenance = async () => false; // 用户取消
+		runCommand("clean-cache");
+		await new Promise((resolve) => setTimeout(resolve, 60));
+		assert.ok(
+			await existsOnDisk(root, secondOrphan),
+			"★ 用户取消时**一个文件都不能动**（否则确认框等于没有）"
+		);
+
+		// 批量上传：把 `attachments/pic.png` 传上去，并改写笔记里的本地链接
+		const attachmentPath = "attachments/pic.png";
+		await mkdir(join(root, "attachments"), { recursive: true });
+		await writeFile(join(root, attachmentPath), Buffer.from(HOSTILE_BYTES));
+		// 用**另一篇**笔记：上面那篇里的引用是 clean-cache 那条断言的依据，不能覆盖掉
+		const notePath = "notes/待迁移.md";
+		await writeFile(join(root, notePath), `![[pic.png]]\n\n![x](attachments/pic.png)\n`);
+		await harness.refreshPathCache();
+
+		const putsBefore = server.countByMethod("PUT");
+		plugin.confirmMaintenance = async () => true;
+		mockObsidian.Notice.instances.length = 0;
+		runCommand("upload-attachments");
+		await waitFor(
+			async () => (await readFile(join(root, notePath), "utf8")).includes("http"),
+			"笔记里的链接被改写成远端地址",
+			5000,
+			diagnose
+		);
+
+		assert.equal(server.countByMethod("PUT"), putsBefore + 1, "★ 批量上传应恰好 PUT 一次");
+		const noteText = await readFile(join(root, notePath), "utf8");
+		assert.ok(noteText.includes(`${endpoint}/${BUCKET}/`), `链接应指向配置的存储：${noteText}`);
+		assert.ok(
+			!noteText.includes("attachments/pic.png"),
+			`★ 两条本地链接都应被改写（短名与完整路径都要认）：${noteText}`
+		);
+		assert.ok(
+			await existsOnDisk(root, attachmentPath),
+			"★ 原文件必须保留（这条命令刻意不删任何东西）"
+		);
+
+		// ============================================================
+		// 9. 卸载：事件引用必须能被宿主注销（否则热重载后每粘一次插两条）
 		// ============================================================
 		for (const ref of plugin.eventRefs) app.workspace.offref(ref);
 		assert.equal(
@@ -395,6 +614,13 @@ export async function runLoadAcceptance(options = {}) {
 		// 恢复默认（抛错）—— 否则同一进程里后续套件会意外走真实网络。
 		mockObsidian.setRequestUrlImpl(null);
 		await server.close();
-		await rm(root, { recursive: true, force: true });
+		// ⚠️ 删临时目录**必须容错**：Windows 上偶发 `EPERM: rmdir`（文件刚写完、
+		// 或杀毒软件短暂占用）。那与测试结论无关，但会让整个套件挂住 ——
+		// 一次"目录没删掉"变成"跑不完"，代价完全不对等。
+		try {
+			await rm(root, { recursive: true, force: true });
+		} catch {
+			// 留给系统的临时目录清理
+		}
 	}
 }

@@ -24,7 +24,7 @@
  * 而"没配置就用"时粘贴会给出明确报错并指向设置页 —— 那条路径比一个图标更有用。
  */
 
-import { Notice, Plugin, getLanguage } from "obsidian";
+import { TFile, Notice, Plugin, getLanguage } from "obsidian";
 
 import { SETTINGS_DEFAULTS, mergePluginSettings } from "./settings";
 import type { PluginSettings } from "./types";
@@ -34,6 +34,20 @@ import { CacheIndex } from "./cache/index";
 import { createIndexStore, makeSerializer } from "./host/runtime";
 import type { HostContext } from "./host/runtime";
 import { createEditorHandlers } from "./host/editor-bridge";
+import { auditForCleanup, runBatchUpload, runCleanup } from "./maintenance/run";
+import type { MaintenanceDeps } from "./maintenance/run";
+import { selectUploadCandidates } from "./maintenance/batch";
+import { ingestAttachment } from "./core/ingest";
+import { confirmWithModal } from "./ui/confirm-modal";
+import type { ConfirmOptions } from "./ui/confirm-modal";
+import { keyFromUrl } from "./render/render-target";
+import { createS3Client } from "./s3/client";
+import type { S3Client } from "./s3/client";
+import { connectionReadiness } from "./s3/credentials";
+import { createLocalCopyEnsurer } from "./core/download";
+import type { LocalCopyOutcome } from "./core/download";
+import { installImageSrcPatch, processImages } from "./render/render-hook";
+import type { RenderHookDeps } from "./render/render-hook";
 
 export default class AttachmentCloudCachePlugin extends Plugin {
 	settings: PluginSettings = { ...SETTINGS_DEFAULTS };
@@ -41,6 +55,16 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 
 	/** 索引的读写（含串行化落盘）。`onload` 里初始化。 */
 	private indexStore: ReturnType<typeof createIndexStore> | null = null;
+
+	/**
+	 * 补齐器（回退下载）。**必须是稳定的一份**：它的并发去重表挂在闭包里，
+	 * 每次新建就等于没有去重 —— 一屏里同一张图会被下载 N 次。
+	 */
+	private ensureLocalCopy: (key: string, remoteUrl: string) => Promise<LocalCopyOutcome> = async () => ({
+		status: "failed",
+		key: "",
+		localPath: "",
+	});
 
 	/**
 	 * 落盘队列。索引自己的写入已经在 `createIndexStore` 里串行化了，
@@ -73,12 +97,306 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		});
 		this.registerEvent(this.app.workspace.on("editor-paste", handlers.onPaste));
 		this.registerEvent(this.app.workspace.on("editor-drop", handlers.onDrop));
+
+		this.ensureLocalCopy = createLocalCopyEnsurer({
+			app: this.app,
+			settings: () => this.settings,
+			// 每次现造：用户可能刚在设置页改完/选好密钥，抓快照会让"改了不生效"
+			// 以最难查的形式出现。拿不到客户端时返回 null（未配置 → 静默不下载）。
+			client: () => this.buildClient(),
+			index: () => this.currentIndex(),
+			persistIndex: () => this.hostContext().persistIndex(),
+			notify: (message) => new Notice(message),
+			t: (key, params) => this.t(key, params),
+		});
+
+		// ── 渲染：把属于本存储的图换成本地副本（离线可用的落点）──
+		//
+		// 两条路径缺一不可：阅读视图（后处理器）与实时预览（setter 拦截）。
+		// 只做前者，用户在离线时编辑笔记会看到满屏破图；只做后者，导出与阅读模式不受益。
+		this.registerMarkdownPostProcessor((element) => {
+			// ⚠️ 这里**同步**完成，不 await —— 一旦 await，元素可能已连上 DOM
+			// 并开始加载远端图片，"零请求"就不成立了。理由见 render-hook 的头注释。
+			processImages(element, this.renderDeps());
+		});
+
+		const uninstallSrcPatch = installImageSrcPatch(this.renderDeps(), {
+			view: typeof window === "undefined" ? null : window,
+			log: (error) => console.error("[attachment-cloud-cache] 改写图片地址时出错", error),
+		});
+		// 卸载时把原 setter 放回去 —— 插件卸载后还在改全局 prototype 是最典型的
+		// "卸载不干净"，而且症状出现在**别的插件**身上，极难归因。
+		this.register(() => uninstallSrcPatch());
+
+		this.registerMaintenanceCommands();
+	}
+
+	/**
+	 * 注册维护命令（P1 #8/#9/#10）。
+	 *
+	 * ⚠️ 破坏性命令（清理缓存）**必须先出确认框**，而且要写清"删几个、占多少空间"。
+	 * 一条"确定要清理吗"等于让用户闭着眼睛按确认。
+	 */
+	private registerMaintenanceCommands(): void {
+		this.addCommand({
+			id: "audit-cache",
+			name: this.t("cmdAuditCache"),
+			callback: () => void this.reportCacheUsage(),
+		});
+
+		this.addCommand({
+			id: "repair-index",
+			name: this.t("cmdRepairIndex"),
+			callback: () => void this.repairIndex(),
+		});
+
+		this.addCommand({
+			id: "clean-cache",
+			name: this.t("cmdCleanCache"),
+			callback: () => void this.cleanCache(),
+		});
+
+		this.addCommand({
+			id: "upload-attachments",
+			name: this.t("cmdUploadAttachments"),
+			callback: () => void this.uploadExistingAttachments(),
+		});
+	}
+
+	/** 维护命令共用的依赖装配。 */
+	private maintenanceDeps(): MaintenanceDeps {
+		return {
+			app: this.app,
+			settings: () => this.settings,
+			index: () => this.currentIndex(),
+			persistIndex: () => this.hostContext().persistIndex(),
+			ingest: async (request) => {
+				const client = this.buildClient();
+				if (!client) throw new Error(this.t("maintainNotConfigured"));
+				return ingestAttachment(
+					{
+						app: this.app,
+						settings: this.settings,
+						client,
+						index: this.currentIndex(),
+						persistIndex: () => this.hostContext().persistIndex(),
+						notify: (message) => new Notice(message),
+					},
+					request
+				);
+			},
+			notify: (message) => new Notice(message),
+			t: (key, params) => this.t(key, params),
+		};
+	}
+
+	/** 本存储 URL → key（判定层的推导，维护功能复用同一套）。 */
+	private keyOfUrl(url: string): string | null {
+		return keyFromUrl(url, this.settings.s3);
+	}
+
+	/** 查看缓存占用（只读，不动任何文件）。 */
+	private async reportCacheUsage(): Promise<void> {
+		const deps = this.maintenanceDeps();
+		const { audit } = await auditForCleanup(deps, (url) => this.keyOfUrl(url));
+		const mb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1);
+
+		new Notice(
+			this.t("maintainUsageReport", {
+				total: audit.bytes.total,
+				totalMb: mb(audit.bytes.total),
+				count: audit.healthy.length + audit.unused.length + audit.orphans.length,
+				reclaimableMb: mb(audit.bytes.reclaimable),
+				orphans: audit.orphans.length,
+				unused: audit.unused.length,
+				missing: audit.missingCopies.length,
+			})
+		);
+	}
+
+	/** 自检并修复索引（只改索引，不碰任何文件）。 */
+	private async repairIndex(): Promise<void> {
+		const deps = this.maintenanceDeps();
+		const { plan } = await auditForCleanup(deps, (url) => this.keyOfUrl(url));
+		const result = await runCleanup(deps, { ...plan, all: [] });
+
+		new Notice(this.t("maintainRepaired", { healed: result.healed, skipped: result.skipped.length }));
+	}
+
+	/** 清理未使用的缓存（**破坏性**：先确认，且只送回收站）。 */
+	private async cleanCache(): Promise<void> {
+		const deps = this.maintenanceDeps();
+		const { plan } = await auditForCleanup(deps, (url) => this.keyOfUrl(url));
+
+		if (plan.all.length === 0) {
+			new Notice(this.t("maintainNothingToClean", { healed: plan.healKeys.length }));
+			// 没有可清理的对象时仍然自愈（那是零风险的）
+			if (plan.healKeys.length > 0) await runCleanup(deps, plan);
+			return;
+		}
+
+		const mb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1);
+		const confirmed = await this.confirmMaintenance({
+			title: this.t("maintainCleanTitle"),
+			lines: [
+				this.t("maintainCleanSummary", { count: plan.all.length, mb: mb(plan.bytes) }),
+				...plan.preview,
+				...(plan.hidden > 0 ? [this.t("maintainCleanMore", { count: plan.hidden })] : []),
+				this.t("maintainCleanSafety"),
+			],
+			cta: this.t("maintainCleanCta"),
+			destructive: true,
+		});
+		if (!confirmed) {
+			new Notice(this.t("maintainCancelled"));
+			return;
+		}
+
+		const result = await runCleanup(deps, plan);
+		new Notice(
+			this.t("maintainCleaned", {
+				removed: result.removed,
+				healed: result.healed,
+				skipped: result.skipped.length,
+			})
+		);
+	}
+
+	/**
+	 * 上传附件目录里已有的图片（P1 #8）。
+	 *
+	 * 上传前先确认：这条命令会**改用户的笔记**（把本地链接换成远端链接）。
+	 */
+	private async uploadExistingAttachments(): Promise<void> {
+		const deps = this.maintenanceDeps();
+		if (!this.buildClient()) {
+			new Notice(this.t("maintainNotConfigured"));
+			return;
+		}
+
+		const files = this.app.vault
+			.getFiles()
+			.filter((file) => typeof file?.path === "string");
+		const selection = selectUploadCandidates(files, { settings: this.settings, index: this.currentIndex() });
+
+		if (selection.paths.length === 0) {
+			new Notice(this.t("maintainBatchNothing"));
+			return;
+		}
+
+		const confirmed = await this.confirmMaintenance({
+			title: this.t("maintainBatchTitle"),
+			lines: [
+				this.t("maintainBatchSummary", { count: selection.paths.length }),
+				...selection.paths.slice(0, 10),
+				...(selection.paths.length > 10
+					? [this.t("maintainCleanMore", { count: selection.paths.length - 10 })]
+					: []),
+				// ⚠️ 必须说清"原文件不会删" —— 否则用户会以为磁盘会腾出来，
+				// 结果发现文件还在，以为命令没生效。
+				this.t("maintainBatchKeepsOriginals"),
+			],
+			cta: this.t("maintainBatchCta"),
+		});
+		if (!confirmed) {
+			new Notice(this.t("maintainCancelled"));
+			return;
+		}
+
+		const result = await runBatchUpload(deps);
+		new Notice(
+			this.t("maintainBatchDone", {
+				uploaded: result.uploaded,
+				reused: result.reused,
+				failed: result.failed,
+				notes: result.notesChanged,
+				links: result.linksRewritten,
+			})
+		);
+	}
+
+	/** 抽成方法是为了让测试能替换掉它（真弹窗点不了）。 */
+	private confirmMaintenance(options: ConfirmOptions): Promise<boolean> {
+		return confirmWithModal(this.app, options);
 	}
 
 	onunload(): void {
-		// 事件由 `registerEvent` 自动注销，无需手写 offref。
+		// 事件与 prototype 补丁都由 `registerEvent` / `register` 自动撤销，无需手写。
 		// 这里只清掉自有引用，避免插件实例被延长引用（热重载时尤其明显）。
 		this.indexStore = null;
+	}
+
+	/** 当前索引（`load` 之后对象会换，所以要现取）。 */
+	private currentIndex(): CacheIndex {
+		return this.indexStore?.index ?? new CacheIndex();
+	}
+
+	/**
+	 * 按**当前**设置与钥匙串造一个客户端；还没配齐时返回 `null`。
+	 *
+	 * 复用 `connectionReadiness`（设置页的"测试连接"用的是同一个判定）⇒
+	 * 界面上说"能连"和实际上传/下载用的是同一套判据，不会出现
+	 * "测试连接成功但粘贴报未配置"这种自相矛盾的表现。
+	 */
+	private buildClient(): S3Client | null {
+		const readiness = connectionReadiness(this.app.secretStorage, this.settings);
+		return readiness.ready ? createS3Client(readiness.config) : null;
+	}
+
+	/**
+	 * vault 相对路径 → 能直接放进 `img[src]` 的地址。
+	 *
+	 * ⚠️ 用 `Vault.getResourcePath(file)`（要 `TFile`）而**不是**
+	 * `adapter.getResourcePath(path)`：后者只声明在 `FileSystemAdapter`
+	 * （桌面）与 `CapacitorAdapter`（移动）上，基类 `DataAdapter` **没有**这一项 ——
+	 * 用它在移动端会直接抛错。本项目"不做平台假设"的纪律就是这个意思。
+	 *
+	 * 拿不到文件（不在宿主索引里、或路径不对）时返回 `null`：调用方据此**保持原样**，
+	 * 而不是写一个坏地址进去（那会让在线用户也看不到图）。
+	 */
+	private resourceUrlFor(vaultPath: string): string | null {
+		try {
+			const file = this.app.vault.getAbstractFileByPath(vaultPath);
+			if (file instanceof TFile) return this.app.vault.getResourcePath(file);
+		} catch (error) {
+			// 宿主实现差异不该让整篇笔记渲染失败
+			console.error("[attachment-cloud-cache] 取本地资源地址失败", error);
+		}
+		return null;
+	}
+
+	/** 交给渲染钩子的依赖。 */
+	private renderDeps(): RenderHookDeps {
+		return {
+			settings: () => this.settings,
+			index: () => this.currentIndex(),
+			resourceUrlFor: (path) => this.resourceUrlFor(path),
+			// 渲染钩子只关心"补上了没有、在哪"，所以在这里把结果收敛成路径 ——
+			// 让渲染层不必知道下载层那套状态机（downloaded/reused/refused…）。
+			ensureLocalCopy: async (key, remoteUrl) => {
+				const outcome = await this.ensureLocalCopy(key, remoteUrl);
+				return outcome.localPath || null;
+			},
+			onLocalCopyMissing: (key) => void this.forgetLocalCopy(key),
+			notify: (message) => new Notice(message),
+		};
+	}
+
+	/**
+	 * 索引指向的本地副本其实不存在 → 把这条记录摘掉并落盘。
+	 *
+	 * 这是**自愈**而不是清理：只改索引，不动任何文件。发生的时机是渲染时
+	 * `<img>` 加载失败（用户删了缓存目录 —— SCOPE 明确承诺那可以随时做）。
+	 * 不摘掉的话，这个 key 会**永远**被判为"本地已有"，于是永远不去下载。
+	 */
+	private async forgetLocalCopy(key: string): Promise<void> {
+		const store = this.indexStore;
+		if (!store) return;
+		try {
+			if (store.index.remove(key)) await this.serialize(() => store.save());
+		} catch (error) {
+			console.error("[attachment-cloud-cache] 摘除失效索引记录失败", error);
+		}
 	}
 
 	/** 供各模块统一的文案查询入口。 */

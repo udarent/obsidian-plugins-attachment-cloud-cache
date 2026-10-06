@@ -6,12 +6,16 @@ cache folder — so images still render when you are offline.
 > **Status: early development (0.1.0).** The project is being built feature by feature under TDD;
 > see [Scope & roadmap](./docs/SCOPE.md) for what is done and what is planned.
 >
-> **What works today:** the settings tab (connection settings, a "test connection" button) and
-> **uploading**: pasting or dropping image files uploads them, keeps a local copy, and rewrites the
-> link to your storage. **Offline rendering is not wired up yet** (stage 4) — the local copies are
-> kept and indexed, but images in reading view still come from the network until that stage lands.
-> Downloading missing copies on demand (stage 5) and the maintenance commands (stage 6) are also
-> still to come.
+> **What works today:** the settings tab (connection settings, a "test connection" button);
+> **uploading** — pasting or dropping image files uploads them, keeps a local copy, and rewrites the
+> link to your storage; **offline rendering** — images served from your storage are swapped to the
+> local copy in both reading view and live preview, and a third-party image is never touched;
+> **fetching missing copies** on demand (a new device, or a cache you cleared); and four maintenance
+> commands (show cache usage, repair the index, clean up unused cache files, upload existing
+> attachments). Everything runs on Obsidian 1.13.0+ on desktop and mobile.
+>
+> **Not built yet:** no real S3 provider has been exercised end-to-end, and no real-device run has
+> happened — see "Verified scope" below for exactly what that leaves unproven.
 
 ## Why another attachments plugin?
 
@@ -94,7 +98,7 @@ Being precise about what has actually been exercised matters more than a long fe
 | The upload chain: byte-identical content, exactly one PUT and zero GETs, the local file being moved rather than copied, a failed upload keeping the bytes, same-name files never clobbered | The same real HTTP server plus a real filesystem |
 | Paste/drop decisions | Exhaustive boundary tests over the decision alone, since misjudging one can swallow your content |
 | Paste/drop execution | A recording editor stub asserting what text is inserted, where it is inserted, and that nothing was lost |
-| The plugin **actually being wired up** | The real built `main.js` is loaded, `onload()` runs, and a paste is driven end-to-end: exactly one PUT, a byte-identical cached copy, the link inserted, a second identical paste issuing zero PUTs, and an unconfigured paste deliberately left to Obsidian. Deleting the registration lines in `src/main.ts` fails this test — that is the point of it |
+| The plugin **actually being wired up** | The real built `main.js` is loaded, `onload()` runs, and everything is driven end-to-end: a paste (exactly one PUT, byte-identical cached copy, link inserted, a second identical paste issuing zero PUTs), rendering in **both** reading view and live preview (src swapped to the local copy, **zero** requests, a third-party image left alone), `clean-cache` (only the orphan goes to trash; a referenced copy survives; **cancelling touches nothing**), and batch upload (both link forms rewritten, originals kept). Removing any registration line in `src/main.ts` fails this test — that is the point of it |
 | Hashing | Cross-checked byte-for-byte against `node:crypto` over padding and key-length boundaries |
 
 **Not yet verified:** no real S3 provider (R2/MinIO/AWS) has been exercised end-to-end yet, and
@@ -102,10 +106,12 @@ Being precise about what has actually been exercised matters more than a long fe
 known to be missing there and falls back when optional APIs are absent, but that is reasoning, not
 evidence. Android and desktop real-device verification is still pending too.
 
-Three specific things only a real machine can settle, and they are written down here rather than
-left implicit: whether the link lands where you expect when **pasting** (it should be the caret),
-where it lands when **dropping** (see the known difference below), and whether Obsidian's own paste
-handling is fully suppressed (a second copy of the image in the note would mean it is not).
+Four specific things only a real machine can settle, written down here rather than left implicit:
+whether the link lands where you expect when **pasting** (it should be the caret); where it lands
+when **dropping** (see the known difference below); whether Obsidian's own paste handling is fully
+suppressed (a second copy of the image in the note would mean it is not); and whether the
+live-preview `src` interception behaves while editing — that one is the least conventional thing in
+this codebase, and it is the first thing to suspect if an image ever shows the wrong source.
 
 **Known difference from native behaviour — dropping a file.** Native Obsidian inserts the link at
 the **pointer position**. This plugin inserts it at the **caret position**, because no public API
@@ -113,6 +119,13 @@ maps pointer coordinates to an editor position (the 1.13.0 type definitions cont
 `posAt`-style API, and reaching for the CodeMirror view object would mean depending on something
 undocumented). If your caret is somewhere else when you drop, the link goes there instead. This is a
 deliberate trade rather than an oversight.
+
+**Known limitation — old links after you change the storage URL.** Recognising "this image is ours"
+relies on the current settings plus the local-copy index. If you change or clear the public URL
+prefix **and** the copy is not in the index (a fresh device), those older links are treated as
+third-party: shown as-is, never downloaded. Online they still render; offline they will not. The
+choice is deliberate — the alternative is guessing at other people's URLs, which would mean pulling
+images into your vault that were never yours.
 
 ## Supported Obsidian versions
 

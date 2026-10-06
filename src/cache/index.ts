@@ -113,13 +113,50 @@ export class CacheIndex {
 	/** 用 Map 而不是数组：按 key 查找是最频繁的操作，且 key 天然唯一。 */
 	private readonly entries: Map<string, CacheEntry>;
 
+	/**
+	 * 远端 URL（**归一化后**）→ 条目。
+	 *
+	 * 存在的理由：渲染钩子要对页面上**每一个** `<img>` 问一次"这张图本地有吗"，
+	 * 而一屏笔记可能有几十张图、索引又可能有上千条 —— 每次都线性扫一遍
+	 * 会让滚动明显掉帧。派生映射在写入/删除时同步维护，查找降为 O(1)。
+	 *
+	 * ⚠️ 删除时必须按**当初存入时那个归一化 URL** 摘除，不能只看 key：
+	 * 同一个 key 的 `remoteUrl` 可能被改写（用户换了域名再上传），
+	 * 只删 key 会在映射里留下一条指向已消失条目的幽灵记录。
+	 */
+	private readonly byUrl: Map<string, CacheEntry>;
+
 	constructor(entries: Iterable<CacheEntry> = []) {
 		this.entries = new Map();
+		this.byUrl = new Map();
 		for (const entry of entries) {
 			// 构造时也走去重：后写的覆盖先写的（与 `set` 一致），
 			// 否则"同一 key 两条记录"会让行为取决于遍历顺序。
-			this.entries.set(entry.key, entry);
+			this.write(entry);
 		}
+	}
+
+	/** 写入的**唯一**入口：同时维护 entries 与 byUrl 两个视图。 */
+	private write(entry: CacheEntry): void {
+		const existing = this.entries.get(entry.key);
+		// 先摘掉同一 key 的旧 URL 映射，否则换域名后会留下幽灵
+		if (existing) {
+			const oldUrl = normalizeUrl(existing.remoteUrl);
+			if (oldUrl && this.byUrl.get(oldUrl)?.key === entry.key) this.byUrl.delete(oldUrl);
+		}
+		this.entries.set(entry.key, entry);
+		const url = normalizeUrl(entry.remoteUrl);
+		if (url) this.byUrl.set(url, entry);
+	}
+
+	/** 删除的**唯一**入口（同上，两个视图一起维护）。 */
+	private erase(key: string): boolean {
+		const existing = this.entries.get(key);
+		if (!existing) return false;
+		this.entries.delete(key);
+		const url = normalizeUrl(existing.remoteUrl);
+		if (url && this.byUrl.get(url)?.key === key) this.byUrl.delete(url);
+		return true;
 	}
 
 	get size(): number {
@@ -136,12 +173,12 @@ export class CacheIndex {
 
 	/** 写入或替换。 */
 	set(entry: CacheEntry): void {
-		this.entries.set(entry.key, entry);
+		this.write(entry);
 	}
 
 	/** 删除；返回是否真的删掉了（供调用方汇报）。 */
 	remove(key: string): boolean {
-		return this.entries.delete(key);
+		return this.erase(key);
 	}
 
 	keys(): string[] {
@@ -171,11 +208,13 @@ export class CacheIndex {
 	 * 尾斜杠差异、大小写）。这里做**归一化比较**而不是严格相等，
 	 * 因为渲染时拿到的是笔记里写的那串文本，未必与当初写入时逐字相同
 	 * （用户可能手工改过域名、或从旧配置迁移过来）。
+	 *
+	 * 走 `byUrl` 派生映射（O(1)）—— 这个方法在渲染路径上要对每张图调用一次。
 	 */
 	findByRemoteUrl(url: string): CacheEntry | undefined {
 		const target = normalizeUrl(url);
 		if (!target) return undefined;
-		return this.toArray().find((entry) => normalizeUrl(entry.remoteUrl) === target);
+		return this.byUrl.get(target);
 	}
 
 	/**
@@ -191,7 +230,7 @@ export class CacheIndex {
 		const removed: string[] = [];
 		for (const entry of this.toArray()) {
 			if (!exists(entry.cachePath)) {
-				this.entries.delete(entry.key);
+				this.erase(entry.key);
 				removed.push(entry.key);
 			}
 		}

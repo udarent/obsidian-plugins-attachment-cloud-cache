@@ -18,7 +18,7 @@
  * mock 的能力缺口会静默掩盖真实行为，所以宁可缺失也不要写错语义。）
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 
@@ -368,6 +368,43 @@ export function createAppMock(rootDir, opts = {}) {
 	};
 
 	/** 用真实磁盘重算文件列表 —— 保证"磁盘有、Obsidian 看不见"能被模拟出来。 */
+	/**
+	 * 同步扫描（与真实 `Vault.getFiles()` 的同步语义对齐）。
+	 *
+	 * ⚠️ 用 `readdirSync` 而不是"扫一次缓存起来"：`getFiles()` 必须反映**当下**的磁盘状态 ——
+	 * 真实宿主也会在文件变更后立刻更新索引。缓存版本会带来"刚写的文件看不见"的假象，
+	 * 而那种假象很难与真实缺陷区分。
+	 */
+	function scanSync() {
+		const out = [];
+		function walk(dir) {
+			let entries;
+			try {
+				entries = readdirSync(dir, { withFileTypes: true });
+			} catch {
+				return;
+			}
+			for (const entry of entries) {
+				const abs = join(dir, entry.name);
+				const vaultPath = relative(rootDir, abs).split(sep).join("/");
+				if (entry.isDirectory()) {
+					out.push({ path: vaultPath, folder: true });
+					walk(abs);
+				} else {
+					let size = 0;
+					try {
+						size = statSync(abs).size;
+					} catch {
+						// 拿不到大小不影响"文件存在"这件事
+					}
+					out.push({ path: vaultPath, folder: false, size });
+				}
+			}
+		}
+		walk(rootDir);
+		return out;
+	}
+
 	async function scan() {
 		const out = [];
 		async function walk(dir) {
@@ -489,13 +526,26 @@ export function createAppMock(rootDir, opts = {}) {
 		getName: () => "mock-vault",
 		getBasePath: () => adapter.getBasePath(),
 
-		async getFiles() {
-			const all = await scan();
-			return all.filter((e) => !e.folder).map((e) => new TFile(e.path, vault, e.size));
+		/**
+		 * ⚠️ **必须同步**，与真实 API 一致：`Vault.getFiles()` 在 Obsidian 里返回数组，
+		 * 不是 Promise。
+		 *
+		 * 替身原来写成 `async`，于是"产品代码里同步遍历它"会拿到一个 Promise ——
+		 * 报错是 `getMarkdownFiles is not a function or its return value is not iterable`，
+		 * 看起来像产品代码写错了。**是替身错了**：一个异步的替身会让
+		 * "同步用法"在测试里永远失败、而"异步用法"在真机上永远失败 ——
+		 * 两边都错，且都不指出真正的原因。
+		 *
+		 * 用同步扫描（`readdirSync`）而不是等着 `pathCache`：真实 API 就是这么同步可用的
+		 * （宿主内部维护着文件索引）。`pathCache` 仍然保留，用于单独模拟"索引滞后"场景。
+		 */
+		getFiles() {
+			return scanSync()
+				.filter((entry) => !entry.folder)
+				.map((entry) => new TFile(entry.path, vault, entry.size));
 		},
-		async getMarkdownFiles() {
-			const files = await vault.getFiles();
-			return files.filter((f) => f.extension === "md");
+		getMarkdownFiles() {
+			return vault.getFiles().filter((file) => file.extension === "md");
 		},
 		getAbstractFileByPath(path) {
 			const p = normalizePath(path);

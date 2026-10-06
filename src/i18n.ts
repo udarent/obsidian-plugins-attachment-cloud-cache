@@ -96,6 +96,46 @@ export const I18N: Record<string, Locale> = {
 		// ── 缓存索引 ──
 		indexLoadFailed: "Local-copy index could not be read, so offline copies will be rebuilt: {error}",
 		indexSkipped: "{count} entries in the local-copy index were unusable and have been dropped.",
+
+		// ── 回退下载（补齐本地副本）──
+		// 只在"用户能采取行动"的失败上出现：配置/权限类。离线失败刻意不提示，
+		// 因为那正是用户此刻的状态，弹提示没有信息量。
+		fallbackDownloadFailed: "Could not fetch a missing local copy: {error}",
+		fallbackNoCacheFolder: "No cache folder is set, so a fetched copy has nowhere to go.",
+		fallbackWriteFailed: "Fetched a copy but could not save it into the vault: {error}",
+		fallbackIndexPersistFailed: "The copy was saved, but the local-copy index could not be written: {error}",
+
+		// ── 维护命令 ──
+		cmdAuditCache: "Show cache usage",
+		cmdRepairIndex: "Repair the local-copy index",
+		cmdCleanCache: "Clean up unused cache files",
+		cmdUploadAttachments: "Upload existing attachments",
+
+		maintainUsageReport:
+			"Cache: {totalMb} MB in {count} files. Reclaimable: {reclaimableMb} MB — {orphans} orphaned, {unused} unused, {missing} entries pointing at missing files.",
+		maintainRepaired: "Index repaired: {healed} stale entries removed, {skipped} file(s) skipped.",
+		maintainNothingToClean: "Nothing to clean up. {healed} stale index entries were repaired.",
+		maintainCleanTitle: "Clean up cache files",
+		maintainCleanSummary: "This moves {count} file(s) ({mb} MB) to the system trash.",
+		maintainCleanMore: "…and {count} more",
+		// 这条必须写清楚"进回收站、不是抹除" —— 它是用户按下确认前唯一的安全信息。
+		maintainCleanSafety: "They go to the system trash, so they can be restored. Copies still referenced by a note are never touched.",
+		maintainCleanCta: "Move to trash",
+		maintainCancelled: "Cancelled — nothing was changed.",
+		maintainCleaned: "Cleaned {removed} file(s); repaired {healed} index entries; {skipped} skipped.",
+		maintainPersistFailed: "Could not save the index after repairing it: {error}",
+		maintainSkipOutsideCache: "Not inside the cache folder",
+		maintainSkipNotIndexed: "Obsidian cannot see this file yet — skipped instead of deleting it directly",
+		maintainNotConfigured: "The storage connection is not set up yet, so nothing was uploaded.",
+		maintainBatchNothing: "No attachments to upload (all images are already handled).",
+		maintainBatchTitle: "Upload existing attachments",
+		maintainBatchSummary: "Upload {count} file(s) and rewrite note links to point at your storage.",
+		// ⚠️ 必须说清"原文件不删"，否则用户会以为磁盘腾出来了、以为命令没生效。
+		maintainBatchKeepsOriginals:
+			"Your original files are left in place on purpose — nothing is deleted, so nothing can be lost.",
+		maintainBatchCta: "Upload and rewrite links",
+		maintainBatchDone:
+			"Uploaded {uploaded}, already there {reused}, failed {failed}. Rewrote {links} link(s) across {notes} note(s).",
 	},
 	zh: {
 		sectionStorage: "存储连接",
@@ -163,6 +203,38 @@ export const I18N: Record<string, Locale> = {
 		hookUnexpectedFailure: "图片上传出现未预期的错误：{error}",
 		indexLoadFailed: "本地副本索引读取失败，离线副本将被重建：{error}",
 		indexSkipped: "本地副本索引里有 {count} 条记录无法使用，已丢弃。",
+		fallbackDownloadFailed: "补齐本地副本失败：{error}",
+		fallbackNoCacheFolder: "没有设置缓存目录，取回的副本无处可放。",
+		fallbackWriteFailed: "副本已取回，但写入 vault 失败：{error}",
+		fallbackIndexPersistFailed: "副本已保存，但本地副本索引写入失败：{error}",
+
+		cmdAuditCache: "查看缓存占用",
+		cmdRepairIndex: "自检并修复本地副本索引",
+		cmdCleanCache: "清理未使用的缓存文件",
+		cmdUploadAttachments: "上传已存在的附件",
+
+		maintainUsageReport:
+			"缓存共 {count} 个文件、{totalMb} MB。其中可回收 {reclaimableMb} MB —— 孤儿 {orphans} 个、未引用 {unused} 个、索引指向的文件已不在 {missing} 条。",
+		maintainRepaired: "索引已修复：清理失效记录 {healed} 条，跳过文件 {skipped} 个。",
+		maintainNothingToClean: "没有需要清理的内容。已修复失效索引记录 {healed} 条。",
+		maintainCleanTitle: "清理缓存文件",
+		maintainCleanSummary: "将把 {count} 个文件（{mb} MB）移入系统回收站。",
+		maintainCleanMore: "……还有 {count} 个",
+		maintainCleanSafety: "它们进入系统回收站，可以还原。仍被笔记引用的副本一律不动。",
+		maintainCleanCta: "移入回收站",
+		maintainCancelled: "已取消，没有改动任何内容。",
+		maintainCleaned: "已清理 {removed} 个文件；修复索引记录 {healed} 条；跳过 {skipped} 个。",
+		maintainPersistFailed: "修复后保存索引失败：{error}",
+		maintainSkipOutsideCache: "不在缓存目录内",
+		maintainSkipNotIndexed: "Obsidian 还看不到这个文件 —— 已跳过，而不是直接删除",
+		maintainNotConfigured: "存储连接尚未配置，没有上传任何内容。",
+		maintainBatchNothing: "没有需要上传的附件（图片都已经处理过了）。",
+		maintainBatchTitle: "上传已存在的附件",
+		maintainBatchSummary: "将上传 {count} 个文件，并把笔记里的链接改成指向你的存储。",
+		maintainBatchKeepsOriginals: "原文件会**保留在原处** —— 不删任何东西，所以不会丢。",
+		maintainBatchCta: "上传并改写链接",
+		maintainBatchDone:
+			"上传 {uploaded} 个、已存在 {reused} 个、失败 {failed} 个。在 {notes} 篇笔记里改写了 {links} 处链接。",
 	},
 };
 

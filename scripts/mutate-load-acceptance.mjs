@@ -50,5 +50,33 @@ await runMutations({
 			to: "\t\t// 变异：不加载索引\n",
 			expect: "索引",
 		},
+		{
+			// 后果：阅读视图里的图仍然走远端 ⇒ 断网就是破图（"离线可用"名存实亡）。
+			name: "★ 忘了注册渲染后处理器（阅读视图仍然联网取图，断网是破图）",
+			from: "\t\tthis.registerMarkdownPostProcessor((element) => {",
+			to: "\t\tvoid ((element) => {",
+			expect: "渲染后处理器",
+		},
+		{
+			// 后果：实时预览的图片（编辑器自己造的）不走本地副本 ⇒ 离线编辑时满屏破图。
+			name: "★ 实时预览的拦截没有生效（它在拿不到 prototype 时会静默跳过）",
+			from: "\t\t\tview: typeof window === \"undefined\" ? null : window,",
+			to: "\t\t\tview: null, // 变异：不接 DOM",
+			expect: "实时预览",
+		},
+		{
+			// 后果：维护命令全都不存在 ⇒ "缓存会持续变大"没有任何出路（P1 #9/#10 的落点）。
+			name: "★ 忘了注册维护命令（缓存无法查看/修复/清理）",
+			from: "\t\tthis.registerMaintenanceCommands();\n",
+			to: "\t\t// 变异：不注册维护命令\n",
+			expect: "维护命令",
+		},
+		{
+			// 后果：清理命令不再请求确认 ⇒ 用户在命令面板里点错一下就删了文件。
+			name: "★ 清理不再请求确认（点错命令即删文件）",
+			from: "\t\tif (!confirmed) {\n\t\t\tnew Notice(this.t(\"maintainCancelled\"));\n\t\t\treturn;\n\t\t}\n\n\t\tconst result = await runCleanup(deps, plan);",
+			to: "\t\tvoid confirmed;\n\t\tconst result = await runCleanup(deps, plan);",
+			expect: "一个文件都不能动",
+		},
 	],
 });
