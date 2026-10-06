@@ -97,22 +97,31 @@ paste/drop hooks behave in a real editor on a real device.
 
 ## Supported Obsidian versions
 
-Requires Obsidian **1.11.4** or newer — desktop and mobile.
+Requires Obsidian **1.13.0** or newer — desktop and mobile.
 
-The floor is set by the newest API the plugin touches, and 1.11.4 is where Obsidian added
-`SecretStorage` and `SecretComponent`: access keys are stored there rather than in `data.json`, and
-that is the newest API used. A lower floor is not available without giving up the keychain.
+The floor is set by the newest API the plugin uses, and that is now the **declarative settings API**
+(`getSettingDefinitions()`, added in 1.13.0). Adopting it was a deliberate trade: settings become
+searchable in Obsidian's global settings search, conditional rows are expressed as predicates instead
+of re-rendering the whole tab, and simple rows need no read/write code at all. The cost is real and
+worth stating plainly — users who have not updated Obsidian in the last few months cannot install
+this plugin, whereas the previous floor (1.11.4, set by `SecretStorage`) covered them.
 
-The number is not an estimate. The `obsidian` type package is pinned to **exactly** `1.11.4`, which
-turns `tsc --noEmit` (part of `npm run build`) into a version gate — using anything added later
-fails to compile. Checked by probe rather than assumed: calling `DataAdapter.appendBinary` (added in
-1.12.3) fails with `Property 'appendBinary' does not exist on type 'DataAdapter'`, while this
-plugin's own source compiles clean against those types.
+Access keys still go through `SecretStorage`/`SecretComponent` (1.11.4), which is below the floor and
+therefore no longer the constraint.
+
+The number is not an estimate. The `obsidian` type package is pinned to **exactly** `1.13.0`, which
+turns `tsc --noEmit` (part of `npm run build`) into a version gate — using anything added later fails
+to compile. Checked by probe rather than assumed: when the pin was at 1.11.4, calling
+`DataAdapter.appendBinary` (added in 1.12.3) failed with `Property 'appendBinary' does not exist on
+type 'DataAdapter'`, while this plugin's own source compiled clean against those types.
 
 That gate only holds while the pin holds, so `npm run check:api-floor` fails if the dependency gains
 a `^` range, if the pinned types drift from `minAppVersion`, or if the installed package no longer
 matches the declaration. Any of those would leave the gate green while it proved nothing — and a
 check that has quietly stopped checking is worse than no check.
+
+`minAppVersion` is per release: if a later version needs a newer API, the floor rises for that
+version and `versions.json` keeps older Obsidian builds on the last compatible release.
 
 `minAppVersion` is per release: if a later version needs a newer API, the floor rises for that
 version and `versions.json` keeps older Obsidian builds on the last compatible release.
