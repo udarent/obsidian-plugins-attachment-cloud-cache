@@ -95,6 +95,28 @@ known to be missing there and falls back when optional APIs are absent, but that
 evidence. Android and desktop real-device verification is still pending too, including how the
 paste/drop hooks behave in a real editor on a real device.
 
+## Supported Obsidian versions
+
+Requires Obsidian **1.11.4** or newer — desktop and mobile.
+
+The floor is set by the newest API the plugin touches, and 1.11.4 is where Obsidian added
+`SecretStorage` and `SecretComponent`: access keys are stored there rather than in `data.json`, and
+that is the newest API used. A lower floor is not available without giving up the keychain.
+
+The number is not an estimate. The `obsidian` type package is pinned to **exactly** `1.11.4`, which
+turns `tsc --noEmit` (part of `npm run build`) into a version gate — using anything added later
+fails to compile. Checked by probe rather than assumed: calling `DataAdapter.appendBinary` (added in
+1.12.3) fails with `Property 'appendBinary' does not exist on type 'DataAdapter'`, while this
+plugin's own source compiles clean against those types.
+
+That gate only holds while the pin holds, so `npm run check:api-floor` fails if the dependency gains
+a `^` range, if the pinned types drift from `minAppVersion`, or if the installed package no longer
+matches the declaration. Any of those would leave the gate green while it proved nothing — and a
+check that has quietly stopped checking is worse than no check.
+
+`minAppVersion` is per release: if a later version needs a newer API, the floor rises for that
+version and `versions.json` keeps older Obsidian builds on the last compatible release.
+
 ## Installation
 
 The plugin is not in the Community directory yet (it is under development). Manual installation:
@@ -136,7 +158,7 @@ The plugin is not in the Community directory yet (it is under development). Manu
 ```bash
 npm install
 npm run dev          # watch build
-npm run check        # type-check + build + lint + manifest + verifier-consistency + all tests
+npm run check        # type-check + build + lint + manifest + api-floor + verifier-consistency + tests
 npm run test:unit    # tests only
 npm run mutate       # mutation-check that every rule's assertions actually have teeth
 ```
@@ -164,3 +186,8 @@ Because that kind of assurance is easy to lose by accident, `npm run check` also
 output would still look successful), that every mutation script is actually listed in
 `npm run mutate`, and that every shared assertion suite is used by both a test and a mutation
 script. A check that silently stops running is worse than no check, so the wiring is verified too.
+
+The same principle produced `scripts/check-api-floor.mjs`, which guards the `minAppVersion` claim
+described under [Supported Obsidian versions](#supported-obsidian-versions). That claim rests on the
+type package staying pinned, which is exactly the kind of invariant that decays quietly — so it is
+asserted rather than trusted.
