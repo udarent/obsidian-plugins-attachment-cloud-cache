@@ -327,11 +327,13 @@ export function createAppMock(rootDir, opts = {}) {
 		},
 		rename: async (from, to) => {
 			calls.rename.push([from, to]);
-			await mkdir(dirname(toAbs(rootDir, to)), { recursive: true });
+			// ⚠️ **刻意不建父目录** —— 真实文件系统的 `rename` 在目标父目录不存在时
+			// 会以 ENOENT 失败，这里若"顺手帮你建好"，就会掩盖"忘了建目录"这类缺陷：
+			// 测试全绿，用户在真机上却是"缓存文件搬不过去"。
+			// 让替身与真实系统同样严格，缺陷才会在测试里暴露。
 			await rename(toAbs(rootDir, from), toAbs(rootDir, to));
 		},
 		copy: async (from, to) => {
-			await mkdir(dirname(toAbs(rootDir, to)), { recursive: true });
 			await writeFile(toAbs(rootDir, to), await readFile(toAbs(rootDir, from)));
 		},
 		trashSystem: async (p) => {
@@ -463,7 +465,7 @@ export function createAppMock(rootDir, opts = {}) {
 			},
 			async renameFile(file, newPath) {
 				calls.rename.push([file.path, newPath]);
-				await mkdir(dirname(toAbs(rootDir, newPath)), { recursive: true });
+				// 同上：不建父目录。宿主自己也只做 rename，目录得由调用方先建好。
 				await rename(toAbs(rootDir, file.path), toAbs(rootDir, newPath));
 			},
 			/**

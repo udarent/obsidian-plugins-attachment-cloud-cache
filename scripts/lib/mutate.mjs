@@ -38,12 +38,12 @@
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { build } from "esbuild";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { installHostGlobals } from "./host-globals.mjs";
+import { bundleEntries, writeObsidianShim } from "./load-ts.mjs";
 
 // 与 load-ts.mjs 同理：变异验证也要在同样的宿主环境下跑套件，
 // 否则"变异前的基线"会因为环境差异而红，结论就不可比了。
@@ -51,51 +51,49 @@ installHostGlobals();
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..");
-const MOCK_OBSIDIAN = join(HERE, "mock-obsidian.mjs");
 
 /**
- * 把某个 TS 源文件打包成临时 ESM 模块并 import。
+ * 把一组 TS 入口打包成临时 ESM 模块并 import。
  * 每次调用都是全新实例（临时目录 + 唯一查询串）。
+ *
+ * ⚠️ 打包与垫片都**复用 `load-ts.mjs`**，不在这里另写一套：
+ * 变异套件与正式测试必须跑在同一套打包规则下，否则"变异被抓住"证明的
+ * 是另一个环境里的行为。顺便也保证了多入口进同一个 bundle
+ * （跨模块 `instanceof` 才不会恒为 false）。
  */
-async function loadFresh(sourcePath) {
+async function loadFresh(entries) {
 	const dir = await mkdtemp(join(tmpdir(), "acc-mut-"));
 	const outfile = join(dir, "bundle.mjs");
 
-	await build({
-		entryPoints: [sourcePath],
-		outfile,
-		bundle: true,
-		format: "esm",
-		platform: "node",
-		target: "node18",
-		external: ["obsidian"],
-		logLevel: "silent",
-	});
+	// 统一成"相对仓库根、不带扩展名"的写法（`bundleEntries` 的约定）
+	const list = (Array.isArray(entries) ? entries : [entries]).map(stripToEntrySpec);
 
-	// obsidian 垫片：转发到唯一那份 mock（理由见 load-ts.mjs 的说明）
-	const shimDir = join(dir, "node_modules", "obsidian");
-	await mkdir(shimDir, { recursive: true });
-	await writeFile(
-		join(shimDir, "package.json"),
-		JSON.stringify({ name: "obsidian", version: "0", type: "module", main: "index.mjs", exports: "./index.mjs" })
-	);
-	await writeFile(join(shimDir, "index.mjs"), `export * from ${JSON.stringify(pathToFileURL(MOCK_OBSIDIAN).href)};\n`);
+	await bundleEntries(list, outfile);
+	await writeObsidianShim(dir);
 
 	const mod = await import(`${pathToFileURL(outfile).href}?mut=${Math.random()}`);
 	await rm(dir, { recursive: true, force: true });
 	return mod;
 }
 
+/** `src/core/ingest.ts` → `src/core/ingest`（barrel 里用不带扩展名的相对写法）。 */
+function stripToEntrySpec(entry) {
+	return String(entry).replace(/\\/g, "/").replace(/\.ts$/, "");
+}
+
 /**
  * @param {{
- *   source: string,                    相对仓库根的 TS 路径
+ *   source: string,                    相对仓库根的 TS 路径（要被改坏的那个文件）
+ *   entries?: string[],                打包入口；默认就是 source 本身。
+ *                                      需要跨模块断言（如 `instanceof`）时传多个
  *   suite: (mod: any) => void | Promise<void>,   断言套件（抛错 = 失败）
  *   mutations: Array<{ name: string, from: string, to: string, expect: string }>,
  * }} options
  */
-export async function runMutations({ source, suite, mutations }) {
+export async function runMutations({ source, entries, suite, mutations }) {
 	const sourcePath = join(REPO_ROOT, source);
 	const original = readFileSync(sourcePath, "utf8");
+	const loadEntries = entries ?? [source];
 
 	// ⚠️ 必须 await：签名与网络类的套件是 async 的（要起 mock S3 服务、
 	// 要 await crypto）。若漏掉 await，套件返回的 Promise 被丢弃，
@@ -103,7 +101,7 @@ export async function runMutations({ source, suite, mutations }) {
 	// 又是一次"从未发生的验证被当成通过"。
 	const attempt = async () => {
 		try {
-			await suite(await loadFresh(sourcePath));
+			await suite(await loadFresh(loadEntries));
 			return { failed: false, message: "" };
 		} catch (error) {
 			return { failed: true, message: String(error?.message ?? error) };
