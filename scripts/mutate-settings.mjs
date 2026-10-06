@@ -45,12 +45,6 @@ await runMutations({
 			expect: "cacheFolder 为",
 		},
 		{
-			name: "数字读取把字符串 / NaN / 负数透传（统计显示成乱码）",
-			from: 'if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;',
-			to: "if (false) return fallback;",
-			expect: "非数字应回落默认",
-		},
-		{
 			name: "枚举不再校验（非法值直接生效）",
 			from: "return (raw, fallback) => (allowed.includes(raw as T) ? (raw as T) : fallback);",
 			to: "return (raw, fallback) => raw as T;",
@@ -72,9 +66,9 @@ await runMutations({
 		// ── ⭐ 字段被真的读进来（"存得进读不出"）──
 		{
 			name: "单个字段永远取默认值（经典的「存得进读不出」）",
-			from: "\tenabled: boolValue(),",
-			to: "\tenabled: (_raw, fallback) => fallback,",
-			expect: "设置项 enabled 必须能往返持久化",
+			from: "\tautoUpload: boolValue(),",
+			to: "\tautoUpload: (_raw, fallback) => fallback,",
+			expect: "设置项 autoUpload 必须能往返持久化",
 		},
 		{
 			name: "s3 子对象里的字段永远取默认值",
@@ -113,10 +107,10 @@ await runMutations({
 			expect: "默认应为 path-style",
 		},
 		{
-			name: "默认不再把本地文件移入缓存（离线可用的前提没了）",
-			from: '\tlocalFileAction: "cache",',
-			to: '\tlocalFileAction: "trash",',
-			expect: "本地文件默认应",
+			name: "默认不再把本地副本移入缓存（离线可用的前提没了）",
+			from: '\tlocalCopy: "cache" as LocalCopyAction,',
+			to: '\tlocalCopy: "trash" as LocalCopyAction,',
+			expect: "本地副本默认应",
 		},
 		{
 			name: "s3 子对象不再从 data.s3 读（整块配置读不出来）",

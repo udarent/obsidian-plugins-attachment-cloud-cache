@@ -4,9 +4,12 @@ import { runCachePathSuite } from "./lib/cache-path-suite.mjs";
 /**
  * 变异验证：缓存路径模块。
  *
- * 重点校验两处**安全性质**是否真的被守住：
- * 1. 单射性 —— 平铺/按扩展名布局下不同 key 不得撞同一路径；
- * 2. `isUnderCacheFolder` —— 它是「清理未使用缓存」删文件的判据，
+ * 这一版只针对唯一存在的那条语义（`缓存相对路径 === 对象 key`）——
+ * 三种布局已被删除，理由见 `src/cache-path.ts` 的头注释。
+ * 但**要守的两条安全性质一点没变**：
+ *
+ * 1. **单射性** —— 不同 key 不得推出同一路径，否则两张图互相覆盖，且是静默的；
+ * 2. **`isUnderCacheFolder`** —— 它是「清理未使用缓存」删文件的判据，
  *    判宽了会删掉用户的笔记（不可逆）。
  */
 await runMutations({
@@ -35,35 +38,34 @@ await runMutations({
 			expect: "含穿越的 key 必须直接拒绝",
 		},
 		{
-			name: "flattenKey 对多段 key 不再加摘要（静默撞名）",
-			from: "\tif (!clean.includes(\"/\")) return baseName(clean);",
-			to: "\tif (clean) return baseName(clean);",
-			expect: "不得撞同一路径",
-		},
-		{
-			name: "byExt 缺扩展名时不再兜底（产生空目录段）",
-			from: '\tconst ext = extensionOf(baseName(cleanKey)) || "misc";',
-			to: "\tconst ext = extensionOf(baseName(cleanKey));",
-			expect: "不应因缺扩展名产生空段",
-		},
-		{
-			name: "mirror 不再保持 key 结构（缓存与桶不再一一对应）",
-			from: '\tif (resolved === "mirror") return `${root}/${cleanKey}`;',
-			to: '\tif (resolved === "mirror") return `${root}/${baseName(cleanKey)}`;',
-			// 会被更靠前的那条 mirror 断言先拦下（这也是它该被拦下的地方）
-			expect: "保持结构",
-		},
-		{
 			name: "空 key 被接受（会推到缓存根目录）",
 			from: "\tif (!cleanKey || hasTraversal(cleanKey)) return null;",
 			to: "\tif (hasTraversal(cleanKey)) return null;",
 			expect: "空 key 应返回 null",
 		},
 		{
-			name: "未知布局不再回落（返回 null 而非 mirror）",
-			from: '\tconst resolved: CacheLayout = isCacheLayout(layout) ? layout : "mirror";',
-			to: "\tconst resolved: CacheLayout = isCacheLayout(layout) ? layout : (\"bogus\" as CacheLayout);",
-			expect: "未知布局应回落到 mirror",
+			// 这是本项目里最隐蔽的一类缺陷：缓存与桶不再一一对应，
+			// 但**不会报错**，只是"有时命中有时不命中"或取到别人的图。
+			name: "★ cachePathFor 不再保持 key 结构（多段 key 塌成 basename）",
+			from: "\treturn `${root}/${cleanKey}`;",
+			to: '\treturn `${root}/${cleanKey.split("/").pop()}`;',
+			// 实际先红的是第 1 节那条"保持结构"的断言 —— 它比单射性更早，
+			// 而且正是这条变异最该被拦下的地方（结构都不对了，谈单射没意义）
+			expect: "多段 key → 保持结构",
+		},
+		{
+			// 单射性的**独有**用例：恒等映射天然单射，所以只有当有人给路径加一道
+			// 归一化（统一小写是最常见的一种）时才会撞名 —— 而撞名是静默覆盖。
+			name: "★ key 被统一小写（大小写不同的两个 key 撞同一路径 → 静默互相覆盖）",
+			from: "\treturn `${root}/${cleanKey}`;",
+			to: "\treturn `${root}/${cleanKey.toLowerCase()}`;",
+			expect: "不同 key 不得撞同一路径",
+		},
+		{
+			name: "缓存目录自身不再清洗（前导斜杠会拼出 // 畸形路径）",
+			from: "\tconst root = cleanVaultPath(cacheFolder);\n\tif (!root || hasTraversal(root)) return null;",
+			to: "\tconst root = String(cacheFolder ?? \"\");\n\tif (!root || hasTraversal(root)) return null;",
+			expect: "缓存目录的首尾斜杠要归一",
 		},
 	],
 });

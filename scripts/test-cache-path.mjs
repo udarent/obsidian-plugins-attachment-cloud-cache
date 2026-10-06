@@ -12,7 +12,8 @@ import { runCachePathSuite } from "./lib/cache-path-suite.mjs";
 await withLoadedTs("src/cache-path.ts", (mod) => {
 	runCachePathSuite(mod);
 	console.log(
-		"Cache-path tests passed (mirror is 1:1 with the bucket, flat/byExt stay injective, " +
-			"all layouts reject traversal and empty keys, isUnderCacheFolder guards cleanup)."
+		"Cache-path tests passed (the cache path is 1:1 with the object key, dirty cache folders are " +
+			"normalized, distinct keys never collide (including case), traversal and empty keys are " +
+			"rejected, and isUnderCacheFolder guards cleanup against deleting notes)."
 	);
 });

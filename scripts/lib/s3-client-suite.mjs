@@ -80,7 +80,7 @@ function makeClient(mod, endpoint, overrides = {}, deps = {}) {
 }
 
 export async function runS3ClientSuite(mod) {
-	const { S3Client, S3Error, requestTargetFor, publicUrlFor, objectUrl, normalizeEndpoint } = mod;
+	const { S3Client, S3Error, requestTargetFor, bucketTargetFor, publicUrlFor, objectUrl, normalizeEndpoint } = mod;
 
 	// ============================================================
 	// 0. 端点规范化（纯函数，先把输入的口子堵上）
@@ -160,6 +160,86 @@ export async function runS3ClientSuite(mod) {
 		`${address.endpoint}/b/dir/%E4%B8%AD%E6%96%87%20%E5%90%8D.png`,
 		"没配 publicUrlBase 时应退回对象地址"
 	);
+
+	// ============================================================
+	// 1b. ⭐ 桶探针的地址（纯函数）
+	//
+	// 「测试连接」必须问的是**桶本身**，而不是某个对象：
+	// 探测对象时"对象不存在"与"桶不存在"都是 404，无法区分 ——
+	// 而这两者的修法完全不同（一个属正常，一个要回去改桶名）。
+	// ============================================================
+	const bucketTarget = bucketTargetFor({ ...address, forcePathStyle: true });
+	assert.equal(bucketTarget.path, "/my-bucket", "⭐ path-style 下桶探针的签名路径就是 /桶名");
+	assert.equal(bucketTarget.url, `${address.endpoint}/my-bucket`, "桶探针的地址形状");
+
+	const bucketVirtualHost = bucketTargetFor({ ...address, forcePathStyle: false });
+	assert.equal(
+		bucketVirtualHost.url,
+		"https://my-bucket.abc.r2.cloudflarestorage.com/",
+		"virtual-host 下桶名进子域、路径为空"
+	);
+	assert.equal(bucketVirtualHost.path, "/", "virtual-host 下签名路径是根");
+	// 桶名含需要编码的字符时也必须编码（否则签名与请求不一致）
+	assert.equal(
+		bucketTargetFor({ ...address, bucket: "a b", forcePathStyle: true }).path,
+		"/a%20b",
+		"桶名要按 AWS 规则编码"
+	);
+
+	// 端点/桶没配时必须**抛配置错误**，而不是拼出一个畸形 URL 再收到一个费解的响应。
+	// ⚠️ 这里只断言"抛的是 S3Error"，**不断言 kind**：
+	// `configError` 的 kind 由后面那条专门的用例守着（"配置错误不得被归成网络故障"），
+	// 在这里再断言一次会让那条规则失去发言权 —— 变异 `configError` 时会先炸在这里，
+	// 报出的原因就不再指向它本来要守的规则了。
+	for (const [label, target] of [
+		["端点为空", { ...address, endpoint: "" }],
+		["桶名为空", { ...address, bucket: "" }],
+		["桶名只有空白", { ...address, bucket: "   " }],
+	]) {
+		let caught = null;
+		try {
+			bucketTargetFor(target);
+		} catch (error) {
+			caught = error;
+		}
+		assert.ok(caught instanceof S3Error, `${label} 时必须抛配置错误（不能拼出一个畸形地址去打）`);
+	}
+
+	// ============================================================
+	// 1c. ⭐ 桶探针的结果必须能区分"桶不存在"与"凭据被拒"
+	// ============================================================
+	await withServer({}, async (server, endpoint) => {
+		const client = makeClient(mod, endpoint);
+		const found = await client.headBucket();
+		assert.equal(found.exists, true, "桶存在且凭据正确时应回 exists:true");
+		assert.equal(server.countByMethod("HEAD"), 1, "桶探针应恰好发一次 HEAD");
+
+		const last = server.requests[server.requests.length - 1];
+		assert.equal(last.key, "", "⭐ 桶探针的路径里**不能有对象 key**（否则测的就不是桶）");
+		assert.equal(last.bucket, "test-bucket", "探针应打在配置的那个桶上");
+	});
+
+	await withServer({}, async (server, endpoint) => {
+		const client = makeClient(mod, endpoint, { bucket: "wrong-bucket" });
+		const found = await client.headBucket();
+		assert.equal(
+			found.exists,
+			false,
+			"★ 桶名写错必须回 exists:false（而不是抛错）—— 界面才能提示「检查桶名」而不是「检查网络」"
+		);
+	});
+
+	await withServer({}, async (server, endpoint) => {
+		const client = makeClient(mod, endpoint, { secretAccessKey: "WRONG-SECRET-KEY" });
+		let caught = null;
+		try {
+			await client.headBucket();
+		} catch (error) {
+			caught = error;
+		}
+		assert.ok(caught, "★ 凭据被拒必须抛出，而不是静默回 exists:false");
+		assert.equal(caught.kind, "auth", "凭据被拒应归类为 auth —— 与「桶不存在」是两条不同的排查路径");
+	});
 
 	// ============================================================
 	// 2. ⭐ 上传：字节一致 + 服务端独立验签

@@ -324,8 +324,14 @@ export async function runTransferSuite(mod) {
 	assert.equal(pastePlan(makeTransfer({ files: [png()] })).files.length, 1, "应给出要处理的文件");
 
 	// 开关
-	assert.equal(pastePlan(makeTransfer({ files: [png()] }), { pasteUpload: false }).intercept, false, "关闭后不该接管");
-	assert.equal(pastePlan(makeTransfer({ files: [png()] }), { enabled: false }).intercept, false, "插件禁用后不该接管");
+	// ⚠️ 这里原本有三条断言（enabled / pasteUpload / dropUpload 各一），现已合并为一条：
+	// `enabled` 虽然叫"插件启用"，实现里**只被粘贴/拖拽的拦截读取**，与另外两个完全同义；
+	// 而"停用整个插件"由 Obsidian 自己的插件开关提供，不需要我们再造一个。
+	assert.equal(
+		pastePlan(makeTransfer({ files: [png()] }), { autoUpload: false }).intercept,
+		false,
+		"关闭自动上传后不该接管粘贴"
+	);
 
 	// 没有文件 → 不接管（否则会 preventDefault 掉一次普通粘贴，把内容吞掉）
 	assert.equal(pastePlan(makeTransfer({})).intercept, false, "没有文件时绝不能接管");
@@ -385,8 +391,14 @@ export async function runTransferSuite(mod) {
 		shouldInterceptDrop(transfer, { ...settings, ...overrides });
 
 	assert.equal(dropPlan(makeTransfer({ files: [png()] })).intercept, true, "外部拖入图片应接管");
-	assert.equal(dropPlan(makeTransfer({ files: [png()] }), { dropUpload: false }).intercept, false, "关闭后不该接管");
-	assert.equal(dropPlan(makeTransfer({ files: [png()] }), { enabled: false }).intercept, false, "插件禁用后不该接管");
+	// ⚠️ 与粘贴同理：原本 dropUpload 与 enabled 各一条断言，合并成 autoUpload 后只剩一条。
+	// 消息刻意与粘贴那条**不同**：变异只改第一处出现（`String.replace` 的行为），
+	// 两条消息若一样，就分不清红的是粘贴那条还是拖拽那条。
+	assert.equal(
+		dropPlan(makeTransfer({ files: [png()] }), { autoUpload: false }).intercept,
+		false,
+		"关闭自动上传后不该接管拖拽"
+	);
 
 	// ⭐ 库内拖动（拖笔记 / 拖已有附件）**没有 files** → 必须放行
 	//

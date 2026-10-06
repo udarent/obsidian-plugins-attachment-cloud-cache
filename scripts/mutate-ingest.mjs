@@ -24,26 +24,28 @@ await runMutations({
 			name: "「移入回收站」被当成普通情况（用户明确不要本地副本却留下了一份）",
 			from: '\tif (action === "trash") return "trash";\n',
 			to: "",
-			expect: "选回收站就直接回收站",
+			expect: "选回收站就是回收站",
 		},
 		{
 			name: "「原地保留」被当成「移入缓存」（用户选了什么不再作数）",
-			from: 'const wantsCache = action === "cache" || action === "ask";',
-			to: 'const wantsCache = action !== "trash";',
+			from: 'if (action === "cache" && cachePathUsable) return "move-to-cache";',
+			to: 'if (action !== "trash" && cachePathUsable) return "move-to-cache";',
 			expect: "原地保留就是原地保留",
 		},
 		{
-			name: "忽略缓存开关（用户关掉缓存，文件还是被搬进缓存目录）",
-			from: "if (wantsCache && cacheEnabled && cachePathUsable) return \"move-to-cache\";",
-			to: "if (wantsCache && cachePathUsable) return \"move-to-cache\";",
-			expect: "缓存功能关闭时不搬",
-		},
-		{
-			name: "忽略缓存路径是否可推导（拿到 null 路径还去搬）",
-			from: "if (wantsCache && cacheEnabled && cachePathUsable) return \"move-to-cache\";",
-			to: "if (wantsCache && cacheEnabled) return \"move-to-cache\";",
+			name: "忽略缓存路径是否可推导（拿到 null 路径还去搬，等于没有副本）",
+			from: 'if (action === "cache" && cachePathUsable) return "move-to-cache";',
+			to: 'if (action === "cache") return "move-to-cache";',
 			expect: "缓存路径不可推导时原地保留",
 		},
+		// ⚠️ 这里原本还有一条"忽略缓存开关"的变异。它已随参数重设计一起删除：
+		// `cacheEnabled` 与 `localFileAction` 合并成了单个 `localCopy`，
+		// "开着缓存但选不留副本"这种矛盾状态在类型上已经不存在，
+		// 于是那条变异没有可改的代码了 —— 留一个匹配不到的变异点比没有更糟。
+		//
+		// 我一度想补一条"三个取值结果不再互不相同"来填补它，但发现：
+		// 那与"原地保留被当成移入缓存"是同一个缺陷，而套件里也不该有一条只被它触发的断言。
+		// 所以没有补 —— 凑数出来的变异看着更绿，实际什么都没多守。
 
 		// ── ⭐ 绝不丢图 ──
 		{
@@ -76,8 +78,8 @@ await runMutations({
 		// ── 复用 / 跳过上传 ──
 		{
 			name: "缓存命中不再复用（每次都重新 PUT 几十 MB）",
-			from: "\tif (\n\t\tsettings.cacheEnabled &&\n\t\tknown &&",
-			to: "\tif (\n\t\tfalse &&\n\t\tknown &&",
+			from: "\tif (\n\t\tknown &&",
+			to: "\tif (\n\t\tfalse &&",
 			expect: "应复用，而不是重新上传",
 		},
 		{

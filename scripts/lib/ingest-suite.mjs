@@ -172,20 +172,25 @@ export async function runIngestSuite(mod) {
 
 	// ============================================================
 	// 1. planLocalCopy —— 纯函数，先穷举（它把"用户选了什么"翻译成"我们做什么"）
+	//
+	// ⚠️ 签名从 (action, cacheEnabled, cachePathUsable) 变成了 (action, cachePathUsable)。
+	// 旧签名里 `action: "cache"` + `cacheEnabled: false` 是一个**静默矛盾**组合：
+	// 用户选了"移入缓存"，实际得到"原地保留"，而界面上看不出任何异常。
+	// 合并成一个 LocalCopyAction 之后，这种状态在类型上就不存在了 ——
+	// 所以这里的用例少了一维，而每一维都唯一对应一个结果。
 	// ============================================================
-	assert.equal(planLocalCopy("trash", true, true), "trash", "选回收站就直接回收站");
-	assert.equal(planLocalCopy("trash", false, false), "trash", "回收站与缓存开关无关");
-	assert.equal(planLocalCopy("cache", true, true), "move-to-cache", "默认组合应搬进缓存");
-	assert.equal(planLocalCopy("cache", true, false), "keep-in-place", "缓存路径不可推导时原地保留");
-	assert.equal(planLocalCopy("cache", false, true), "keep-in-place", "缓存功能关闭时不搬（用户明确不要缓存）");
-	assert.equal(planLocalCopy("keep", true, true), "keep-in-place", "原地保留就是原地保留");
-	assert.equal(
-		planLocalCopy("ask", true, true),
-		"move-to-cache",
-		"ask 的询问弹窗尚未实现，先按最安全方向处理（等同 cache），而不是什么都不做"
-	);
+	assert.equal(planLocalCopy("trash", true), "trash", "选回收站就是回收站（不留本地副本 ⇒ 离线看不了）");
+	assert.equal(planLocalCopy("trash", false), "trash", "回收站与缓存路径能否推导无关");
+	assert.equal(planLocalCopy("cache", true), "move-to-cache", "默认组合应搬进缓存");
+	assert.equal(planLocalCopy("cache", false), "keep-in-place", "缓存路径不可推导时原地保留（宁可留文件，不丢图）");
+	assert.equal(planLocalCopy("keep", true), "keep-in-place", "原地保留就是原地保留");
+	// 「三个取值必须产生三个不同结果」这条曾经单独asserted过，现已删除：
+	// 上面五条已经逐一把每个取值钉到唯一的结果上，于是"互不相同"是被**蕴含**的，
+	// 任何破坏互不相同的改动都会先撞上其中某一条 —— 它永远轮不到自己失败。
+	// 一条永远不红的断言就是影子断言，留着只会让"变异全都抓住了"这句话变得不可信。
+	// （真正要防的"假选项"由 `isLocalCopyAction("ask") === false` 与选项集断言守着。）
 	// 反向守护：不能出现"任何输入都返回 move-to-cache"
-	assert.notEqual(planLocalCopy("keep", true, true), "move-to-cache", "keep 不得被当成 cache");
+	assert.notEqual(planLocalCopy("keep", true), "move-to-cache", "keep 不得被当成 cache");
 
 	// ============================================================
 	// 2. 正常路径：上传 → 搬进缓存 → 登记索引
@@ -405,7 +410,7 @@ export async function runIngestSuite(mod) {
 	// ============================================================
 	// 这是本项目里少数会造成**不可逆**损失的操作：粘贴时若允许覆盖，
 	// 用户可能抹掉一个同名的、完全无关的、没有其它副本的文件。
-	await withHarness(mod, { settings: { localFileAction: "keep" } }, async (h) => {
+	await withHarness(mod, { settings: { localCopy: "keep" } }, async (h) => {
 		const original = Buffer.from("这是我原本就有的文件，绝不能被覆盖");
 		await h.write("photo.png", original);
 
@@ -434,9 +439,9 @@ export async function runIngestSuite(mod) {
 	});
 
 	// ============================================================
-	// 6. localFileAction = keep → 副本留在附件目录，索引指向它
+	// 6. localCopy = keep → 副本留在附件目录，索引指向它
 	// ============================================================
-	await withHarness(mod, { settings: { localFileAction: "keep" } }, async (h) => {
+	await withHarness(mod, { settings: { localCopy: "keep" } }, async (h) => {
 		const result = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "keep-me.png", mime: "image/png" });
 		assert.equal(result.status, "uploaded");
 		assert.equal(result.localPath, "keep-me.png", "原地保留就该留在附件目录");
@@ -446,6 +451,11 @@ export async function runIngestSuite(mod) {
 			"选「原地保留」时不该往缓存目录里搬"
 		);
 		assert.ok(await h.exists("keep-me.png"), "文件应真的在那里");
+		// 原先是单独一条用例（`cacheEnabled = false` → 原地保留、不建缓存目录）。
+		// 那个状态**已经不存在了**：它正是"选了移入缓存却得到原地保留"这个静默矛盾的来源，
+		// 合并成单个 `localCopy` 之后，`keep` 是表达"原地保留"的唯一方式。
+		// 所以这里把那条断言收进来，而不是让一个已删除的状态继续留在测试里。
+		assert.equal(await h.exists("_attachment-cache"), false, "原地保留时不该建出缓存目录");
 		assert.equal(
 			h.index.get(result.key)?.cachePath,
 			"keep-me.png",
@@ -454,9 +464,9 @@ export async function runIngestSuite(mod) {
 	});
 
 	// ============================================================
-	// 7. localFileAction = trash → 不留本地副本，也不登记索引
+	// 7. localCopy = trash → 不留本地副本，也不登记索引
 	// ============================================================
-	await withHarness(mod, { settings: { localFileAction: "trash" } }, async (h) => {
+	await withHarness(mod, { settings: { localCopy: "trash" } }, async (h) => {
 		const result = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "temp.png", mime: "image/png" });
 		assert.equal(result.status, "uploaded", "即使不留本地副本，上传本身要成功");
 		assert.equal(result.localPath, "", "回收站处置后本地没有副本");
@@ -469,14 +479,14 @@ export async function runIngestSuite(mod) {
 	});
 
 	// ============================================================
-	// 8. cacheEnabled = false → 原地保留（不建缓存目录）
+	// 8.（已删除）原「cacheEnabled = false → 原地保留」用例
+	//
+	// 那个状态随参数重设计一起消失了：`cacheEnabled` 与 `localFileAction` 不正交，
+	// 二者能组成"选了移入缓存却得到原地保留"的静默矛盾，所以合并成了单个 `localCopy`。
+	// 它唯一独有的断言（不建缓存目录）已并入上面的 `localCopy = keep` 用例。
+	// 这里保留说明而不是留一个测不到东西的空壳 —— 空壳测试比没有测试更糟，
+	// 它会让人以为那个状态仍然存在。
 	// ============================================================
-	await withHarness(mod, { settings: { cacheEnabled: false } }, async (h) => {
-		const result = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "nocache.png", mime: "image/png" });
-		assert.equal(result.status, "uploaded");
-		assert.equal(result.localPath, "nocache.png", "缓存关闭时应原地保留");
-		assert.equal(await h.exists("_attachment-cache"), false, "缓存关闭时不该建出缓存目录");
-	});
 
 	// ============================================================
 	// 9. 嵌套 key（{date}/...）→ 缓存目录要按需建出中间层

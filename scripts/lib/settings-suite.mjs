@@ -20,18 +20,19 @@ import assert from "node:assert/strict";
  * @returns {{ scalars: number }}  供日志汇报用的统计
  */
 export function runSettingsSuite(mod) {
-	const { SETTINGS_DEFAULTS, mergePluginSettings, isCacheLayout, isLocalFileAction } = mod;
+	const { SETTINGS_DEFAULTS, mergePluginSettings, isLocalCopyAction } = mod;
 
 	// ============================================================
 	// 1. 默认值必须体现产品定位
 	// ============================================================
-	assert.equal(SETTINGS_DEFAULTS.enabled, true, "插件默认应启用");
-	assert.equal(SETTINGS_DEFAULTS.cacheEnabled, true, "缓存默认应开启 —— 这是本插件的核心价值");
+	assert.equal(SETTINGS_DEFAULTS.autoUpload, true, "自动上传默认开启");
 
+	//  一个字段同时表达了旧版的 cacheEnabled + localFileAction ——
+	// 那两个字段的组合会产生"选了移入缓存却得到原地保留"这类静默矛盾，合并后不存在了。
 	assert.equal(
-		SETTINGS_DEFAULTS.localFileAction,
+		SETTINGS_DEFAULTS.localCopy,
 		"cache",
-		"上传后本地文件默认应**移入缓存**（不是删除）—— 「本地副本即缓存」是离线可用的前提"
+		"上传后本地副本默认应**移入缓存**（不是删除）—— 「本地副本即缓存」是离线可用的前提"
 	);
 
 	assert.deepEqual(
@@ -41,9 +42,15 @@ export function runSettingsSuite(mod) {
 	);
 
 	assert.equal(SETTINGS_DEFAULTS.s3.objectKeyTemplate, "{hash}.{ext}", "默认对象 key 为单段内容寻址");
-	assert.equal(SETTINGS_DEFAULTS.cacheLayout, "mirror", "缓存默认镜像桶内结构（单一心智模型）");
-	assert.equal(SETTINGS_DEFAULTS.pasteUpload, true, "粘贴即传默认开启");
-	assert.equal(SETTINGS_DEFAULTS.dropUpload, true, "拖拽即传默认开启");
+	// 缓存布局不再是设置项：单段 key 下 flat 与 mirror 结果相同，
+	// 提供一个不产生差异的开关比不提供更糟。见 cache-path.ts 的说明。
+	assert.ok(!("cacheLayout" in SETTINGS_DEFAULTS), "缓存布局不应再是用户可配项");
+	assert.ok(!("cacheDelaySeconds" in SETTINGS_DEFAULTS), "已删除的死字段不应回来");
+	assert.ok(!("enabled" in SETTINGS_DEFAULTS), "enabled 应已并入 autoUpload");
+	assert.ok(!("pasteUpload" in SETTINGS_DEFAULTS), "pasteUpload 应已并入 autoUpload");
+	assert.ok(!("dropUpload" in SETTINGS_DEFAULTS), "dropUpload 应已并入 autoUpload");
+	assert.ok(!("cacheEnabled" in SETTINGS_DEFAULTS), "cacheEnabled 应已并入 localCopy");
+	assert.ok(!("localFileAction" in SETTINGS_DEFAULTS), "localFileAction 应已并入 localCopy");
 	assert.equal(SETTINGS_DEFAULTS.fallbackDownload, true, "回退下载默认开启（覆盖换设备场景）");
 
 	// ============================================================
@@ -93,14 +100,20 @@ export function runSettingsSuite(mod) {
 	const scalars = Object.entries(SETTINGS_DEFAULTS).filter(
 		([, v]) => typeof v === "boolean" || typeof v === "number" || typeof v === "string"
 	);
+	// ⚠️ 这个下限是「结构意外缩水」的哨兵，**不是目标值**。
+	// 它从 8 降到 5 是参数界面重设计**有意**的结果：
+	//   enabled + pasteUpload + dropUpload → autoUpload（一个意图，三个旋钮）
+	//   cacheEnabled + localFileAction     → localCopy（两个字段会静默矛盾）
+	//   删掉 cacheDelaySeconds（从未被任何逻辑读取）与 cacheLayout（无用户价值）
+	// 若将来它无故下降，说明又有人删字段却没同步这里。
 	assert.ok(
-		scalars.length >= 8,
+		scalars.length >= 5,
 		`推导出 ${scalars.length} 个标量字段，数量异常 —— 疑似 SETTINGS_DEFAULTS 结构被改动`
 	);
 
 	// 取值受限的字段必须换成**另一个合法值**，否则会被校验回落成默认值，
 	// 从而误报成"不能往返"。
-	const ALTERNATIVES = { cacheLayout: "byExt", localFileAction: "trash" };
+	const ALTERNATIVES = { localCopy: "trash" };
 	for (const key of Object.keys(ALTERNATIVES)) {
 		assert.ok(key in SETTINGS_DEFAULTS, `ALTERNATIVES 里的 ${key} 已不在 SETTINGS_DEFAULTS 中（死键）`);
 	}
@@ -181,7 +194,7 @@ export function runSettingsSuite(mod) {
 	// ============================================================
 	for (const bad of [null, undefined, 42, "nope", [], true]) {
 		const merged = mergePluginSettings(SETTINGS_DEFAULTS, bad);
-		assert.equal(merged.enabled, SETTINGS_DEFAULTS.enabled, `输入 ${JSON.stringify(bad)} 应回落到默认值`);
+		assert.equal(merged.autoUpload, SETTINGS_DEFAULTS.autoUpload, `输入 ${JSON.stringify(bad)} 应回落到默认值`);
 		assert.equal(
 			merged.s3.objectKeyTemplate,
 			SETTINGS_DEFAULTS.s3.objectKeyTemplate,
@@ -190,38 +203,57 @@ export function runSettingsSuite(mod) {
 	}
 
 	const wrong = mergePluginSettings(SETTINGS_DEFAULTS, {
-		enabled: "yes",
-		cacheDelaySeconds: "soon",
-		cacheLayout: "nonsense",
-		localFileAction: "explode",
+		autoUpload: "yes",
+		localCopy: "explode",
 		enabledExtensions: "png",
 	});
-	assert.equal(wrong.enabled, true, "非布尔值应回落默认");
-	assert.equal(wrong.cacheDelaySeconds, SETTINGS_DEFAULTS.cacheDelaySeconds, "非数字应回落默认");
-	assert.equal(wrong.cacheLayout, SETTINGS_DEFAULTS.cacheLayout, "非法枚举应回落默认");
-	assert.equal(wrong.localFileAction, SETTINGS_DEFAULTS.localFileAction, "非法枚举应回落默认");
+	assert.equal(wrong.autoUpload, true, "非布尔值应回落默认");
+	assert.equal(wrong.localCopy, SETTINGS_DEFAULTS.localCopy, "非法枚举应回落默认");
 	assert.deepEqual(wrong.enabledExtensions, SETTINGS_DEFAULTS.enabledExtensions, "非数组应回落默认");
 
 	// ============================================================
 	// 5. 枚举守卫本身要能用（供 UI 与合并共用）
 	// ============================================================
-	for (const good of ["flat", "byExt", "mirror"]) assert.equal(isCacheLayout(good), true, good);
-	assert.equal(isCacheLayout("deep"), false);
-	assert.equal(isCacheLayout(null), false);
-
-	for (const good of ["cache", "keep", "trash", "ask"]) assert.equal(isLocalFileAction(good), true, good);
-	assert.equal(isLocalFileAction("delete"), false);
+	for (const good of ["cache", "keep", "trash"]) assert.equal(isLocalCopyAction(good), true, good);
+	assert.equal(isLocalCopyAction("delete"), false);
+	assert.equal(isLocalCopyAction(null), false);
+	// `ask` 曾是合法取值但**从未实现**（planLocalCopy 里等同 cache）——
+	// 界面上写着"每次询问"却从不询问，是假选项，必须不再被接受。
+	assert.equal(isLocalCopyAction("ask"), false, "未实现的 ask 不应再是合法取值");
 
 	// ============================================================
 	// 6. 未知字段不该被带进来（避免脏数据在 data.json 里累积）
+	//
+	// 这里同时覆盖"这一版删掉的那些参数"：真实用户的 data.json 里就留着它们，
+	// 合并时必须丢掉 —— 否则会出现"界面已经删掉的开关仍在暗处生效"，
+	// 而那种状态没人能解释。
 	// ============================================================
+	const REMOVED_KEYS = [
+		"enabled",
+		"pasteUpload",
+		"dropUpload",
+		"cacheEnabled",
+		"cacheLayout",
+		"cacheDelaySeconds",
+		"localFileAction",
+	];
+	const legacyPayload = Object.fromEntries(REMOVED_KEYS.map((k) => [k, "legacy-value"]));
+
 	const withJunk = mergePluginSettings(SETTINGS_DEFAULTS, {
 		...SETTINGS_DEFAULTS,
 		someRemovedField: "legacy",
+		// 旧版本的键带着旧值一起进来 —— 这是真实升级路径会出现的形状
+		...legacyPayload,
 		s3: { ...SETTINGS_DEFAULTS.s3, oldProviderKey: "x" },
 	});
+	// ⚠️ 顺序：先断言"泛化的未知字段"这一条（它是这条规则的主语），
+	// 再逐项断言被删掉的参数。反过来的话，`...raw` 那类变异会先炸在下面，
+	// 上面这条就永远轮不到它失败 —— 变成一条影子断言。
 	assert.ok(!("someRemovedField" in withJunk), "未知的顶层字段不应被保留");
 	assert.ok(!("oldProviderKey" in withJunk.s3), "s3 里未知的字段不应被保留");
+	for (const removed of REMOVED_KEYS) {
+		assert.ok(!(removed in withJunk), `已删除的参数 ${removed} 不得从旧 data.json 里被带回来`);
+	}
 
 	// ============================================================
 	// 7. ⭐ 合并结果必须是**完整**的：每个键都在、且类型正确
@@ -252,7 +284,7 @@ export function runSettingsSuite(mod) {
 	//
 	// 清空 `cacheFolder` 会让缓存路径推导直接返回 null ⇒ 缓存**静默失效**，
 	// 而"离线可用"正是这个插件的核心价值。空值必须回落，不能当合法值收下。
-	// 引用名同理：空的引用名会让凭据永远取不到，症状是"一直 403"。
+	// ⚠️ 凭据的**名字**不在此列 —— 空串表示"尚未在钥匙串里选择"，是合法状态。
 	// ============================================================
 	for (const emptyish of ["", "   ", "\t\n"]) {
 		const label = JSON.stringify(emptyish);
@@ -261,9 +293,7 @@ export function runSettingsSuite(mod) {
 			s3: {
 				region: emptyish,
 				objectKeyTemplate: emptyish,
-				accessKeyIdRef: emptyish,
-				secretAccessKeyRef: emptyish,
-			},
+				},
 		});
 
 		assert.equal(merged.cacheFolder, SETTINGS_DEFAULTS.cacheFolder, `cacheFolder 为 ${label} 时应回落默认`);
@@ -272,16 +302,6 @@ export function runSettingsSuite(mod) {
 			merged.s3.objectKeyTemplate,
 			SETTINGS_DEFAULTS.s3.objectKeyTemplate,
 			`s3.objectKeyTemplate 为 ${label} 时应回落默认`
-		);
-		assert.equal(
-			merged.s3.accessKeyIdRef,
-			SETTINGS_DEFAULTS.s3.accessKeyIdRef,
-			`s3.accessKeyIdRef 为 ${label} 时应回落默认（空引用名会让凭据永远取不到）`
-		);
-		assert.equal(
-			merged.s3.secretAccessKeyRef,
-			SETTINGS_DEFAULTS.s3.secretAccessKeyRef,
-			`s3.secretAccessKeyRef 为 ${label} 时应回落默认`
 		);
 	}
 

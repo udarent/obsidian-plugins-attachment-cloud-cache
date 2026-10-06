@@ -9,7 +9,7 @@
 		"build": "tsc --noEmit && node esbuild.config.mjs production",
 		"test": "node esbuild.config.mjs production && node scripts/run-tests.mjs",
 		"test:unit": "node scripts/run-tests.mjs",
-		"mutate": "node scripts/mutate-settings.mjs && node scripts/mutate-object-key.mjs && node scripts/mutate-cache-path.mjs && node scripts/mutate-vault-files.mjs && node scripts/mutate-cache-index.mjs && node scripts/mutate-hash.mjs && node scripts/mutate-sigv4.mjs && node scripts/mutate-s3-errors.mjs && node scripts/mutate-s3-client.mjs && node scripts/mutate-ingest.mjs && node scripts/mutate-editor-hooks.mjs && node scripts/mutate-transfer.mjs",
+		"mutate": "node scripts/mutate-settings.mjs && node scripts/mutate-object-key.mjs && node scripts/mutate-cache-path.mjs && node scripts/mutate-vault-files.mjs && node scripts/mutate-cache-index.mjs && node scripts/mutate-hash.mjs && node scripts/mutate-sigv4.mjs && node scripts/mutate-s3-errors.mjs && node scripts/mutate-s3-client.mjs && node scripts/mutate-ingest.mjs && node scripts/mutate-editor-hooks.mjs && node scripts/mutate-transfer.mjs && node scripts/mutate-settings-logic.mjs && node scripts/mutate-settings-bindings.mjs && node scripts/mutate-credentials.mjs",
 		"lint": "eslint .",
 		"manifest": "node scripts/check-manifest.mjs",
 		"check:api-floor": "node scripts/check-api-floor.mjs",
@@ -44,7 +44,7 @@
 		"eslint-plugin-obsidianmd": "^0.4.2",
 		"globals": "^17.13.0",
 		"jiti": "^2.7.0",
-		"obsidian": "1.11.4",
+		"obsidian": "1.13.0",
 		"typescript": "5.3.3",
 		"typescript-eslint": "^8.71.0"
 	}

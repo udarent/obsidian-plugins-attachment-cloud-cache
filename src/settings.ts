@@ -6,7 +6,7 @@
  * 两种更常见、也更容易出错的手写方式：
  *
  * 1. `{ ...defaults, ...loaded }` → **脏数据会被带进来**。用户删过的字段、旧版本遗留的键
- *    会一直留在 `data.json` 里，而且 `loaded` 里类型不对的值（如 `enabled: "yes"`）直接生效。
+ *    会一直留在 `data.json` 里，而且 `loaded` 里类型不对的值（如 `autoUpload: "yes"`）直接生效。
  * 2. `{ ...defaults, <逐个枚举的字段> }` → **静默丢字段**。凡没被枚举到的一律拿默认值。
  *    这个更危险：类型系统抓不到（`...defaults` 提供了全部键，编译通过），也不报错，
  *    用户在界面上改了、存进了文件，重启后却被重置 —— 表现为"设置存得进、读不出"。
@@ -14,24 +14,27 @@
  * 手写的根因是"**默认值表**、**校验规则**、**合并逻辑**"是三份各自维护的清单，
  * 加一个字段要改三处，漏一处不报错。所以这里让它们只有**一份**：
  * 一张 `SETTINGS_SPEC` 字段表同时描述默认值与校验方式，合并时按表遍历。
- * 加字段只需加一行 —— 而且**漏了会编译不过**（见下面的映射类型标注）。
+ * 加字段只需加一行 —— 而且**漏了会编译不过**（见下面的映射类型断言）。
  *
  * ## 两条硬约束
  *
- * - **凭据不在这里。** Access Key / Secret Key 走宿主的 SecretStorage
- *   （操作系统钥匙串），这里只保存**引用名**。所以下面的字段表里
- *   完全看不到密钥字段 —— 这是刻意的，且由 `test-settings.mjs` 钉住。
+ * - **凭据的值不在这里。** 这里只保存 SecretStorage 里那个密钥的**名字**
+ *   （`accessKeyIdRef` / `secretAccessKeyRef`），密钥本身在操作系统钥匙串里。
+ *   由 `test-settings.mjs` 钉住"不存在明文凭据字段"。
  * - **未知字段一律丢弃。** 因为只写字段表里列出的键，旧版本遗留的键
- *   （包括历史版本可能存过的明文凭据）**不可能**被带进合并结果。
+ *   （包括历史版本曾存过的明文凭据、或被砍掉的参数）**不可能**被带进合并结果。
+ *   这正是这一版砍掉 5 个参数后**不需要写迁移代码**的原因：旧键自动消失，
+ *   新字段拿默认值，而 `localCopy` 这个新字段的默认值（`cache`）恰好等于
+ *   旧组合 `cacheEnabled: true + localFileAction: "cache"` 的效果。
  */
 
-import { CACHE_LAYOUTS, LOCAL_FILE_ACTIONS, isCacheLayout, isLocalFileAction } from "./types";
-import type { PluginSettings, S3Config } from "./types";
+import { LOCAL_COPY_ACTIONS, isLocalCopyAction } from "./types";
+import type { LocalCopyAction, PluginSettings, S3Config } from "./types";
 import { isPlainRecord } from "./records";
 
 // 枚举类型守卫定义在 types.ts（与枚举本身同处一地，避免两个模块各存一份）。
 // 这里转出去，让"读设置的模块"同时就是"拿守卫的模块"。
-export { isCacheLayout, isLocalFileAction };
+export { isLocalCopyAction };
 
 /** 默认启用的图片格式。 */
 const DEFAULT_IMAGE_EXTENSIONS = [
@@ -60,29 +63,29 @@ function boolValue(): FieldReader<boolean> {
 	return (raw, fallback) => (typeof raw === "boolean" ? raw : fallback);
 }
 
-/** 字符串：允许空串（空串对 `attachmentFolder` 是有意义的值 = 跟随宿主设置）。 */
+/**
+ * 字符串：**允许空串**。
+ *
+ * 空串在本插件里是有意义的值，不是"没填"：
+ * - `attachmentFolder` 空 = 跟随宿主的附件设置；
+ * - `accessKeyIdRef` / `secretAccessKeyRef` 空 = 尚未在钥匙串里选密钥。
+ * 后者尤其不能回落成某个写死的名字 —— 那会指向一个不存在的密钥，
+ * 表现为"提示密钥无效"却查不出原因。
+ */
 function textValue(): FieldReader<string> {
 	return (raw, fallback) => (typeof raw === "string" ? raw : fallback);
 }
 
-/** 非空字符串：用于不能为空的字段（如目录名、引用名）。 */
+/** 非空字符串：用于**为空会直接导致功能不可用**的字段（如目录名、key 模板）。 */
 function requiredTextValue(): FieldReader<string> {
 	return (raw, fallback) => (typeof raw === "string" && raw.trim() !== "" ? raw : fallback);
-}
-
-/** 有限数字，且不小于 `min`。 */
-function countValue(min: number): FieldReader<number> {
-	return (raw, fallback) => {
-		if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
-		return raw < min ? fallback : raw;
-	};
 }
 
 /**
  * 枚举值：必须落在允许集合里。
  *
  * 用「是否在集合里」而不是逐个 `===`：这样"合法取值"只有一处定义（`types.ts` 的清单），
- * 新增一个布局时不会漏掉某个分支。
+ * 新增一个选项时不会漏掉某个分支。
  */
 function oneOfValue<T extends string>(allowed: readonly T[]): FieldReader<T> {
 	return (raw, fallback) => (allowed.includes(raw as T) ? (raw as T) : fallback);
@@ -116,18 +119,13 @@ function textListValue(): FieldReader<string[]> {
  * 把它作为 fallback 传进来 —— 于是"改默认值"只需改这里一处。
  */
 const FACTORY_SETTINGS = {
-	enabled: true,
+	autoUpload: true,
 	enabledExtensions: DEFAULT_IMAGE_EXTENSIONS,
 	attachmentFolder: "",
-	cacheEnabled: true,
+	// 默认"移入缓存"：本地副本就是离线可用的前提，且缓存目录可整体清理
+	localCopy: "cache" as LocalCopyAction,
 	cacheFolder: "_attachment-cache",
-	cacheLayout: "mirror",
-	// 默认"移入缓存"而不是删除 —— 本地副本就是离线可用的前提
-	localFileAction: "cache",
-	pasteUpload: true,
-	dropUpload: true,
 	fallbackDownload: true,
-	cacheDelaySeconds: 0,
 } as const;
 
 /**
@@ -140,17 +138,14 @@ const FACTORY_SETTINGS = {
 const SETTINGS_SPEC: {
 	[K in keyof Omit<PluginSettings, "s3">]: FieldReader<Omit<PluginSettings, "s3">[K]>;
 } = {
-	enabled: boolValue(),
+	autoUpload: boolValue(),
 	enabledExtensions: textListValue(),
 	attachmentFolder: textValue(),
-	cacheEnabled: boolValue(),
+	localCopy: oneOfValue(LOCAL_COPY_ACTIONS),
+	// ⚠️ 用 requiredTextValue 而不是 textValue：缓存目录为空会让缓存**静默失效**
+	// （路径推不出来 → 永远不命中），比"回落到默认目录"糟得多。
 	cacheFolder: requiredTextValue(),
-	cacheLayout: oneOfValue(CACHE_LAYOUTS),
-	localFileAction: oneOfValue(LOCAL_FILE_ACTIONS),
-	pasteUpload: boolValue(),
-	dropUpload: boolValue(),
 	fallbackDownload: boolValue(),
-	cacheDelaySeconds: countValue(0),
 };
 
 const S3_FALLBACKS: S3Config = {
@@ -158,8 +153,9 @@ const S3_FALLBACKS: S3Config = {
 	region: "auto",
 	bucket: "",
 	publicUrlBase: "",
-	accessKeyIdRef: "attachment-cloud-cache-access-key-id",
-	secretAccessKeyRef: "attachment-cloud-cache-secret-access-key",
+	// 空 = 尚未在钥匙串里选密钥。**不给写死的默认名字** —— 见 textValue 的说明。
+	accessKeyIdRef: "",
+	secretAccessKeyRef: "",
 	// path-style 默认开：R2 的 S3 端点不支持 virtual-host，而其余各家都接受 path-style
 	forcePathStyle: true,
 	// 内容寻址的单段模板：同一张图只存一份，且缓存路径与桶内结构一一对应
@@ -172,8 +168,8 @@ const S3_SPEC: { [K in keyof S3Config]: FieldReader<S3Config[K]> } = {
 	region: requiredTextValue(),
 	bucket: textValue(),
 	publicUrlBase: textValue(),
-	accessKeyIdRef: requiredTextValue(),
-	secretAccessKeyRef: requiredTextValue(),
+	accessKeyIdRef: textValue(),
+	secretAccessKeyRef: textValue(),
 	forcePathStyle: boolValue(),
 	objectKeyTemplate: requiredTextValue(),
 };

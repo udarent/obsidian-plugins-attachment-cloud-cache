@@ -338,6 +338,35 @@ export function createMockS3(options) {
 		}
 
 		const method = (req.method ?? "").toUpperCase();
+
+		// ── 桶级请求（`HEAD /桶`，路径里没有 key）──
+		// 这是"测试连接"用的探针，它必须能区分两件事：
+		//   · 桶**不存在** → 上面那段已回 404 NoSuchBucket
+		//   · 桶存在、凭据也对 → 这里回 200
+		// 少了这段，桶级 HEAD 会掉进下面的 `objects.get("")` 而得到 404 NoSuchKey，
+		// 症状是"测试连接永远说桶不存在"—— 而配置其实完全正确，只是替身不够真实。
+		if (key === "") {
+			if (method === "HEAD") {
+				record.respondedStatus = 200;
+				res.writeHead(200, { "x-amz-request-id": "mock-request-id" });
+				res.end();
+				return;
+			}
+			if (method === "GET") {
+				// 列出对象（ListObjectsV2）。本项目尚未用到，但回一个空列表比回 405
+				// 更贴近真实服务，免得将来真要用时被一个不真实的替身误导。
+				const listing = `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>${bucket}</Name><KeyCount>0</KeyCount><IsTruncated>false</IsTruncated></ListBucketResult>`;
+				record.respondedStatus = 200;
+				res.writeHead(200, {
+					"content-type": "application/xml",
+					"content-length": Buffer.byteLength(listing),
+					"x-amz-request-id": "mock-request-id",
+				});
+				res.end(listing);
+				return;
+			}
+		}
+
 		if (method === "PUT") {
 			objects.set(key, { body: bodyBuffer, contentType: headers["content-type"] ?? "" });
 			record.respondedStatus = 200;

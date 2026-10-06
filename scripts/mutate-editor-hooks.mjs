@@ -31,23 +31,26 @@ await runMutations({
 	entries,
 	suite: runTransferSuite,
 	mutations: [
+		// ── 自动上传总开关 ──
+		//
+		// ⚠️ 这里原本有三条变异（`enabled` / `pasteUpload` / `dropUpload` 各一）。
+		// 三者已合并成单个 `autoUpload`（`enabled` 名为"启用插件"，实际只被拦截读取），
+		// 所以现在只有一条规则要守 —— 但粘贴与拖拽是**两处**调用，各需一条变异。
+		//
+		// 两条变异的 `from` 都带上了各自的下一行做区分：两个函数里那句检查
+		// 逐字相同，而 `String.replace` 只替换**第一处** —— 不带上文的话，
+		// 第二条变异的 `from` 会被 `from === ""` 的检查或"只改了粘贴那处"悄悄糊弄过去。
 		{
-			name: "插件禁用后仍然接管（用户关掉了插件却还在被改笔记）",
-			from: "if (!settings.enabled) return refuse(\"插件未启用\");",
-			to: "if (false) return refuse(\"插件未启用\");",
-			expect: "插件禁用后不该接管",
+			name: "粘贴开关被忽略（用户关掉自动上传，粘贴仍然被接管）",
+			from: '\tif (!settings.autoUpload) return refuse("自动上传已关闭");\n\n\tconst files = filesFromTransfer(transfer);',
+			to: '\tconst files = filesFromTransfer(transfer);',
+			expect: "关闭自动上传后不该接管粘贴",
 		},
 		{
-			name: "粘贴开关被忽略（用户关掉自动上传仍然被接管）",
-			from: 'if (!settings.pasteUpload) return refuse("粘贴自动上传已关闭");',
-			to: 'if (false) return refuse("粘贴自动上传已关闭");',
-			expect: "关闭后不该接管",
-		},
-		{
-			name: "拖拽开关被忽略",
-			from: 'if (!settings.dropUpload) return refuse("拖拽自动上传已关闭");',
-			to: 'if (false) return refuse("拖拽自动上传已关闭");',
-			expect: "关闭后不该接管",
+			name: "拖拽开关被忽略（用户关掉自动上传，拖拽仍然被接管）",
+			from: '\tif (!settings.autoUpload) return refuse("自动上传已关闭");\n\n\tconst rawFiles = toArray(transfer?.files);',
+			to: '\tconst rawFiles = toArray(transfer?.files);',
+			expect: "关闭自动上传后不该接管拖拽",
 		},
 		{
 			name: "剪贴板有文本时也接管（⭐ 用户粘的文字会消失）",

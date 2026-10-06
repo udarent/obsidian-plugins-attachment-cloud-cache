@@ -39,7 +39,7 @@ import { cachePathFor } from "../cache-path";
 import { renderObjectKey } from "../object-key";
 import type { S3Client } from "../s3/client";
 import { sha256Hex } from "../s3/hash";
-import type { LocalFileAction, PluginSettings } from "../types";
+import type { LocalCopyAction, PluginSettings } from "../types";
 import {
 	fallbackFileName,
 	parentFolderOf,
@@ -63,20 +63,18 @@ export type LocalCopyPlan =
  * 抽成纯函数的理由与别名判定一样：这是"用户明确选了什么"与"我们实际做了什么"
  * 之间的翻译。翻错了不会有报错，只有"行为与设置不符"的长期困惑。
  *
+ * ⚠️ 这个函数曾经接收 `localFileAction` + `cacheEnabled` **两个**参数，
+ * 于是存在一类静默矛盾：用户选"移入缓存"但把缓存关掉 → 得到"原地保留"，
+ * 而界面上看不出任何异常。两个字段合并成一个 `LocalCopyAction` 之后，
+ * **矛盾状态在类型上就不存在了** —— 三个取值各自唯一对应一个结果。
+ *
  * `cachePathUsable` 指缓存路径能否推导出来（缓存目录没配 / key 无法推导时为 false）。
- * 缓存功能开着但路径不可用时，退回"原地保留"而不是报错 ——
- * 用户的图能正常用，只是离线渲染少了本地副本，这比让上传直接失败好。
+ * 此时退回"原地保留"而不是报错 —— 用户的图能正常用，只是副本没进缓存目录，
+ * 这比让上传直接失败好。
  */
-export function planLocalCopy(
-	action: LocalFileAction,
-	cacheEnabled: boolean,
-	cachePathUsable: boolean
-): LocalCopyPlan {
+export function planLocalCopy(action: LocalCopyAction, cachePathUsable: boolean): LocalCopyPlan {
 	if (action === "trash") return "trash";
-	// `ask` 的询问弹窗属于设置 UI 那一阶段；在那之前按**最安全**的方向处理
-	// （等同 `cache`），而不是"什么都不做"——什么都不做会让文件散落在附件目录。
-	const wantsCache = action === "cache" || action === "ask";
-	if (wantsCache && cacheEnabled && cachePathUsable) return "move-to-cache";
+	if (action === "cache" && cachePathUsable) return "move-to-cache";
 	return "keep-in-place";
 }
 
@@ -266,16 +264,18 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 		};
 	}
 
-	const cachePath = cachePathFor(key, settings.cacheFolder, settings.cacheLayout);
+	const cachePath = cachePathFor(key, settings.cacheFolder);
 	const remoteUrlFor = safePublicUrl(client, key);
 	const contentType = resolveContentType(request.name, request.mime);
 
 	// ── 2. 命中缓存 → 跳过上传（零网络）──
-	// 三个条件缺一不可：缓存功能开着、索引里有记录、本地副本真的在、且 URL 没变过。
-	// 只检查"本地有文件"是不够的 —— 那个文件可能是同步来的，我们并不确定它上传过。
+	// 三个条件缺一不可：索引里有记录、URL 没变过、本地副本真的还在。
+	// 之前这里还有一个 `cacheEnabled` 前置判断，现在去掉了 —— 它是**多余**的：
+	// 不留本地副本（`localCopy: "trash"`）时根本不会登记索引（见下面第 6 步），
+	// 所以 `known` 必然是 undefined，这个分支自然不会进来。
+	// 留着一个永远为真的条件，只会让读代码的人以为还有别的情况要考虑。
 	const known = index.get(key);
 	if (
-		settings.cacheEnabled &&
 		known &&
 		known.remoteUrl &&
 		remoteUrlFor &&
@@ -317,7 +317,7 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 	}
 
 	// ── 5. 按设置处置本地副本 ──
-	const plan = planLocalCopy(settings.localFileAction, settings.cacheEnabled, Boolean(cachePath));
+	const plan = planLocalCopy(settings.localCopy, Boolean(cachePath));
 	let localPath = stagedPath;
 
 	if (plan === "trash") {

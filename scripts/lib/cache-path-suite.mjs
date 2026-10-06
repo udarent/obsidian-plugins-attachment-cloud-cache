@@ -4,98 +4,106 @@
  * 这一层最要紧的两条：
  * - `cachePathFor` 的**单射性**：不同 key 撞同一路径会让两张图互相覆盖，且是静默的。
  * - `isUnderCacheFolder` 是**清理命令删文件的安全闸门** —— 判宽了会删掉用户的笔记。
+ *
+ * ⚠️ 这里原先逐条测三种布局（mirror / flat / byExt）。那三种布局已被删除：
+ * 前两种在默认的单段 key 模板下结果**完全相同**（提供一个不产生差异的开关比不提供更糟），
+ * 而非默认那两条分支需要消解撞名、却没有任何调用方 ——
+ * 在一个会喂给"删文件"命令的路径推导里留不可达分支是纯粹的负债。
+ * 所以现在只测唯一存在的那条语义，但**单射性与穿越拒绝的力度没有降低**。
  */
 
 import assert from "node:assert/strict";
 
 export function runCachePathSuite(mod) {
-	const { cachePathFor, isUnderCacheFolder, flattenKeyForLayout, CACHE_LAYOUTS } = mod;
+	const { cachePathFor, isUnderCacheFolder } = mod;
 	const root = "_attachment-cache";
 
-	// ---------- 1. mirror：与桶内结构一一对应 ----------
-	assert.equal(cachePathFor("a1b2.png", root, "mirror"), `${root}/a1b2.png`, "单段 key → 直接对应");
+	// ---------- 1. 「缓存相对路径 === 对象 key」必须严格成立 ----------
+	assert.equal(cachePathFor("a1b2.png", root), `${root}/a1b2.png`, "单段 key → 直接对应");
 	assert.equal(
-		cachePathFor("attachments/2026/a1b2.png", root, "mirror"),
+		cachePathFor("attachments/2026/a1b2.png", root),
 		`${root}/attachments/2026/a1b2.png`,
 		"多段 key → 保持结构"
 	);
 	assert.equal(
-		cachePathFor("x/y/z.png", root, "mirror").slice(root.length + 1),
+		cachePathFor("x/y/z.png", root).slice(root.length + 1),
 		"x/y/z.png",
-		"mirror 下「缓存相对路径 === 对象 key」必须严格成立"
+		"缓存相对路径必须与对象 key 逐字相同（缓存目录就是桶内结构的一面镜子）"
 	);
 
-	// ---------- 2. flat：平铺但不得撞名 ----------
-	assert.equal(cachePathFor("a1b2c3.png", root, "flat"), `${root}/a1b2c3.png`);
+	// ---------- 2. 确定性 ----------
+	for (const key of ["a1b2.png", "x/y/z.png", "a//b.png", "/absolute/path.png"]) {
+		const first = cachePathFor(key, root);
+		assert.equal(cachePathFor(key, root), first, `同一输入必须得到同一结果：${key}`);
+	}
 
-	const flatA = cachePathFor("a/photo.png", root, "flat");
-	const flatB = cachePathFor("b/photo.png", root, "flat");
-	assert.notEqual(flatA, flatB, "★ flat 下不同 key 的相同文件名不得撞同一路径");
-	assert.ok(flatA.startsWith(`${root}/`), "仍应在缓存目录内");
-	assert.ok(!flatA.slice(root.length + 1).includes("/"), "flat 不应产生子目录");
-	assert.ok(flatA.endsWith(".png"), "flat 仍应保留扩展名");
-	assert.equal(cachePathFor("a/photo.png", root, "flat"), flatA, "flat 展开必须确定性");
+	// ---------- 3. 缓存目录本身也要清洗 ----------
+	//
+	// ⚠️ 这一段是被变异验证**逼出来**的：有一条变异把 `cleanVaultPath(cacheFolder)`
+	// 换成 `String(cacheFolder)`，结果全绿 —— 因为原有断言用的缓存目录
+	// 全都是已经干净的 `_attachment-cache`，**没有任何一条测过脏输入**。
+	// 而用户完全可能填 `/attachments/cache/` 或 `a//b` 这种写法。
+	assert.equal(
+		cachePathFor("a.png", "/_attachment-cache/"),
+		"_attachment-cache/a.png",
+		"缓存目录的首尾斜杠要归一，否则会拼出 // 这种畸形路径（且与索引里记的路径对不上）"
+	);
+	assert.equal(cachePathFor("a.png", "a//b"), "a/b/a.png", "缓存目录里的空段要收敛");
+	assert.equal(cachePathFor("a.png", "a/./b"), "a/b/a.png", "缓存目录里的 `.` 段要丢掉");
+	assert.equal(cachePathFor("a.png", "a\\b"), "a/b/a.png", "反斜杠要当分隔符归一");
 
-	// ---------- 3. byExt：按扩展名分目录 ----------
-	assert.equal(cachePathFor("a1b2.png", root, "byExt"), `${root}/png/a1b2.png`, "按扩展名分目录");
+	// ---------- 4. ★ 单射性：不同 key 不得推出同一路径 ----------
+	//
+	// 覆盖是静默的（图能显示，只是内容错了），所以这条比"路径好看"重要得多。
+	// 恒等映射天然单射，但断言仍要留着 —— 若哪天有人为了"更好浏览"改成按 basename
+	// 落地，这里会立刻发现两张同名图撞在一起。
+	const injectivitySamples = [
+		["a/photo.png", "b/photo.png"],
+		["photo.png", "sub/photo.png"],
+		["x/y/z.png", "x/yz.png"],
+		["a.png", "b.png"],
+		// 大小写：内容寻址的 key 是十六进制，但用户完全可能用 `{filename}` 模板，
+		// 那里 `A.png` 与 `a.png` 是两个不同的对象。若有人给路径加一道"统一小写"的
+		// 归一化，这两张图就会**静默互相覆盖**。
+		["A.png", "a.png"],
+	];
+	for (const [left, right] of injectivitySamples) {
+		assert.notEqual(
+			cachePathFor(left, root),
+			cachePathFor(right, root),
+			`★ 不同 key 不得撞同一路径：${left} vs ${right}`
+		);
+	}
 
-	const upper = cachePathFor("x/y/a1b2.PNG", root, "byExt");
-	assert.ok(upper.startsWith(`${root}/png/`), `扩展名目录应小写：${upper}`);
-	assert.ok(upper.endsWith(".PNG"), `文件名不应被改名：${upper}`);
-	assert.ok(upper.includes("a1b2"), `应保留可读的文件名部分：${upper}`);
-
-	const singleSegName = cachePathFor("a1b2c3.png", root, "byExt").split("/").pop();
-	assert.equal(singleSegName, "a1b2c3.png", "单段 key 不应产生撞名摘要");
-
-	const byExtA = cachePathFor("a/photo.png", root, "byExt");
-	const byExtB = cachePathFor("b/photo.png", root, "byExt");
-	assert.notEqual(byExtA, byExtB, "★ byExt 下不同 key 的相同文件名不得撞同一路径");
-
-	const noExt = cachePathFor("a/noext", root, "byExt");
-	assert.ok(noExt !== null, "缺扩展名的 key 也应能推出路径");
-	assert.ok(!noExt.includes("//"), `byExt 不应因缺扩展名产生空段：${noExt}`);
-
-	// ---------- 4. 敌意 key 分两类处理 ----------
+	// ---------- 5. 敌意 key 分两类处理 ----------
 	const normalizableKeys = ["/absolute/path.png", "a//b.png", "a/./b.png"];
 	const traversalKeys = ["../../etc/passwd", "a/../../../b.png", "..\\..\\win.png"];
 
-	for (const layout of CACHE_LAYOUTS) {
-		for (const key of normalizableKeys) {
-			const path = cachePathFor(key, root, layout);
-			assert.ok(path !== null, `[${layout}] 可归一的 key 应能推出路径：${key}`);
-			assert.ok(path.startsWith(`${root}/`), `[${layout}] 必须在缓存目录内：${key} → ${path}`);
-			assert.ok(!path.includes(".."), `[${layout}] 不得含穿越：${key} → ${path}`);
-			assert.ok(!path.includes("//"), `[${layout}] 不得有空段：${key} → ${path}`);
-			assert.ok(!path.includes("\\"), `[${layout}] 不得含反斜杠：${key} → ${path}`);
-		}
-
-		for (const key of traversalKeys) {
-			assert.equal(
-				cachePathFor(key, root, layout),
-				null,
-				`[${layout}] ★ 含穿越的 key 必须直接拒绝：${key}`
-			);
-		}
+	for (const key of normalizableKeys) {
+		const path = cachePathFor(key, root);
+		assert.ok(path !== null, `可归一的 key 应能推出路径：${key}`);
+		assert.ok(path.startsWith(`${root}/`), `必须在缓存目录内：${key} → ${path}`);
+		assert.ok(!path.includes(".."), `不得含穿越：${key} → ${path}`);
+		assert.ok(!path.includes("//"), `不得有空段：${key} → ${path}`);
+		assert.ok(!path.includes("\\"), `不得含反斜杠：${key} → ${path}`);
 	}
 
-	assert.equal(cachePathFor("a.png", "../outside", "mirror"), null, "缓存目录含穿越应拒绝");
-	assert.ok(
-		cachePathFor("deep/a/b/c/d.png", root, "mirror").startsWith(`${root}/`),
-		"多层 key 仍在缓存目录内"
-	);
+	for (const key of traversalKeys) {
+		assert.equal(cachePathFor(key, root), null, `★ 含穿越的 key 必须直接拒绝：${key}`);
+	}
 
-	// ---------- 5. 无法推导的情形 → null ----------
-	assert.equal(cachePathFor("", root, "mirror"), null, "空 key 应返回 null");
-	assert.equal(cachePathFor("///", root, "mirror"), null, "只有斜杠的 key 应返回 null");
-	assert.equal(cachePathFor(null, root, "mirror"), null, "null key 应返回 null");
-	assert.equal(cachePathFor("a.png", "", "mirror"), null, "空缓存目录应返回 null");
-	assert.equal(
-		cachePathFor("a.png", root, "nonsense"),
-		cachePathFor("a.png", root, "mirror"),
-		"未知布局应回落到 mirror"
-	);
+	assert.equal(cachePathFor("a.png", "../outside"), null, "缓存目录含穿越应拒绝");
+	assert.ok(cachePathFor("deep/a/b/c/d.png", root).startsWith(`${root}/`), "多层 key 仍在缓存目录内");
 
-	// ---------- 6. isUnderCacheFolder：安全闸门 ----------
+	// ---------- 6. 无法推导的情形 → null ----------
+	assert.equal(cachePathFor("", root), null, "空 key 应返回 null");
+	assert.equal(cachePathFor("///", root), null, "只有斜杠的 key 应返回 null");
+	assert.equal(cachePathFor(null, root), null, "null key 应返回 null");
+	assert.equal(cachePathFor(undefined, root), null, "undefined key 应返回 null");
+	assert.equal(cachePathFor("a.png", ""), null, "空缓存目录应返回 null");
+	assert.equal(cachePathFor("a.png", null), null, "null 缓存目录应返回 null");
+
+	// ---------- 7. isUnderCacheFolder：安全闸门 ----------
 	assert.equal(isUnderCacheFolder(`${root}/a.png`, root), true, "缓存目录内的文件");
 	assert.equal(isUnderCacheFolder(`${root}/sub/a.png`, root), true, "子目录内的文件");
 	assert.equal(isUnderCacheFolder("notes/note.md", root), false, "★ 笔记绝不能被判为缓存");
@@ -121,12 +129,5 @@ export function runCachePathSuite(mod) {
 
 	assert.equal(isUnderCacheFolder("/_attachment-cache/a.png", root), true, "绝对式写法应能归一后判定");
 	assert.equal(isUnderCacheFolder("", root), false, "空路径不算在内");
-
-	// ---------- 7. flattenKeyForLayout ----------
-	assert.equal(flattenKeyForLayout("a1b2.png"), "a1b2.png", "单段 key 应保持原样");
-	const flattened = flattenKeyForLayout("a/photo.png");
-	assert.notEqual(flattened, "photo.png", "多段 key 不应只留 basename（会撞名）");
-	assert.ok(flattened.includes("photo"), "应保留可读的文件名部分");
-	assert.ok(flattened.length < 60, `展开后不应过长，实际 ${flattened.length}`);
-	assert.equal(flattenKeyForLayout("a/photo.png"), flattened, "同一输入必须得到同一结果");
+	assert.equal(isUnderCacheFolder(null, root), false, "null 路径不算在内");
 }

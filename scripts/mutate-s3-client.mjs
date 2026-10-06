@@ -151,5 +151,37 @@ await runMutations({
 			to: "const payloadHash = await payloadHashOf(\"\");",
 			expect: "载荷",
 		},
+
+		// ── 桶探针（「测试连接」的判据）──
+		{
+			name: "桶探针的签名路径丢掉桶名（签名与请求对不上，必然 403）",
+			from: "\t\tpath: `/${encodedBucket}`,",
+			to: '\t\tpath: "/",',
+			expect: "实际发出 /my-bucket",
+		},
+		{
+			name: "桶探针不再编码桶名（桶名含空格等字符时签名错）",
+			from: "\tconst encodedBucket = uriEncode(bucket);\n\tconst target = {\n\t\turl: `${endpoint}/${encodedBucket}`,",
+			to: "\tconst encodedBucket = bucket;\n\tconst target = {\n\t\turl: `${endpoint}/${encodedBucket}`,",
+			expect: "实际发出 /a%20b",
+		},
+		{
+			name: "桶探针的 virtual-host 分支多出一段路径（地址不再是桶根）",
+			from: '\t\tparsed.pathname = "/";',
+			to: '\t\tparsed.pathname = "/bucket";',
+			expect: "实际发出 /bucket",
+		},
+		{
+			name: "★ 桶不存在被当成存在（用户会以为配置没问题，然后在首次上传时才失败）",
+			from: "\t\t\tif (response.status === 404) return { exists: false };",
+			to: "\t\t\tif (response.status === 404) return { exists: true };",
+			expect: "桶名写错必须回 exists:false",
+		},
+		{
+			name: "★ 凭据被拒被吞成「桶不存在」（排查方向被带偏到桶名上）",
+			from: "\t\t\tif (!isSuccess(response.status)) {\n\t\t\t\tthrow this.fail(response, { operation: \"HEAD\", key: target.path, attempt });\n\t\t\t}\n\t\t\treturn { exists: true };",
+			to: "\t\t\tif (!isSuccess(response.status)) {\n\t\t\t\treturn { exists: false };\n\t\t\t}\n\t\t\treturn { exists: true };",
+			expect: "凭据被拒必须抛出",
+		},
 	],
 });

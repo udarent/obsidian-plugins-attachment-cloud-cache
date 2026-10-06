@@ -199,6 +199,41 @@ export function requestTargetFor(address: ObjectAddress, key: string): RequestTa
 	return target;
 }
 
+/**
+ * 组装**桶本身**的探测地址（S3 的 `HEAD /桶`）。
+ *
+ * ⚠️ 为什么需要它，而不是拿一个随机 key 做 `headObject`：
+ * 探测对象时，"对象不存在"与"桶不存在"**都是 404**，无法区分 ——
+ * 而这两者的修法完全不同（一个属正常，一个要回去改桶名）。
+ * 所以"测试连接"必须能直接问桶本身在不在。
+ */
+export function bucketTargetFor(address: ObjectAddress): RequestTarget {
+	const endpoint = normalizeEndpoint(address.endpoint);
+	if (!endpoint) throw configError("S3 端点未配置，请先在设置里填写");
+
+	const bucket = String(address.bucket ?? "").trim();
+	if (!bucket) throw configError("S3 桶名未配置，请先在设置里填写");
+
+	if (address.forcePathStyle === false) {
+		const parsed = new URL(endpoint);
+		parsed.host = `${bucket}.${parsed.host}`;
+		parsed.pathname = "/";
+		parsed.search = "";
+		parsed.hash = "";
+		const target = { url: parsed.toString(), path: "/" };
+		assertPathPreserved(target);
+		return target;
+	}
+
+	const encodedBucket = uriEncode(bucket);
+	const target = {
+		url: `${endpoint}/${encodedBucket}`,
+		path: `/${encodedBucket}`,
+	};
+	assertPathPreserved(target);
+	return target;
+}
+
 /** 只要 URL 的便捷入口。 */
 export function objectUrl(address: ObjectAddress, key: string): string {
 	return requestTargetFor(address, key).url;
@@ -418,6 +453,32 @@ export class S3Client {
 				contentType: response.headers["content-type"] ?? "",
 				etag: etagOf(response.headers),
 			};
+		});
+	}
+
+	/**
+	 * 探测桶本身（`HEAD /桶`）—— 「测试连接」的判据。
+	 *
+	 * 返回 `{ exists }` 而不是抛错表示"不存在"：桶不存在是**用户配置问题**，
+	 * 不是传输故障，两者必须能分开呈现（一个要回去改桶名，一个要检查网络）。
+	 * 凭据错误与网络故障仍然抛出（由 `classify` 定级），因为那才是真正需要区分的失败。
+	 */
+	async headBucket(): Promise<{ exists: boolean }> {
+		const target = bucketTargetFor(this.config);
+		const payloadHash = await payloadHashOf("");
+
+		return this.withRetry("headBucket", target.path, async (attempt) => {
+			const { headers } = await this.sign(target, "HEAD", payloadHash);
+			const response = await this.send({ url: target.url, method: "HEAD", headers }, {
+				operation: "HEAD",
+				key: target.path,
+				attempt,
+			});
+			if (response.status === 404) return { exists: false };
+			if (!isSuccess(response.status)) {
+				throw this.fail(response, { operation: "HEAD", key: target.path, attempt });
+			}
+			return { exists: true };
 		});
 	}
 

@@ -159,8 +159,7 @@ export function shouldInterceptPaste(
 	transfer: TransferLike | null | undefined,
 	settings: PluginSettings
 ): TransferPlan {
-	if (!settings.enabled) return refuse("插件未启用");
-	if (!settings.pasteUpload) return refuse("粘贴自动上传已关闭");
+	if (!settings.autoUpload) return refuse("自动上传已关闭");
 
 	const files = filesFromTransfer(transfer);
 	if (files.length === 0) return refuse("载荷里没有文件");
@@ -184,8 +183,7 @@ export function shouldInterceptDrop(
 	transfer: TransferLike | null | undefined,
 	settings: PluginSettings
 ): TransferPlan {
-	if (!settings.enabled) return refuse("插件未启用");
-	if (!settings.dropUpload) return refuse("拖拽自动上传已关闭");
+	if (!settings.autoUpload) return refuse("自动上传已关闭");
 
 	const rawFiles = toArray(transfer?.files);
 	if (rawFiles.length === 0) {
