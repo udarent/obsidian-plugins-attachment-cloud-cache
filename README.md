@@ -104,14 +104,18 @@ Being precise about what has actually been exercised matters more than a long fe
 **Not yet verified:** no real S3 provider (R2/MinIO/AWS) has been exercised end-to-end yet, and
 **iOS has not been tested at all** — it cannot be tested on this machine. The code avoids APIs
 known to be missing there and falls back when optional APIs are absent, but that is reasoning, not
-evidence. Android and desktop real-device verification is still pending too.
+evidence. Android has not been run on a real device either.
 
-Four specific things only a real machine can settle, written down here rather than left implicit:
-whether the link lands where you expect when **pasting** (it should be the caret); where it lands
-when **dropping** (see the known difference below); whether Obsidian's own paste handling is fully
-suppressed (a second copy of the image in the note would mean it is not); and whether the
-live-preview `src` interception behaves while editing — that one is the least conventional thing in
-this codebase, and it is the first thing to suspect if an image ever shows the wrong source.
+A **real-desktop smoke check does pass** (`npm run verify:real`, driving Obsidian over the DevTools
+protocol): the plugin loads in a real host, all four commands register, the settings tab renders,
+and — the part that only a real WebView can settle — the live-preview `src` interception installs
+without breaking anything and leaves third-party addresses alone.
+
+What that does **not** cover is anything requiring a human at the keyboard: pasting and dropping an
+image for real, whether the link lands where you expect, whether Obsidian's own paste handling is
+fully suppressed, and how the live-preview interception behaves while editing. That last one is the
+least conventional thing in this codebase and the first thing to suspect if an image ever shows the
+wrong source.
 
 **Known difference from native behaviour — dropping a file.** Native Obsidian inserts the link at
 the **pointer position**. This plugin inserts it at the **caret position**, because no public API
