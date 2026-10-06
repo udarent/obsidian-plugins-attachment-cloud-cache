@@ -38,7 +38,8 @@
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -51,6 +52,10 @@ installHostGlobals();
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..");
+
+// 最早装上：任何一条日志都可能撞上"下游已经关掉管道"，而那一刻若正处在
+// 变异中途，进程一退出就会把源码留在被改坏的状态（详见函数说明）。
+installBrokenPipeGuard();
 
 /**
  * 把一组 TS 入口打包成临时 ESM 模块并 import。
@@ -94,6 +99,76 @@ function stripToEntrySpec(entry) {
  */
 
 /**
+ * 每个被变异的源文件，对应的"原始内容"备份路径。
+ *
+ * ⚠️ 放在**系统临时目录**而不是仓库里：放仓库里会出现在 `git status` 里，
+ * 每次跑变异都留下噪音，也很容易被误提交。
+ */
+function backupPathFor(sourcePath) {
+	const digest = createHash("sha256").update(sourcePath).digest("hex").slice(0, 16);
+	return join(tmpdir(), `acc-mutation-backup-${digest}.txt`);
+}
+
+/**
+ * 让"输出被下游截断"不至于**掐死整个变异过程**。
+ *
+ * ⚠️ 这条是实测踩出来的，而且症状极具误导性：
+ * 常用 `node scripts/mutate-x.mjs | head` 只想看开头几行 ——
+ * `head` 读够就关掉管道，于是本进程下一次 `console.log` 触发 **EPIPE**，
+ * 未处理的流错误会让 Node **立刻退出**，而此时源码正处在"已变异"状态。
+ * 源码就被留在了一个被改坏的版本上，而下游看到的现象是
+ * 「某个业务断言失败」（例如"alt 里的方括号必须清掉"），
+ * 让人以为是实现坏了、跑去改实现。
+ *
+ * 所以这里吞掉 EPIPE（那是"下游不看了"的正常信号），其余错误照抛。
+ */
+function installBrokenPipeGuard() {
+	for (const stream of [process.stdout, process.stderr]) {
+		stream.on("error", (error) => {
+			if (error?.code === "EPIPE") return;
+			throw error;
+		});
+	}
+}
+
+/**
+ * 自愈：若上次运行被**强杀**（超时 / SIGKILL）在变异中途，源码会停在"已变异"状态。
+ *
+ * 这不是理论风险 —— 实测踩过：一次 `timeout` 掐掉了变异进程，
+ * `src/editor/editor-hooks.ts` 就少了一行 `replace(...)`，而工作区看上去"只是脏了一点"。
+ * 更糟的是那次**没有报错**：下一个变异脚本的基线失败，报出来的却是一句业务断言
+ * （"alt 里的方括号必须清掉"），很容易被当成实现坏了去改实现。
+ *
+ * 所以每次启动先看有没有遗留备份：有就**先还原再干活**。
+ */
+async function recoverFromInterruptedRun(sourcePath) {
+	const backup = backupPathFor(sourcePath);
+	const stale = await readFile(backup, "utf8").catch(() => null);
+	if (stale === null) return false;
+	writeFileSync(sourcePath, stale);
+	await rm(backup, { force: true });
+	return true;
+}
+
+/** 装信号处理：被 SIGINT / SIGTERM 打断时先把源码还原回去，再去死。 */
+function installRestoreHandlers(sourcePath, original) {
+	const restore = () => {
+		try {
+			writeFileSync(sourcePath, original);
+		} catch {
+			// 尽力而为：真要失败也没别的办法了
+		}
+		void rm(backupPathFor(sourcePath), { force: true });
+	};
+	for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+		process.once(signal, () => {
+			restore();
+			process.exit(130);
+		});
+	}
+}
+
+/**
  * @param {{
  *   source: string,                    相对仓库根的 TS 路径（要被改坏的那个文件）
  *   entries?: string[],                打包入口；默认就是 source 本身。
@@ -104,8 +179,22 @@ function stripToEntrySpec(entry) {
  */
 export async function runMutations({ source, entries, suite, mutations }) {
 	const sourcePath = join(REPO_ROOT, source);
+
+	// ⭐ 先自愈：上次若被强杀在变异中途，源码会停在"已变异"状态。
+	// 必须在**读原文之前**做，否则会把"被改坏的版本"当成基线。
+	const recovered = await recoverFromInterruptedRun(sourcePath);
+
 	const original = readFileSync(sourcePath, "utf8");
 	const loadEntries = entries ?? [source];
+
+	// 备份 + 装信号处理：本次若被打断，下次启动能自愈
+	await writeFile(backupPathFor(sourcePath), original);
+	installRestoreHandlers(sourcePath, original);
+
+	if (recovered) {
+		console.log(`⚠️  检测到上次运行被中断，已先还原 ${source} 再继续`);
+		console.log("");
+	}
 
 	// ⚠️ 必须 await：签名与网络类的套件是 async 的（要起 mock S3 服务、
 	// 要 await crypto）。若漏掉 await，套件返回的 Promise 被丢弃，
@@ -125,6 +214,7 @@ export async function runMutations({ source, entries, suite, mutations }) {
 	if (baseline.failed) {
 		console.log("✗ 基线未通过：未变异时套件就失败了，先修实现或测试");
 		console.log(`   ${baseline.message.split("\n")[0]}`);
+		await rm(backupPathFor(sourcePath), { force: true });
 		process.exit(1);
 	}
 	console.log(`基线：未变异时 ${source} 的套件通过 ✓`);
@@ -165,7 +255,8 @@ export async function runMutations({ source, entries, suite, mutations }) {
 		if (!ok) allCaught = false;
 	}
 
-	// 还原后必须仍然通过
+	// 还原后必须仍然通过 —— 顺带也确认"还原"这件事本身生效了。
+	// 若这里红了，说明源码没被正确还原（下一次运行的自愈会再兜一层）。
 	const after = await attempt();
 	console.log("");
 	if (after.failed) {
@@ -174,6 +265,9 @@ export async function runMutations({ source, entries, suite, mutations }) {
 	} else {
 		console.log("还原后：套件通过 ✓");
 	}
+
+	// 全部收尾完成，撤掉备份（留着会让下次启动误以为"上次被中断了"）
+	await rm(backupPathFor(sourcePath), { force: true });
 
 	console.log("");
 	console.log(
