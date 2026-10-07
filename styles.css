@@ -14,3 +14,35 @@
 	color: var(--text-error);
 	font-weight: 600;
 }
+
+/* ─────────────────────────────────────────────
+   设置页「测试连接」的结果行
+
+   ⚠️ 这些类原先只写在代码里、样式表里一个都没有 —— 于是连接测试的结果
+   **没有任何颜色**，看起来和普通说明文字一样。反馈没有视觉差异时，
+   用户会以为它根本没跑。现在按语气分三档着色。
+
+   `--text-success` / `--text-warning` / `--text-error` 都是宿主主题变量，
+   所以跟随用户的主题；不写死颜色。
+   ───────────────────────────────────────────── */
+.acc-connection-status .acc-test-line {
+	font-size: var(--font-ui-smaller);
+	margin-top: 0.25em;
+	line-height: 1.4;
+}
+
+.acc-test-pending {
+	color: var(--text-muted);
+}
+
+.acc-test-ok {
+	color: var(--text-success);
+}
+
+.acc-test-warn {
+	color: var(--text-warning);
+}
+
+.acc-test-error {
+	color: var(--text-error);
+}

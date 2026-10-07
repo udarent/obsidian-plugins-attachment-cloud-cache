@@ -406,10 +406,14 @@ async function main() {
 				postProcessor: typeof app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}].registerMarkdownPostProcessor === "function",
 				getResourcePath: typeof app.vault.getResourcePath === "function",
 				secretStorage: typeof app.secretStorage?.getSecret === "function",
+				sampleObjectKey: typeof app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}].sampleObjectKey === "function",
 			}))()`
 		);
 		log(`  ${apis.getResourcePath ? "✓" : "✗"} Vault.getResourcePath 存在（本地副本改写的落点）`);
 		log(`  ${apis.secretStorage ? "✓" : "✗"} app.secretStorage 存在（凭据不进明文）`);
+		// 「测试连接」第二步要用它取一个已存在的对象来探测公开地址 ——
+		// 改个名字不会有任何编译错误（设置页是运行时才调它的），所以在这里钉一下
+		log(`  ${apis.sampleObjectKey ? "✓" : "✗"} plugin.sampleObjectKey 存在（公开链接检查取样用）`);
 
 		// 真实设置页能否产出定义（声明式 API 在真机上的形状）。
 		//

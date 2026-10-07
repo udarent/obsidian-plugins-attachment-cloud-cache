@@ -80,7 +80,7 @@ function makeClient(mod, endpoint, overrides = {}, deps = {}) {
 }
 
 export async function runS3ClientSuite(mod) {
-	const { S3Client, S3Error, requestTargetFor, bucketTargetFor, publicUrlFor, objectBaseFor, objectUrl, normalizeEndpoint } = mod;
+	const { S3Client, S3Error, requestTargetFor, bucketTargetFor, publicUrlFor, objectBaseFor, probePublicLink, objectUrl, normalizeEndpoint } = mod;
 
 	// ============================================================
 	// 0. 端点规范化（纯函数，先把输入的口子堵上）
@@ -662,5 +662,46 @@ export async function runS3ClientSuite(mod) {
 		assert.ok(server.stored("p1.png") && server.stored("p2.png"), "两个对象都应落库");
 	});
 
-	return { scenarios: 11 };
+	// ============================================================
+	// 12. ⭐ 匿名探测公开地址（「测试连接」用它回答「外人能不能打开这条链接」）
+	// ============================================================
+	//
+	// 这条检查的全部价值在于**匿名**：带签名去请求等于拿「我自己能打开」冒充
+	// 「别人能打开」—— 那它永远绿、什么都证明不了。所以第一条断言不是状态码，
+	// 而是**请求里没有 Authorization 头**。
+	await withServer({}, async (server, endpoint) => {
+		// 替身一律要求签名 ⇒ 匿名请求拿到 403，正好就是「桶私有」那一支
+		const probe = await probePublicLink(`${endpoint}/test-bucket/photo.png`, { transport: nodeTransport() });
+		assert.equal(probe.status, 403, "私有桶上匿名请求应得到 403");
+
+		const last = server.requests.at(-1);
+		assert.ok(last, "替身应记录到这次请求");
+		assert.equal(
+			Object.keys(last.headers ?? {}).some((name) => name.toLowerCase() === "authorization"),
+			false,
+			"★ 探测必须**不带** Authorization —— 否则就是拿自己的凭据冒充「别人能打开」"
+		);
+		assert.equal(last.method, "HEAD", "用 HEAD：只要状态码，不下载图片本体");
+	});
+
+	// 模拟「桶允许匿名读取」：替身本身是私有的，用 intercept 在验签前直接给出 200
+	await withServer({ intercept: () => ({ status: 200, code: "OK" }) }, async (_server, endpoint) => {
+		const probe = await probePublicLink(`${endpoint}/test-bucket/photo.png`, { transport: nodeTransport() });
+		assert.equal(probe.status, 200, "公开可读时应为 200");
+	});
+
+	// 404：地址通、但那个对象不在（前缀少了桶名就会是这样）
+	await withServer({ intercept: () => ({ status: 404, code: "NoSuchKey" }) }, async (_server, endpoint) => {
+		const probe = await probePublicLink(`${endpoint}/wrong-bucket/photo.png`, { transport: nodeTransport() });
+		assert.equal(probe.status, 404, "对象不存在时应为 404");
+	});
+
+	// ⚠️ 连不上（DNS 错、端口关着）**不能抛错**：设置页要靠这个结果给出「前缀可能写错了」，
+	// 而一个在设置页里冒出来的异常会把整页的反馈都吞掉。
+	{
+		const probe = await probePublicLink("http://127.0.0.1:1/never.png", { transport: nodeTransport() });
+		assert.equal(probe.status, null, "★ 网络失败必须收敛成 status:null，而不是抛错");
+	}
+
+	return { scenarios: 12 };
 }

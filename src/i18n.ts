@@ -51,6 +51,15 @@ export const I18N: Record<string, Locale> = {
 		testFail_throttled: "The service is rate-limiting requests. Try again in a moment.",
 		testFail_server: "The service reported an internal error. Try again later.",
 		testFail_other: "The test failed. Check the address, the bucket name and the credentials.",
+		// ── 第二步：那个地址**别人**打得开吗（匿名探测）──
+		testPublic_ok: "The public link works — anyone can open it: {url}",
+		testPublic_forbidden:
+			"Reached that address, but it refuses anonymous access — other people cannot open your links. Make the bucket publicly readable, or set a Public URL base (a CDN or custom domain).",
+		testPublic_missing:
+			"Reached that address, but the object is not there (404) — the URL base is probably wrong. Checked: {url}",
+		testPublic_unreachable: "Could not reach that address at all — the URL base is probably wrong. Checked: {url}",
+		testPublic_other: "Could not tell whether the link works (HTTP {status}). Checked: {url}",
+		testPublic_noSample: "Nothing uploaded yet, so there is no link to check — paste an image first.",
 
 		// ── 上传 ──
 		autoUpload: "Upload on paste and drop",
@@ -213,6 +222,14 @@ export const I18N: Record<string, Locale> = {
 		testFail_throttled: "服务正在限流，请稍后再试。",
 		testFail_server: "服务端出错，请稍后再试。",
 		testFail_other: "测试失败 —— 请检查地址、桶名与凭据。",
+		// ── 第二步：那个地址**别人**打得开吗（匿名探测）──
+		testPublic_ok: "公开链接可用 —— 别人也能打开：{url}",
+		testPublic_forbidden:
+			"那个地址能连上，但拒绝匿名访问 —— 别人打不开你的链接。把存储桶设为公开读，或填一个公开访问前缀（CDN / 自定义域名）。",
+		testPublic_missing: "那个地址能连上，但对象不在（404）—— 多半是前缀写错了。检查的是：{url}",
+		testPublic_unreachable: "连不上那个地址 —— 前缀可能写错了。检查的是：{url}",
+		testPublic_other: "无法判断链接是否可用（HTTP {status}）。检查的是：{url}",
+		testPublic_noSample: "还没上传过任何东西，没有链接可检查 —— 先粘一张图。",
 
 		autoUpload: "粘贴或拖入时自动上传",
 		autoUploadDesc:

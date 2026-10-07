@@ -223,3 +223,47 @@ export function formatCacheLimitMb(value: unknown): string {
 export function connectionFailureKey(kind: ConnectionFailureKind): string {
 	return `testFail_${kind}`;
 }
+
+/**
+ * 公开地址探测结果的归类。
+ *
+ * ⚠️ 与 `classifyConnectionFailure` 是**两个不同的问题**，绝不能合并：
+ * 那个问的是「**我**能不能连上存储」，这个问的是「**别人**能不能打开我笔记里那条链接」。
+ * 合并了就会出现最坏的那种表现 —— 自己这边一切正常，而发给别人的链接全是死的。
+ *
+ * 每一类的**修法不同**，所以也不能都归成"打不开"：
+ * - `forbidden`：地址对、桶私有 ⇒ 开公开读，或配一个公开访问前缀（CDN / 自定义域名）
+ * - `missing`：地址通、对象不在 ⇒ 多半前缀写错（例如少了桶名）
+ * - `unreachable`：地址本身不对 ⇒ 前缀写错了
+ */
+export type PublicLinkKind = "ok" | "forbidden" | "missing" | "unreachable" | "other";
+
+export function classifyPublicLink(status: number | null): PublicLinkKind {
+	if (status === null) return "unreachable";
+	if (status >= 200 && status < 300) return "ok";
+	if (status === 401 || status === 403) return "forbidden";
+	if (status === 404) return "missing";
+	return "other";
+}
+
+export function publicLinkKey(kind: PublicLinkKind): string {
+	return `testPublic_${kind}`;
+}
+
+/**
+ * 归类 → 呈现的**语气**（界面上的颜色）。
+ *
+ * 分三档而不是"对/错"：`forbidden` 是**知道了就好**（桶私有是正当选择，只是链接对外是死的），
+ * 而 `missing` / `unreachable` 是**地址配错了**（该去改前缀）。都涂成红色会把两件事混成一件，
+ * 用户就不知道该不该动手改。
+ */
+export function publicLinkTone(kind: PublicLinkKind): "ok" | "warn" | "error" {
+	switch (kind) {
+		case "ok":
+			return "ok";
+		case "forbidden":
+			return "warn";
+		default:
+			return "error";
+	}
+}

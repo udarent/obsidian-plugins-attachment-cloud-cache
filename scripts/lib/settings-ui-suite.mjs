@@ -24,6 +24,9 @@ export function runSettingsUiSuite(mod) {
 		deleteModeOptions,
 		classifyConnectionFailure,
 		connectionFailureKey,
+		classifyPublicLink,
+		publicLinkKey,
+		publicLinkTone,
 		describeRememberedSites,
 		ensureSecretSlot,
 		SECRET_SLOT_PREFIX,
@@ -111,6 +114,36 @@ export function runSettingsUiSuite(mod) {
 	for (const kind of ["auth", "bucketMissing", "network", "throttled", "server", "other"]) {
 		assert.equal(connectionFailureKey(kind), `testFail_${kind}`, `每类失败都要有文案 key：${kind}`);
 	}
+
+	// ============================================================
+	// 4b. ⭐ 公开地址探测的归类（「测试连接」的第二步）
+	// ============================================================
+	//
+	// 这一步回答的是另一个问题：「我笔记里那些链接，**别人**打得开吗？」
+	// 每一类的**修法不同**，所以绝不能合并成"打不开"：
+	// - 403/401：地址对、但桶私有 ⇒ 开公开读，或配一个公开访问前缀（CDN / 自定义域名）
+	// - 404：地址通、对象不在 ⇒ 多半是前缀写错了（例如少了桶名）
+	// - 连不上：地址本身不对 ⇒ 前缀写错了
+	assert.equal(classifyPublicLink(200), "ok");
+	assert.equal(classifyPublicLink(204), "ok", "2xx 都算可用");
+	assert.equal(classifyPublicLink(403), "forbidden", "403 是「能连上但拒绝匿名访问」");
+	assert.equal(classifyPublicLink(401), "forbidden", "401 同理（有的服务商这样表达）");
+	assert.equal(classifyPublicLink(404), "missing", "404 是「地址通、对象不在」");
+	assert.equal(classifyPublicLink(500), "other");
+	assert.equal(classifyPublicLink(null), "unreachable", "★ 网络层失败（null）归为「连不上」");
+
+	for (const kind of ["ok", "forbidden", "missing", "unreachable", "other"]) {
+		assert.equal(publicLinkKey(kind), `testPublic_${kind}`, `每类都要有文案 key：${kind}`);
+	}
+
+	// 语气分三档：`forbidden` 只是"知道了就好"（桶私有是正当选择），
+	// 而 `missing`/`unreachable` 是**地址配错了**，该去改前缀。
+	// 都涂成红色会让用户以为"连接坏了"，从而去改根本没坏的东西。
+	assert.equal(publicLinkTone("ok"), "ok");
+	assert.equal(publicLinkTone("forbidden"), "warn", "桶私有 = 提示，不是错误");
+	assert.equal(publicLinkTone("missing"), "error", "地址通则对象不在 = 前缀配错了");
+	assert.equal(publicLinkTone("unreachable"), "error", "连不上 = 地址配错了");
+	assert.equal(publicLinkTone("other"), "error");
 
 	// ============================================================
 	// 5. 键的解析

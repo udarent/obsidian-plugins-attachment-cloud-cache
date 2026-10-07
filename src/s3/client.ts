@@ -316,6 +316,34 @@ export function objectBaseFor(address: ObjectAddress): string {
 	return `${endpoint}/${uriEncode(bucket)}`;
 }
 
+/** 匿名探测的结果。 */
+export interface PublicLinkProbe {
+	/** HTTP 状态码；网络层失败（DNS 错、连不上、超时）为 `null`。 */
+	status: number | null;
+}
+
+/**
+ * **匿名**请求一个公开地址，只回答一个问题：「别人能不能打开这条链接？」
+ *
+ * ——这是本模块里唯一**不带签名**的请求，而"不带签名"正是它的全部价值：
+ * 带凭据去请求等于拿「我自己能打开」冒充「别人能打开」，那条检查会永远绿、
+ * 什么都证明不了（`test-s3-client` 有一条断言专门钉住"请求里没有 Authorization"）。
+ *
+ * 用 `HEAD`：只要状态码，不下载图片本体（点一次"测试"不该把一张大图拉一遍）。
+ *
+ * ⚠️ 网络层失败**收敛成 `status: null`，不抛错**：调用方是设置页，一个冒出来的异常
+ * 会把整页的反馈吞掉，而这里恰恰要给出「前缀可能写错了」这种可操作的结论。
+ */
+export async function probePublicLink(url: string, deps: S3ClientDeps = {}): Promise<PublicLinkProbe> {
+	const transport = deps.transport ?? obsidianTransport;
+	try {
+		const response = await transport({ url, method: "HEAD", headers: {} });
+		return { status: response.status };
+	} catch {
+		return { status: null };
+	}
+}
+
 // ─────────────────────────── 客户端 ───────────────────────────
 
 export interface S3ClientConfig extends ObjectAddress {

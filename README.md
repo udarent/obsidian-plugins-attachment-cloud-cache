@@ -63,8 +63,8 @@ Open **Settings → Attachment Cloud Cache**, then:
    would produce
 3. Type your **Access key ID** (a plain text field — capitals are normal), then the **Secret access
    key** in the field right below it
-4. Click **Test connection** — it sends one signed request to your bucket, and on failure tells you
-   roughly what kind of problem it is
+4. Click **Test connection** — it sends one signed request to your bucket, and then opens the URL
+   your links would use **without any credentials**, telling you whether other people can open them
 
 ## Things to know
 

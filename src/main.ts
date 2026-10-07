@@ -499,6 +499,16 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	}
 
 	/**
+	 * 索引里任意一条对象的 key —— 供设置页验证「笔记里那条公开链接，**别人**打得开吗」。
+	 *
+	 * 没有则返回 `null`（还没上传过任何东西）。设置页据此**如实说"无从验证"**，
+	 * 而不是拿一个假的通过糊弄过去。
+	 */
+	sampleObjectKey(): string | null {
+		return this.currentIndex().keys()[0] ?? null;
+	}
+
+	/**
 	 * 按**当前**设置与钥匙串造一个客户端；还没配齐时返回 `null`。
 	 *
 	 * 复用 `connectionReadiness`（设置页的"测试连接"用的是同一个判定）⇒

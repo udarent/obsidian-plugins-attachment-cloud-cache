@@ -33,24 +33,32 @@ import { Notice, PluginSettingTab } from "obsidian";
 import type { App, Setting, SettingDefinitionItem, SettingGroupItem } from "obsidian";
 
 import type AttachmentCloudCachePlugin from "../main";
-import { createS3Client, objectBaseFor } from "../s3/client";
+import { createS3Client, objectBaseFor, probePublicLink, publicUrlFor } from "../s3/client";
+import type { S3ClientConfig } from "../s3/client";
 import { connectionReadiness } from "../s3/credentials";
 import { fromControlValue, isWritableValue, readByKey, toControlValue, writeByKey } from "./settings-bindings";
 import {
 	classifyConnectionFailure,
+	classifyPublicLink,
 	connectionFailureKey,
 	describeRememberedSites,
 	ensureSecretSlot,
 	localCopyOptions,
+	publicLinkKey,
+	publicLinkTone,
 	randomSlotPart,
 	shouldShowCacheFolder,
 } from "./settings-logic";
 
-/** 一次连接测试的结果（已翻成文案 key，界面只负责显示）。 */
-interface TestOutcome {
-	ok: boolean;
+/** 一次连接测试的**一行**结果（已翻成文案 key，界面只负责显示）。 */
+interface TestLine {
 	key: string;
 	params?: Record<string, unknown>;
+	/**
+	 * 呈现语气。分三档是有意的：`warn` 表示"知道了就好"（例如桶私有 —— 那是正当选择，
+	 * 只是链接对外是死的），`error` 表示"该去改点什么"。都涂成红色会让用户去改没坏的东西。
+	 */
+	tone: "ok" | "warn" | "error";
 }
 
 export class SettingsTab extends PluginSettingTab {
@@ -233,9 +241,15 @@ export class SettingsTab extends PluginSettingTab {
 	/**
 	 * 「测试连接」按钮。
 	 *
-	 * 真的发一条 `HEAD /桶` 出去 —— 只做静态校验的话它就不叫"测试连接"了。
-	 * 结果**就地显示**在说明下方：用 Notice 会一闪而过，而排查连接时
-	 * 用户需要对照着改（Notice 只在成功时补一条，免得重复打扰）。
+	 * 它做**两步**，回答两个不同的问题：
+	 * 1. 真的发一条 `HEAD /桶` 出去 —— 「**我**这边连得上吗？」（只做静态校验就不叫测试连接了）
+	 * 2. **匿名**请求一次「当前配置会写进笔记的那个地址」—— 「**别人**打得开我笔记里的链接吗？」
+	 *
+	 * 第 2 步才是最容易被漏掉的一半：前一步全绿、而发给别人的链接全是死的，
+	 * 是最能长期不被察觉的状态（本项目就出过一次 —— 公开前缀根本没生效，谁都没发现）。
+	 *
+	 * 结果**就地逐行显示**在说明下方：用 Notice 会一闪而过，而排查连接时用户需要
+	 * 对照着改（Notice 只在第一步通过时补一条，免得重复打扰）。
 	 */
 	private renderConnectionTest(setting: Setting): void {
 		const statusEl = setting.descEl.createDiv({ cls: "acc-connection-status" });
@@ -244,14 +258,21 @@ export class SettingsTab extends PluginSettingTab {
 			button.setButtonText(this.t("testConnection")).onClick(async () => {
 				button.setDisabled(true);
 				button.setButtonText(this.t("testing"));
-				statusEl.setText(this.t("testing"));
-				statusEl.removeClass("acc-ok", "acc-error");
+				statusEl.empty();
+				statusEl.createDiv({ cls: "acc-test-line acc-test-pending", text: this.t("testing") });
 
 				try {
-					const outcome = await this.runConnectionTest();
-					statusEl.setText(this.t(outcome.key, outcome.params));
-					statusEl.addClass(outcome.ok ? "acc-ok" : "acc-error");
-					if (outcome.ok) new Notice(this.t(outcome.key, outcome.params));
+					const lines = await this.runConnectionTest();
+					statusEl.empty();
+					for (const line of lines) {
+						statusEl.createDiv({
+							cls: `acc-test-line acc-test-${line.tone}`,
+							text: this.t(line.key, line.params),
+						});
+					}
+					if (lines[0]?.tone === "ok") {
+						new Notice(lines.map((line) => this.t(line.key, line.params)).join("\n"));
+					}
 				} finally {
 					button.setDisabled(false);
 					button.setButtonText(this.t("testConnection"));
@@ -260,21 +281,48 @@ export class SettingsTab extends PluginSettingTab {
 		});
 	}
 
-	private async runConnectionTest(): Promise<TestOutcome> {
+	private async runConnectionTest(): Promise<TestLine[]> {
 		const readiness = connectionReadiness(this.app.secretStorage, this.plugin.settings);
 		if (!readiness.ready) {
-			return { ok: false, key: "testFail_notReady", params: { problem: readiness.problem } };
+			return [{ key: "testFail_notReady", params: { problem: readiness.problem }, tone: "error" }];
 		}
 
 		try {
 			const client = createS3Client(readiness.config);
 			const { exists } = await client.headBucket();
-			return exists ? { ok: true, key: "testOk" } : { ok: false, key: "testFail_bucketMissing" };
+			if (!exists) return [{ key: "testFail_bucketMissing", tone: "error" }];
 		} catch (error) {
 			// 只取**归类**，不把原始 message 抛给用户：那是给排查用的（可能带一屏 XML），
 			// 而用户此刻需要的是"下一步改哪儿"。
-			return { ok: false, key: connectionFailureKey(classifyConnectionFailure(error)) };
+			return [{ key: connectionFailureKey(classifyConnectionFailure(error)), tone: "error" }];
 		}
+
+		// 第一步过了，第二步才有参考价值（凭据/桶都不对时，公开地址的结论说明不了什么）
+		return [{ key: "testOk", tone: "ok" }, await this.runPublicLinkCheck(readiness.config)];
+	}
+
+	/**
+	 * 第二步：**匿名**试着打开「当前配置会写进笔记的那个地址」，回答「别人打得开吗」。
+	 *
+	 * ⚠️ 必须试**真的要写的那个地址**（用 `publicUrlFor` 算，与写链接同一套推导）。
+	 * 自己另拼一个地址来测，测的就不是用户笔记里那条链接了 —— 而本项目刚因为
+	 * "推导与写入不同源"吃过一次亏（公开前缀根本没传到客户端）。
+	 */
+	private async runPublicLinkCheck(config: S3ClientConfig): Promise<TestLine> {
+		const key = this.plugin.sampleObjectKey();
+		if (!key) {
+			// 没有对象可试：**如实说无从验证**，而不是报一个假的通过
+			return { key: "testPublic_noSample", tone: "warn" };
+		}
+
+		const url = publicUrlFor(config, key);
+		const probe = await probePublicLink(url);
+		const kind = classifyPublicLink(probe.status);
+		return {
+			key: publicLinkKey(kind),
+			params: { status: probe.status ?? "-", url },
+			tone: publicLinkTone(kind),
+		};
 	}
 
 	// ─────────────────────── 上传 ───────────────────────

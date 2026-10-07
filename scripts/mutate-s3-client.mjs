@@ -192,5 +192,22 @@ await runMutations({
 			to: "\treturn `${endpoint}`;",
 			expect: "必须与 requestTargetFor 同源",
 		},
+		{
+			// 后果：探测带着自己的凭据去请求 ⇒ "我能打开"被当成"别人也能打开"，
+			// 这条检查**永远**报通过，而它对外的意义是零。这是最要命的一种变异：
+			// 它不会让任何东西变红（状态码反而更"正常"），只能靠"请求里有没有 Authorization"发现。
+			name: "★ 匿名探测带上了 Authorization（拿自己冒充别人，检查永远绿）",
+			from: '\t\tconst response = await transport({ url, method: "HEAD", headers: {} });',
+			to: '\t\tconst response = await transport({ url, method: "HEAD", headers: { authorization: "AWS4-HMAC-SHA256 fake" } });',
+			expect: "探测必须**不带** Authorization",
+		},
+		{
+			// 后果：网络失败直接抛到设置页 ⇒ 用户点了"测试"却什么反馈都没有
+			//（异常把整页的更新都吞了），而这本该给出"前缀可能写错了"这种可操作的结论。
+			name: "★ 连不上时抛错而不是收敛成 status:null（设置页会没反应）",
+			from: "\t\treturn { status: null };",
+			to: "\t\treturn { status: 0 };",
+			expect: "网络失败必须收敛成 status:null",
+		},
 	],
 });

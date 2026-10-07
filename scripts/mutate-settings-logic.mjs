@@ -106,5 +106,20 @@ await runMutations({
 			to: '\tconst trimmed = String(existing ?? "");',
 			expect: "纯空白的槽位名视同没有",
 		},
+		{
+			// 后果：403（桶私有）被归到"其它"⇒ 用户看到一句含糊的"无法判断"，
+			// 而真正该做的是"开公开读或配公开前缀"。提示指错方向。
+			name: "★ 403 不再归为「拒绝匿名访问」（提示退化成含糊的「无法判断」）",
+			from: '\tif (status === 401 || status === 403) return "forbidden";',
+			to: '\tif (status === 401) return "forbidden";',
+			expect: "403 是「能连上但拒绝匿名访问」",
+		},
+		{
+			// 后果：桶私有被涂成红色 ⇒ 用户以为"连接坏了"，去改根本没坏的东西。
+			name: "★ 桶私有被当成错误而不是提示（语气误导）",
+			from: '\t\tcase "forbidden":\n\t\t\treturn "warn";',
+			to: '\t\tcase "forbidden":\n\t\t\treturn "error";',
+			expect: "桶私有 = 提示，不是错误",
+		},
 	],
 });
