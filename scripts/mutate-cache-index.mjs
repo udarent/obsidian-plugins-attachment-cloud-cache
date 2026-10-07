@@ -111,5 +111,39 @@ await runMutations({
 			to: "return { entries: this.toArray() };",
 			expect: "带版本号",
 		},
+		{
+			// 后果：坏时间戳（字符串 / 负数 / NaN）原样流进索引 ⇒ 缓存轮换按"最久没用过"
+			// 排序时算出 NaN，排序结果不可预测 —— 表现为"有时候删掉的是天天在看的图"。
+			name: "★ 「最近使用时间」不再校验（坏时间戳流进去，轮换排序结果不可预测）",
+			from: "\t\tlastUsedAt: pickNonNegativeNumber(raw.lastUsedAt),",
+			to: "\t\tlastUsedAt: raw.lastUsedAt,",
+			// 先红的其实是最前面那条"缺失字段应补安全默认值"（缺字段时不再是 0 而是 undefined）——
+			// 与"坏值不校验"是同一个缺陷的两种表现，所以归因写它。
+			expect: "缺失字段",
+		},
+		{
+			// 后果：给一个索引里没有的 key 记"最近使用" ⇒ 凭空造出一条记录（且没有 cachePath），
+			// 于是轮换会去管一个它根本不该管的对象。
+			name: "★ 记录不存在时也返回「已更新」（凭空造记录）",
+			from: "\t\tif (!entry) return false;\n",
+			to: "\t\tif (!entry) return true;\n",
+			expect: "不创建",
+		},
+		{
+			// 后果：NaN / 0 / 负数也写进去 ⇒ 之后所有基于时间的比较都失效，
+			// 而这一层唯一的用途就是排序。
+			name: "★ 坏的时间值也写进索引（之后时间比较全部失效）",
+			from: '\t\tif (typeof at !== "number" || !Number.isFinite(at) || at <= 0) return false;\n',
+			to: "\t\t// 变异：不校验时间值\n",
+			expect: "不该写",
+		},
+		{
+			// 后果：渲染热路径（一屏几十张图、滚动再来一轮）每次都把索引标脏并落盘 ⇒
+			// 无谓的持续写盘，而这一层只是给轮换排序用的。
+			name: "★ 去掉「最近使用」的节流（渲染热路径把索引反复标脏）",
+			from: "\t\tif (previous > 0 && at - previous < minIntervalMs) return false;\n",
+			to: "\t\t// 变异：不节流\n",
+			expect: "重复更新",
+		},
 	],
 });

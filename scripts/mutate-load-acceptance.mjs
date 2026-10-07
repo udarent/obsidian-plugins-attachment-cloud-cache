@@ -94,5 +94,37 @@ await runMutations({
 			to: "\t\tvoid store;\n",
 			expect: "记忆文件",
 		},
+		{
+			// 后果：上限默认是 0（不限制），于是"忘了装配轮换器"在界面上**毫无痕迹** ——
+			// 用户设了上限、保存了设置，然后什么都不会发生。
+			name: "★ 入口不装配缓存轮换器（设了上限也不会生效）",
+			from: "\t\tthis.rotation = createCacheRotator({\n",
+			to: "\t\tthis.rotation = null;\n\t\tvoid createCacheRotator({\n",
+			expect: "轮换器",
+		},
+		{
+			// 后果：用户把上限调小之后要等下一次周期检查（最多 10 分钟）才生效 ——
+			// 而"改完设置立刻看到效果"正是用户的期待。
+			name: "★ 保存设置后不触发轮换（改了上限不立刻生效）",
+			from: '\t\tvoid this.rotation?.maybeRotate("settings");\n',
+			to: "\t\t// 变异：不触发\n",
+			expect: "自动淘汰",
+		},
+		{
+			// 后果：周期检查不再登记 ⇒ 插件**永远不会自己发现超限**，
+			// 缓存会一直涨到用户手动改一次设置为止。
+			name: "★ 忘了登记周期定时器（永远不会自己发现超限）",
+			from: "\t\tthis.register(() => window.clearInterval(intervalTimer));\n",
+			to: "\t\t// 变异：不登记周期定时器的清理\n",
+			expect: "清理回调",
+		},
+		{
+			// 后果：同上，但少的是"启动那一轮" —— 它恰好是**唯一**会在索引坏掉时
+			// 直接量磁盘的一轮；缺了它，那种情况下上限形同虚设。
+			name: "★ 忘了登记启动定时器（索引坏掉时上限永久失效）",
+			from: "\t\tthis.register(() => window.clearTimeout(startupTimer));\n",
+			to: "\t\t// 变异：不登记启动定时器的清理\n",
+			expect: "清理回调",
+		},
 	],
 });

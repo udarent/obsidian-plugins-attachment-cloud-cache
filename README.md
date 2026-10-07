@@ -13,7 +13,9 @@ cache folder — so images still render when you are offline.
 > **fetching missing copies** on demand (a new device, or a cache you cleared); **caching images from
 > other sites** — off by default; once you turn it on, an image from another site is asked about
 > **once per site**, and if you agree it is downloaded, uploaded to your storage and the link in your
-> note is rewritten (a site you declined is never asked about again); and four maintenance
+> note is rewritten (a site you declined is never asked about again); **a cache size limit** — off by
+> default; set a limit and the least recently used copies are moved to the trash in the background
+> (they come back when you view them again); and four maintenance
 > commands (show cache usage, repair the index, clean up unused cache files, upload existing
 > attachments). Everything runs on Obsidian 1.13.0+ on desktop and mobile.
 >

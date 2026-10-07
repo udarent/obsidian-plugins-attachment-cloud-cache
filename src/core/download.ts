@@ -212,6 +212,8 @@ export function createLocalCopyEnsurer(deps: LocalCopyDeps) {
 				contentType: downloaded.contentType,
 				etag: downloaded.etag,
 				uploadedAt: (deps.now?.() ?? new Date()).toISOString(),
+				// 刚下载的副本就是"刚被用到"的（这次渲染正是在等它）
+				lastUsedAt: (deps.now?.() ?? new Date()).getTime(),
 				// 下载来的副本没有"原始文件名"这个概念，留空（字段本身只用于报告可读性）
 				sourceName: "",
 			};

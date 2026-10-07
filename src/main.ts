@@ -34,8 +34,10 @@ import { CacheIndex } from "./cache/index";
 import { createIndexStore, makeSerializer } from "./host/runtime";
 import type { HostContext } from "./host/runtime";
 import { createEditorHandlers } from "./host/editor-bridge";
-import { auditForCleanup, runBatchUpload, runCleanup } from "./maintenance/run";
+import { auditForCleanup, collectCacheFiles, runBatchUpload, runCleanup, runEviction, scanReferences } from "./maintenance/run";
 import type { MaintenanceDeps } from "./maintenance/run";
+import { createCacheRotator } from "./maintenance/rotation";
+import type { CacheRotator } from "./maintenance/rotation";
 import { selectUploadCandidates } from "./maintenance/batch";
 import { ingestAttachment } from "./core/ingest";
 import { confirmWithModal } from "./ui/confirm-modal";
@@ -54,6 +56,23 @@ import { createExternalHook } from "./render/external-hook";
 import type { ExternalAskChoice, ExternalAskInfo, ExternalHook } from "./render/external-hook";
 import { createExternalCacher } from "./core/external-cache";
 import { askExternalCacheWithNotice } from "./ui/external-notice";
+
+/**
+ * 启动后延迟多久做第一次缓存上限检查。
+ *
+ * 延迟是刻意的：超限时那一轮要列缓存目录、还要扫全库笔记（判断哪些副本还被人引用），
+ * 直接放在 `onload` 里会让"打开 Obsidian"变慢。3 秒足够让界面先出来。
+ */
+const ROTATION_STARTUP_DELAY_MS = 3 * 1000;
+
+/**
+ * 周期性兜底检查的间隔。
+ *
+ * ⚠️ 间隔短不会造成持续 I/O：每一轮先走**便宜的门槛**（索引里的字节求和，
+ * 纯内存），没超就立刻返回。真正昂贵的部分（列目录、扫笔记）只在超限时才发生，
+ * 而且还有一层分钟级节流。
+ */
+const ROTATION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
 
 export default class AttachmentCloudCachePlugin extends Plugin {
 	settings: PluginSettings = { ...SETTINGS_DEFAULTS };
@@ -84,6 +103,9 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 
 	/** 站外缓存的编排。**必须是稳定的一份** —— 去重表挂在它的闭包里。 */
 	private externalHook: ExternalHook | null = null;
+
+	/** 缓存上限的自动轮换。同上：节流与并发标志挂在它的闭包里。 */
+	private rotation: CacheRotator | null = null;
 
 	/**
 	 * 询问接缝。
@@ -175,6 +197,36 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			cache: (url, notePath) => cacheExternalImage(url, notePath),
 			onError: (error) => console.error("[attachment-cloud-cache] 站外图片处理出错", error),
 		});
+
+		// ── 缓存上限：后台自动轮换（超限时淘汰最久没用过的副本） ──
+		//
+		// 默认**不限制**（`cacheLimitMb: 0`），此时这一整条链路连一次 I/O 都不会做。
+		this.rotation = createCacheRotator({
+			settings: () => this.settings,
+			index: () => this.currentIndex(),
+			// 复用维护功能那三个函数，而不是另写一套：列目录、扫引用、送回收站
+			// 都只有一处实现，行为不会因为"从哪条路径进来"而不同。
+			collectFiles: () => collectCacheFiles(this.app, this.settings.cacheFolder),
+			scanReferencedKeys: async () => (await scanReferences(this.app, (url) => this.keyOfUrl(url))).keys,
+			evict: (plan) => runEviction(this.maintenanceDeps(), plan),
+			notify: (message) => new Notice(message),
+			t: (key, params) => this.t(key, params),
+			onError: (error) => console.error("[attachment-cloud-cache] 缓存轮换出错", error),
+		});
+
+		// 触发 ①：启动后延迟一次。**延迟**是刻意的 —— 超限时这一轮要列目录、
+		// 扫全库笔记，不能挡在插件加载路径上。
+		const startupTimer = window.setTimeout(() => {
+			void this.rotation?.maybeRotate("startup");
+		}, ROTATION_STARTUP_DELAY_MS);
+		this.register(() => window.clearTimeout(startupTimer));
+
+		// 触发 ②：周期性兜底。这一轮先走**便宜的门槛**（内存里求和），
+		// 没超就直接返回 —— 所以间隔短也不会造成持续 I/O。
+		const intervalTimer = window.setInterval(() => {
+			void this.rotation?.maybeRotate("interval");
+		}, ROTATION_CHECK_INTERVAL_MS);
+		this.register(() => window.clearInterval(intervalTimer));
 
 		// ── 渲染：把属于本存储的图换成本地副本（离线可用的落点）──
 		//
@@ -272,6 +324,12 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		const { audit } = await auditForCleanup(deps, (url) => this.keyOfUrl(url));
 		const mb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1);
 
+		// 上限：0 = 不限制。用一句人话表示，而不是把 0 直接摆给用户看
+		// （"上限：0 MB" 会被读成"上限是零"，那是相反的意思）。
+		const limit = this.settings.cacheLimitMb > 0
+			? this.t("cacheLimitValue", { mb: this.settings.cacheLimitMb })
+			: this.t("cacheLimitNone");
+
 		new Notice(
 			this.t("maintainUsageReport", {
 				total: audit.bytes.total,
@@ -281,6 +339,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				orphans: audit.orphans.length,
 				unused: audit.unused.length,
 				missing: audit.missingCopies.length,
+				limit,
 			})
 		);
 	}
@@ -397,6 +456,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		this.indexStore = null;
 		this.siteStore = null;
 		this.externalHook = null;
+		this.rotation = null;
 	}
 
 	/**
@@ -483,6 +543,9 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				return outcome.localPath || null;
 			},
 			onLocalCopyMissing: (key) => void this.forgetLocalCopy(key),
+			// 记下"这张图刚被看到" —— 缓存上限轮换靠它区分"常看"与"早就没人看"。
+			// ⚠️ 只改内存（落盘在 `IndexStore.touch` 里防抖）：这条路径是渲染热路径。
+			onLocalCopyUsed: (key) => void this.indexStore?.touch(key),
 			notify: (message) => new Notice(message),
 		};
 	}
@@ -517,6 +580,11 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+		// 触发 ③：用户可能刚把上限调小（甚至从"不限制"改成有值），
+		// 那时他期待的是"立刻生效"，而不是等下一个周期。
+		// ⚠️ 这条路径每次改设置都会被调到（包括每敲一个字符），
+		// 所以轮换器自带**节流**，而门槛检查只花一次内存求和 —— 不会变成打字卡顿。
+		void this.rotation?.maybeRotate("settings");
 	}
 
 	/**
@@ -562,6 +630,11 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			index: () => store?.index ?? new CacheIndex(),
 			persistIndex: async () => {
 				if (store) await this.serialize(() => store.save());
+				// 触发 ④：`persistIndex` 在**每次成功上传/下载之后**都会被调用
+				// （那是"缓存刚长大"最直接的时刻），所以用它做"长大"这个信号。
+				// 它也会被自愈之类的路径调到 —— 没关系：那一轮只花一次内存求和，
+				// 而且轮换器自己带节流与并发保护。
+				void this.rotation?.maybeRotate("growth");
 			},
 			notify: (message) => new Notice(message),
 			t: (key, params) => this.t(key, params),

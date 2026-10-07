@@ -248,6 +248,15 @@ export class SettingsTab extends PluginSettingTab {
 				control: { type: "text", key: "cacheFolder" },
 			},
 			{
+				name: this.t("cacheLimit"),
+				desc: this.t("cacheLimitDesc"),
+				aliases: ["limit", "quota", "size", "rotate", "上限", "轮换", "容量", "空间"],
+				// ⚠️ 与缓存目录同一个显示条件：副本不在缓存目录里时（`keep`），
+				// 这个上限永远不会触发 —— 显示一个永远不起作用的开关比不显示更糟。
+				visible: () => shouldShowCacheFolder(this.plugin.settings.localCopy),
+				control: { type: "text", key: "cacheLimitMb", placeholder: this.t("cacheLimitPlaceholder") },
+			},
+			{
 				name: this.t("fallbackDownload"),
 				desc: this.t("fallbackDownloadDesc"),
 				aliases: ["download", "sync", "下载", "同步"],

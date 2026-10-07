@@ -112,7 +112,7 @@ export const I18N: Record<string, Locale> = {
 		cmdUploadAttachments: "Upload existing attachments",
 
 		maintainUsageReport:
-			"Cache: {totalMb} MB in {count} files. Reclaimable: {reclaimableMb} MB — {orphans} orphaned, {unused} unused, {missing} entries pointing at missing files.",
+			"Cache: {totalMb} MB in {count} files. Reclaimable: {reclaimableMb} MB — {orphans} orphaned, {unused} unused, {missing} entries pointing at missing files. Limit: {limit}.",
 		maintainRepaired: "Index repaired: {healed} stale entries removed, {skipped} file(s) skipped.",
 		maintainNothingToClean: "Nothing to clean up. {healed} stale index entries were repaired.",
 		maintainCleanTitle: "Clean up cache files",
@@ -160,6 +160,18 @@ export const I18N: Record<string, Locale> = {
 		externalNotImage: "That address is not an image ({contentType}), so it was not uploaded.",
 		externalTooLarge: "The image is larger than the {mb} MB limit, so it was not uploaded.",
 		externalUploadFailed: "Downloaded the image but could not upload it: {error}",
+
+		// ── 缓存上限与自动轮换 ──
+		cacheLimit: "Cache size limit (MB)",
+		cacheLimitDesc:
+			"Once the cache folder grows past this, the least recently used copies are moved to the system trash in the background — they are downloaded again the next time you view them. 0 means no limit. Trashed files leave the vault immediately, but the disk space is only freed when your system empties the trash.",
+		cacheLimitPlaceholder: "0 = no limit",
+		cacheLimitNone: "unlimited",
+		cacheLimitValue: "{mb} MB",
+		cacheEvicted:
+			"Cache is over its limit: moved {count} least recently used copies ({mb} MB) to the trash. They will be downloaded again when you view them.",
+		cacheEvictedPartial:
+			"Cache is over its limit: moved {count} copies ({mb} MB) to the trash, still {overMb} MB over the limit.",
 	},
 	zh: {
 		sectionStorage: "存储连接",
@@ -238,7 +250,7 @@ export const I18N: Record<string, Locale> = {
 		cmdUploadAttachments: "上传已存在的附件",
 
 		maintainUsageReport:
-			"缓存共 {count} 个文件、{totalMb} MB。其中可回收 {reclaimableMb} MB —— 孤儿 {orphans} 个、未引用 {unused} 个、索引指向的文件已不在 {missing} 条。",
+			"缓存共 {count} 个文件、{totalMb} MB。其中可回收 {reclaimableMb} MB —— 孤儿 {orphans} 个、未引用 {unused} 个、索引指向的文件已不在 {missing} 条。上限：{limit}。",
 		maintainRepaired: "索引已修复：清理失效记录 {healed} 条，跳过文件 {skipped} 个。",
 		maintainNothingToClean: "没有需要清理的内容。已修复失效索引记录 {healed} 条。",
 		maintainCleanTitle: "清理缓存文件",
@@ -282,6 +294,18 @@ export const I18N: Record<string, Locale> = {
 		externalNotImage: "该地址不是图片（{contentType}），未上传。",
 		externalTooLarge: "图片超过 {mb} MB 上限，未上传。",
 		externalUploadFailed: "图片已下载，但上传失败：{error}",
+
+		// ── 缓存上限与自动轮换 ──
+		cacheLimit: "缓存大小上限（MB）",
+		cacheLimitDesc:
+			"缓存目录超过这个大小后，后台会把最久没用过的副本移入系统回收站 —— 下次看到它们时会自动重新下载。填 0 表示不限制。移入回收站的文件会立刻离开 vault，但磁盘空间要等系统清空回收站才真正释放。",
+		cacheLimitPlaceholder: "0 = 不限制",
+		cacheLimitNone: "不限",
+		cacheLimitValue: "{mb} MB",
+		cacheEvicted:
+			"缓存超出上限：已把 {count} 份最久没用过的副本（{mb} MB）移入回收站。下次看到它们时会自动重新下载。",
+		cacheEvictedPartial:
+			"缓存超出上限：已移入回收站 {count} 份（{mb} MB），仍超出上限 {overMb} MB。",
 	},
 };
 

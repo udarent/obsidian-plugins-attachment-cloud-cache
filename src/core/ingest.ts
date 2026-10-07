@@ -339,6 +339,9 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 		contentType,
 		etag,
 		uploadedAt: now.toISOString(),
+		// 刚写下的副本就是"刚被用到"的：粘贴完用户多半马上要看它。
+		// 这也让它在缓存轮换的宽限期内不会被立刻淘汰（见 maintenance/eviction.ts）。
+		lastUsedAt: now.getTime(),
 		sourceName: fileName,
 	};
 	// `trash` 处置时本地没有副本：仍登记，但 cachePath 记空串会被 normalizeEntry 丢弃 → 

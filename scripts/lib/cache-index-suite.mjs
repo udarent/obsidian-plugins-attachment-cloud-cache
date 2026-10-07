@@ -23,6 +23,8 @@ const SAMPLE = {
 	contentType: "image/png",
 	etag: "deadbeef",
 	uploadedAt: "2026-10-06T05:06:58.000Z",
+	// "最近被用到"的时间（epoch ms）—— 缓存上限的轮换靠它排序
+	lastUsedAt: Date.parse("2026-10-06T07:00:00.000Z"),
 	sourceName: "photo.png",
 };
 
@@ -57,6 +59,7 @@ export function runCacheIndexSuite(mod) {
 			contentType: "",
 			etag: "",
 			uploadedAt: "",
+			lastUsedAt: 0,
 			sourceName: "",
 		},
 		"缺失字段应补安全默认值"
@@ -306,6 +309,113 @@ export function runCacheIndexSuite(mod) {
 	assert.equal(normalizeUrl(""), "", "空串归一化为空串");
 	assert.equal(normalizeUrl(null), "", "非字符串返回空串");
 	assert.equal(normalizeUrl(42), "");
+
+	// ============================================================
+	// 10. ⭐ "最近被用到"的时间（缓存上限轮换的排序依据）
+	//
+	// 它坏掉不会有任何报错：只是轮换会挑错人 —— 把用户天天在看的图淘汰掉，
+	// 而几个月没打开过的那份留着。所以要单独钉住。
+	// ============================================================
+	const touch = (index, key, at, intervalMs) => index.touch(key, at, intervalMs);
+
+	// --- normalizeEntry：坏时间戳不能让整条记录作废 ---
+	{
+		// 它是**可选元数据**：缺失/坏掉只影响轮换排序，不该让"这条副本存在"这件事丢掉。
+		for (const [label, raw] of [
+			["字符串", "昨天"],
+			["负数", -1],
+			["NaN", Number.NaN],
+			["Infinity", Number.POSITIVE_INFINITY],
+			["对象", {}],
+			["null", null],
+		]) {
+			const normalized = normalizeEntry({ key: "k.png", cachePath: "c/k.png", lastUsedAt: raw });
+			assert.ok(normalized, `★ lastUsedAt 是${label}时不该丢掉整条记录（它只是可选元数据）`);
+			assert.equal(normalized.lastUsedAt, 0, `★ lastUsedAt 是${label}时应归 0（= 不确知）`);
+			assert.equal(normalized.key, "k.png", "其它字段照常保留");
+		}
+		assert.equal(
+			normalizeEntry({ key: "k.png", cachePath: "c/k.png", lastUsedAt: 12345 }).lastUsedAt,
+			12345,
+			"合法的时间戳要原样保留"
+		);
+		assert.equal(
+			normalizeEntry({ key: "k.png", cachePath: "c/k.png" }).lastUsedAt,
+			0,
+			"★ 没有这个字段（旧版本索引）时归 0，而不是 undefined（那会让排序算出 NaN）"
+		);
+	}
+
+	// --- touch：只改内存、有节流、不凭空造记录 ---
+	{
+		// ⚠️ 必须传**拷贝**，不能直接用共享样板 `SAMPLE`：
+		// `CacheIndex` 按**引用**持有条目（`write()` 里存的就是传进来的那个对象），
+		// 而 `touch()` 会就地改 `lastUsedAt` —— 用共享样板就等于把这个模块级常量改脏了。
+		// 后果很隐蔽：套件**单独跑一次**完全正常，而**同一个进程里跑第二次**时才红
+		//（变异运行器恰恰是这么跑的：基线 + 每条变异 + 还原后各跑一遍）。
+		// 症状是"还原后仍失败"，看起来像源码没还原，其实是测试自己有状态。
+		const index = new CacheIndex([{ ...SAMPLE }]);
+		const HOUR = 60 * 60 * 1000;
+
+		assert.equal(
+			touch(index, "不存在.png", Date.parse("2026-10-07T00:00:00Z"), HOUR),
+			false,
+			"★ 记录不存在时**不创建**（凭空造一条会让轮换去管它不该管的文件）"
+		);
+		assert.equal(index.size, 1, "大小不该变");
+
+		// 第一次：从 0（= 不确知）更新到"现在"
+		const first = Date.parse("2026-10-07T00:00:00Z");
+		assert.equal(touch(index, "a1b2.png", first, HOUR), true, "第一次应更新");
+		assert.equal(index.get("a1b2.png").lastUsedAt, first, "值要写进去");
+
+		// 节流：一小时内再来不更新（否则渲染热路径会把索引反复标脏）
+		assert.equal(
+			touch(index, "a1b2.png", first + 30 * 60 * 1000, HOUR),
+			false,
+			"★ 同一小时内不该重复更新（渲染路径会对每张图都调它）"
+		);
+		assert.equal(index.get("a1b2.png").lastUsedAt, first, "被节流时值不变");
+
+		// 过了间隔就更新
+		const later = first + HOUR;
+		assert.equal(touch(index, "a1b2.png", later, HOUR), true, "过了间隔应更新");
+		assert.equal(index.get("a1b2.png").lastUsedAt, later, "值要变成新的");
+
+		// 坏时间不许写进去
+		for (const bad of [Number.NaN, 0, -5, "昨天", null, undefined]) {
+			assert.equal(
+				touch(index, "a1b2.png", bad, 0),
+				false,
+				`★ at 是 ${JSON.stringify(bad)} 时不该写（写进去会让排序结果不可预测）`
+			);
+		}
+		assert.equal(index.get("a1b2.png").lastUsedAt, later, "坏值不该改变已有的值");
+
+		// ⭐ 就地更新不能破坏派生映射（按 URL 反查仍要命中）
+		assert.equal(
+			index.findByRemoteUrl(SAMPLE.remoteUrl)?.key,
+			"a1b2.png",
+			"★ touch 只改 `lastUsedAt`，不该影响按 URL 反查（那会静默破坏渲染路径）"
+		);
+
+		// 落盘往返要带上这个字段
+		const reloaded = CacheIndex.fromJSON(JSON.parse(JSON.stringify(index.toJSON()))).index;
+		assert.equal(reloaded.get("a1b2.png").lastUsedAt, later, "★ lastUsedAt 必须能被写出去、读回来（否则每次重启都退化成按上传时间排）");
+	}
+
+	// 同一 key 的时间戳变化不影响"顺序稳定"那条性质
+	{
+		const a = new CacheIndex([{ ...SAMPLE, key: "a.png", remoteUrl: "https://x/a.png" }]);
+		const b = new CacheIndex([{ ...SAMPLE, key: "b.png", remoteUrl: "https://x/b.png" }]);
+		touch(a, "a.png", Date.parse("2026-10-07T09:00:00Z"), 0);
+		touch(b, "b.png", Date.parse("2026-10-07T08:00:00Z"), 0);
+		assert.deepEqual(
+			a.toArray().map((e) => e.key),
+			["a.png"],
+			"toArray 仍按 key 排序（不受时间戳影响）"
+		);
+	}
 
 	return { urlCases: 12, entryCases: 20 };
 }

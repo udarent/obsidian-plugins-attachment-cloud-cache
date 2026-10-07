@@ -30,6 +30,7 @@
 
 import { LOCAL_COPY_ACTIONS, isLocalCopyAction } from "./types";
 import type { LocalCopyAction, PluginSettings, S3Config } from "./types";
+import { CACHE_LIMIT_MB_MAX } from "./types";
 import { isPlainRecord } from "./records";
 
 // 枚举类型守卫定义在 types.ts（与枚举本身同处一地，避免两个模块各存一份）。
@@ -92,6 +93,23 @@ function oneOfValue<T extends string>(allowed: readonly T[]): FieldReader<T> {
 }
 
 /**
+ * 数值：只认**有限数**，非数 / `NaN` / `Infinity` 一律回退；并按范围夹紧、取整。
+ *
+ * ⚠️ 这里是**夹紧**而不是拒绝：这个字段表示"上限"，一个负数或天文数字都不代表
+ * 任何真实意图，而"回退/夹到边界"至少是一个安全且可解释的状态。
+ * 真正需要区分"输错了"的地方在界面那一层（`parseCacheLimitMb` 返回 `null`，
+ * 于是**不写**、保留原值 —— 见 `settings-bindings.ts`）。
+ */
+function numberValue(options: { min?: number; max?: number } = {}): FieldReader<number> {
+	const min = options.min ?? 0;
+	const max = options.max ?? Number.MAX_SAFE_INTEGER;
+	return (raw, fallback) => {
+		if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
+		return Math.min(max, Math.max(min, Math.trunc(raw)));
+	};
+}
+
+/**
  * 扩展名列表：过滤非字符串与空串，统一小写并按出现顺序去重。
  *
  * 空数组视为"没填"而回退 —— 一个都没勾等于没配置，此时应当用默认清单，
@@ -130,6 +148,10 @@ const FACTORY_SETTINGS = {
 	// 而这种动作的同意应当显式；何况默认开会让已有 vault 里所有站外图站点
 	// 在首次渲染时集体弹常驻通知 —— 一次更新就满屏弹窗。
 	externalImageCache: false,
+	// ⚠️ 默认**不限制**（0）。上限默认关着有两层理由：
+	// ① 自动淘汰是"后台删文件"，用户没要求就不该发生；
+	// ② 它默认关着，"离线可用"这个主承诺就不会被悄悄打折。
+	cacheLimitMb: 0,
 } as const;
 
 /**
@@ -151,6 +173,7 @@ const SETTINGS_SPEC: {
 	cacheFolder: requiredTextValue(),
 	fallbackDownload: boolValue(),
 	externalImageCache: boolValue(),
+	cacheLimitMb: numberValue({ min: 0, max: CACHE_LIMIT_MB_MAX }),
 };
 
 const S3_FALLBACKS: S3Config = {

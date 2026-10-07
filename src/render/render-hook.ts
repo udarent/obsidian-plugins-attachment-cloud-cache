@@ -69,6 +69,17 @@ export interface RenderHookDeps {
 	ensureLocalCopy?: (key: string, remoteUrl: string) => Promise<string | null>;
 	/** 发现索引指向的本地副本其实不存在 —— 交给调用方自愈。 */
 	onLocalCopyMissing?: (key: string) => void;
+	/**
+	 * 这份本地副本**刚被真的用上**（`src` 已经指向它）。
+	 *
+	 * 存在的唯一目的是给**缓存上限的轮换**排序：淘汰时按"最久没用过"先走，
+	 * 而不是按"最早上传"（见 `maintenance/eviction.ts`）。
+	 *
+	 * ⚠️ 它会被**高频**调用（一屏几十张图、滚动一次再来一轮），
+	 * 所以实现里绝不能有 I/O —— 接线层只改内存，落盘是防抖的
+	 * （见 `host/runtime.ts` 的 `IndexStore.touch`）。
+	 */
+	onLocalCopyUsed?: (key: string) => void;
 	/** 用户可见提示（可选）。 */
 	notify?: (message: string) => void;
 }
@@ -126,6 +137,8 @@ export function processImages(
 			});
 			img.setAttribute("src", resourceUrl);
 			result.local += 1;
+			// 记下"这张图刚被看到" —— 缓存轮换靠它区分"常看"与"早就没人看"
+			deps.onLocalCopyUsed?.(decision.key);
 			continue;
 		}
 
@@ -277,6 +290,8 @@ export function installImageSrcPatch(deps: RenderHookDeps, env: SrcPatchEnvironm
 							}
 							wireImageFallback(element, deps, applySrc);
 							next = resourceUrl;
+							// 同上：这一份副本刚被用到（实时预览这条路径也一样要记）
+							deps.onLocalCopyUsed?.(decision.key);
 						}
 					} else if (decision.action === "fetch" && deps.ensureLocalCopy) {
 						// 不属于"已有本地副本"，但属于本存储 → 后台补齐，补上后换成本地。

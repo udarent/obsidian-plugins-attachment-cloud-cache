@@ -268,6 +268,9 @@ export async function runMutations({ source, entries, reexportDefault, suite, mu
 	console.log("");
 	if (after.failed) {
 		console.log("★ 还原后仍失败 —— 源码没有被正确还原！");
+		// ⚠️ 必须把原因打出来：只说"失败了"的话，人会先去怀疑业务代码，
+		// 而真正的原因可能是"上次运行留下的残留"或"套件本身偶发"。
+		console.log(`      实际：${String(after.message).split("\n")[0].slice(0, 120)}`);
 		allCaught = false;
 	} else {
 		console.log("还原后：套件通过 ✓");

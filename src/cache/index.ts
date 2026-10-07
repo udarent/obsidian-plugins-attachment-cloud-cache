@@ -33,6 +33,16 @@ import { isPlainRecord } from "../records";
 
 /** 索引文件的结构版本。将来改结构时用它决定要不要做迁移。 */
 export const CACHE_INDEX_VERSION = 1;
+
+/**
+ * `touch()` 的默认节流间隔：同一个 key 一小时才更新一次"最近使用时间"。
+ *
+ * 一小时是刻意的**粗粒度**：这个时间只用来排序（淘汰谁），
+ * 而"某张图是 10 分钟前看的还是 70 分钟前看的"对排序毫无影响；
+ * 反之，细粒度会让索引被反复标脏、反复写盘。
+ */
+export const DEFAULT_TOUCH_MIN_INTERVAL_MS = 60 * 60 * 1000;
+
 export interface CacheEntry {
 	/** 对象 key（桶内的唯一标识）。 */
 	key: string;
@@ -54,6 +64,20 @@ export interface CacheEntry {
 	etag: string;
 	/** 上传完成时间（ISO 字符串）。 */
 	uploadedAt: string;
+	/**
+	 * 最近一次**被用到**的时间（epoch ms）。0 = 不确知。
+	 *
+	 * "被用到"= 渲染时这张图真的换成了这份本地副本（见 `render-hook.ts` 的
+	 * `onLocalCopyUsed`）。它存在的唯一目的是给**缓存上限的轮换**排序：
+	 * 淘汰时按"最久没用过"先走，而不是按"最早上传"。
+	 *
+	 * ⚠️ 与 `uploadedAt` 是两件不同的事，别混用：
+	 * 一年前上传但天天在看的图，比昨天上传却再没打开过的图**更该留着**。
+	 *
+	 * ⚠️ 更新它走 `touch()`，是**有节流**的（同一个 key 一小时才改一次）：
+	 * 渲染路径会对每张图调用它，不节流的话索引会被反复标脏、反复落盘。
+	 */
+	lastUsedAt: number;
 	/** 原始文件名，仅供报告可读性 —— **不参与任何判定**。 */
 	sourceName: string;
 }
@@ -105,6 +129,8 @@ export function normalizeEntry(raw: unknown): CacheEntry | null {
 		contentType: pickString(raw.contentType),
 		etag: pickString(raw.etag),
 		uploadedAt: pickString(raw.uploadedAt),
+		// 坏值/缺失一律 0（= 不确知）。轮换把 0 当"最旧"处理 —— 见 eviction.ts 的说明。
+		lastUsedAt: pickNonNegativeNumber(raw.lastUsedAt),
 		sourceName: pickString(raw.sourceName),
 	};
 }
@@ -215,6 +241,40 @@ export class CacheIndex {
 		const target = normalizeUrl(url);
 		if (!target) return undefined;
 		return this.byUrl.get(target);
+	}
+
+	/**
+	 * 记下"这份副本刚被用到"。返回**是否真的更新了**（供调用方决定要不要落盘）。
+	 *
+	 * ## ⚠️ 为什么要节流
+	 *
+	 * 调用点在**渲染路径**上：一屏几十张图、滚动一次就再来一轮。若每次都把
+	 * `lastUsedAt` 改成"现在"，索引会被无休止地标脏、被无休止地写盘 ——
+	 * 而这件事的全部用途只是"淘汰时排序"。所以同一个 key 在 `minIntervalMs`
+	 * 之内只更新一次：排序精度损失最多一小时，代价是不再有无谓的写盘。
+	 *
+	 * ## 为什么"没有这条记录"时不创建
+	 *
+	 * 索引里没有这条记录，说明这份副本不该由我们管理（`localCopy: "keep"` 的副本
+	 * 在附件目录里、或者它只是个孤儿文件）。凭空造一条记录会让轮换把它当成
+	 * "有索引的副本"，而它的路径其实不在我们该管的地方。
+	 *
+	 * ## ⚠️ 它只把时间**往前**推
+	 *
+	 * `at` 早于已记录的值时返回 `false`（什么都不改）。这是刻意的：这个入口的语义是
+	 * "刚被用到"，把时间往回拨不属于它的职责 —— 而且那会让"越来越旧"这件事变得不可靠。
+	 * 系统时钟回拨（NTP 校正）也会落到这条路径上，代价只是那条记录的时间暂时偏新，
+	 * 而轮换本来就是按"最久没用过"排序的粗粒度判断。
+	 */
+	touch(key: string, at: number, minIntervalMs = DEFAULT_TOUCH_MIN_INTERVAL_MS): boolean {
+		const entry = this.entries.get(key);
+		if (!entry) return false;
+		if (typeof at !== "number" || !Number.isFinite(at) || at <= 0) return false;
+		const previous = entry.lastUsedAt;
+		if (previous > 0 && at - previous < minIntervalMs) return false;
+		// 就地改：`lastUsedAt` 不参与 `byUrl` 的键，所以不需要走 `write()`
+		entry.lastUsedAt = at;
+		return true;
 	}
 
 	/**

@@ -25,7 +25,7 @@
  * 用户的修改会在重启后被**静默重置**（表现为"改了没用"）。
  */
 
-import { formatExtensionList, parseExtensionList } from "./settings-logic";
+import { formatCacheLimitMb, formatExtensionList, parseCacheLimitMb, parseExtensionList } from "./settings-logic";
 
 /** 把点号键切成路径段。`""` 与只含空段的键视为非法。 */
 export function splitKey(key: unknown): string[] | null {
@@ -78,6 +78,8 @@ export function writeByKey(root: unknown, key: unknown, value: unknown): boolean
 const PRESENT: Record<string, (stored: unknown) => unknown> = {
 	// 设置里是数组，文本框里是一行文本
 	enabledExtensions: (stored) => formatExtensionList(stored),
+	// 设置里是数字，文本框里是字符串
+	cacheLimitMb: (stored) => formatCacheLimitMb(stored),
 };
 
 /**
@@ -88,6 +90,11 @@ const PRESENT: Record<string, (stored: unknown) => unknown> = {
  */
 const COERCE: Record<string, (raw: unknown) => unknown> = {
 	enabledExtensions: (raw) => parseExtensionList(raw),
+	// ⚠️ 解析失败时退回 0（不限制）。正常走不到这里 —— `isWritableValue` 已经把
+	// 看不懂的输入拦在外面了。但万一调用方没检查，退回"不限制"也比把一个**字符串**
+	// 写进数字字段强：后者会在下次加载时被回落成默认值（同样是不限制），
+	// 可用户会以为"我填的东西丢了"，且查不出原因。
+	cacheLimitMb: (raw) => parseCacheLimitMb(raw) ?? 0,
 };
 
 /** 设置值 → 控件显示值。 */
@@ -120,6 +127,10 @@ export function isWritableValue(key: unknown, value: unknown): boolean {
 		case "s3.region":
 		case "s3.objectKeyTemplate":
 			return value.trim() !== "";
+		case "cacheLimitMb":
+			// 解析不出来就**不写**（保留原值），而不是把用户的输入静默变成「不限制」——
+			// 他刚敲了什么，框里就该留着什么。
+			return parseCacheLimitMb(value) !== null;
 		default:
 			return true;
 	}

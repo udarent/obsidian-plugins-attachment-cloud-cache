@@ -74,6 +74,9 @@ export async function runRenderHookSuite(mod) {
 		contentType: "image/png",
 		etag: "",
 		uploadedAt: "2026-10-06T00:00:00.000Z",
+		// 「最近被用到」的时间 —— 渲染钩子不读它（只由 `touch` 写），
+		// 但条目形状要完整，免得将来读它时才发现这个样板里没有。
+		lastUsedAt: 0,
 		sourceName: key,
 	});
 
@@ -90,8 +93,9 @@ export async function runRenderHookSuite(mod) {
 	// ============================================================
 	// 1. ⭐ 索引命中 → 换成本地地址，且**远端地址从未被赋进去**
 	// ============================================================
+	const touched = [];
 	const img1 = fakeImage(`${BASE}/cached.png`);
-	const r1 = processImages(fakeContainer([img1]), depsWith());
+	const r1 = processImages(fakeContainer([img1]), depsWith({ onLocalCopyUsed: (key) => touched.push(key) }));
 
 	assert.equal(r1.local, 1, "索引里有本地副本应改写一张");
 	assert.equal(r1.deferred, 0, "不该进入补齐流程");
@@ -101,6 +105,9 @@ export async function runRenderHookSuite(mod) {
 		["app://local/_attachment-cache/cached.png"],
 		"★ 写入序列里**只有**本地地址 —— 远端地址一旦出现就意味着可能已发出请求"
 	);
+	// ⭐ 这条是缓存轮换排序的依据：不记的话，轮换只能按"上传时间"排，
+	// 于是"天天在看的图"可能比"上传后就没打开过的图"先被淘汰。
+	assert.deepEqual(touched, ["cached.png"], "★ 换成副本时要记下「这张图刚被看到」（缓存上限轮换靠它排序）");
 
 	// ============================================================
 	// 2. 站外图 / 本地资源 / 空 src 一律不动
@@ -112,10 +119,16 @@ export async function runRenderHookSuite(mod) {
 		["空 src", ""],
 	]) {
 		const img = fakeImage(src);
-		const result = processImages(fakeContainer([img]), depsWith());
+		const notTouched = [];
+		const result = processImages(fakeContainer([img]), depsWith({ onLocalCopyUsed: (key) => notTouched.push(key) }));
 		assert.equal(result.local, 0, `${label} 不该被改写`);
 		assert.deepEqual(img.writes, [], `${label} 不该被赋值`);
 		assert.equal(img.listenerCount("error"), 0, `${label} 不该挂兜底监听器`);
+		assert.deepEqual(
+			notTouched,
+			[],
+			`★ ${label} 更不该被记成「刚被看到」—— 那会让轮换以为它常被使用，于是永远不淘汰它`
+		);
 	}
 
 	// ============================================================
@@ -240,7 +253,12 @@ export async function runRenderHookSuite(mod) {
 	const { view, restore } = makeFakeImageElementClass();
 	// 补齐结果可切换：既测"补齐成功→换本地"，也测"补齐失败→退回远端"
 	let fetchResult = "_attachment-cache/missing.png";
-	const patchDeps = depsWith({ ensureLocalCopy: async () => fetchResult });
+	// 实时预览这条路径也要记"刚被看到"（编辑态里看图是最常见的场景）
+	const touchedInPreview = [];
+	const patchDeps = depsWith({
+		ensureLocalCopy: async () => fetchResult,
+		onLocalCopyUsed: (key) => touchedInPreview.push(key),
+	});
 	const uninstall = installImageSrcPatch(patchDeps, { view });
 
 	const el = new view.HTMLImageElement();
@@ -249,6 +267,11 @@ export async function runRenderHookSuite(mod) {
 		el.getAttribute("src"),
 		"app://local/_attachment-cache/cached.png",
 		"★ 实时预览里赋远端地址，元素上应当是本地地址（远端地址从未进入元素）"
+	);
+	assert.deepEqual(
+		touchedInPreview,
+		["cached.png"],
+		"★ 实时预览换成副本时同样要记下「刚被看到」（否则编辑态看的图永远不会被认为常用）"
 	);
 
 	// 站外地址原样通过

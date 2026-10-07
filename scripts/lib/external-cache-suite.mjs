@@ -19,10 +19,11 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { cleanupInBackground } from "./cleanup.mjs";
 import { createAppMock } from "./mock-obsidian.mjs";
 import { createMockS3, nodeTransport } from "./mock-s3.mjs";
 
@@ -161,30 +162,6 @@ function fetchRequest(options = {}) {
 	};
 }
 
-/**
- * 用一个**分离的子进程**删临时目录。
- *
- * ⚠️ 为什么不在本进程里 `await rm(...)` —— 这是实测出来的，不是推测：
- * Windows 上 `rm -r` **偶发**会卡住不返回（现场：活动句柄只剩未完成的 fs 请求，
- * 而套件其实早已跑完）。症状是"**测试全绿但进程退不出去**"，被外层超时杀掉；
- * 同一份代码连跑 8 遍能有 4 遍挂死，加上 `maxRetries` 更糟。
- * 删一个 15 个子目录的树还慢（实测 13~24 秒），而这段时间里它随时可能卡住。
- *
- * 交给分离的子进程之后，卡住也只卡它自己，与本进程能否退出无关。
- * `detached` + `unref` 两件都要：前者让它脱离进程组，后者让本进程不必等它。
- */
-function cleanupInBackground(path) {
-	try {
-		const child = spawn(
-			process.execPath,
-			["-e", `require("fs").rmSync(${JSON.stringify(path)}, { recursive: true, force: true })`],
-			{ detached: true, stdio: "ignore" }
-		);
-		child.unref();
-	} catch {
-		// 清理失败无所谓：临时目录在系统临时区，删不掉不该影响测试结论
-	}
-}
 
 export async function runExternalCacheSuite(mod) {
 	const {

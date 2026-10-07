@@ -7,7 +7,7 @@
  */
 
 import type { LocalCopyAction } from "../types";
-import { LOCAL_COPY_ACTIONS } from "../types";
+import { CACHE_LIMIT_MB_MAX, LOCAL_COPY_ACTIONS } from "../types";
 
 /**
  * 下拉选项：由**类型清单**生成 `{取值: 文案}`（正是 `SettingDropdownControl.options` 的形状）。
@@ -115,6 +115,53 @@ export function describeRememberedSites(
 	return records
 		.map((record) => `${record.host} — ${record.decision === "allow" ? labels.allow : labels.deny}`)
 		.join("\n");
+}
+
+/**
+ * 解析用户在设置里填的缓存上限（MB）。**纯函数**。
+ *
+ * ## 为什么单独成函数
+ *
+ * 这个字段的输入来自一个**文本框**（设置页只有文本/开关/下拉三种控件），
+ * 所以"用户敲的那串字符"与"设置里那个数字"之间必须有一次翻译。
+ * 翻译错了的症状是"改了设置、也保存了，但重启后值又变回去了"——
+ * 属于本项目最警惕的那类静默失效，必须有测试钉住。
+ *
+ * ## 规则：宽松，但**不猜**
+ *
+ * | 输入 | 结果 |
+ * |---|---|
+ * | `""`（清空） | `0` = 不限制（清空是有明确意图的动作） |
+ * | 纯数字（允许首尾空白） | 该数字，夹在 `[0, CACHE_LIMIT_MB_MAX]` |
+ * | 其余（`abc`、`1e9`、`-5`、`1.5GB`） | `null` = **无法理解** |
+ *
+ * 返回 `null` 时调用方**必须保留原值**（见 `settings-bindings.ts` 的
+ * `isWritableValue`）—— 把"看不懂的输入"静默变成"不限制"会让用户以为
+ * 自己填过的东西丢了，而那恰恰是他刚做的事。
+ *
+ * ⚠️ 不接受小数：粒度是 MB，`1.5` 更像"单位写错了"，
+ * 与其静默取整不如让框里留着用户敲的那串字符。
+ */
+export function parseCacheLimitMb(raw: unknown): number | null {
+	if (typeof raw === "number") {
+		return Number.isFinite(raw) ? clampLimitMb(Math.trunc(raw)) : null;
+	}
+	if (typeof raw !== "string") return null;
+	const text = raw.trim();
+	if (text === "") return 0;
+	if (!/^\d+$/.test(text)) return null;
+	const parsed = Number(text);
+	return Number.isFinite(parsed) ? clampLimitMb(parsed) : null;
+}
+
+function clampLimitMb(value: number): number {
+	return Math.min(CACHE_LIMIT_MB_MAX, Math.max(0, value));
+}
+
+/** 设置里的上限（数字）→ 输入框里的文本。 */
+export function formatCacheLimitMb(value: unknown): string {
+	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "0";
+	return String(Math.trunc(value));
 }
 
 export function connectionFailureKey(kind: ConnectionFailureKind): string {

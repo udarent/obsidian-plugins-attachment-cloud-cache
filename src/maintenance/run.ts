@@ -21,6 +21,7 @@ import type { PluginSettings } from "../types";
 import { isUnderCacheFolder } from "../cache-path";
 import { auditCache, planCleanup } from "./audit";
 import type { CacheAudit, CleanupPlan, DiskFile } from "./audit";
+import type { EvictionOutcome, EvictionPlan } from "./eviction";
 import { keysInText, planLinkRewrites } from "./references";
 import type { RewriteRule } from "./references";
 import { selectUploadCandidates } from "./batch";
@@ -202,6 +203,82 @@ export async function runCleanup(deps: MaintenanceDeps, plan: CleanupPlan): Prom
 	}
 
 	result.bytes = plan.bytes;
+	return result;
+}
+
+/** 按计划执行淘汰（缓存上限轮换的执行层）。 */
+export interface EvictionRunResult extends EvictionOutcome {
+	/** 顺手摘掉的索引记录数。 */
+	unindexed: number;
+}
+
+/**
+ * 按计划执行淘汰：**把文件送进回收站，并摘掉它们的索引记录**。
+ *
+ * ## ⚠️ 为什么一定要摘索引
+ *
+ * 索引的用途是回答"这条 URL 对应的本地副本在哪"。文件被淘汰之后若还留着记录，
+ * 渲染层会以为本地还有那份副本 → 换成 `app://` 地址 → 加载失败 → 走 error 兜底 →
+ * **每次渲染都白试一次**（还每次都去请求一遍补齐）。摘掉之后判定会回到
+ * "属于本存储、但本地没有副本"，于是下次看到这张图时**自动重新下载** ——
+ * 这正是"淘汰之后还能自己长回来"的机制。
+ *
+ * ## 与 `runCleanup` 共用同一条安全纪律
+ *
+ * 走宿主的回收站（`fileManager.trashFile`），拿不到删除凭据就**跳过**，
+ * 绝不退化成 `adapter.remove`（那会绕过用户"删除即进回收站"的设置）。
+ * 这是**自动**运行的路径、没人在旁边看，所以纪律更要守。
+ *
+ * ## 一个如实说明的代价
+ *
+ * 进回收站 → 文件**立刻离开 vault**（同步/备份的体积马上变小），
+ * 而**磁盘空间要等系统清空回收站才真正释放**。对"上限"这个诉求来说，
+ * 前者通常才是用户真正在意的（同步配额、vault 体积），换来的好处是误删可恢复。
+ * 想立刻释放物理空间就去清空回收站 —— 设置项的描述里也写明了这一点。
+ */
+export async function runEviction(deps: MaintenanceDeps, plan: EvictionPlan): Promise<EvictionRunResult> {
+	const result: EvictionRunResult = { evicted: 0, freed: 0, skipped: [], unindexed: 0 };
+	const trashedKeys: string[] = [];
+
+	for (const victim of plan.evict) {
+		// 双保险：清单理论上只含缓存目录内的路径，但这是**删文件**的循环，
+		// 少一层校验的代价不可逆。
+		if (!isUnderCacheFolder(victim.cachePath, deps.settings().cacheFolder)) {
+			result.skipped.push({ path: victim.cachePath, reason: deps.t("maintainSkipOutsideCache") });
+			continue;
+		}
+
+		const file = deps.app.vault.getAbstractFileByPath(victim.cachePath);
+		if (!file) {
+			// 宿主的文件索引滞后于磁盘：**跳过**并如实汇报，绝不退化为底层删除
+			result.skipped.push({ path: victim.cachePath, reason: deps.t("maintainSkipNotIndexed") });
+			continue;
+		}
+
+		try {
+			await deps.app.fileManager.trashFile(file);
+			result.evicted += 1;
+			result.freed += Math.max(0, victim.bytes);
+			// 只有"有索引记录"的才需要摘（孤儿本来就没有记录）
+			if (victim.key) trashedKeys.push(victim.key);
+		} catch (error) {
+			result.skipped.push({ path: victim.cachePath, reason: describe(error) });
+		}
+	}
+
+	if (trashedKeys.length > 0) {
+		const index = deps.index();
+		for (const key of trashedKeys) {
+			if (index.remove(key)) result.unindexed += 1;
+		}
+		try {
+			await deps.persistIndex();
+		} catch (error) {
+			// 摘记录失败不该让"文件已经淘汰"这件事看起来没发生 —— 但要留下话
+			deps.notify(deps.t("maintainPersistFailed", { error: describe(error) }));
+		}
+	}
+
 	return result;
 }
 

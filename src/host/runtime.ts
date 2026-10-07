@@ -42,10 +42,12 @@ import type { TransferFileLike } from "../editor/editor-hooks";
 export function makeSerializer(): <T>(task: () => Promise<T>) => Promise<T> {
 	let tail: Promise<unknown> = Promise.resolve();
 	return (task) => {
-		// `then(task, task)` 而不是 `then(task)`：前一次失败时也要继续，
-		// 否则队列会被一次偶发错误永久堵死。
-		const run = tail.then(task, task);
-		// 队尾只用来串联，因此吞掉结果与异常（各自的结果已经交给 `run` 的调用方）
+		const run = tail.then(task);
+		// ⭐ **保证"失败不中断"的是这一行**，不是上面那个 `then` 的失败回调：
+		// `tail` 永远是一个**已兑现**的 promise（每次都被 `catch` 过），
+		// 所以下一个任务一定排得上队。
+		// （变异验证确认过：把 `then(task, task)` 的第二个参数删掉不影响任何断言 ——
+		// 说明那是个多余的参数，留着只会让人以为"保证在那"。）
 		tail = run.catch(() => undefined);
 		return run;
 	};
@@ -57,6 +59,54 @@ export interface IndexStore {
 	readonly index: CacheIndex;
 	load: () => Promise<{ error: string; skipped: number; existed: boolean }>;
 	save: () => Promise<void>;
+	/**
+	 * 记下"这份副本刚被用到"。返回是否真的更新了（被节流时为 `false`）。
+	 *
+	 * ⚠️ 只改内存 + **防抖**落盘 —— 它在渲染路径上被调用，那里一次 I/O 都不能有。
+	 */
+	touch: (key: string) => boolean;
+}
+
+/**
+ * "最近使用时间"的防抖落盘延迟。
+ *
+ * 一分钟是刻意的：这份数据只用来给缓存轮换排序（见 `maintenance/eviction.ts`），
+ * 而轮换自己也有分钟级的节流。攒一会儿再写完全够用，还能把一屏图触发的
+ * 几十次 `touch` 合成一次写盘。
+ */
+export const DEFAULT_USAGE_FLUSH_DELAY_MS = 60 * 1000;
+
+/** 默认的延迟调度器（用 `window.setTimeout`：弹出窗口里裸 `setTimeout` 不是同一个）。 */
+function defaultDefer(task: () => Promise<void>, ms: number): () => void {
+	// ⚠️ 包一层再交给 `setTimeout`，而不是把 `task` 直接传进去：
+	// 定时器回调**不该返回 Promise**（没人会 await 它，返回了只会让 lint 与读者困惑）。
+	// 那个返回值是给**注入的**调度器用的（测试要能 await 到"真的写完了"）。
+	const timer = window.setTimeout(() => {
+		void task();
+	}, ms);
+	return () => window.clearTimeout(timer);
+}
+
+export interface IndexStoreOptions {
+	now?: () => number;
+	/**
+	 * 延迟调度器（返回取消函数）。
+	 *
+	 * 注入是为了**可测**：防抖落盘若只能靠真等，"它到底会不会写、会不会重复写"
+	 * 就变成了不可断言的行为。
+	 *
+	 * ⚠️ `task` 返回那次落盘的 Promise。真实的 `setTimeout` 会忽略它（那不重要）——
+	 * 重要的是**注入的调度器可以 `await` 它**，于是"防抖到点之后真的写下去了"
+	 * 是一条能断言的确定性行为，而不是靠轮询去猜。
+	 *
+	 * 类型刻意写成 `() => Promise<void>` 而不是 `() => void | Promise<void>`：
+	 * 后者会被 lint 按 `void` 那一支判定，于是"返回 Promise"被当成误用
+	 *（而这里恰恰要求它返回）。
+	 */
+	defer?: (task: () => Promise<void>, ms: number) => () => void;
+	flushDelayMs?: number;
+	/** 落盘失败时的记录口（不能用来打扰用户：它由渲染触发）。 */
+	onError?: (error: unknown) => void;
 }
 
 /**
@@ -70,28 +120,75 @@ export function createIndexStore(
 	app: App,
 	pluginDir: string | undefined,
 	pluginId: string,
-	makeIndex: () => CacheIndex
+	makeIndex: () => CacheIndex,
+	options: IndexStoreOptions = {}
 ): IndexStore {
 	const dir = (pluginDir ?? `.obsidian/plugins/${pluginId}`).replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
 	const path = indexFilePath(dir);
 	const serialize = makeSerializer();
+	const now = options.now ?? Date.now;
+	const defer = options.defer ?? defaultDefer;
+	const flushDelayMs = options.flushDelayMs ?? DEFAULT_USAGE_FLUSH_DELAY_MS;
 	let current = makeIndex();
+	/** 排队中的那次防抖落盘（`null` = 没有排队）。 */
+	let cancelFlush: (() => void) | null = null;
+
+	const report = (error: unknown): void => {
+		try {
+			options.onError?.(error);
+		} catch {
+			// 连记录都失败也不能影响渲染
+		}
+	};
+
+	/** 整份落盘（串行化 + 取消排队中的防抖落盘）。 */
+	const save = async (): Promise<void> => {
+		// 马上就要整份写盘了 —— 把排队中的那次防抖落盘取消，避免紧接着重复写一遍
+		if (cancelFlush) {
+			cancelFlush();
+			cancelFlush = null;
+		}
+		// 在**执行时**读 `current`（而不是排队时先抓一份快照）：
+		// 排队期间若又上传了一张图，写下去的应当包含它。
+		await serialize(() => saveCacheIndex(app.vault.adapter, path, current));
+	};
+
+	const load = async (): Promise<{ error: string; skipped: number; existed: boolean }> => {
+		const result = await loadCacheIndex(app.vault.adapter, path);
+		// 换掉整个对象而不是逐条搬：`loadCacheIndex` 已经把坏条目筛过一遍，
+		// 直接用它作为"当前真相"最简单。接线层每次都现取 `index`，不会持有旧引用。
+		current = result.index;
+		return { error: result.error, skipped: result.skipped.length, existed: result.existed };
+	};
 
 	return {
 		get index() {
 			return current;
 		},
-		async load() {
-			const result = await loadCacheIndex(app.vault.adapter, path);
-			// 换掉整个对象而不是逐条搬：`loadCacheIndex` 已经把坏条目筛过一遍，
-			// 直接用它作为"当前真相"最简单。接线层每次都现取 `index`，不会持有旧引用。
-			current = result.index;
-			return { error: result.error, skipped: result.skipped.length, existed: result.existed };
-		},
-		async save() {
-			// 在**执行时**读 `current`（而不是排队时先抓一份快照）：
-			// 排队期间若又上传了一张图，写下去的应当包含它。
-			await serialize(() => saveCacheIndex(app.vault.adapter, path, current));
+		load,
+		save,
+		touch(key: string): boolean {
+			let updated = false;
+			try {
+				updated = current.touch(key, now());
+			} catch (error) {
+				// 记"最近使用"失败绝不能影响渲染（它只是给轮换排序用的）
+				report(error);
+				return false;
+			}
+			if (!updated) return false;
+			// 已经排过一次就复用：屏幕上的几十张图只会合成一次写盘
+			if (!cancelFlush) {
+				// 用局部函数 `save` 而不是 `this.save`：`this` 在解构调用时会失效，
+				// 而那种失效是静默的（落盘永远不会发生，但没有任何报错）。
+				cancelFlush = defer(() => {
+					cancelFlush = null;
+					// 返回这个 Promise 让调度器（测试里是注入的）能 await 到写完；
+					// `catch` 保证即使没人 await，也不会变成未处理的拒绝。
+					return save().catch(report);
+				}, flushDelayMs);
+			}
+			return true;
 		},
 	};
 }

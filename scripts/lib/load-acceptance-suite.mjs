@@ -34,12 +34,13 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { compileFunction } from "node:vm";
 
+import { cleanupInBackground } from "./cleanup.mjs";
 import * as mockObsidian from "./mock-obsidian.mjs";
 import { installHostGlobals } from "./host-globals.mjs";
 import { createMockS3 } from "./mock-s3.mjs";
@@ -122,6 +123,14 @@ async function realRequestUrl(options) {
  */
 const EXTERNAL_HOST = "images.example.test";
 const EXTERNAL_IMAGE_URL = `https://${EXTERNAL_HOST}/a.png`;
+/**
+ * 等「启动那一轮定时器」要用多久。
+ *
+ * 必须**大于** `main.ts` 里那个启动延迟（3 秒）—— 这一轮的意义是把它**让过去**，
+ * 而不是与它抢：抢到了会被节流（那是产品的正确行为），测试就成了偶发失败。
+ */
+const STARTUP_WINDOW_MS = 3500;
+
 /** 站点决定记忆的落盘位置（与 `createSiteStore` 的推导一致）。 */
 const SITE_MEMORY_PATH = ".obsidian/plugins/attachment-cloud-cache/.site-decisions.json";
 const EXTERNAL_IMAGE_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff]);
@@ -368,6 +377,29 @@ export async function runLoadAcceptance(options = {}) {
 		return askDecision;
 	};
 
+	// ── 兜住"插件忘了登记清理函数" ──
+	//
+	// ⚠️ 套件自己记录 `onload` 期间创建的定时器，收尾时**不管有没有被 `register` 登记**都清掉。
+	// 少了这一步，一个"忘了 register 定时器"的回归会让进程一直有活着的定时器 ⇒
+	// **测试断言全绿却卡住**，被外层超时杀掉（日志里什么都没有 —— 最难查的一种）。
+	// 有了它，那种回归会老老实实变成一条"清理回调少了一个"的断言失败。
+	//
+	// ⚠️ 这两个变量必须声明在 `try` **外面**：收尾的 `finally` 里要用它们，
+	// 而 `try` 块里的 `const` 在 `finally` 里是看不见的。
+	const realSetTimeout = window.setTimeout;
+	const realSetInterval = window.setInterval;
+	const createdTimers = [];
+	window.setTimeout = (...args) => {
+		const id = realSetTimeout(...args);
+		createdTimers.push(["timeout", id]);
+		return id;
+	};
+	window.setInterval = (...args) => {
+		const id = realSetInterval(...args);
+		createdTimers.push(["interval", id]);
+		return id;
+	};
+
 	try {
 		/** 现场快照：失败时能看到"提示了什么、发了什么请求"。**单行**，见 `waitFor`。 */
 		const diagnose = () =>
@@ -376,12 +408,27 @@ export async function runLoadAcceptance(options = {}) {
 				`请求=${server.requests.map((r) => r.method).join(",") || "(无)"}`,
 				`注册=${plugin.registrations.map((r) => r.detail).join(",") || "(无)"}`,
 			].join(" ｜ ");
+
 		// ============================================================
 		// 1. 加载：onload 不得抛错，且必须**注册**该注册的东西
 		// ============================================================
 		await plugin.onload();
+		/** `onload` 完成的时刻 —— 用来等"启动那一轮定时器"跑完（见 8c）。 */
+		const loadedAt = Date.now();
 
 		assert.ok(plugin.settingTabs.length >= 1, "★ 设置页必须被注册（否则用户连配置入口都没有）");
+
+		// ⭐ 后台自动轮换必须**真的接上了**：
+		// 轮换器存在（忘了 new 就等于没有这个功能），而且注册过清理函数 ——
+		// prototype 补丁 + 启动定时器 + 周期定时器共三个。
+		// 少了定时器的那两个，症状是"设了上限却永远不会自动轮换"，而界面上毫无痕迹。
+		assert.ok(plugin.rotation, "★ 入口必须装配缓存轮换器（否则上限设了也不会生效）");
+		const cleanups = plugin.registrations.filter((r) => r.kind === "register").length;
+		assert.ok(
+			cleanups >= 3,
+			`★ 至少要登记 3 个清理回调（prototype 补丁 + 启动定时器 + 周期定时器），实际 ${cleanups}`
+		);
+
 
 		// 注册了不等于**能用**：设置页若在取定义时抛错，用户点齿轮只会看到报错。
 		// 这里直接从产物里把定义取一遍 —— 声明式设置页的核心就是这个方法。
@@ -734,6 +781,90 @@ export async function runLoadAcceptance(options = {}) {
 		}
 
 		// ============================================================
+		// 8c. 缓存上限：超过后自动淘汰「最久没用过」的副本
+		//
+		// 这一轮验的是**入口有没有把这条链路接上**：设了上限之后，
+		// 后台轮换真的会去看一眼、真的会淘汰、并且真的只淘汰该淘汰的。
+		// 判定细节（挑谁、宽限期、腾不到目标怎么报）在 `test-rotation.mjs` 与
+		// `test-eviction.mjs` 里穷举。
+		// ============================================================
+		{
+			// ⚠️ 先等"启动那一轮定时器"跑掉。它此刻**没有上限**、会立刻返回，
+			// 也不会占用节流；但若让它插在"设上限"与"触发轮换"之间，这一轮就会被节流挡掉
+			//（那是产品的正确行为，不是缺陷），测试于是变成偶发失败。显式等它才是确定性的。
+			const sinceLoad = Date.now() - loadedAt;
+			if (sinceLoad < STARTUP_WINDOW_MS) {
+				await new Promise((resolve) => setTimeout(resolve, STARTUP_WINDOW_MS - sinceLoad));
+			}
+
+			// 造一份够大的副本：1 MB 的上限之下必须**有东西可腾**，
+			// 而缓存目录里现有的那些都只有几十字节。
+			const bigBytes = new Uint8Array(2 * 1024 * 1024);
+			bigBytes.set(HOSTILE_BYTES);
+			const pastedBefore = editor.replaced.length;
+			app.workspace.trigger("editor-paste", makePasteEvent([makeFile("big.png", bigBytes)]), editor, {
+				file: { path: "notes/上限.md" },
+			});
+			await waitFor(() => editor.replaced.length > pastedBefore, "大图上传后链接被插入", 20000, diagnose);
+
+			// ⚠️ 必须让宿主的文件索引看到刚写下的缓存副本。
+			// 替身**刻意**让文件索引滞后于磁盘（那是真实行为：Obsidian 扫描有延迟），
+			// 而淘汰在"拿不到删除凭据"时会**跳过**（绝不退化为底层删除）——
+			// 不刷新的话，这一轮只会淘汰旧文件，刚上传的那份要等下一轮才轮得到。
+			await harness.refreshPathCache();
+
+			const index = plugin.indexStore.index;
+			const inserted = editor.replaced[pastedBefore] ?? "";
+			const uploadedUrl = /https?:\/\/[^\s)]+/.exec(inserted)?.[0] ?? "";
+			const entry = uploadedUrl ? index.findByRemoteUrl(uploadedUrl) : undefined;
+			assert.ok(entry, `★ 刚上传的图应登记进索引（插入的内容：${JSON.stringify(inserted)}）`);
+
+			// ⭐ 把全部条目的「最近使用」回拨两小时。
+			// 刚上传的副本落在宽限期内（10 分钟），轮换**故意**不动它们 —— 那是正确行为
+			//（避免"刚下载完就删掉"），但那样这条场景就永远只测到"什么都没发生"。
+			// 回拨等于告诉它"这些是两小时前用的"。
+			//
+			// ⚠️ 这里直接改字段，而不是走 `touch()`：`touch` 的语义是"刚被用到"，
+			// **有意**不允许把时间往回拨（试过 —— 回拨会被它拒掉，于是条目仍留在宽限期内，
+			// 整条场景变成"什么都没发生"）。测试要构造的正是"两小时前用过"这个状态。
+			const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+			for (const key of index.keys()) {
+				const record = index.get(key);
+				if (record) record.lastUsedAt = twoHoursAgo;
+			}
+
+			const entriesBefore = index.size;
+			const trashedBefore = harness.calls.trash.length;
+			mockObsidian.Notice.instances.length = 0;
+
+			// 把上限调到 1 MB 并保存 —— 保存设置会触发一轮检查
+			plugin.settings.cacheLimitMb = 1;
+			await plugin.saveSettings();
+
+			await waitFor(() => !index.has(entry.key), "超限后自动淘汰了最久没用过的副本", 20000, diagnose);
+
+			assert.equal(await existsOnDisk(root, entry.cachePath), false, "★ 被淘汰的副本要真的离开磁盘");
+			assert.ok(
+				harness.calls.trash.includes(entry.cachePath),
+				"★ 淘汰要走**回收站**（可恢复），而不是直接删掉"
+			);
+			assert.ok(index.size < entriesBefore, `索引条目数应减少（${entriesBefore} → ${index.size}）`);
+			assert.ok(harness.calls.trash.length > trashedBefore, "回收站调用应当增加");
+			// ⚠️ 提示是"淘汰之后"才发出的（执行层先返回、编排层再算实际回收量并提示），
+			// 而上面那个 waitFor 看到的是**索引被摘掉**那一刻 —— 两者之间隔着一次 await。
+			// 所以这里也要"等"而不是"直接断言"，否则就是一个偶发失败。
+			await waitFor(
+				() => mockObsidian.Notice.instances.some((n) => /MB/.test(n.message)),
+				"淘汰之后给出了提示（腾了多少 MB）",
+				5000,
+				diagnose
+			);
+
+			// 关掉上限，免得影响后面的场景
+			plugin.settings.cacheLimitMb = 0;
+		}
+
+		// ============================================================
 		// 9. 卸载：事件引用必须能被宿主注销（否则热重载后每粘一次插两条）
 		// ============================================================
 		for (const ref of plugin.eventRefs) app.workspace.offref(ref);
@@ -748,16 +879,32 @@ export async function runLoadAcceptance(options = {}) {
 			putCount: server.countByMethod("PUT"),
 		};
 	} finally {
+		// 模拟卸载：真实宿主在卸载时会调用这些清理函数。
+		//
+		// ⚠️ 这**不只是**为了"干净"：周期定时器（10 分钟）不清掉的话，本进程会一直
+		// 有一个活着的定时器 ⇒ Node 不肯退出 ⇒ 表现是"测试全绿却卡住"，
+		// 最后被外层超时杀掉。而那种卡死最难查（日志里什么都没有）。
+		for (const cleanup of [...(plugin.cleanups ?? [])].reverse()) {
+			try {
+				cleanup();
+			} catch {
+				// 清理失败不该影响测试结论
+			}
+		}
+		// 再兜一层：连"没被 register 登记"的定时器也清掉（理由见套件开头那段）
+		window.setTimeout = realSetTimeout;
+		window.setInterval = realSetInterval;
+		for (const [kind, id] of createdTimers) {
+			if (kind === "interval") window.clearInterval(id);
+			else window.clearTimeout(id);
+		}
 		// 恢复默认（抛错）—— 否则同一进程里后续套件会意外走真实网络。
 		mockObsidian.setRequestUrlImpl(null);
 		await server.close();
-		// ⚠️ 删临时目录**必须容错**：Windows 上偶发 `EPERM: rmdir`（文件刚写完、
-		// 或杀毒软件短暂占用）。那与测试结论无关，但会让整个套件挂住 ——
-		// 一次"目录没删掉"变成"跑不完"，代价完全不对等。
-		try {
-			await rm(root, { recursive: true, force: true });
-		} catch {
-			// 留给系统的临时目录清理
-		}
+		// ⚠️ 删临时目录**必须容错、而且不能在本进程里等**：Windows 上 `rm -r` 偶发
+		// 会卡住不返回（现场只剩未完成的 fs 请求，套件其实早已跑完）—— 症状是
+		// "**测试全绿但进程退不出去**"，被外层超时杀掉，日志里什么都没有。
+		// 交给分离的子进程之后，卡住也只卡它自己。理由详见 `cleanup.mjs`。
+		cleanupInBackground(root);
 	}
 }

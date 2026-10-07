@@ -644,6 +644,8 @@ export async function runIngestSuite(mod) {
 			contentType: "image/png",
 			etag: "abc",
 			uploadedAt: FIXED_NOW.toISOString(),
+			// 刚写下的副本就是"刚被用到"的（缓存轮换靠这个时间排序）
+			lastUsedAt: FIXED_NOW.getTime(),
 			sourceName: "a.png",
 		});
 		await mod.saveCacheIndex(adapter, path, index);

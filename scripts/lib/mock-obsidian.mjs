@@ -203,6 +203,8 @@ export class Plugin extends Component {
 		this.settingTabs = [];
 		/** `registerEvent` 拿到的引用，供断言"卸载时能自动注销"。 */
 		this.eventRefs = [];
+		/** `register` 拿到的清理函数（宿主在卸载时调用）。 */
+		this.cleanups = [];
 		/** 命令 / ribbon 图标（当前未使用，留着让"忘了接线"能被测出来）。 */
 		this.commands = [];
 		this.ribbonIcons = [];
@@ -215,6 +217,22 @@ export class Plugin extends Component {
 		this.eventRefs.push(ref);
 		if (ref?.name) record(this, "event", ref.name);
 		return ref;
+	}
+
+	/**
+	 * ⚠️ 必须记账：`register` 是"卸载时清理"的**唯一**入口
+	 * （prototype 补丁、启动定时器、周期定时器都走它）。
+	 *
+	 * 不记账的后果不只是"测不了" —— 是**一整类接线缺口完全没有痕迹**：
+	 * 插件忘了注册后台定时器时，验收里看不到任何异常，而用户那边的表现是
+	 * "设了缓存上限却从来不会自动轮换"。替身愿意记账，这种缺口才抓得住。
+	 *
+	 * 测试可以调用这些清理函数来模拟卸载（真实宿主在卸载时会调用它们）。
+	 */
+	register(callback) {
+		this.cleanups.push(callback);
+		record(this, "register", "(cleanup)");
+		return callback;
 	}
 
 	addSettingTab(tab) {
