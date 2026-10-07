@@ -265,8 +265,4 @@ export function runInterceptSuite(mod) {
 		"只拿得到 from 时应返回只带 from 的插入位置"
 	);
 
-	console.log(
-		"Intercept decisions passed (default-handled → ignore; unconfigured → warn and let Obsidian save; " +
-			"order pinned so a text-only paste never nags about config; insert point captured sync with graceful fallback)."
-	);
 }

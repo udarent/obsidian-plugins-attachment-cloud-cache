@@ -330,11 +330,6 @@ export async function runRenderHookSuite(mod) {
 	}
 	assert.equal(patchThrown, null, "拿不到 prototype 时应静默跳过，而不是抛错");
 
-	console.log(
-		"Render hook passed (index hit → local src with the remote URL never written; third-party/local/data ignored; " +
-			"no usable local path → nothing written; missing copy → download then swap; local file gone → fall back to " +
-			"remote exactly once; idempotent; preview `src` setter interception with uninstall)."
-	);
 }
 
 /**

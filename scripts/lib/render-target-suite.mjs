@@ -274,9 +274,4 @@ export function runRenderTargetSuite(mod) {
 		"只配了公网前缀时也要能认出自己的图（端点可以后填）"
 	);
 
-	console.log(
-		"Render-target decisions passed (index hit → local; own storage without a copy → fetch; " +
-			"everything else ignored including third-party images; key round-trips through publicUrlFor for " +
-			"multi-segment and non-ASCII keys; malformed input never throws)."
-	);
 }

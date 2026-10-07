@@ -9,5 +9,13 @@ import { runExternalCacheSuite } from "./lib/external-cache-suite.mjs";
  */
 await withLoadedTs(
 	["src/core/external-cache", "src/s3/client", "src/cache/index"],
-	runExternalCacheSuite
+	async (mod) => {
+		await runExternalCacheSuite(mod);
+		console.log(
+			"External-cache tests passed (real HTTP + real disk + real S3 stand-in: with consent off not a single request " +
+				"is sent and the note is left untouched, the bytes land on disk identically, a 403 is read as hotlink " +
+				"protection rather than success, the third-party link is rewritten, a download failure never uploads, " +
+				"loopback hosts are never fetched, and every refusal is reported instead of passing silently)."
+		);
+	}
 );

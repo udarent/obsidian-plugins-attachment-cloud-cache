@@ -9,5 +9,13 @@ import { runDownloadSuite } from "./lib/download-suite.mjs";
  */
 await withLoadedTs(
 	["src/core/download", "src/cache/index", "src/s3/client", "src/render/render-target"],
-	runDownloadSuite
+	async (mod) => {
+		const stats = await runDownloadSuite(mod);
+		console.log(
+			`Download passed (byte-identical to disk, index registered and persisted, concurrent requests for one key ` +
+				`collapse to a single GET, failures stay retryable, third-party URLs refused, setting off = no request, ` +
+				`never clobbers an occupied path, offline failures stay silent while auth failures speak up, ` +
+				`sha256 of the round-tripped bytes matches ${stats.sha256Prefix}…).`
+		);
+	}
 );

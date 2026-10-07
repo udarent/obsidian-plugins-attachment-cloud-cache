@@ -476,10 +476,7 @@ export async function runDownloadSuite(mod) {
 		}
 	}
 
-	console.log(
-		`Download passed (byte-identical to disk, index registered and persisted, concurrent requests for one key ` +
-			`collapse to a single GET, failures stay retryable, third-party URLs refused, setting off = no request, ` +
-			`never clobbers an occupied path, offline failures stay silent while auth failures speak up, ` +
-			`sha256 of the round-tripped bytes matches ${sha256Hex(HOSTILE_BYTES).slice(0, 8)}…).`
-	);
+	// ⚠️ 自述**不在套件里打印**：套件会被变异验证复用，在那里打印会混进变异输出
+	//（而且它自称 "passed" 在变异过程中是错的语义）。入口负责宣告，这里只交出要报的值。
+	return { sha256Prefix: sha256Hex(HOSTILE_BYTES).slice(0, 8) };
 }

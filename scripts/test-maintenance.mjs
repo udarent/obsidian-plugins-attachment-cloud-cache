@@ -17,5 +17,13 @@ await withLoadedTs(
 		"src/settings",
 		"src/types",
 	],
-	runMaintenanceSuite
+	(mod) => {
+		runMaintenanceSuite(mod);
+		console.log(
+			"Maintenance planners passed (four audit classes with attachment-folder files never treated as orphans; " +
+				"preview truncated but execution list full; link spans for wikilink/alias/subpath/title/angle forms; " +
+				"rewrites preserve aliases and never touch unrelated links; reference scan only counts our own storage; " +
+				"batch candidates skip non-enabled, empty and already-indexed files)."
+		);
+	}
 );

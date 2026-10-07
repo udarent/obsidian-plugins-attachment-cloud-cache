@@ -313,10 +313,4 @@ export function runMaintenanceSuite(mod) {
 	});
 	assert.deepEqual(noStat.paths, ["attachments/no-stat.png"], "拿不到 size 时不该误判成空文件");
 
-	console.log(
-		"Maintenance planners passed (four audit classes with attachment-folder files never treated as orphans; " +
-			"preview truncated but execution list full; link spans for wikilink/alias/subpath/title/angle forms; " +
-			"rewrites preserve aliases and never touch unrelated links; reference scan only counts our own storage; " +
-			"batch candidates skip non-enabled, empty and already-indexed files)."
-	);
 }

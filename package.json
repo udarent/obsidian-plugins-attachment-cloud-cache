@@ -9,17 +9,18 @@
 		"build": "tsc --noEmit && node esbuild.config.mjs production",
 		"test": "node esbuild.config.mjs production && node scripts/run-tests.mjs",
 		"test:unit": "node scripts/run-tests.mjs",
-		"mutate": "node scripts/mutate-settings.mjs && node scripts/mutate-object-key.mjs && node scripts/mutate-cache-path.mjs && node scripts/mutate-vault-files.mjs && node scripts/mutate-cache-index.mjs && node scripts/mutate-hash.mjs && node scripts/mutate-sigv4.mjs && node scripts/mutate-s3-errors.mjs && node scripts/mutate-s3-client.mjs && node scripts/mutate-ingest.mjs && node scripts/mutate-editor-hooks.mjs && node scripts/mutate-transfer.mjs && node scripts/mutate-settings-logic.mjs && node scripts/mutate-settings-bindings.mjs && node scripts/mutate-credentials.mjs && node scripts/mutate-intercept.mjs && node scripts/mutate-load-acceptance.mjs && node scripts/mutate-render-target.mjs && node scripts/mutate-render-hook.mjs && node scripts/mutate-download.mjs && node scripts/mutate-maintenance-audit.mjs && node scripts/mutate-maintenance-run.mjs && node scripts/mutate-site-decisions.mjs && node scripts/mutate-external-decide.mjs && node scripts/mutate-site-store.mjs && node scripts/mutate-external-cache.mjs && node scripts/mutate-external-hook.mjs && node scripts/mutate-external-notice.mjs && node scripts/mutate-eviction.mjs && node scripts/mutate-rotation.mjs && node scripts/mutate-runtime.mjs && node scripts/mutate-remove.mjs && node scripts/mutate-error-text.mjs && node scripts/mutate-atomic-write.mjs",
+		"mutate": "node scripts/mutate-settings.mjs && node scripts/mutate-object-key.mjs && node scripts/mutate-cache-path.mjs && node scripts/mutate-vault-files.mjs && node scripts/mutate-cache-index.mjs && node scripts/mutate-hash.mjs && node scripts/mutate-sigv4.mjs && node scripts/mutate-s3-errors.mjs && node scripts/mutate-s3-client.mjs && node scripts/mutate-ingest.mjs && node scripts/mutate-editor-hooks.mjs && node scripts/mutate-transfer.mjs && node scripts/mutate-settings-logic.mjs && node scripts/mutate-settings-bindings.mjs && node scripts/mutate-credentials.mjs && node scripts/mutate-intercept.mjs && node scripts/mutate-load-acceptance.mjs && node scripts/mutate-render-target.mjs && node scripts/mutate-render-hook.mjs && node scripts/mutate-download.mjs && node scripts/mutate-maintenance-audit.mjs && node scripts/mutate-maintenance-run.mjs && node scripts/mutate-site-decisions.mjs && node scripts/mutate-external-decide.mjs && node scripts/mutate-site-store.mjs && node scripts/mutate-external-cache.mjs && node scripts/mutate-external-hook.mjs && node scripts/mutate-external-notice.mjs && node scripts/mutate-eviction.mjs && node scripts/mutate-rotation.mjs && node scripts/mutate-runtime.mjs && node scripts/mutate-remove.mjs && node scripts/mutate-error-text.mjs && node scripts/mutate-atomic-write.mjs && node scripts/mutate-i18n.mjs",
 		"lint": "eslint .",
 		"manifest": "node scripts/check-manifest.mjs",
 		"check:api-floor": "node scripts/check-api-floor.mjs",
 		"check:mutate-files": "node scripts/check-mutate-files.mjs",
-		"check": "npm run build && npm run lint && npm run manifest && npm run check:api-floor && npm run check:mutate-files && npm run check:injected && npm run check:dev-docs && npm run check:readme-pair && npm run test:unit",
+		"check": "npm run build && npm run lint && npm run manifest && npm run check:api-floor && npm run check:mutate-files && npm run check:injected && npm run check:dev-docs && npm run check:readme-pair && npm run check:i18n-keys && npm run test:unit",
 		"version": "node version-bump.mjs && git add manifest.json versions.json",
 		"verify:real": "node scripts/verify-obsidian-smoke.mjs",
 		"check:injected": "node scripts/check-injected-snippets.mjs",
 		"check:dev-docs": "node scripts/check-no-dev-doc-refs.mjs",
-		"check:readme-pair": "node scripts/check-readme-pair.mjs"
+		"check:readme-pair": "node scripts/check-readme-pair.mjs",
+		"check:i18n-keys": "node scripts/check-i18n-keys.mjs"
 	},
 	"keywords": [
 		"s3",
