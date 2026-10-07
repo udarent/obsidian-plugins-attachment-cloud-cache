@@ -71,8 +71,8 @@ await runMutations({
 		{
 			// 后果：什么都没删也照样弹提示 ⇒ 后台保洁任务在用户读笔记时反复插嘴。
 			name: "★ 什么都没删也会提示（后台任务开始插嘴）",
-			from: "\t\tif (outcome.evicted > 0) announce(outcome, overBy);\n",
-			to: "\t\tannounce(outcome, overBy);\n",
+			from: "\t\tif (outcome.evicted > 0) announce(outcome, overBy, settings);\n",
+			to: "\t\tannounce(outcome, overBy, settings);\n",
 			expect: "不该提示",
 		},
 		{
@@ -82,6 +82,14 @@ await runMutations({
 			from: "\t\t\t} catch (error) {\n\t\t\t\t// 后台任务绝不能把异常抛给调用方（它跑在插件的生命周期里）\n\t\t\t\treport(error);\n\t\t\t\treturn null;\n\t\t\t}",
 			to: "\t\t\t} catch (error) {\n\t\t\t\tthrow error;\n\t\t\t}",
 			expect: "绝不能抛给调用方",
+		},
+		{
+			// 后果：提示写死成"已移入回收站"（或反之）⇒ 用户去回收站里找那些
+			// 其实已经被删除的副本。文案与"实际用了哪个删除 API"必须同源。
+			name: "★ 提示文案不再跟着删除方式（说进了回收站，其实已删除）",
+			from: "\t\t\tconst suffix = deleteModeSuffix(settings.deleteMode);",
+			to: '\t\t\tconst suffix = "trash";',
+			expect: "已删除",
 		},
 	],
 });

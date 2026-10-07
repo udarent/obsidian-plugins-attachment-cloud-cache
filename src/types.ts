@@ -57,6 +57,44 @@ export function isLocalCopyAction(value: unknown): value is LocalCopyAction {
 	return typeof value === "string" && (LOCAL_COPY_ACTIONS as readonly string[]).includes(value);
 }
 
+/**
+ * 淘汰 / 清理缓存文件时，用哪种方式把文件拿掉。
+ *
+ * 两个取值的区别**只在用户能感知的那一件事上**：磁盘空间什么时候真的释放。
+ *
+ * - 两者都会让文件立刻离开 vault（同步与备份的体积马上变小）；
+ * - 区别是物理空间"立刻"释放，还是"等系统清空回收站"。
+ *
+ * 这是它值得成为一个设置项的唯一理由 —— 别把它读成"危险/安全"的两档，
+ * 因为它删的**只是缓存副本**：笔记里存的一直是远端地址，被删掉的副本
+ * 下次看到那张图时会**自动重新下载**。所以两种取值都不会丢数据。
+ *
+ * ⚠️ 它**从不作用于用户自己的附件**（`localCopy: "trash"` 那条路径始终走回收站）——
+ * 见 `maintenance/remove.ts` 的说明。
+ */
+export type DeleteMode =
+	/**
+	 * 直接删除（默认）。
+	 *
+	 * 磁盘空间**立刻**释放 —— 这正是"设了上限"最常被期待的效果
+	 * （尤其是磁盘紧张、或缓存目录本身占了大头的时候）。
+	 * 代价是不可撤销：删错了只能靠"下次看到那张图时重新下载"回来。
+	 */
+	| "permanent"
+	/**
+	 * 移入系统回收站。
+	 *
+	 * 误删可恢复；但空间要等系统清空回收站才真正释放，
+	 * 所以"设了上限磁盘还是满的"是这条取值下的**正常现象**，不是 bug。
+	 */
+	| "trash";
+
+export const DELETE_MODES: readonly DeleteMode[] = ["permanent", "trash"];
+
+export function isDeleteMode(value: unknown): value is DeleteMode {
+	return typeof value === "string" && (DELETE_MODES as readonly string[]).includes(value);
+}
+
 /** S3 兼容存储的连接参数。 */
 export interface S3Config {
 	/** 服务端点，如 `https://abc.r2.cloudflarestorage.com`。 */
@@ -98,8 +136,8 @@ export const CACHE_LIMIT_MB_MAX = 1024 * 1024;
 /**
  * 用户可配置的全部设置。
  *
- * 只有 7 个顶层字段 —— 这是刻意的：每一个都对应一个**用户能自己回答的问题**
- * （"哪些要上传""本地副本怎么办""离线看得到吗""缓存最多占多大"），
+ * 只有 8 个顶层字段 —— 这是刻意的：每一个都对应一个**用户能自己回答的问题**
+ * （"哪些要上传""本地副本怎么办""离线看得到吗""缓存最多占多大""删了怎么找回来"），
  * 而不是一个实现细节。被砍掉的 5 个见 `docs/SCOPE.md` 的参数表。
  */
 export interface PluginSettings {
@@ -146,5 +184,16 @@ export interface PluginSettings {
 	 * 那是用户的正常附件，既不计入上限、也绝不会被自动淘汰。
 	 */
 	cacheLimitMb: number;
+	/**
+	 * 淘汰 / 清理缓存文件时怎么删。**默认 `permanent`（立刻释放磁盘空间）**。
+	 *
+	 * 对**自动轮换**与**「清理缓存文件」命令**都有效 —— 两者做的是同一件事
+	 * （把缓存目录里的文件拿掉），没有理由让它们各自有一套行为：
+	 * 那种不一致会表现成"我清理了缓存，磁盘空间却没变"。
+	 *
+	 * ⚠️ 不影响用户自己的附件：上传后不留本地副本（`localCopy: "trash"`）
+	 * 那条路径删的是**用户的原始文件**，始终走回收站。
+	 */
+	deleteMode: DeleteMode;
 	s3: S3Config;
 }

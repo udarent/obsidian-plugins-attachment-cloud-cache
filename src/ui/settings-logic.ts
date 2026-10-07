@@ -6,8 +6,8 @@
  * 拆成纯函数才能穷举，也才能在不用真实 Obsidian 的情况下验证。
  */
 
-import type { LocalCopyAction } from "../types";
-import { CACHE_LIMIT_MB_MAX, LOCAL_COPY_ACTIONS } from "../types";
+import type { DeleteMode, LocalCopyAction } from "../types";
+import { CACHE_LIMIT_MB_MAX, DELETE_MODES, LOCAL_COPY_ACTIONS } from "../types";
 
 /**
  * 下拉选项：由**类型清单**生成 `{取值: 文案}`（正是 `SettingDropdownControl.options` 的形状）。
@@ -18,6 +18,13 @@ import { CACHE_LIMIT_MB_MAX, LOCAL_COPY_ACTIONS } from "../types";
 export function localCopyOptions(labelOf: (value: LocalCopyAction) => string): Record<string, string> {
 	const options: Record<string, string> = {};
 	for (const value of LOCAL_COPY_ACTIONS) options[value] = labelOf(value);
+	return options;
+}
+
+/** 同上，用于「缓存文件的删除方式」。 */
+export function deleteModeOptions(labelOf: (value: DeleteMode) => string): Record<string, string> {
+	const options: Record<string, string> = {};
+	for (const value of DELETE_MODES) options[value] = labelOf(value);
 	return options;
 }
 

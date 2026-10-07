@@ -126,5 +126,13 @@ await runMutations({
 			to: "\t\t// 变异：不登记启动定时器的清理\n",
 			expect: "清理回调",
 		},
+		{
+			// 后果：确认框的措辞与实际行为分叉。用户按下的按钮是**不可逆**的，
+			// 而他据此判断要不要按 —— 说"可以还原"而其实抹除，他会以为删错了也能找回。
+			name: "★ 确认框的措辞写死（不说清是抹除还是可还原）",
+			from: "\t\tconst mode = deleteModeSuffix(this.settings.deleteMode);",
+			to: '\t\tconst mode = "trash";',
+			expect: "无法撤销",
+		},
 	],
 });

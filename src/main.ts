@@ -35,6 +35,7 @@ import { createIndexStore, makeSerializer } from "./host/runtime";
 import type { HostContext } from "./host/runtime";
 import { createEditorHandlers } from "./host/editor-bridge";
 import { auditForCleanup, collectCacheFiles, runBatchUpload, runCleanup, runEviction, scanReferences } from "./maintenance/run";
+import { deleteModeSuffix } from "./maintenance/remove";
 import type { MaintenanceDeps } from "./maintenance/run";
 import { createCacheRotator } from "./maintenance/rotation";
 import type { CacheRotator } from "./maintenance/rotation";
@@ -204,7 +205,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		this.rotation = createCacheRotator({
 			settings: () => this.settings,
 			index: () => this.currentIndex(),
-			// 复用维护功能那三个函数，而不是另写一套：列目录、扫引用、送回收站
+			// 复用维护功能那几个函数，而不是另写一套：列目录、扫引用、按设置删文件
 			// 都只有一处实现，行为不会因为"从哪条路径进来"而不同。
 			collectFiles: () => collectCacheFiles(this.app, this.settings.cacheFolder),
 			scanReferencedKeys: async () => (await scanReferences(this.app, (url) => this.keyOfUrl(url))).keys,
@@ -353,7 +354,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		new Notice(this.t("maintainRepaired", { healed: result.healed, skipped: result.skipped.length }));
 	}
 
-	/** 清理未使用的缓存（**破坏性**：先确认，且只送回收站）。 */
+	/** 清理未使用的缓存（**破坏性**：先确认，按设置里的方式删除）。 */
 	private async cleanCache(): Promise<void> {
 		const deps = this.maintenanceDeps();
 		const { plan } = await auditForCleanup(deps, (url) => this.keyOfUrl(url));
@@ -366,15 +367,20 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		}
 
 		const mb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1);
+		// ⚠️ 确认框里的每一句话都取决于"待会儿真的会怎么删"：
+		// 这是用户按下确认前**唯一**的安全信息，说反了比不写更糟
+		//（说"可还原"而其实已抹除 ⇒ 他以为还能找回）。后缀与执行层同源
+		//（`remove.ts` 的 `deleteModeSuffix`），所以两者不可能分叉。
+		const mode = deleteModeSuffix(this.settings.deleteMode);
 		const confirmed = await this.confirmMaintenance({
 			title: this.t("maintainCleanTitle"),
 			lines: [
-				this.t("maintainCleanSummary", { count: plan.all.length, mb: mb(plan.bytes) }),
+				this.t(`maintainCleanSummary_${mode}`, { count: plan.all.length, mb: mb(plan.bytes) }),
 				...plan.preview,
 				...(plan.hidden > 0 ? [this.t("maintainCleanMore", { count: plan.hidden })] : []),
-				this.t("maintainCleanSafety"),
+				this.t(`maintainCleanSafety_${mode}`),
 			],
-			cta: this.t("maintainCleanCta"),
+			cta: this.t(`maintainCleanCta_${mode}`),
 			destructive: true,
 		});
 		if (!confirmed) {

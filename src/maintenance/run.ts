@@ -7,8 +7,9 @@
  *    而不是留给调用方记得先跑哪个命令 —— 顺序记错会白丢文件（见 `audit.ts` 的说明）。
  * 2. **拿不到删除凭据就跳过，绝不退化为底层删除。** 宿主的文件索引可能滞后于磁盘
  *    （刚同步进来的文件还没被索引），此时 `getAbstractFileByPath` 返回 null。
- *    用 `adapter.remove` 硬删会**绕过用户"删除即进回收站"的设置**，属不可逆 ——
- *    所以宁可跳过并如实汇报。
+ *    用 `adapter.remove` 硬删会**绕过宿主的文件索引** —— 文件从磁盘上没了，
+ *    而宿主仍然认得它，留下"看得见、读不到"的幽灵条目 —— 所以宁可跳过并如实汇报。
+ *    至于这一步到底走回收站还是直接删，由 `remove.ts` 按设置里那一项决定。
  * 3. **改笔记前先把原文取到手。** `vault.modify` 是**整文件覆盖**：若写入的是空串
  *    （例如读取失败却继续往下走），用户的笔记就没了。所以读失败一律跳过该文件。
  */
@@ -21,6 +22,7 @@ import type { PluginSettings } from "../types";
 import { isUnderCacheFolder } from "../cache-path";
 import { auditCache, planCleanup } from "./audit";
 import type { CacheAudit, CleanupPlan, DiskFile } from "./audit";
+import { removeCacheFile } from "./remove";
 import type { EvictionOutcome, EvictionPlan } from "./eviction";
 import { keysInText, planLinkRewrites } from "./references";
 import type { RewriteRule } from "./references";
@@ -30,7 +32,7 @@ import type { IngestRequest, IngestResult } from "../core/ingest";
 
 /** 一次清理的结果，供汇报。 */
 export interface CleanupResult {
-	/** 成功送进回收站的数量。 */
+	/** 成功拿掉的文件数。 */
 	removed: number;
 	/** 拿不到删除凭据而跳过的（宿主的索引滞后于磁盘）。 */
 	skipped: { path: string; reason: string }[];
@@ -155,7 +157,7 @@ export async function auditForCleanup(
 }
 
 /**
- * 执行清理：**先自愈，再把清单里的文件送进回收站**。
+ * 执行清理：**先自愈，再按设置的方式删掉清单里的文件**。
  *
  * 顺序写死在这里，不给调用方选 —— 顺序搞反会白丢文件（见 `audit.ts`）。
  */
@@ -177,7 +179,7 @@ export async function runCleanup(deps: MaintenanceDeps, plan: CleanupPlan): Prom
 		}
 	}
 
-	// ── 2. 清理：走宿主的回收站 ──
+	// ── 2. 清理：按设置里的方式删除（见 `remove.ts`）──
 	for (const path of plan.all) {
 		// 双保险：清单理论上只含缓存目录内的路径，但这是**删文件**的循环，
 		// 少一层校验的代价不可逆。
@@ -189,13 +191,13 @@ export async function runCleanup(deps: MaintenanceDeps, plan: CleanupPlan): Prom
 		const file = deps.app.vault.getAbstractFileByPath(path);
 		if (!file) {
 			// 宿主的索引滞后于磁盘：**跳过**，绝不退化为 adapter.remove
-			//（那会绕过用户"删除即进回收站"的设置，不可逆）。
+			//（那会绕过宿主的文件索引，留下"看得见、读不到"的幽灵条目）。
 			result.skipped.push({ path, reason: deps.t("maintainSkipNotIndexed") });
 			continue;
 		}
 
 		try {
-			await deps.app.fileManager.trashFile(file);
+			await removeCacheFile(deps.app, file, deps.settings().deleteMode);
 			result.removed += 1;
 		} catch (error) {
 			result.skipped.push({ path, reason: describe(error) });
@@ -213,7 +215,7 @@ export interface EvictionRunResult extends EvictionOutcome {
 }
 
 /**
- * 按计划执行淘汰：**把文件送进回收站，并摘掉它们的索引记录**。
+ * 按计划执行淘汰：**把文件按设置的方式拿掉，并摘掉它们的索引记录**。
  *
  * ## ⚠️ 为什么一定要摘索引
  *
@@ -225,20 +227,22 @@ export interface EvictionRunResult extends EvictionOutcome {
  *
  * ## 与 `runCleanup` 共用同一条安全纪律
  *
- * 走宿主的回收站（`fileManager.trashFile`），拿不到删除凭据就**跳过**，
- * 绝不退化成 `adapter.remove`（那会绕过用户"删除即进回收站"的设置）。
- * 这是**自动**运行的路径、没人在旁边看，所以纪律更要守。
+ * 两个入口都通过 `remove.ts` 删文件（走宿主 API、拿不到删除凭据就**跳过**、
+ * 绝不退化成 `adapter.remove`）。这是**自动**运行的路径、没人在旁边看，
+ * 所以纪律更要守；而"直接删除还是进回收站"由设置里那一项决定 ——
+ * 一处定义，两个入口行为一致。
  *
- * ## 一个如实说明的代价
+ * ## 为什么默认是"直接删除"
  *
- * 进回收站 → 文件**立刻离开 vault**（同步/备份的体积马上变小），
- * 而**磁盘空间要等系统清空回收站才真正释放**。对"上限"这个诉求来说，
- * 前者通常才是用户真正在意的（同步配额、vault 体积），换来的好处是误删可恢复。
- * 想立刻释放物理空间就去清空回收站 —— 设置项的描述里也写明了这一点。
+ * 上限的用途是"别让缓存把磁盘吃光"，而回收站**不解**这个问题：文件离开了 vault，
+ * 物理空间却还占着，于是表现成"设了上限，磁盘还是满的"。而这里删的只是缓存副本 ——
+ * 笔记里存的始终是远端地址，副本下次看到那张图时会重新下载 ——
+ * 所以可恢复性由**重新下载**提供，不必由回收站提供。
+ * 想换成可恢复的那一档，设置里选「移入系统回收站」。
  */
 export async function runEviction(deps: MaintenanceDeps, plan: EvictionPlan): Promise<EvictionRunResult> {
 	const result: EvictionRunResult = { evicted: 0, freed: 0, skipped: [], unindexed: 0 };
-	const trashedKeys: string[] = [];
+	const removedKeys: string[] = [];
 
 	for (const victim of plan.evict) {
 		// 双保险：清单理论上只含缓存目录内的路径，但这是**删文件**的循环，
@@ -256,19 +260,19 @@ export async function runEviction(deps: MaintenanceDeps, plan: EvictionPlan): Pr
 		}
 
 		try {
-			await deps.app.fileManager.trashFile(file);
+			await removeCacheFile(deps.app, file, deps.settings().deleteMode);
 			result.evicted += 1;
 			result.freed += Math.max(0, victim.bytes);
 			// 只有"有索引记录"的才需要摘（孤儿本来就没有记录）
-			if (victim.key) trashedKeys.push(victim.key);
+			if (victim.key) removedKeys.push(victim.key);
 		} catch (error) {
 			result.skipped.push({ path: victim.cachePath, reason: describe(error) });
 		}
 	}
 
-	if (trashedKeys.length > 0) {
+	if (removedKeys.length > 0) {
 		const index = deps.index();
-		for (const key of trashedKeys) {
+		for (const key of removedKeys) {
 			if (index.remove(key)) result.unindexed += 1;
 		}
 		try {

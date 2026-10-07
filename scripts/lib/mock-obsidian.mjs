@@ -380,6 +380,9 @@ export function createAppMock(rootDir, opts = {}) {
 		createFolder: [],
 		rename: [],
 		trash: [],
+		delete: [],
+		/** `Vault.delete` 收到的第二个参数（不该有人传它，见 remove.ts 的说明）。 */
+		deleteForce: undefined,
 		writes: [],
 		readBinary: [],
 		getBasePath: 0,
@@ -609,6 +612,23 @@ export function createAppMock(rootDir, opts = {}) {
 		async modifyBinary(file, data) {
 			calls.writes.push(file.path);
 			await writeFile(toAbs(rootDir, file.path), Buffer.from(data));
+		},
+		/**
+		 * **彻底删除**（不经回收站），官方文档原话 "Deletes the file completely"。
+		 *
+		 * 与 `fileManager.trashFile` **分别记账**（`calls.delete` / `calls.trash`）：
+		 * 这两者的区别正是"磁盘空间现在释放还是等清空回收站"，而它是个设置项 ——
+		 * 若替身把它们记成同一个数，就**没法断言"到底走了哪一条"**，
+		 * 于是"选了直接删除却走了回收站"这类缺陷在测试里完全没有痕迹。
+		 *
+		 * ⚠️ 与真实 API 一样**不走 adapter**：两个原语都由宿主自己完成删除并更新索引，
+		 * 所以这里也是直接动磁盘（而不是转手调 `adapter.remove`，那会掩盖
+		 * "产品代码是否真的用了宿主 API"这件事）。
+		 */
+		async delete(file, force) {
+			calls.delete.push(file.path);
+			calls.deleteForce = force;
+			await rm(toAbs(rootDir, file.path), { force: true });
 		},
 		getResourcePath(file) {
 			return `app://local/${normalizePath(file.path)}`;

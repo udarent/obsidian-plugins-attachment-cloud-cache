@@ -78,5 +78,13 @@ await runMutations({
 			to: "\treturn `failure_${kind}`;",
 			expect: "每类失败都要有文案 key",
 		},
+		{
+			// 后果：选项里少了「回收站」那一档 ⇒ 想选可恢复的用户没有入口，
+			// 而"界面上选不到"等于"这个取值不存在"。
+			name: "★ 删除方式的选项少了一档（想选可恢复的用户没有入口）",
+			from: "\tfor (const value of DELETE_MODES) options[value] = labelOf(value);",
+			to: '\tfor (const value of ["permanent"]) options[value] = labelOf(value);',
+			expect: "两个删除方式都要有选项",
+		},
 	],
 });

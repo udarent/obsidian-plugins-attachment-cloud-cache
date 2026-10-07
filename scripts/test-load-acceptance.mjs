@@ -14,7 +14,8 @@ console.log(
 	`Load acceptance passed (built main.js loads and registers ${JSON.stringify(result.registrations)}; ` +
 		"a real paste went through: 1 PUT + cached copy byte-identical + link inserted, a second identical paste " +
 		"issued 0 PUT; rendering rewrote the src to the local copy with **zero** requests in both reading view and " +
-		"live preview, while a third-party image was left alone; clean-cache moved only the orphan to trash " +
-		"(a referenced copy survived, and cancelling touched nothing); batch upload rewrote both link forms and " +
-		"kept the originals; an unconfigured paste is left to Obsidian; with the feature switched on, an image from another site was asked about once, downloaded, uploaded and its link rewritten; and with a cache limit set, the background rotation moved the least recently used copies to the trash (the note itself untouched))."
+		"live preview, while a third-party image was left alone; clean-cache moved only the orphan, and with the " +
+		"removal mode set to trash it used the host's trash (a referenced copy survived, and cancelling touched " +
+		"nothing); batch upload rewrote both link forms and " +
+		"kept the originals; an unconfigured paste is left to Obsidian; with the feature switched on, an image from another site was asked about once, downloaded, uploaded and its link rewritten; and with a cache limit set, the background rotation deleted the least recently used copies outright (the default, so the space is freed now) and removed their index entries, with the note itself untouched))."
 );

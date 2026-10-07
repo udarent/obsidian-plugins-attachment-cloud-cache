@@ -641,7 +641,32 @@ export async function runLoadAcceptance(options = {}) {
 
 		const referencedCopy = entry.cachePath; // 仍被笔记引用的那份
 
-		plugin.confirmMaintenance = async () => true; // 自动确认（"确认后执行"这条路径）
+		// ⭐ 这一轮**显式**选「移入系统回收站」。
+		//
+		// 默认是「直接删除」（`vault.delete`），而这里刻意改成另一档，为的是让
+		// **两个原语都在端到端层被走一遍**：后台自动轮换那一节验默认的"立刻释放"，
+		// 这里验可选的可恢复路径。顺带确认"设置真的会改变实际调用的宿主 API" ——
+		// 只测默认值的话，接线错了（比如两个分支接反）也能全绿。
+		//
+		// ⚠️ 先存下原值再改、结束时还原：这样「缓存上限」那一节跑的就是**出厂默认**，
+		// 而不是被这一节改过的值（否则那一节看似在验默认行为，其实验的是 trash）。
+		const savedDeleteMode = plugin.settings.deleteMode;
+		plugin.settings.deleteMode = "trash";
+
+		// 记下确认框里到底写了什么。**这是必要的**：确认框是用户按下那个不可逆按钮前
+		// 唯一读到的安全信息，而它必须与"待会儿真的会怎么删"一致 ——
+		// 说"可以还原"而其实抹除，用户就不会再去找了（反之亦然）。
+		// 不记下来的话，这段话没有任何断言看着，改错了也没人知道。
+		const confirms = [];
+		const captureConfirm = (result) => async (options) => {
+			confirms.push(options);
+			return result;
+		};
+
+		const beforeCleanTrash = harness.calls.trash.length;
+		const beforeCleanDelete = harness.calls.delete.length;
+
+		plugin.confirmMaintenance = captureConfirm(true); // 自动确认（"确认后执行"这条路径）
 		mockObsidian.Notice.instances.length = 0;
 		runCommand("clean-cache");
 		// 等**提示**（它在清理之后才发）而不是等文件消失 —— 后者会在命令还没收尾时就返回
@@ -652,17 +677,40 @@ export async function runLoadAcceptance(options = {}) {
 			diagnose
 		);
 
-		assert.ok(await existsOnDisk(root, orphanVaultPath) === false, "★ 孤儿文件应被移入回收站");
+		assert.ok(await existsOnDisk(root, orphanVaultPath) === false, "★ 孤儿文件应当被拿掉");
+		assert.ok(
+			harness.calls.trash.includes(orphanVaultPath),
+			"★ 选了「移入回收站」就该走宿主的 trashFile"
+		);
+		assert.equal(
+			harness.calls.delete.length,
+			beforeCleanDelete,
+			"★ 选了回收站就**不该**也走直接删除（那是双删，可恢复的那一档就失去意义了）"
+		);
+		assert.ok(harness.calls.trash.length > beforeCleanTrash, "回收站调用应当增加");
 		assert.ok(
 			await existsOnDisk(root, referencedCopy),
 			"★ 仍被笔记引用的副本**绝不能**被清理（那是离线可用的依赖）"
+		);
+
+		// ⭐ 确认框必须说清"可恢复"，且按钮写的也是"移入回收站"。
+		// 两种语言各留一条正则：套件不该假设界面语言。
+		const trashConfirm = confirms[confirms.length - 1];
+		assert.ok(trashConfirm, "清理应当先弹确认框");
+		assert.ok(
+			/can be restored|可以还原/.test(trashConfirm.lines.join(" ")),
+			`★ 选了回收站，确认框必须说清「可以还原」（实际：${trashConfirm.lines.join(" / ")}）`
+		);
+		assert.ok(
+			/Move to trash|移入回收站/.test(trashConfirm.cta),
+			`★ 按钮文案要跟着删除方式走（实际：${trashConfirm.cta}）`
 		);
 
 		// 取消时不执行任何清理 —— 这条路径最容易被漏测（用户点错命令时全靠它）
 		const secondOrphan = "_attachment-cache/orphan2.png";
 		await writeFile(join(root, secondOrphan), Buffer.from([4, 5, 6]));
 		await harness.refreshPathCache();
-		plugin.confirmMaintenance = async () => false; // 用户取消
+		plugin.confirmMaintenance = captureConfirm(false); // 用户取消
 		runCommand("clean-cache");
 		await new Promise((resolve) => setTimeout(resolve, 60));
 		assert.ok(
@@ -670,10 +718,70 @@ export async function runLoadAcceptance(options = {}) {
 			"★ 用户取消时**一个文件都不能动**（否则确认框等于没有）"
 		);
 
+		// ⭐ **同一个命令、换回默认的删除方式**再跑一次。
+		//
+		// 这一次验的是"设置真的会改变行为，且**两个入口行为一致**"：
+		// 后台自动淘汰走直接删除（见后面那一节），手动清理在默认设置下也必须走直接删除 ——
+		// 否则会出现"我清理了缓存，磁盘空间却没变"（而用户以为清理就等于腾出空间）。
+		plugin.settings.deleteMode = "permanent";
+		const thirdOrphan = "_attachment-cache/orphan3.png";
+		await writeFile(join(root, thirdOrphan), Buffer.from([7, 8, 9]));
+		await harness.refreshPathCache();
+
+		const beforeDefaultTrash = harness.calls.trash.length;
+		const beforeDefaultDelete = harness.calls.delete.length;
+		mockObsidian.Notice.instances.length = 0;
+		plugin.confirmMaintenance = captureConfirm(true);
+		runCommand("clean-cache");
+		await waitFor(
+			() => mockObsidian.Notice.instances.some((n) => /Cleaned|清理/.test(n.message)),
+			"默认方式下清理完成",
+			5000,
+			diagnose
+		);
+
+		assert.ok(await existsOnDisk(root, thirdOrphan) === false, "默认方式下孤儿文件应被拿掉");
+		assert.ok(
+			harness.calls.delete.includes(thirdOrphan),
+			"★ 默认的删除方式是**直接删除**（清理缓存就是为了腾空间，回收站不腾）"
+		);
+		assert.equal(
+			harness.calls.trash.length,
+			beforeDefaultTrash,
+			"★ 默认不该走回收站"
+		);
+		assert.ok(harness.calls.delete.length > beforeDefaultDelete, "删除调用应当增加");
+
+		// 确认框也必须跟着改口：默认这一档是不可撤销的，说"可以还原"会害人
+		const defaultConfirm = confirms[confirms.length - 1];
+		assert.ok(
+			/cannot be undone|无法撤销/.test(defaultConfirm.lines.join(" ")),
+			`★ 默认（直接删除）时确认框必须说清「无法撤销」（实际：${defaultConfirm.lines.join(" / ")}）`
+		);
+		assert.ok(
+			/Delete permanently|彻底删除/.test(defaultConfirm.cta),
+			`★ 按钮文案要跟着删除方式走（实际：${defaultConfirm.cta}）`
+		);
+
+		// 还原删除方式（并确认它回到了默认值）—— 见上面那段说明
+		plugin.settings.deleteMode = savedDeleteMode;
+		assert.equal(
+			plugin.settings.deleteMode,
+			"permanent",
+			"★ 删除方式的出厂默认必须是「直接删除」：上限要解决的正是空间问题，回收站不解它"
+		);
+
 		// 批量上传：把 `attachments/pic.png` 传上去，并改写笔记里的本地链接
 		const attachmentPath = "attachments/pic.png";
 		await mkdir(join(root, "attachments"), { recursive: true });
-		await writeFile(join(root, attachmentPath), Buffer.from(HOSTILE_BYTES));
+		// ⚠️ 这份内容**必须与粘贴那份（`HOSTILE_BYTES`）不同**。
+		// 上传是**内容寻址**的：一模一样的字节会命中同一个对象，于是这次批量上传
+		// 合理地走"远端已存在 → 复用"，**一个 PUT 都不发**。那样下面那条
+		// "恰好 PUT 一次"就不再是"批量上传真的传了"，而是被**别的东西**满足的 ——
+		// 实测它当时是被一个恰好躺在缓存目录里的孤儿文件满足的（内容寻址的去重
+		// 让这条断言看着在守一件事，其实守的是另一件）。
+		const BATCH_BYTES = new Uint8Array([...HOSTILE_BYTES, 0x7a, 0x7b]);
+		await writeFile(join(root, attachmentPath), Buffer.from(BATCH_BYTES));
 		// 用**另一篇**笔记：上面那篇里的引用是 clean-cache 那条断言的依据，不能覆盖掉
 		const notePath = "notes/待迁移.md";
 		await writeFile(join(root, notePath), `![[pic.png]]\n\n![x](attachments/pic.png)\n`);
@@ -834,6 +942,7 @@ export async function runLoadAcceptance(options = {}) {
 			}
 
 			const entriesBefore = index.size;
+			const deletedBefore = harness.calls.delete.length;
 			const trashedBefore = harness.calls.trash.length;
 			mockObsidian.Notice.instances.length = 0;
 
@@ -844,12 +953,20 @@ export async function runLoadAcceptance(options = {}) {
 			await waitFor(() => !index.has(entry.key), "超限后自动淘汰了最久没用过的副本", 20000, diagnose);
 
 			assert.equal(await existsOnDisk(root, entry.cachePath), false, "★ 被淘汰的副本要真的离开磁盘");
+			// ⭐ 出厂默认是「直接删除」⇒ 磁盘空间**立刻**释放。
+			// 这条断言的意义就是"上限真的解决了空间问题"：走回收站的话文件会离开 vault，
+			// 但那份空间仍然占着，于是"设了上限，磁盘还是满的"。
 			assert.ok(
-				harness.calls.trash.includes(entry.cachePath),
-				"★ 淘汰要走**回收站**（可恢复），而不是直接删掉"
+				harness.calls.delete.includes(entry.cachePath),
+				"★ 默认的淘汰方式必须是**直接删除**（立刻释放空间才是设上限的目的）"
+			);
+			assert.equal(
+				harness.calls.trash.length,
+				trashedBefore,
+				"★ 默认不该走回收站（那会让物理空间不释放）—— 可恢复的那一档由上一节单独覆盖"
 			);
 			assert.ok(index.size < entriesBefore, `索引条目数应减少（${entriesBefore} → ${index.size}）`);
-			assert.ok(harness.calls.trash.length > trashedBefore, "回收站调用应当增加");
+			assert.ok(harness.calls.delete.length > deletedBefore, "删除调用应当增加");
 			// ⚠️ 提示是"淘汰之后"才发出的（执行层先返回、编排层再算实际回收量并提示），
 			// 而上面那个 waitFor 看到的是**索引被摘掉**那一刻 —— 两者之间隔着一次 await。
 			// 所以这里也要"等"而不是"直接断言"，否则就是一个偶发失败。

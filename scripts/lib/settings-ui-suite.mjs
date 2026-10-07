@@ -21,6 +21,7 @@ export function runSettingsUiSuite(mod) {
 		formatExtensionList,
 		shouldShowCacheFolder,
 		localCopyOptions,
+		deleteModeOptions,
 		classifyConnectionFailure,
 		connectionFailureKey,
 		describeRememberedSites,
@@ -80,6 +81,17 @@ export function runSettingsUiSuite(mod) {
 	assert.equal(options.cache, "label:cache", "选项值对应文案");
 	// 反向守护：`ask` 曾是合法取值但从未实现，不该再出现在界面上
 	assert.equal("ask" in options, false, "★ 未实现的 ask 不该出现在选项里（假选项）");
+
+	// 删除方式同理：两个取值都要在，且顺序以「默认项在前」——
+	// 下拉框的顺序就是用户看到的顺序，默认项排第一才符合"这是默认行为"的直觉。
+	const modeOptions = deleteModeOptions((value) => `label:${value}`);
+	assert.deepEqual(
+		Object.keys(modeOptions),
+		["permanent", "trash"],
+		"★ 两个删除方式都要有选项，且默认的「直接删除」在前"
+	);
+	assert.equal(modeOptions.permanent, "label:permanent", "选项值对应文案");
+	assert.equal(modeOptions.trash, "label:trash", "同上");
 
 	// ============================================================
 	// 4. 连通性失败归类
@@ -166,6 +178,19 @@ export function runSettingsUiSuite(mod) {
 	assert.equal(isWritableValue("s3.accessKeyIdRef", ""), true, "凭据名允许为空（= 尚未选择）");
 	assert.equal(isWritableValue("autoUpload", false), true, "非字符串值不受空值规则影响");
 	assert.equal(isWritableValue(null, "x"), false, "非法键不可写");
+
+	// 枚举字段：只接受清单里的取值。下拉框本来只会给出合法值，所以这几条是
+	// **防御性**的 —— 但"落进 `data.json` 的必须是合法值"不该依赖控件的自觉：
+	// 写坏了要等下次加载时被回落成默认值才发现，而那时的症状是"改了没用"。
+	assert.equal(isWritableValue("deleteMode", "permanent"), true, "合法的删除方式可写");
+	assert.equal(isWritableValue("deleteMode", "trash"), true, "同上");
+	assert.equal(
+		isWritableValue("deleteMode", "permanent-please"),
+		false,
+		"★ 认不出的删除方式不可写（写进去会在重启后被静默重置）"
+	);
+	assert.equal(isWritableValue("deleteMode", ""), false, "空串不是合法取值");
+	assert.equal(isWritableValue("localCopy", "explode"), false, "★ 本地副本处置同理（同一类字段同一套规则）");
 
 	// ============================================================
 	// 9. 凭据状态：三种状态必须分清楚

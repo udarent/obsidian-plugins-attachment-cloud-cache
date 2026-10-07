@@ -116,11 +116,19 @@ export const I18N: Record<string, Locale> = {
 		maintainRepaired: "Index repaired: {healed} stale entries removed, {skipped} file(s) skipped.",
 		maintainNothingToClean: "Nothing to clean up. {healed} stale index entries were repaired.",
 		maintainCleanTitle: "Clean up cache files",
-		maintainCleanSummary: "This moves {count} file(s) ({mb} MB) to the system trash.",
+		// ⚠️ 这两组文案按「删除方式」二选一（`remove.ts` 的 `deleteModeSuffix`）。
+		// 弄反的后果是具体的：说"进了回收站"而其实已删除 ⇒ 用户去回收站找一个
+		// 根本不在那儿的文件；说"已删除"而其实在回收站 ⇒ 用户以为没法找回了。
+		maintainCleanSummary_permanent: "This permanently deletes {count} file(s) ({mb} MB) from the cache folder.",
+		maintainCleanSummary_trash: "This moves {count} file(s) ({mb} MB) to the system trash.",
 		maintainCleanMore: "…and {count} more",
-		// 这条必须写清楚"进回收站、不是抹除" —— 它是用户按下确认前唯一的安全信息。
-		maintainCleanSafety: "They go to the system trash, so they can be restored. Copies still referenced by a note are never touched.",
-		maintainCleanCta: "Move to trash",
+		// 这条必须写清楚"是抹除还是可恢复" —— 它是用户按下确认前唯一的安全信息。
+		maintainCleanSafety_permanent:
+			"Deleted files are gone — this cannot be undone, and the disk space is freed right away. The images are downloaded again when you next view them. Copies still referenced by a note are never touched.",
+		maintainCleanSafety_trash:
+			"They go to the system trash, so they can be restored — the disk space is only freed when your system empties the trash. Copies still referenced by a note are never touched.",
+		maintainCleanCta_permanent: "Delete permanently",
+		maintainCleanCta_trash: "Move to trash",
 		maintainCancelled: "Cancelled — nothing was changed.",
 		maintainCleaned: "Cleaned {removed} file(s); repaired {healed} index entries; {skipped} skipped.",
 		maintainPersistFailed: "Could not save the index after repairing it: {error}",
@@ -164,13 +172,24 @@ export const I18N: Record<string, Locale> = {
 		// ── 缓存上限与自动轮换 ──
 		cacheLimit: "Cache size limit (MB)",
 		cacheLimitDesc:
-			"Once the cache folder grows past this, the least recently used copies are moved to the system trash in the background — they are downloaded again the next time you view them. 0 means no limit. Trashed files leave the vault immediately, but the disk space is only freed when your system empties the trash.",
+			"Once the cache folder grows past this, the least recently used copies are removed in the background — they are downloaded again the next time you view them. 0 means no limit. How they are removed is the setting right below this one.",
 		cacheLimitPlaceholder: "0 = no limit",
 		cacheLimitNone: "unlimited",
 		cacheLimitValue: "{mb} MB",
-		cacheEvicted:
+		deleteMode: "How cache files are removed",
+		deleteModeDesc:
+			"Applies both to the background rotation above and to the “Clean up cache files” command. Deleting permanently frees the disk space right away; the system trash keeps them restorable, but that space only comes back once you empty the trash. Either way the images are downloaded again when you next view them. This never applies to your own attachments.",
+		deleteMode_permanent: "Delete permanently (frees the space now)",
+		deleteMode_trash: "Move to the system trash (restorable)",
+		// ⚠️ 通知也要按删除方式分叉：说错会让用户去回收站里找一个已经不在那儿的文件，
+		// 或者以为已经删掉的东西还能找回来。
+		cacheEvicted_permanent:
+			"Cache is over its limit: deleted {count} least recently used copies ({mb} MB). They will be downloaded again when you view them.",
+		cacheEvicted_trash:
 			"Cache is over its limit: moved {count} least recently used copies ({mb} MB) to the trash. They will be downloaded again when you view them.",
-		cacheEvictedPartial:
+		cacheEvictedPartial_permanent:
+			"Cache is over its limit: deleted {count} copies ({mb} MB), still {overMb} MB over the limit.",
+		cacheEvictedPartial_trash:
 			"Cache is over its limit: moved {count} copies ({mb} MB) to the trash, still {overMb} MB over the limit.",
 	},
 	zh: {
@@ -254,10 +273,19 @@ export const I18N: Record<string, Locale> = {
 		maintainRepaired: "索引已修复：清理失效记录 {healed} 条，跳过文件 {skipped} 个。",
 		maintainNothingToClean: "没有需要清理的内容。已修复失效索引记录 {healed} 条。",
 		maintainCleanTitle: "清理缓存文件",
-		maintainCleanSummary: "将把 {count} 个文件（{mb} MB）移入系统回收站。",
+		// ⚠️ 这两组文案按「删除方式」二选一（`remove.ts` 的 `deleteModeSuffix`）。
+		// 弄反的后果是具体的：说"进了回收站"而其实已删除 ⇒ 用户去回收站找一个
+		// 根本不在那儿的文件；说"已删除"而其实在回收站 ⇒ 用户以为没法找回了。
+		maintainCleanSummary_permanent: "将从缓存目录彻底删除 {count} 个文件（{mb} MB）。",
+		maintainCleanSummary_trash: "将把 {count} 个文件（{mb} MB）移入系统回收站。",
 		maintainCleanMore: "……还有 {count} 个",
-		maintainCleanSafety: "它们进入系统回收站，可以还原。仍被笔记引用的副本一律不动。",
-		maintainCleanCta: "移入回收站",
+		// 这条必须写清楚"是抹除还是可恢复" —— 它是用户按下确认前唯一的安全信息。
+		maintainCleanSafety_permanent:
+			"删除后无法撤销，磁盘空间会立刻释放。图片会在你下次查看时重新下载。仍被笔记引用的副本一律不动。",
+		maintainCleanSafety_trash:
+			"它们进入系统回收站，可以还原 —— 磁盘空间要等你清空回收站才释放。仍被笔记引用的副本一律不动。",
+		maintainCleanCta_permanent: "彻底删除",
+		maintainCleanCta_trash: "移入回收站",
 		maintainCancelled: "已取消，没有改动任何内容。",
 		maintainCleaned: "已清理 {removed} 个文件；修复索引记录 {healed} 条；跳过 {skipped} 个。",
 		maintainPersistFailed: "修复后保存索引失败：{error}",
@@ -267,7 +295,9 @@ export const I18N: Record<string, Locale> = {
 		maintainBatchNothing: "没有需要上传的附件（图片都已经处理过了）。",
 		maintainBatchTitle: "上传已存在的附件",
 		maintainBatchSummary: "将上传 {count} 个文件，并把笔记里的链接改成指向你的存储。",
-		maintainBatchKeepsOriginals: "原文件会**保留在原处** —— 不删任何东西，所以不会丢。",
+		// ⚠️ 别在文案里写 markdown（`**加粗**`）：确认弹窗是 `createDiv({ text })`、
+		// 提示是宿主的 Notice，两者都**按纯文本**渲染 —— 星号会原样显示给用户。
+		maintainBatchKeepsOriginals: "原文件会保留在原处 —— 不删任何东西，所以不会丢。",
 		maintainBatchCta: "上传并改写链接",
 		maintainBatchDone:
 			"上传 {uploaded} 个、已存在 {reused} 个、失败 {failed} 个。在 {notes} 篇笔记里改写了 {links} 处链接。",
@@ -298,13 +328,24 @@ export const I18N: Record<string, Locale> = {
 		// ── 缓存上限与自动轮换 ──
 		cacheLimit: "缓存大小上限（MB）",
 		cacheLimitDesc:
-			"缓存目录超过这个大小后，后台会把最久没用过的副本移入系统回收站 —— 下次看到它们时会自动重新下载。填 0 表示不限制。移入回收站的文件会立刻离开 vault，但磁盘空间要等系统清空回收站才真正释放。",
+			"缓存目录超过这个大小后，后台会把最久没用过的副本删掉 —— 下次看到它们时会自动重新下载。填 0 表示不限制。怎么删由下面那一项决定。",
 		cacheLimitPlaceholder: "0 = 不限制",
 		cacheLimitNone: "不限",
 		cacheLimitValue: "{mb} MB",
-		cacheEvicted:
+		deleteMode: "缓存文件的删除方式",
+		deleteModeDesc:
+			"对后台自动轮换与「清理缓存文件」命令都有效。直接删除会立刻释放磁盘空间；放入系统回收站可以还原，但那份空间要等你清空回收站才回来。两种方式下，图片都会在你下次查看时重新下载。此项从不作用于你自己的附件。",
+		deleteMode_permanent: "直接删除（立刻释放空间）",
+		deleteMode_trash: "移入系统回收站（可还原）",
+		// ⚠️ 通知也要按删除方式分叉：说错会让用户去回收站里找一个已经不在那儿的文件，
+		// 或者以为已经删掉的东西还能找回来。
+		cacheEvicted_permanent:
+			"缓存超出上限：已删除 {count} 份最久没用过的副本（{mb} MB）。下次看到它们时会自动重新下载。",
+		cacheEvicted_trash:
 			"缓存超出上限：已把 {count} 份最久没用过的副本（{mb} MB）移入回收站。下次看到它们时会自动重新下载。",
-		cacheEvictedPartial:
+		cacheEvictedPartial_permanent:
+			"缓存超出上限：已删除 {count} 份（{mb} MB），仍超出上限 {overMb} MB。",
+		cacheEvictedPartial_trash:
 			"缓存超出上限：已移入回收站 {count} 份（{mb} MB），仍超出上限 {overMb} MB。",
 	},
 };

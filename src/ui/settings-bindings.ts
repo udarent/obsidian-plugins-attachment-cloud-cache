@@ -26,6 +26,7 @@
  */
 
 import { formatCacheLimitMb, formatExtensionList, parseCacheLimitMb, parseExtensionList } from "./settings-logic";
+import { isDeleteMode, isLocalCopyAction } from "../types";
 
 /** 把点号键切成路径段。`""` 与只含空段的键视为非法。 */
 export function splitKey(key: unknown): string[] | null {
@@ -131,6 +132,13 @@ export function isWritableValue(key: unknown, value: unknown): boolean {
 			// 解析不出来就**不写**（保留原值），而不是把用户的输入静默变成「不限制」——
 			// 他刚敲了什么，框里就该留着什么。
 			return parseCacheLimitMb(value) !== null;
+		// 枚举字段：只接受清单里的取值。下拉框本来只会给出合法值，所以这两条是
+		// **防御性**的 —— 但"落进 `data.json` 的必须是合法值"这件事不该依赖控件的自觉：
+		// 写坏了要等下次加载时被回落成默认值才发现，而那时的症状是"改了没用"。
+		case "localCopy":
+			return isLocalCopyAction(value);
+		case "deleteMode":
+			return isDeleteMode(value);
 		default:
 			return true;
 	}
