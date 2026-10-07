@@ -125,6 +125,13 @@ export type Readiness =
  *
  * 分 `fixIn` 是为了让界面能把用户**送到该去的那一栏** —— "桶名没填"和
  * "密钥没选"在设置页的两个不同区域，只说"配置不完整"等于让用户自己找。
+ *
+ * ⚠️⚠️ **这里返回的 `config` 是入口、粘贴钩子、设置页"测试连接"三条路唯一的客户端来源**，
+ * 所以它必须**带全** `S3ClientConfig` 声明的字段。漏一个不会有任何报错 ——
+ * 只会让那条功能**静默**失效。实测踩到：`publicUrlBase` 曾漏在这里，于是用户配的公开前缀
+ * **从未生效**，笔记里的链接一直退回对象地址（私有桶上那些链接对别人就是 404），
+ * 而类型系统看不出来（当时 `S3ClientConfig` 里根本没有这个字段，所以"少传"不算错）。
+ * ⇒ 给客户端加字段时，先问一句："它要不要从设置流到这里？"
  */
 export function connectionReadiness(reader: SecretReader, settings: PluginSettings): Readiness {
 	const s3 = settings.s3;
@@ -162,6 +169,8 @@ export function connectionReadiness(reader: SecretReader, settings: PluginSettin
 			bucket: s3.bucket,
 			region: s3.region,
 			forcePathStyle: s3.forcePathStyle,
+			// ⚠️ 别删这一行：它决定笔记里写什么链接。原样传（归一化由 URL 组装层做一次）。
+			publicUrlBase: s3.publicUrlBase,
 			accessKeyId,
 			secretAccessKey,
 		},

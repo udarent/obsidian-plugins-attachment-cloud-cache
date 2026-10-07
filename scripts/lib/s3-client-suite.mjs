@@ -80,7 +80,7 @@ function makeClient(mod, endpoint, overrides = {}, deps = {}) {
 }
 
 export async function runS3ClientSuite(mod) {
-	const { S3Client, S3Error, requestTargetFor, bucketTargetFor, publicUrlFor, objectUrl, normalizeEndpoint } = mod;
+	const { S3Client, S3Error, requestTargetFor, bucketTargetFor, publicUrlFor, objectBaseFor, objectUrl, normalizeEndpoint } = mod;
 
 	// ============================================================
 	// 0. 端点规范化（纯函数，先把输入的口子堵上）
@@ -159,6 +159,52 @@ export async function runS3ClientSuite(mod) {
 		publicUrlFor({ ...CREDENTIALS, endpoint: address.endpoint, bucket: "b" }, "dir/中文 名.png"),
 		`${address.endpoint}/b/dir/%E4%B8%AD%E6%96%87%20%E5%90%8D.png`,
 		"没配 publicUrlBase 时应退回对象地址"
+	);
+
+	// ⭐ `objectBaseFor`：**省略公开访问前缀**时链接的前缀是什么（设置页用它当 placeholder，
+	// 让用户直接看到"留空会用哪个地址"，而不是靠说明文字去解释）。
+	//
+	// ⚠️ 它必须与 `requestTargetFor` **同源** —— 否则"界面上给你看的地址"与"真正写进笔记的
+	// 地址"会分叉，而这种分叉只在用户的笔记里显形、事后极难改。下面这几条就是钉这个：
+	// 真实请求地址必须以我们展示的前缀开头。
+	const baseCases = [
+		{ endpoint: "https://minio.example.com:9000", bucket: "my-bucket", forcePathStyle: true },
+		{ endpoint: "https://s3.example.com/", bucket: "b", forcePathStyle: true },
+		{ endpoint: "https://s3.example.com", bucket: "b", forcePathStyle: false },
+		{ endpoint: "abc.r2.cloudflarestorage.com", bucket: "pics", forcePathStyle: true },
+	];
+	for (const testCase of baseCases) {
+		const base = objectBaseFor(testCase);
+		assert.notEqual(base, "", `应能推导出前缀：${testCase.endpoint}`);
+		// ⚠️ 这里必须**精确相等**，不能只判 startsWith —— 踩过：漏掉桶名时
+		// `端点/桶/键` 依然以 `端点` 开头，于是"少一截"的变异会**漏过**（测试无牙）。
+		// 用不含特殊字符的 key，把编码因素排除掉，让这条断言只盯"前缀对不对"。
+		assert.equal(
+			requestTargetFor(testCase, "probe.png").url,
+			`${base}/probe.png`,
+			`★ objectBaseFor 必须与 requestTargetFor 同源（${testCase.endpoint}，pathStyle=${testCase.forcePathStyle}）：展示的是 ${base}`
+		);
+		// 再拿一个含中文与空格的 key 确认**展示的前缀**也能对上（编码那一段由 publicUrl 的用例覆盖）
+		assert.ok(
+			requestTargetFor(testCase, "dir/中文 名.png").url.startsWith(`${base}/`),
+			`★ 含特殊字符的 key 也必须挂在这个前缀下：展示 ${base}`
+		);
+	}
+	assert.equal(
+		objectBaseFor({ endpoint: "https://s3.example.com", bucket: "", forcePathStyle: true }),
+		"",
+		"缺桶名时推导不出前缀（显示半截地址会让用户以为系统在建议他用那个）"
+	);
+	assert.equal(objectBaseFor({ endpoint: "", bucket: "b", forcePathStyle: true }), "", "缺服务地址时同样不推导");
+	assert.equal(
+		objectBaseFor({ endpoint: "::::", bucket: "b", forcePathStyle: false }),
+		"",
+		"服务地址无法解析时返回空串，而不是抛错（设置页会因为一个半填的地址崩掉）"
+	);
+	assert.equal(
+		objectBaseFor({ endpoint: "https://s3.example.com", bucket: "  ", forcePathStyle: true }),
+		"",
+		"纯空白的桶名不算填了"
 	);
 
 	// ============================================================

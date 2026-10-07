@@ -183,5 +183,14 @@ await runMutations({
 			to: "\t\t\tif (!isSuccess(response.status)) {\n\t\t\t\treturn { exists: false };\n\t\t\t}\n\t\t\treturn { exists: true };",
 			expect: "凭据被拒必须抛出",
 		},
+		{
+			// 后果：设置页显示的"留空会用哪个地址"与真正写进笔记的地址分叉。
+			// 这种分叉不会在本地报错 —— 只在**别人打开图片**时才暴露，届时候选地址已经写进
+			// 一堆笔记里了，改起来是逐条手改。所以展示值必须与真实请求地址同源。
+			name: "★ 展示用的前缀与真实地址不同源（设置页给你看的地址是错的）",
+			from: "\treturn `${endpoint}/${uriEncode(bucket)}`;",
+			to: "\treturn `${endpoint}`;",
+			expect: "必须与 requestTargetFor 同源",
+		},
 	],
 });

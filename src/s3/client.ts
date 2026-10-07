@@ -281,6 +281,41 @@ export function publicUrlFor(address: ObjectAddress & { publicUrlBase?: string }
 	return `${base}/${encodePath(cleanKey).slice(1)}`;
 }
 
+/**
+ * 省略 `publicUrlBase` 时，链接的**前缀**是什么（path-style 是 `端点/桶`，virtual-host 是 `桶.主机`）。
+ *
+ * 用途只有一处：设置页拿它当输入框的 **placeholder**，让用户**看见**"留空会用哪个地址"，
+ * 而不是从说明文字里去猜。所以它只用于**展示** —— 真正的地址仍由 `publicUrlFor` 生成
+ *（它的回退分支就是 `requestTargetFor`）。
+ *
+ * ⚠️ 两者必须**同源**：这里少一个字符、多一个斜杠，用户就会以为留空是安全的，
+ * 而笔记里写进去的是另一个地址 —— 那种分叉只会在**别人打开图片时**才暴露，事后极难改。
+ * `test-s3-client` 里有一条断言把"展示的前缀"与"真实请求地址"钉在一起。
+ *
+ * 端点/桶没填（或端点无法解析）时返回空串：**宁可什么都不显示**，也不给一个半截地址 ——
+ * 那会被当成"系统建议你用这个"。
+ */
+export function objectBaseFor(address: ObjectAddress): string {
+	const endpoint = normalizeEndpoint(address.endpoint);
+	const bucket = String(address.bucket ?? "").trim();
+	if (!endpoint || !bucket) return "";
+
+	if (address.forcePathStyle === false) {
+		try {
+			const parsed = new URL(endpoint);
+			parsed.host = `${bucket}.${parsed.host}`;
+			parsed.pathname = "";
+			parsed.search = "";
+			parsed.hash = "";
+			return parsed.toString().replace(/\/+$/, "");
+		} catch {
+			return "";
+		}
+	}
+
+	return `${endpoint}/${uriEncode(bucket)}`;
+}
+
 // ─────────────────────────── 客户端 ───────────────────────────
 
 export interface S3ClientConfig extends ObjectAddress {
@@ -289,6 +324,17 @@ export interface S3ClientConfig extends ObjectAddress {
 	accessKeyId: string;
 	secretAccessKey: string;
 	service?: string;
+	/**
+	 * 笔记里写的链接前缀（桶开了公开访问、或挂了自定义域名时用）。
+	 * 留空则退回**对象地址**（`requestTargetFor`）—— 那要求桶本身可公开读。
+	 *
+	 * ⚠️ 它刻意不在 `ObjectAddress` 里：那个接口回答的是"请求发到哪"，
+	 * 而这一项回答的是"**笔记里写什么**"，两者可以不同（CDN 域名 ≠ API 端点）。
+	 * 但它**必须**在这里声明 —— `connectionReadiness` 组装的 config 是入口、粘贴钩子、
+	 * 设置页三条构造路径唯一的来源；字段没声明就没人为它负责，
+	 * 结果是漏传且**没有任何报错**（见 `credentials.ts` 里 `connectionReadiness` 的说明）。
+	 */
+	publicUrlBase?: string;
 }
 
 export interface S3ClientDeps {

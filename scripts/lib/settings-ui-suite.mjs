@@ -285,6 +285,20 @@ export function runSettingsUiSuite(mod) {
 	assert.equal(ready.config.secretAccessKey, "SECRET", "★ 秘密访问密钥必须从钥匙串换出**值**（设置里只有名字）");
 	assert.equal(ready.config.bucket, "b");
 
+	// ⭐⭐ 这个 config 是**三条构造路径唯一的来源**（入口、粘贴钩子、设置页的测试连接），
+	// 所以它漏一个字段，那条功能就会**静默**失效 —— 类型系统看不出来（`S3ClientConfig`
+	// 当时根本没有这个字段），端到端夹具又恰好把值设成了回退值。
+	// 实际踩到：`publicUrlBase` 漏了，于是**用户配的公开前缀从未生效**，链接一直退回对象地址。
+	assert.equal(
+		connectionReadiness(readerWith({ s: "SECRET" }), {
+			...base,
+			s3: { ...s3Base, publicUrlBase: "https://cdn.example.com" },
+		}).config.publicUrlBase,
+		"https://cdn.example.com",
+		"★ 就绪配置必须带上公开访问前缀 —— 漏掉它不会有任何报错，只会让链接悄悄退回对象地址"
+	);
+	assert.equal(ready.config.publicUrlBase, "", "没配前缀时应如实带空串（由 URL 组装层决定回退到对象地址）");
+
 	const noEndpoint = connectionReadiness(readerWith({ s: "SECRET" }), {
 		...base,
 		s3: { ...s3Base, endpoint: "" },

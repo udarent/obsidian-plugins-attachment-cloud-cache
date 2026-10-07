@@ -33,7 +33,7 @@ import { Notice, PluginSettingTab } from "obsidian";
 import type { App, Setting, SettingDefinitionItem, SettingGroupItem } from "obsidian";
 
 import type AttachmentCloudCachePlugin from "../main";
-import { createS3Client } from "../s3/client";
+import { createS3Client, objectBaseFor } from "../s3/client";
 import { connectionReadiness } from "../s3/credentials";
 import { fromControlValue, isWritableValue, readByKey, toControlValue, writeByKey } from "./settings-bindings";
 import {
@@ -149,7 +149,17 @@ export class SettingsTab extends PluginSettingTab {
 				name: this.t("s3PublicUrlBase"),
 				desc: this.t("s3PublicUrlBaseDesc"),
 				aliases: ["CDN", "domain", "公开地址"],
-				control: { type: "text", key: "s3.publicUrlBase" },
+				// ⭐ placeholder 是**推导出来的**（改端点或桶它就跟着变），直接告诉用户
+				// "留空会用哪个地址" —— 比在说明文字里解释一遍有效得多。
+				//
+				// ⚠️ 只展示、**不写回设置**：写死就失去自适应性（以后改端点/桶，链接不再跟着变），
+				// 而链接是要写进用户笔记的、事后极难改。推导不出来时给 `undefined`（宁可不显示，
+				// 也不显示一个半截地址 —— 那会被当成"系统建议你用这个"）。
+				control: {
+					type: "text",
+					key: "s3.publicUrlBase",
+					placeholder: objectBaseFor(this.plugin.settings.s3) || undefined,
+				},
 			},
 
 			{

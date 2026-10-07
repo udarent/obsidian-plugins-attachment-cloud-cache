@@ -56,10 +56,14 @@ anyone who has not updated Obsidian in the last few months cannot install this.
 
 Open **Settings → Attachment Cloud Cache**, then:
 
-1. Fill in **Endpoint**, **Bucket**, **Region**, and **Public URL base**
-2. Type your **Access key ID** (a plain text field — capitals are normal), then the **Secret access
+1. Fill in **Endpoint**, **Bucket**, and **Region**
+2. **Public URL base** is optional — leave it empty and links use the object address
+   (`endpoint/bucket/key`), which requires the bucket to allow anonymous reads. If your images go
+   through a CDN or a custom domain, put that prefix here; the field shows what leaving it empty
+   would produce
+3. Type your **Access key ID** (a plain text field — capitals are normal), then the **Secret access
    key** in the field right below it
-3. Click **Test connection** — it sends one signed request to your bucket, and on failure tells you
+4. Click **Test connection** — it sends one signed request to your bucket, and on failure tells you
    roughly what kind of problem it is
 
 ## Things to know

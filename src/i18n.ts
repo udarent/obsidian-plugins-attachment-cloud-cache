@@ -38,7 +38,8 @@ export const I18N: Record<string, Locale> = {
 		s3SecretKeyPlaceholder: "Stored in your keychain",
 		s3SecretStoreFailed: "Could not save the secret to your keychain: {error}",
 		s3PublicUrlBase: "Public URL prefix",
-		s3PublicUrlBaseDesc: "Image links are built from this prefix plus the object path.",
+		s3PublicUrlBaseDesc:
+			"Image links are built from this prefix plus the object path. You can leave it empty: links then use the object address (endpoint + bucket), which needs the bucket to allow anonymous reads. On a CDN or a custom domain, fill this in.",
 		testConnection: "Test connection",
 		testConnectionDesc: "Sends one HEAD request to the bucket.",
 		testing: "Testing…",
@@ -199,7 +200,8 @@ export const I18N: Record<string, Locale> = {
 		s3SecretKeyPlaceholder: "已存入系统钥匙串",
 		s3SecretStoreFailed: "无法把该密钥写入系统钥匙串：{error}",
 		s3PublicUrlBase: "公开访问前缀",
-		s3PublicUrlBaseDesc: "笔记里的图片链接由这个前缀加上对象路径拼成。",
+		s3PublicUrlBaseDesc:
+			"笔记里的图片链接 = 这个前缀 + 对象路径。可以留空 —— 留空就用对象地址（服务地址 + 存储桶），那要求存储桶允许匿名读取；走 CDN 或自定义域名时必须填。",
 		testConnection: "测试连接",
 		testConnectionDesc: "会向存储桶发一次 HEAD 请求。",
 		testing: "测试中…",

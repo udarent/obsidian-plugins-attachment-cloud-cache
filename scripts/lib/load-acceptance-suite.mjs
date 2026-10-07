@@ -60,6 +60,19 @@ const ACCESS_KEY_ID = "AKIDEXAMPLE";
 const SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
 const BUCKET = "acceptance-bucket";
 
+/**
+ * ⭐ 公开访问前缀**故意与端点不同** —— 真实场景就是这样（CDN、自定义域名、R2 的公开域名）。
+ *
+ * 为什么值得单独解释：早先这里填的是 `${endpoint}/${BUCKET}`，恰好等于"**省略**这个设置
+ * 时的回退值"。于是"配置的前缀有没有真的被用上"**无法从断言里看出来** —— 传了、没传，
+ * 生成的链接一模一样。一个真 bug（前缀根本没传到客户端、链接一直退回对象地址）
+ * 就这样躲过了端到端验收，直到有人问"这个参数能不能省略"才被发现。
+ *
+ * **夹具必须让因果可区分**：两个值相同时，那条断言什么都证明不了。
+ */
+const PUBLIC_BASE = "https://cdn.example.com";
+
+
 /** 刻意含 0x00 / 0xFF / 非法 UTF-8：文本通道会悄悄改掉这些字节。 */
 const HOSTILE_BYTES = new Uint8Array([
 	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff, 0xfe, 0x80, 0xc3, 0x28, 0x0a, 0x7f, 0xed, 0xfd,
@@ -355,7 +368,7 @@ export async function runLoadAcceptance(options = {}) {
 			endpoint,
 			region: "auto",
 			bucket: BUCKET,
-			publicUrlBase: `${endpoint}/${BUCKET}`,
+			publicUrlBase: PUBLIC_BASE,
 			// ⚠️ 这里填的是访问密钥 ID 的**值**（明文标识符），不是钥匙串条目的名字 ——
 			// 早期版本这里写的是 `accessKeyIdRef: "acc-test-ak"`（一个名字），
 			// 改成明文之后若照抄那个名字，签名就会拿 "acc-test-ak" 去算，
@@ -485,8 +498,14 @@ export async function runLoadAcceptance(options = {}) {
 		const text = editor.replaced[0];
 		assert.match(text, /^!\[.*\]\(https?:\/\//, `插入的应是远端图片链接，实际：${text}`);
 		assert.ok(
-			text.includes(`${endpoint}/${BUCKET}/`),
-			"链接必须指向配置的公开前缀（否则图片打开是 404）"
+			text.includes(`${PUBLIC_BASE}/`),
+			`★ 链接必须用**配置的公开前缀**（${PUBLIC_BASE}），实际：${text}`
+		);
+		// 反向一起断言，才**区分得出因果**：只查"包含前缀"的话，
+		// 万一前缀恰好等于回退值（曾经的夹具就是这样）就永远通过。
+		assert.ok(
+			!text.includes(`${endpoint}/${BUCKET}/`),
+			`★ 配了公开前缀时就不该退回对象地址 —— 那会让图片在别人那里 404：${text}`
 		);
 
 		// 缓存副本真的落盘，且是**逐字节**一致
@@ -756,7 +775,7 @@ export async function runLoadAcceptance(options = {}) {
 
 		assert.equal(server.countByMethod("PUT"), putsBefore + 1, "★ 批量上传应恰好 PUT 一次");
 		const noteText = await readFile(join(root, notePath), "utf8");
-		assert.ok(noteText.includes(`${endpoint}/${BUCKET}/`), `链接应指向配置的存储：${noteText}`);
+		assert.ok(noteText.includes(`${PUBLIC_BASE}/`), `链接应指向配置的存储（公开前缀）：${noteText}`);
 		assert.ok(
 			!noteText.includes("attachments/pic.png"),
 			`★ 两条本地链接都应被改写（短名与完整路径都要认）：${noteText}`
@@ -824,7 +843,7 @@ export async function runLoadAcceptance(options = {}) {
 
 			const rewritten = await readFile(join(root, notePath), "utf8");
 			assert.equal(rewritten.includes(externalUrl), false, "★ 笔记里的站外链接必须被改写");
-			assert.equal(rewritten.includes(endpoint), true, "★ 换上的是自己存储的地址");
+			assert.equal(rewritten.includes(PUBLIC_BASE), true, "★ 换上的是自己存储的公开地址（配置的前缀）");
 			assert.equal(rewritten.includes("# 站外图"), true, "★ 笔记的其它内容必须原样保留");
 			assert.equal(externalHostRequests.length, 1, "★ 站外图只该下载一次");
 
