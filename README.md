@@ -21,8 +21,9 @@ cache folder — so images still render when you are offline.
 > commands (show cache usage, repair the index, clean up unused cache files, upload existing
 > attachments). Everything runs on Obsidian 1.13.0+ on desktop and mobile.
 >
-> **Not built yet:** no real S3 provider has been exercised end-to-end, and no real-device run has
-> happened — see "Verified scope" below for exactly what that leaves unproven.
+> **Not built yet:** no real S3 provider has been exercised end-to-end, and **neither iOS nor Android
+> has ever been run** — see "Verified scope" below for exactly what that leaves unproven. Desktop is a
+> different story: it *has* been driven for real, Obsidian and all (`npm run verify:real`).
 
 ## Why another attachments plugin?
 
@@ -114,9 +115,17 @@ known to be missing there and falls back when optional APIs are absent, but that
 evidence. Android has not been run on a real device either.
 
 A **real-desktop smoke check does pass** (`npm run verify:real`, driving Obsidian over the DevTools
-protocol): the plugin loads in a real host, all four commands register, the settings tab renders,
-and — the part that only a real WebView can settle — the live-preview `src` interception installs
-without breaking anything and leaves third-party addresses alone.
+protocol): the plugin loads in a real host, all four commands register, the settings tab renders
+(4 groups, 19 items), and — the part that only a real WebView can settle — the live-preview `src`
+interception installs without breaking anything and leaves third-party addresses alone.
+
+It also answers the question a type declaration cannot: **whether the host APIs this plugin calls
+actually exist at runtime.** That is not hypothetical here — `adapter.getBasePath` is declared and
+throws on mobile. So the check now also confirms `Vault.delete` and `FileManager.trashFile` are both
+really there (the two removal primitives), that the removal mode reads back as its default on a real
+vault (whose `data.json` predates the field, so it exercises the fallback path an upgrading user
+takes), and that the removal setting reaches the rendered settings tab as a dropdown with exactly
+two options.
 
 What that does **not** cover is anything requiring a human at the keyboard: pasting and dropping an
 image for real, whether the link lands where you expect, whether Obsidian's own paste handling is

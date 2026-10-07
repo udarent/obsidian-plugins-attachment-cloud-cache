@@ -13,16 +13,25 @@
  *
  * 这一步**只验证"不炸 + 接线在册"**，不验证交互（粘贴/拖拽要人工）。
  *
- * ## 两个环境要点（都踩过）
+ * ## 三个环境要点（都踩过）
  *
  * - 启动必须带 `--disable-gpu --no-sandbox`：只带 `--remote-debugging-port` 会以
  *   `GPU process isn't usable. Goodbye.` 退出（看起来就像"进程被环境回收了"）。
  * - 启动它的**父进程必须活着**：保持者一退出，Obsidian 8 秒内消失。
+ * - ⭐ **别的地方已经开着一个 Obsidian 时，本脚本一定会失败，而且失败得很难看**：
+ *   Obsidian 是单实例的，新实例会把命令行参数（含调试端口）交给已在运行的那个
+ *   然后**自己退出**，而那个实例不会因为别人要求就开调试端口。
+ *   症状是"只打出标题，然后静默等满 60 秒超时"—— 连续两轮我都把这个现象
+ *   误当成"环境限制"，其实是**已经有实例在跑**。
+ *   所以下面在端口没起来时会**主动数一下进程**并把这句话打出来，而不是让人猜。
+ *   遇到时的处理：关掉所有 Obsidian 窗口（或用 `-- --port 9231` 换端口并确认
+ *   那个端口空闲）后重跑。⚠️ 结束别人的进程前先问一句 —— 那可能是用户正在用的
+ *   Obsidian，强行结束有丢未保存内容的风险。
  *
  * 用法：node verify-obsidian-smoke.mjs [--port 9222]
  */
 
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -33,9 +42,35 @@ const PORT = Number(
 );
 /** Obsidian 可执行文件位置；换机器/换安装位置时用环境变量覆盖。 */
 const OBSIDIAN = process.env.OBSIDIAN_EXE ?? "C:/Program Files/Obsidian/Obsidian.exe";
+/**
+ * 等调试端口的秒数。
+ *
+ * 可覆盖是为了**能验证"端口没起来"那条失败路径**（否则测一次要干等 60 秒），
+ * 也为了在本机排查时不用空等。
+ */
+const WAIT_SECONDS = Number(process.env.OBSIDIAN_DEBUG_WAIT ?? 60);
 const PLUGIN_ID = "attachment-cloud-cache";
 
 const log = (line = "") => console.log(line);
+
+/**
+ * 数一下系统里有多少个 Obsidian 进程（数不出来时返回 `null`）。
+ *
+ * ⚠️ 用**不带过滤**的 `tasklist` 再自己数：带 `/FI "IMAGENAME eq X.exe"` 在中文
+ * Windows 上会返回一句本地化的提示（"没有运行的任务匹配指定标准"），`/NH` 也匹配不到，
+ * 于是**计数恒为 0** —— 那会让人得出"没有别的实例在跑"的相反结论。
+ */
+function countObsidianProcesses() {
+	return new Promise((resolve) => {
+		execFile("tasklist", [], { windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
+			if (error || typeof stdout !== "string") {
+				resolve(null); // 数不出来不该让验证失败，只是少一条诊断线索
+				return;
+			}
+			resolve((stdout.match(/Obsidian\.exe/gi) ?? []).length);
+		});
+	});
+}
 
 /** 极简 CDP 客户端（Node 18+ 自带 WebSocket，零依赖）。 */
 async function connect(port) {
@@ -108,14 +143,38 @@ async function main() {
 	let client = null;
 	try {
 		// 等 CDP 起来（Node 的 fetch 不走 HTTP_PROXY，正好能直连 localhost）
-		for (let i = 0; i < 60; i += 1) {
+		let portReady = false;
+		for (let i = 0; i < WAIT_SECONDS; i += 1) {
 			try {
 				const version = await (await fetch(`http://127.0.0.1:${PORT}/json/version`)).json();
 				log(`  ✓ 调试端口已就绪：${version.Browser}`);
+				portReady = true;
 				break;
 			} catch {
 				await delay(1000);
 			}
+		}
+
+		// ⭐ 端口没起来时，先**分清是哪一种失败**再说别的。
+		// 这两种原因的处置完全不同，而症状一模一样（都是"等满 60 秒"）：
+		//   ① 已经有 Obsidian 在跑 → 单实例锁把参数吃掉了 → 去关掉它；
+		//   ② 没有别的实例 → 是我们的实例自己的问题（GPU 崩溃等）。
+		if (!portReady) {
+			const others = await countObsidianProcesses();
+			if (others !== null && others > 0) {
+				throw new Error(
+					`调试端口 ${PORT} 在 ${WAIT_SECONDS} 秒内没有就绪，而系统里有 ${others} 个 Obsidian 进程在跑。\n` +
+						"  Obsidian 是单实例的：新实例会把命令行参数（含调试端口）交给已在运行的那个，然后自己退出\n" +
+						"  （退出码 0 —— 上面若有一行「Obsidian 退出，code=0」，就是它）。而那个实例不会因为\n" +
+						"  别人要求就开调试端口，所以这个组合下**永远**等不到端口。\n" +
+						"  处理：关掉所有 Obsidian 窗口后重跑（若那个实例是用户正在用的，先问一句再结束它）。"
+				);
+			}
+			throw new Error(
+				`调试端口 ${PORT} 在 ${WAIT_SECONDS} 秒内没有就绪，且没有别的 Obsidian 实例在跑。\n` +
+					`  这更像是我们启动的实例自己没能起来：确认 ${OBSIDIAN} 能正常打开，\n` +
+					"  并检查启动参数里是否有 --disable-gpu --no-sandbox（GPU 进程崩溃会让它立刻退出）。"
+			);
 		}
 
 		client = await connect(PORT);
@@ -225,6 +284,51 @@ async function main() {
 			for (const line of client.consoleErrors.slice(0, 3)) log(`    - ${String(line).slice(0, 160)}`);
 		}
 
+		// ⭐ 删除原语：本轮新增了「直接删除」这一档，它用的 `Vault.delete` 是**新引入的宿主 API**。
+		//
+		// 为什么非验不可：类型声明里有、运行时没有的 API 在本项目**真实存在**
+		// （`adapter.getBasePath` 就是 —— 移动端类型里有、跑起来抛错）。
+		// 若 `vault.delete` 也是这种，默认的删除方式会在第一次淘汰时抛错，
+		// 而那时报告里写的是"跳过"，用户只会看到"缓存一直不降"。
+		//
+		// 顺带确认"设置真的读进来了"：`deleteMode` 的默认值必须在真机上是 `permanent`
+		//（`data.json` 里多半还没有这个字段 —— 那样走的正是字段表的回落路径，
+		// 恰好是"升级后老用户拿到什么"的真实情形）。
+		const removal = await evaluate(
+			client,
+			`(() => {
+				const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+				const internals = app.setting ?? {};
+				const tabs = [...(internals.pluginTabs ?? []), ...(internals.settingTabs ?? [])];
+				const tab = tabs.find((t) => t?.plugin?.manifest?.id === ${JSON.stringify(PLUGIN_ID)});
+				const defs = tab?.getSettingDefinitions?.() ?? [];
+				const items = defs.flatMap((g) => g.items ?? []);
+				// 认键不看文案：文案会随语言变，键不会
+				const item = items.find((i) => i?.control?.key === "deleteMode");
+				return {
+					vaultDelete: typeof app.vault.delete === "function",
+					trashFile: typeof app.fileManager?.trashFile === "function",
+					mode: plugin?.settings?.deleteMode,
+					itemFound: Boolean(item),
+					controlType: item?.control?.type,
+					optionKeys: item?.control?.options ? Object.keys(item.control.options) : [],
+					controlKeys: items.map((i) => i?.control?.key).filter(Boolean),
+				};
+			})()`
+		);
+		log(`  ${removal.vaultDelete ? "✓" : "✗"} Vault.delete 存在（「直接删除」这一档的落点）`);
+		log(`  ${removal.trashFile ? "✓" : "✗"} FileManager.trashFile 存在（「移入回收站」那一档的落点）`);
+		log(
+			`  ${removal.mode === "permanent" ? "✓" : "✗"} 删除方式在真机上读到了默认值：${JSON.stringify(removal.mode)}`
+		);
+		log(
+			`  ${removal.itemFound && removal.optionKeys.length === 2 ? "✓" : "✗"} 设置页里有「删除方式」这一项` +
+				`（${removal.controlType ?? "?"}，选项 ${JSON.stringify(removal.optionKeys)}）`
+		);
+		if (!removal.itemFound) {
+			log(`    （设置页现有的 control key：${JSON.stringify(removal.controlKeys)}）`);
+		}
+
 		const ok =
 			loaded &&
 			commands.length >= 4 &&
@@ -234,6 +338,11 @@ async function main() {
 			apis.getResourcePath &&
 			apis.secretStorage &&
 			settings.ok &&
+			removal.vaultDelete &&
+			removal.trashFile &&
+			removal.mode === "permanent" &&
+			removal.itemFound &&
+			removal.optionKeys.length === 2 &&
 			relevantErrors.length === 0;
 
 		log();
