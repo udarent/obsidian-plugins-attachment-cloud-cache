@@ -10,7 +10,10 @@ cache folder — so images still render when you are offline.
 > **uploading** — pasting or dropping image files uploads them, keeps a local copy, and rewrites the
 > link to your storage; **offline rendering** — images served from your storage are swapped to the
 > local copy in both reading view and live preview, and a third-party image is never touched;
-> **fetching missing copies** on demand (a new device, or a cache you cleared); and four maintenance
+> **fetching missing copies** on demand (a new device, or a cache you cleared); **caching images from
+> other sites** — off by default; once you turn it on, an image from another site is asked about
+> **once per site**, and if you agree it is downloaded, uploaded to your storage and the link in your
+> note is rewritten (a site you declined is never asked about again); and four maintenance
 > commands (show cache usage, repair the index, clean up unused cache files, upload existing
 > attachments). Everything runs on Obsidian 1.13.0+ on desktop and mobile.
 >
@@ -127,7 +130,9 @@ deliberate trade rather than an oversight.
 **Known limitation — old links after you change the storage URL.** Recognising "this image is ours"
 relies on the current settings plus the local-copy index. If you change or clear the public URL
 prefix **and** the copy is not in the index (a fresh device), those older links are treated as
-third-party: shown as-is, never downloaded. Online they still render; offline they will not. The
+third-party: shown as-is, **never downloaded unless you explicitly agreed to cache that site** (that
+path is off by default and is the only code in this project that fetches someone else's bytes). With
+the feature off, or for a site you declined, they still render online; offline they will not. The
 choice is deliberate — the alternative is guessing at other people's URLs, which would mean pulling
 images into your vault that were never yours.
 

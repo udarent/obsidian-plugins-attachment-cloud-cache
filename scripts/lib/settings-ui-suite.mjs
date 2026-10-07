@@ -23,6 +23,7 @@ export function runSettingsUiSuite(mod) {
 		localCopyOptions,
 		classifyConnectionFailure,
 		connectionFailureKey,
+		describeRememberedSites,
 		// settings-bindings
 		splitKey,
 		readByKey,
@@ -246,5 +247,42 @@ export function runSettingsUiSuite(mod) {
 		gone.problem,
 		notChosen.problem,
 		"★ 「从未选择」与「所选密钥已不存在」必须是不同的提示（修法不同）"
+	);
+
+	// ============================================================
+	// 「已记住的站点」列表（`describeRememberedSites`）
+	//
+	// 这是用户**唯一**能撤销"此站点不再询问"的地方，所以它必须：
+	// 空态说人话、两种决定显示成用户看得懂的字（而不是 `allow` / `deny`）。
+	// ============================================================
+	const labels = { allow: "缓存", deny: "不再询问", empty: "尚未记住任何站点。" };
+
+	assert.equal(describeRememberedSites([], labels), "尚未记住任何站点。", "★ 空态要说人话（而不是空串）");
+	assert.equal(
+		describeRememberedSites([{ host: "a.example.net", decision: "allow" }], labels),
+		"a.example.net — 缓存",
+		"★ allow 要显示成用户看得懂的「缓存」，不能把 allow 原样给他看"
+	);
+	assert.equal(
+		describeRememberedSites([{ host: "b.example.net", decision: "deny" }], labels),
+		"b.example.net — 不再询问",
+		"★ deny 要显示成「不再询问」"
+	);
+	assert.equal(
+		describeRememberedSites(
+			[
+				{ host: "a.example.net", decision: "allow" },
+				{ host: "b.example.net", decision: "deny" },
+			],
+			labels
+		),
+		"a.example.net — 缓存\nb.example.net — 不再询问",
+		"多个站点要逐行列出（顺序沿用记忆自己的排序，落盘顺序由此稳定）"
+	);
+	// 不认识的决定值不能显示成"缓存"（宁可显示成否定的那个 —— 保守，用户会去检查）
+	assert.equal(
+		describeRememberedSites([{ host: "c.example.net", decision: "???" }], labels),
+		"c.example.net — 不再询问",
+		"★ 不认识的决定值要落到保守的一侧（显示成「缓存」会让用户以为它会被处理）"
 	);
 }

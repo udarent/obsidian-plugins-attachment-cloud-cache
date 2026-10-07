@@ -53,8 +53,8 @@ await runMutations({
 		{
 			// 后果：阅读视图里的图仍然走远端 ⇒ 断网就是破图（"离线可用"名存实亡）。
 			name: "★ 忘了注册渲染后处理器（阅读视图仍然联网取图，断网是破图）",
-			from: "\t\tthis.registerMarkdownPostProcessor((element) => {",
-			to: "\t\tvoid ((element) => {",
+			from: "\t\tthis.registerMarkdownPostProcessor((element, ctx) => {",
+			to: "\t\tvoid ((element, ctx) => {",
 			expect: "渲染后处理器",
 		},
 		{
@@ -77,6 +77,22 @@ await runMutations({
 			from: "\t\tif (!confirmed) {\n\t\t\tnew Notice(this.t(\"maintainCancelled\"));\n\t\t\treturn;\n\t\t}\n\n\t\tconst result = await runCleanup(deps, plan);",
 			to: "\t\tvoid confirmed;\n\t\tconst result = await runCleanup(deps, plan);",
 			expect: "一个文件都不能动",
+		},
+		{
+			// 后果：整条站外链路在入口上断掉 —— 用户开了功能、也被问了，
+			// 但点了「缓存」之后什么都没发生（除了一个再也不会来的通知）。
+			name: "★ 后处理器里不接站外编排（用户点了「缓存」却什么都不发生）",
+			from: "\t\t\tthis.externalHook?.process(element, ctx);\n",
+			to: "\t\t\t// 变异：不接站外编排\n",
+			expect: "应询问一次",
+		},
+		{
+			// 后果：决定只活在内存里 ⇒ 用户重启后再打开同一篇笔记，又被问一遍，
+			// 而他确信自己已经答过了。
+			name: "★ 站点决定不落盘（重启后用户被重新问一遍）",
+			from: "\t\tawait this.serialize(() => store.save());\n",
+			to: "\t\tvoid store;\n",
+			expect: "记忆文件",
 		},
 	],
 });

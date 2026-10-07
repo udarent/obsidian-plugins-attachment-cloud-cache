@@ -86,6 +86,9 @@ const HOSTILE_BYTES = new Uint8Array([
  */
 async function realRequestUrl(options) {
 	const { url, method = "GET", headers, body } = options;
+	// 站外图床按主机名拦下（理由见 `externalImageResponse` 的说明）
+	const stubbed = externalImageResponse(url);
+	if (stubbed) return stubbed;
 	const response = await fetch(url, {
 		method,
 		headers,
@@ -97,6 +100,45 @@ async function realRequestUrl(options) {
 		out[name.toLowerCase()] = value;
 	});
 	return { status: response.status, headers: out, arrayBuffer: await response.arrayBuffer() };
+}
+
+/**
+ * 站外图床的假响应。
+ *
+ * ## 为什么在这里模拟，而不是起一个本地 HTTP 服务
+ *
+ * 起在 `127.0.0.1` 上的话，会被产品**正确地**拦下来 —— 回环/链路本地地址一律不碰
+ * （见 `external-decide.ts` 的 `isBlockedHost`）。要么为此在生产代码上开一个
+ * "关掉安全检查"的后门，要么把假图床放在一个**不是回环**的主机上。
+ * 后者显然更好。
+ *
+ * 而"网络边界"在宿主里就是 `requestUrl` —— 它本来就是我们这一侧唯一发请求的地方，
+ * 所以在这里按主机名拦下那一个假域名，是最贴近真实的做法：
+ * 其余的请求（包括发给 mock S3 的那些）照常走真实 HTTP。
+ *
+ * ⚠️ 代价如实写在这里：这条路径**没有**验证真实 HTTP（超时、防盗链、字节形状）。
+ * 那些由 `external-cache-suite` 用真实服务与真实磁盘覆盖；本套件负责的是
+ * "入口有没有把这条链路接上"。
+ */
+const EXTERNAL_HOST = "images.example.test";
+const EXTERNAL_IMAGE_URL = `https://${EXTERNAL_HOST}/a.png`;
+/** 站点决定记忆的落盘位置（与 `createSiteStore` 的推导一致）。 */
+const SITE_MEMORY_PATH = ".obsidian/plugins/attachment-cloud-cache/.site-decisions.json";
+const EXTERNAL_IMAGE_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff]);
+
+/** 记下"站外图床"被请求过几次 —— 用来断言"只下载一次"。 */
+const externalHostRequests = [];
+
+function externalImageResponse(url) {
+	if (!String(url).includes(EXTERNAL_HOST)) return null;
+	externalHostRequests.push(String(url));
+	if (String(url).includes("/a.png")) {
+		return { status: 200, headers: { "content-type": "image/png" }, arrayBuffer: EXTERNAL_IMAGE_BYTES.buffer };
+	}
+	if (String(url).includes("/blocked.png")) {
+		return { status: 403, headers: { "content-type": "text/html" }, arrayBuffer: new ArrayBuffer(0) };
+	}
+	return { status: 404, headers: {}, arrayBuffer: new ArrayBuffer(0) };
 }
 
 /**
@@ -315,6 +357,17 @@ export async function runLoadAcceptance(options = {}) {
 	app.secretStorage.setSecret("acc-test-ak", ACCESS_KEY_ID);
 	app.secretStorage.setSecret("acc-test-sk", SECRET_ACCESS_KEY);
 
+	// ── 询问接缝 ──
+	//
+	// ⚠️ 真通知在测试里点不了，所以这里覆写入口暴露的那个接缝。
+	// 它也是这条链路**唯一**能被端到端驱动的地方：不覆写就永远只测到"没询问"。
+	const askCalls = [];
+	let askDecision = "cache";
+	plugin.askExternalCache = async (info) => {
+		askCalls.push(info);
+		return askDecision;
+	};
+
 	try {
 		/** 现场快照：失败时能看到"提示了什么、发了什么请求"。**单行**，见 `waitFor`。 */
 		const diagnose = () =>
@@ -440,6 +493,12 @@ export async function runLoadAcceptance(options = {}) {
 			foreignImg.getAttribute("src"),
 			"https://third-party.example.net/x.png",
 			"★ 站外图必须原样保留（既不下载也不改写）"
+		);
+		// ⭐ 而且**连问都不该问**：站外缓存默认关闭，一个没打开的插件不该来打扰用户。
+		assert.equal(
+			askCalls.length,
+			0,
+			`★ 默认关闭时不该为站外图询问（实际问了 ${askCalls.length} 次）`
 		);
 
 		// ============================================================
@@ -595,6 +654,84 @@ export async function runLoadAcceptance(options = {}) {
 			await existsOnDisk(root, attachmentPath),
 			"★ 原文件必须保留（这条命令刻意不删任何东西）"
 		);
+
+		// ============================================================
+		// ============================================================
+		// 8b. 站外图：开启后「询问 → 下载 → 上传 → 改写链接」
+		//
+		// ⚠️ 这是全库唯一会下载**别人的图**、也是唯一会**改写用户笔记**的链路，
+		// 所以它必须在接线层面被走一遍（而不是只靠单元套件间接推断）。
+		// ============================================================
+		{
+			const externalUrl = EXTERNAL_IMAGE_URL;
+			const notePath = "notes/站外.md";
+			const originalNote = `# 站外图\n\n![x](${externalUrl})\n`;
+
+			await mkdir(join(root, "notes"), { recursive: true });
+			await writeFile(join(root, notePath), originalNote, "utf8");
+			await harness.refreshPathCache();
+
+			// 打开功能（默认是关的），并让接缝回答「缓存」
+			plugin.settings.externalImageCache = true;
+			askCalls.length = 0;
+			askDecision = "cache";
+			externalHostRequests.length = 0;
+			const putsBefore = server.countByMethod("PUT");
+
+			for (const processor of plugin.postProcessors) {
+				processor(makeFakeContainer([makeFakeImage(externalUrl)]), { sourcePath: notePath });
+			}
+
+			assert.equal(askCalls.length, 1, "★ 开启后遇到站外图应询问一次");
+			assert.equal(askCalls[0].host, EXTERNAL_HOST, `询问要带上站点（实际 ${JSON.stringify(askCalls[0])}）`);
+
+			// ⚠️ 等的是**改写完成**，不是 PUT 完成：这条链是"下载 → 上传 → 改写"，
+			// 所以 PUT 结束时笔记还没改（等早了会读到一个还没改写的笔记）。
+			await waitFor(
+				async () => !(await readFile(join(root, notePath), "utf8")).includes(externalUrl),
+				"站外图被下载、上传，并且笔记里的链接被改写",
+				10000,
+				diagnose
+			);
+
+			assert.equal(server.countByMethod("PUT"), putsBefore + 1, "★ 恰好一次 PUT");
+
+			// 决定必须**落盘**：不落盘的话，用户下次启动还要重新回答一遍 ——
+			// 而他会以为自己已经答过了（记忆只活在内存里的症状就是这样）。
+			await waitFor(
+				async () => {
+					try {
+						return (await readFile(join(root, SITE_MEMORY_PATH), "utf8")).includes(EXTERNAL_HOST);
+					} catch {
+						return false;
+					}
+				},
+				"站点决定被写进记忆文件",
+				5000,
+				diagnose
+			);
+
+			const rewritten = await readFile(join(root, notePath), "utf8");
+			assert.equal(rewritten.includes(externalUrl), false, "★ 笔记里的站外链接必须被改写");
+			assert.equal(rewritten.includes(endpoint), true, "★ 换上的是自己存储的地址");
+			assert.equal(rewritten.includes("# 站外图"), true, "★ 笔记的其它内容必须原样保留");
+			assert.equal(externalHostRequests.length, 1, "★ 站外图只该下载一次");
+
+			// ⭐ 再渲染一次：这个站点已被记住 → 不该再问（渲染会因滚动、切视图反复发生）
+			const askedSoFar = askCalls.length;
+			const downloadsSoFar = externalHostRequests.length;
+			for (const processor of plugin.postProcessors) {
+				processor(makeFakeContainer([makeFakeImage(externalUrl)]), { sourcePath: notePath });
+			}
+			assert.equal(askCalls.length, askedSoFar, "★ 答过之后不该再问（否则每个站点都会被反复打扰）");
+			assert.equal(
+				externalHostRequests.length,
+				downloadsSoFar,
+				"（这条路径上要清理的是记忆，而不是重新下载）"
+			);
+
+			plugin.settings.externalImageCache = false;
+		}
 
 		// ============================================================
 		// 9. 卸载：事件引用必须能被宿主注销（否则热重载后每粘一次插两条）

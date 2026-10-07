@@ -469,6 +469,14 @@ export function createMockS3(options) {
 			return found ? found.body : null;
 		},
 		close() {
+			// ⚠️ 必须**主动掐掉连接**，只 `server.close()` 会等空闲连接自己超时。
+			// 客户端用的是 undici（`fetch`），它默认**保活**：这些连接要等 4 秒以上才散，
+			// 于是每个环境收尾都白等几秒（多个套件叠加起来很明显）。
+			//
+			// 说明：这一条**不是**"测试进程偶发退不出去"的成因（那个的真凶是 Windows 上
+			// `rm -r` 偶发卡住，见 `external-cache-suite.mjs` 的 `cleanupInBackground`），
+			// 它只是让关闭变得确定、快。
+			server.closeAllConnections?.();
 			return new Promise((resolve) => server.close(() => resolve()));
 		},
 	};

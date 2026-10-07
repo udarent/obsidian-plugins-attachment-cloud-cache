@@ -97,6 +97,26 @@ export function classifyConnectionFailure(error: unknown): ConnectionFailureKind
 }
 
 /** 归类 → 文案 key。 */
+/**
+ * 把"已记住的站点"整理成给用户看的文本（**纯函数**，便于穷举）。
+ *
+ * 单独成函数而不是写在 `render` 回调里，理由与这个文件里其它几个一样：
+ * 这种"值 → 给人看的一行字"的翻译最容易写错（漏了空态、把两个决定搞反），
+ * 而它写在渲染回调里就**没有办法断言**。
+ *
+ * 每一行都是 `站点 — 决定`。用 `allow`/`deny` 之外的东西当标签（由调用方传入已翻译的文案），
+ * 因为用户看不懂 `allow`。
+ */
+export function describeRememberedSites(
+	records: readonly { host: string; decision: string }[],
+	labels: { allow: string; deny: string; empty: string }
+): string {
+	if (records.length === 0) return labels.empty;
+	return records
+		.map((record) => `${record.host} — ${record.decision === "allow" ? labels.allow : labels.deny}`)
+		.join("\n");
+}
+
 export function connectionFailureKey(kind: ConnectionFailureKind): string {
 	return `testFail_${kind}`;
 }

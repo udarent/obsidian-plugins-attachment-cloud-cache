@@ -126,6 +126,10 @@ const FACTORY_SETTINGS = {
 	localCopy: "cache" as LocalCopyAction,
 	cacheFolder: "_attachment-cache",
 	fallbackDownload: true,
+	// ⚠️ 默认**关**。打开它意味着插件会对外发 PUT 并**改写用户的笔记**，
+	// 而这种动作的同意应当显式；何况默认开会让已有 vault 里所有站外图站点
+	// 在首次渲染时集体弹常驻通知 —— 一次更新就满屏弹窗。
+	externalImageCache: false,
 } as const;
 
 /**
@@ -146,6 +150,7 @@ const SETTINGS_SPEC: {
 	// （路径推不出来 → 永远不命中），比"回落到默认目录"糟得多。
 	cacheFolder: requiredTextValue(),
 	fallbackDownload: boolValue(),
+	externalImageCache: boolValue(),
 };
 
 const S3_FALLBACKS: S3Config = {

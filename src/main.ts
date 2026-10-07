@@ -48,6 +48,12 @@ import { createLocalCopyEnsurer } from "./core/download";
 import type { LocalCopyOutcome } from "./core/download";
 import { installImageSrcPatch, processImages } from "./render/render-hook";
 import type { RenderHookDeps } from "./render/render-hook";
+import { createSiteStore } from "./host/site-store";
+import { SiteDecisions } from "./render/site-decisions";
+import { createExternalHook } from "./render/external-hook";
+import type { ExternalAskChoice, ExternalAskInfo, ExternalHook } from "./render/external-hook";
+import { createExternalCacher } from "./core/external-cache";
+import { askExternalCacheWithNotice } from "./ui/external-notice";
 
 export default class AttachmentCloudCachePlugin extends Plugin {
 	settings: PluginSettings = { ...SETTINGS_DEFAULTS };
@@ -73,6 +79,26 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 */
 	private readonly serialize = makeSerializer();
 
+	/** 站点决定记忆的持久化。**稳定单例**（`load()` 之后对象会换，所以要现取）。 */
+	private siteStore: ReturnType<typeof createSiteStore> | null = null;
+
+	/** 站外缓存的编排。**必须是稳定的一份** —— 去重表挂在它的闭包里。 */
+	private externalHook: ExternalHook | null = null;
+
+	/**
+	 * 询问接缝。
+	 *
+	 * ⚠️ 默认是**真实的通知**；入口验收测试会覆写它（真通知在测试里点不了）。
+	 * 这条接缝是这条链路唯一能被端到端驱动的地方 —— 没有它，
+	 * "用户选「缓存」之后到底发生了什么"就只能靠单元套件间接推断。
+	 */
+	askExternalCache: (info: ExternalAskInfo) => Promise<ExternalAskChoice> = (info) =>
+		askExternalCacheWithNotice({
+			message: this.t("externalAskMessage", { host: info.host }),
+			cacheLabel: this.t("externalAskCache"),
+			neverLabel: this.t("externalAskNever"),
+		});
+
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		// ⚠️ 语种要在**注册设置页之前**定下来 —— 设置页在 `display()` 里取文案，
@@ -82,6 +108,10 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		this.addSettingTab(new SettingsTab(this.app, this));
 
 		await this.loadCacheIndex();
+		// 站点决定记忆要**在渲染挂钩子之前**载入：渲染路径上的判定是同步的，
+		// 只能读内存 —— 那时读不到记忆就等于"用户答过也照问"。
+		this.siteStore = createSiteStore(this.app, this.manifest.dir, this.manifest.id);
+		await this.loadSiteDecisions();
 
 		// 粘贴与拖拽注册在这两个事件上（`@since 1.1.0`），而不是 document 上的 DOM 事件：
 		// 宿主会把 `Editor` 直接递过来，不必自己判断"哪个编辑器有焦点"，
@@ -110,14 +140,55 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			t: (key, params) => this.t(key, params),
 		});
 
+		// ── 站外图：按站点询问一次，同意后下载 → 上传 → 改写链接 ──
+		//
+		// ⚠️ 这里是全库**唯一**会下载"别人的图"、也是唯一会**改写用户笔记**的链路。
+		// 它的前置条件是"用户明确同意"，而那个同意由 `askExternalCache` 拿到；
+		// 执行层还会再复核一次（用户可能在询问与执行之间把功能关掉）。
+		const cacheExternalImage = createExternalCacher({
+			app: this.app,
+			settings: () => this.settings,
+			client: () => this.buildClient(),
+			index: () => this.currentIndex(),
+			persistIndex: () => this.hostContext().persistIndex(),
+			notify: (message) => new Notice(message),
+			t: (key, params) => this.t(key, params),
+		});
+
+		// ⚠️ 稳定单例：三张去重表（正在问的站点 / 问过的站点 / 正在下载的 URL）
+		// 都挂在它的闭包里。每次渲染新建一份 = 没有去重 = 同一篇文章里
+		// 同一个站点被反复询问（而渲染会因滚动、切视图而反复发生）。
+		this.externalHook = createExternalHook({
+			settings: () => this.settings,
+			decisions: () => this.siteDecisionsSnapshot(),
+			// 同步算：判定层是同步的，而一次渲染里只算一次
+			configured: () => connectionReadiness(this.app.secretStorage, this.settings).ready,
+			ask: (info) => this.askExternalCache(info),
+			remember: (host, decision) => {
+				this.siteDecisionsSnapshot().set(host, decision);
+				// 落盘失败不该让这次操作算失败（决定在本次会话内已经生效），
+				// 所以只记日志 —— 与索引落盘失败的处理方式一致。
+				void this.persistSiteDecisions().catch((error) =>
+					console.error("[attachment-cloud-cache] 站点决定记忆写入失败", error)
+				);
+			},
+			cache: (url, notePath) => cacheExternalImage(url, notePath),
+			onError: (error) => console.error("[attachment-cloud-cache] 站外图片处理出错", error),
+		});
+
 		// ── 渲染：把属于本存储的图换成本地副本（离线可用的落点）──
 		//
 		// 两条路径缺一不可：阅读视图（后处理器）与实时预览（setter 拦截）。
 		// 只做前者，用户在离线时编辑笔记会看到满屏破图；只做后者，导出与阅读模式不受益。
-		this.registerMarkdownPostProcessor((element) => {
+		//
+		// 站外图的询问与缓存也挂在这条路径上（第二个参数 `ctx.sourcePath` 是
+		// "该改哪篇笔记"的唯一权威来源 —— 没有它就没法改写，链路也就没有意义）。
+		this.registerMarkdownPostProcessor((element, ctx) => {
 			// ⚠️ 这里**同步**完成，不 await —— 一旦 await，元素可能已连上 DOM
 			// 并开始加载远端图片，"零请求"就不成立了。理由见 render-hook 的头注释。
 			processImages(element, this.renderDeps());
+			// 站外图：判定同样只查内存记忆（同步），真正的下载/上传是 fire-and-forget。
+			this.externalHook?.process(element, ctx);
 		});
 
 		const uninstallSrcPatch = installImageSrcPatch(this.renderDeps(), {
@@ -324,6 +395,40 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		// 事件与 prototype 补丁都由 `registerEvent` / `register` 自动撤销，无需手写。
 		// 这里只清掉自有引用，避免插件实例被延长引用（热重载时尤其明显）。
 		this.indexStore = null;
+		this.siteStore = null;
+		this.externalHook = null;
+	}
+
+	/**
+	 * 载入站点决定记忆。
+	 *
+	 * 读失败**不是**致命错误（`loadSiteDecisions` 已经降级为空记忆）：
+	 * 代价只是"用户要重新回答一遍"，而为此让插件起不来完全不成比例。
+	 */
+	private async loadSiteDecisions(): Promise<void> {
+		const store = this.siteStore;
+		if (!store) return;
+		const result = await store.load();
+		if (result.error) {
+			console.error("[attachment-cloud-cache] 站点决定记忆读取失败，已按空记忆继续", result.error);
+		}
+	}
+
+	/** 站点决定记忆的当前快照（设置页与本文件都用它；`load()` 后对象会换）。 */
+	siteDecisionsSnapshot(): SiteDecisions {
+		return this.siteStore?.decisions ?? new SiteDecisions();
+	}
+
+	/** 清掉全部已记住的站点；返回清掉的条数（设置页据此汇报）。 */
+	clearSiteDecisions(): number {
+		return this.siteDecisionsSnapshot().clear();
+	}
+
+	/** 把记忆落盘（串行化，避免两次写入互相插队）。 */
+	async persistSiteDecisions(): Promise<void> {
+		const store = this.siteStore;
+		if (!store) return;
+		await this.serialize(() => store.save());
 	}
 
 	/** 当前索引（`load` 之后对象会换，所以要现取）。 */

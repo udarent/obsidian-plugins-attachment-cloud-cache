@@ -136,6 +136,30 @@ export const I18N: Record<string, Locale> = {
 		maintainBatchCta: "Upload and rewrite links",
 		maintainBatchDone:
 			"Uploaded {uploaded}, already there {reused}, failed {failed}. Rewrote {links} link(s) across {notes} note(s).",
+
+		// ── 站外图片 ──
+		externalImageCache: "Cache images from other sites",
+		externalImageCacheDesc:
+			"When you open a note containing an image from another site, you are asked once per site whether to download it, upload it to your storage and rewrite the link. Off by default. Cached copies are always kept locally.",
+		rememberedSites: "Sites you have answered for",
+		rememberedSitesDesc:
+			'Sites you have answered for. "Cache" sites are handled automatically; "never ask" sites are left alone.',
+		rememberedSitesEmpty: "No sites remembered yet.",
+		rememberedSitesClear: "Clear",
+		rememberedSitesCleared: "Cleared {count} remembered site(s).",
+		rememberedSiteAllow: "cache",
+		rememberedSiteDeny: "never ask",
+		externalAskMessage: "Image from {host} — cache it into your storage?",
+		externalAskCache: "Cache and remember this site",
+		externalAskNever: "Don't ask for this site",
+		externalCached: "Cached the image from {host} and rewrote the link.",
+		externalCachedNoRewrite: "The image was uploaded, but the link in this note could not be rewritten: {error}",
+		externalNoNote: "Could not read the note this image is in, so nothing was downloaded or changed.",
+		externalFetchForbidden: "Could not download the image from {host}: the site blocks direct downloads (hotlink protection).",
+		externalFetchMissing: "The image is no longer available ({status}).",
+		externalNotImage: "That address is not an image ({contentType}), so it was not uploaded.",
+		externalTooLarge: "The image is larger than the {mb} MB limit, so it was not uploaded.",
+		externalUploadFailed: "Downloaded the image but could not upload it: {error}",
 	},
 	zh: {
 		sectionStorage: "存储连接",
@@ -235,6 +259,29 @@ export const I18N: Record<string, Locale> = {
 		maintainBatchCta: "上传并改写链接",
 		maintainBatchDone:
 			"上传 {uploaded} 个、已存在 {reused} 个、失败 {failed} 个。在 {notes} 篇笔记里改写了 {links} 处链接。",
+
+		// ── 站外图片 ──
+		externalImageCache: "缓存站外图片",
+		externalImageCacheDesc:
+			"打开含站外图片的笔记时，会按站点询问一次：是否下载、上传到你的存储并改写链接。默认关闭。缓存副本始终保留在本地。",
+		rememberedSites: "已记住的站点",
+		rememberedSitesDesc: "你回答过的站点。选了「缓存」的站点会自动处理；选了「不再询问」的站点不再打扰。",
+		rememberedSitesEmpty: "尚未记住任何站点。",
+		rememberedSitesClear: "清除",
+		rememberedSitesCleared: "已清除 {count} 个已记住的站点。",
+		rememberedSiteAllow: "缓存",
+		rememberedSiteDeny: "不再询问",
+		externalAskMessage: "来自 {host} 的图片 —— 缓存到你的存储？",
+		externalAskCache: "缓存并记住该站点",
+		externalAskNever: "此站点不再询问",
+		externalCached: "已缓存来自 {host} 的图片并改写链接。",
+		externalCachedNoRewrite: "图片已上传，但没能改写本篇笔记里的链接：{error}",
+		externalNoNote: "读不到这张图所在的笔记，因此没有下载、也没有改动任何内容。",
+		externalFetchForbidden: "无法从 {host} 下载图片：该站点有防盗链保护。",
+		externalFetchMissing: "图片已失效（{status}）。",
+		externalNotImage: "该地址不是图片（{contentType}），未上传。",
+		externalTooLarge: "图片超过 {mb} MB 上限，未上传。",
+		externalUploadFailed: "图片已下载，但上传失败：{error}",
 	},
 };
 

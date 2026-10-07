@@ -39,6 +39,7 @@ import { fromControlValue, isWritableValue, readByKey, toControlValue, writeByKe
 import {
 	classifyConnectionFailure,
 	connectionFailureKey,
+	describeRememberedSites,
 	localCopyOptions,
 	shouldShowCacheFolder,
 } from "./settings-logic";
@@ -252,6 +253,13 @@ export class SettingsTab extends PluginSettingTab {
 				aliases: ["download", "sync", "下载", "同步"],
 				control: { type: "toggle", key: "fallbackDownload" },
 			},
+			{
+				name: this.t("externalImageCache"),
+				desc: this.t("externalImageCacheDesc"),
+				// 别名要覆盖用户会搜的词：默认关，所以"找不到它"就等于"功能不存在"
+				aliases: ["external", "hotlink", "third-party", "站外", "外链", "图床"],
+				control: { type: "toggle", key: "externalImageCache" },
+			},
 		];
 
 		return items;
@@ -283,6 +291,45 @@ export class SettingsTab extends PluginSettingTab {
 				aliases: ["path-style", "virtual-host", "兼容", "寻址"],
 				control: { type: "toggle", key: "s3.forcePathStyle" },
 			},
+			{
+				name: this.t("rememberedSites"),
+				desc: this.t("rememberedSitesDesc"),
+				aliases: ["sites", "ask", "站点", "询问"],
+				// 放这里而不是"离线副本"组：这是一个**查看与撤销**已经做过的决定的地方，
+				// 不是一个日常会调的开关。
+				render: (setting) => this.renderRememberedSites(setting),
+			},
 		];
+	}
+
+	/**
+	 * 「已记住的站点」列表 + 清除按钮。
+	 *
+	 * 这个列表存在的意义是**让用户能撤销**：选了「不再询问」之后，
+	 * 除了这里没有别的地方能把它改回来（而人一定会误点一次）。
+	 */
+	private renderRememberedSites(setting: Setting): void {
+		const records = this.plugin.siteDecisionsSnapshot().toArray();
+		setting.setDesc(
+			describeRememberedSites(records, {
+				allow: this.t("rememberedSiteAllow"),
+				deny: this.t("rememberedSiteDeny"),
+				empty: this.t("rememberedSitesEmpty"),
+			})
+		);
+		if (records.length === 0) return;
+
+		setting.addButton((button) =>
+			button.setButtonText(this.t("rememberedSitesClear")).onClick(async () => {
+				const cleared = this.plugin.clearSiteDecisions();
+				await this.plugin.persistSiteDecisions();
+				// ⚠️ 提示里带上条数：这正是 `clear()` 返回计数的用途
+				new Notice(this.t("rememberedSitesCleared", { count: cleared }));
+				// ⚠️ 用 `update()` 而不是 `display()`：1.13 起设置页是**声明式**的，
+				// 重新调 `display()` **不会**刷新（lint 也拦这一条）。结果是
+				// "清掉了、提示也弹了，但列表还挂着旧内容" —— 用户会以为没生效。
+				this.update();
+			})
+		);
 	}
 }
