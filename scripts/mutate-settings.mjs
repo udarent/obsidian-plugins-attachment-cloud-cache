@@ -93,10 +93,16 @@ await runMutations({
 			expect: "未知的顶层字段不应被保留",
 		},
 		{
-			name: "凭据字段被允许进入 s3 配置（违反 SecretStorage 约束）",
+			// 变成"秘密字段也能进设置" ⇒ 旧 data.json 里的明文秘密会被**保留**下来，
+			// 于是它跟着 vault 一起同步、备份、分享出去。
+			//
+			// ⚠️ 这里打的是 `secretAccessKey`（秘密），**不是** `accessKeyId`：
+			// 后者现在本来就该在字段表里（它是标识符，且钥匙串的 ID 不允许大写、
+			// 装不下它 —— 详见 types.ts 的文件头）。拿它当变异目标会变成无意义的空操作。
+			name: "★ 秘密字段被允许进入 s3 配置（旧配置里的明文秘密会被保留并随 vault 同步出去）",
 			from: "\tobjectKeyTemplate: requiredTextValue(),\n};",
-			to: "\tobjectKeyTemplate: requiredTextValue(),\n\taccessKeyId: textValue(),\n};",
-			expect: "不得保留凭据字段",
+			to: "\tobjectKeyTemplate: requiredTextValue(),\n\tsecretAccessKey: textValue(),\n};",
+			expect: "合并结果不得保留凭据字段",
 		},
 
 		// ── 默认值本身 ──

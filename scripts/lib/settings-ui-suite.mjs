@@ -173,7 +173,12 @@ export function runSettingsUiSuite(mod) {
 		true,
 		"★ 反过来：附件目录**允许**为空（空 = 跟随宿主设置），不能一并拦掉"
 	);
-	assert.equal(isWritableValue("s3.accessKeyIdRef", ""), true, "凭据名允许为空（= 尚未选择）");
+	assert.equal(
+		isWritableValue("s3.accessKeyId", ""),
+		true,
+		"访问密钥 ID 允许为空（= 尚未填写）—— 它是普通文本框，空是有意义的状态"
+	);
+	assert.equal(isWritableValue("s3.secretAccessKeyRef", ""), true, "凭据名允许为空（= 尚未选择）");
 	assert.equal(isWritableValue("autoUpload", false), true, "非字符串值不受空值规则影响");
 	assert.equal(isWritableValue(null, "x"), false, "非法键不可写");
 
@@ -194,81 +199,137 @@ export function runSettingsUiSuite(mod) {
 	// ============================================================
 	const readerWith = (map) => ({ getSecret: (id) => (id in map ? map[id] : null) });
 
-	const unset = credentialStatus(readerWith({}), { accessKeyIdRef: "", secretAccessKeyRef: "" });
-	assert.equal(unset.accessKeyId.state, "unset", "名字为空 = 从未选择");
-	assert.equal(unset.complete, false, "未选择时不可能完整");
+	// ⭐ 访问密钥 ID 是**明文标识符**（存在设置里），不是钥匙串条目。
+	//
+	// 为什么它不是密钥：它是"是谁"（标识符），会出现在请求签名与服务端日志里；
+	// 单独拿到它对签名毫无用处 —— 真正的秘密是 Secret Access Key。
+	// 而且 **Obsidian 的密钥 ID 只能是小写字母数字加短横线**
+	//（`SecretStorage.setSecret` 的 `@param id Lowercase alphanumeric ID`，非法直接抛错），
+	// 而访问密钥 ID 常规就带大写（AWS 的 `AKIA…`、MinIO 生成的那种）——
+	// 把它塞进密钥选择器，用户只会撞上"名字不能有大写"这堵墙。
+	//
+	// 所以它只有两种状态：**填了 / 没填**。"已丢失"那种状态不可能存在。
+	const unset = credentialStatus(readerWith({}), { accessKeyId: "", secretAccessKeyRef: "" });
+	assert.equal(unset.accessKeyIdPresent, false, "没填 = 未配置");
+	assert.equal(unset.complete, false, "没填时不可能完整");
 
-	const missing = credentialStatus(readerWith({}), { accessKeyIdRef: "gone", secretAccessKeyRef: "also-gone" });
-	assert.equal(
-		missing.accessKeyId.state,
-		"missing",
-		"★ 名字非空但取不到值 = 密钥已不存在（与 unset 是**不同**的状态，修法也不同）"
-	);
-
-	const ok = credentialStatus(readerWith({ a: "AKIA", b: "SECRET" }), {
-		accessKeyIdRef: "a",
+	const filled = credentialStatus(readerWith({ b: "SECRET" }), {
+		accessKeyId: "AKIAIOSFODNN7EXAMPLE",
 		secretAccessKeyRef: "b",
 	});
-	assert.equal(ok.accessKeyId.state, "ok");
-	assert.equal(ok.complete, true, "两条都能取到才算完整");
+	assert.equal(filled.accessKeyIdPresent, true, "★ 带大写的访问密钥 ID 就是正常可用的（没有任何字符限制）");
+	assert.equal(filled.complete, true, "两项齐了才算完整");
+
+	// 纯空格不算填了 —— 判据与桶名那边一致。
+	// 少了这条，一串空格会被当成"配好了"，然后拿它去签名、得到一个看不懂的 403。
+	const blank = credentialStatus(readerWith({ b: "SECRET" }), {
+		accessKeyId: "   ",
+		secretAccessKeyRef: "b",
+	});
+	assert.equal(blank.accessKeyIdPresent, false, "★ 纯空白的访问密钥 ID 不算填了");
+
+	// ⭐ 秘密访问密钥仍然分「没选」与「选了但已不存在」——**修法不同**，
+	// 都报成"凭据未配置"会让已经配过的用户以为自己填的东西丢了。
+	const secretMissing = credentialStatus(readerWith({}), {
+		accessKeyId: "AKIA",
+		secretAccessKeyRef: "gone",
+	});
+	assert.equal(
+		secretMissing.secretAccessKey.state,
+		"missing",
+		"名字非空但取不到值 = 密钥已不存在（与 unset 是不同的状态）"
+	);
+	assert.equal(secretMissing.complete, false, "密钥取不到时不算完整");
+
+	const secretUnset = credentialStatus(readerWith({}), { accessKeyId: "AKIA", secretAccessKeyRef: "" });
+	assert.equal(secretUnset.secretAccessKey.state, "unset", "★ 没选秘密密钥就是 unset —— 不能报成 ok");
+	assert.equal(secretUnset.complete, false, "没选秘密密钥时不可能完整");
 
 	// 值为空串视为无效（被清空的密钥对签名同样不可用）
-	const emptyValue = credentialStatus(readerWith({ a: "" }), { accessKeyIdRef: "a", secretAccessKeyRef: "" });
-	assert.equal(emptyValue.accessKeyId.state, "missing", "空串值不算有效密钥");
+	const emptyValue = credentialStatus(readerWith({ b: "" }), { accessKeyId: "AKIA", secretAccessKeyRef: "b" });
+	assert.equal(emptyValue.secretAccessKey.state, "missing", "空串值不算有效密钥");
 
 	// 名字两端空白要归一（用户可能粘进带空格的）
-	const padded = credentialStatus(readerWith({ a: "AKIA" }), {
-		accessKeyIdRef: "  a  ",
-		secretAccessKeyRef: "",
+	const padded = credentialStatus(readerWith({ b: "SECRET" }), {
+		accessKeyId: "AKIA",
+		secretAccessKeyRef: "  b  ",
 	});
-	assert.equal(padded.accessKeyId.name, "a", "名字要去空白后再查");
-	assert.equal(padded.accessKeyId.state, "ok", "去空白后应能查到");
+	assert.equal(padded.secretAccessKey.name, "b", "名字要去空白后再查");
+	assert.equal(padded.secretAccessKey.state, "ok", "去空白后应能查到");
 
 	// 钥匙串读取抛错不能让界面崩
 	const throwing = credentialStatus(
-		{ getSecret: () => { throw new Error("keychain locked"); } },
-		{ accessKeyIdRef: "a", secretAccessKeyRef: "b" }
+		{
+			getSecret: () => {
+				throw new Error("keychain locked");
+			},
+		},
+		{ accessKeyId: "AKIA", secretAccessKeyRef: "b" }
 	);
-	assert.equal(throwing.accessKeyId.state, "missing", "读钥匙串抛错要当作取不到，而不是让设置页崩掉");
+	assert.equal(throwing.secretAccessKey.state, "missing", "读钥匙串抛错要当作取不到，而不是让设置页崩掉");
 
 	// ============================================================
 	// 10. 连通性前置检查
 	// ============================================================
 	const base = { autoUpload: true, enabledExtensions: ["png"], attachmentFolder: "", localCopy: "cache", cacheFolder: "c", fallbackDownload: true };
-	const s3Base = { endpoint: "https://s3.example.com", region: "auto", bucket: "b", publicUrlBase: "", accessKeyIdRef: "k", secretAccessKeyRef: "s", forcePathStyle: true, objectKeyTemplate: "{hash}.{ext}" };
-	const ready = connectionReadiness(readerWith({ k: "AKIA", s: "SECRET" }), { ...base, s3: s3Base });
+	const s3Base = { endpoint: "https://s3.example.com", region: "auto", bucket: "b", publicUrlBase: "", accessKeyId: "AKIA", secretAccessKeyRef: "s", forcePathStyle: true, objectKeyTemplate: "{hash}.{ext}" };
+	const ready = connectionReadiness(readerWith({ s: "SECRET" }), { ...base, s3: s3Base });
 	assert.equal(ready.ready, true, "配置齐全时应就绪");
-	assert.equal(ready.config.accessKeyId, "AKIA", "★ 就绪时必须把密钥的**值**取出来传给客户端（设置里只有名字）");
-	assert.equal(ready.config.secretAccessKey, "SECRET");
+	assert.equal(
+		ready.config.accessKeyId,
+		"AKIA",
+		"★ 访问密钥 ID 直接来自设置（明文标识符），而不是去钥匙串换"
+	);
+	assert.equal(ready.config.secretAccessKey, "SECRET", "★ 秘密访问密钥必须从钥匙串换出**值**（设置里只有名字）");
 	assert.equal(ready.config.bucket, "b");
 
-	const noEndpoint = connectionReadiness(readerWith({ k: "AKIA", s: "SECRET" }), {
+	const noEndpoint = connectionReadiness(readerWith({ s: "SECRET" }), {
 		...base,
 		s3: { ...s3Base, endpoint: "" },
 	});
 	assert.equal(noEndpoint.ready, false, "缺服务地址时必须判定为未就绪（不能带着空地址去发请求）");
 	assert.equal(noEndpoint.fixIn, "connection", "缺地址应指向「存储连接」");
 
-	const noBucket = connectionReadiness(readerWith({ k: "AKIA", s: "SECRET" }), {
+	const noBucket = connectionReadiness(readerWith({ s: "SECRET" }), {
 		...base,
 		s3: { ...s3Base, bucket: "  " },
 	});
 	assert.equal(noBucket.ready, false, "纯空白的桶名也不算填了");
 	assert.equal(noBucket.fixIn, "connection", "缺桶名同样指向「存储连接」");
 
-	const notChosen = connectionReadiness(readerWith({}), { ...base, s3: { ...s3Base, accessKeyIdRef: "" } });
-	assert.equal(notChosen.ready, false, "从未选择密钥时必须判定为未就绪");
-	assert.equal(notChosen.fixIn, "credentials", "从未选择密钥 → 去选一条");
+	const notChosen = connectionReadiness(readerWith({}), { ...base, s3: { ...s3Base, accessKeyId: "" } });
+	assert.equal(notChosen.ready, false, "没填访问密钥 ID 时必须判定为未就绪");
+	assert.equal(notChosen.fixIn, "credentials", "没填访问密钥 ID → 去凭据那一栏填");
 
 	const gone = connectionReadiness(readerWith({}), { ...base, s3: s3Base });
-	assert.equal(gone.ready, false, "所选密钥已不存在时必须判定为未就绪（不能拿空凭据去请求）");
+	assert.equal(gone.ready, false, "所选的秘密密钥已不存在时必须判定为未就绪（不能拿空凭据去请求）");
 	assert.equal(gone.fixIn, "credentials", "所选密钥失效同样属于凭据问题");
-	// ⚠️ 这两条的**文案必须不同**：一个让人去选、一个说明所选密钥已不存在。
+
+	// ⭐ 秘密密钥**没选**（而不是"选了但失效"）—— 同样必须判未就绪，且提示要不同。
+	//
+	// ⚠️ 这条是**补出来的**：访问密钥 ID 改成明文之前，那个"访问密钥引用为空"的用例
+	// 顺带覆盖了这条路径；改完之后"没选秘密密钥"一度**没有任何用例走到**，
+	// 于是「把 unset 误报成 ok」这个变异会**漏过**（带着空秘密去请求 ⇒ 403）。
+	// 是变异验证把这个缺口暴露出来的 —— 这也说明：改了模型之后要回头确认
+	// "原来被顺带覆盖的路径，现在还有没有人走"。
+	const secretNotPicked = connectionReadiness(readerWith({}), {
+		...base,
+		s3: { ...s3Base, secretAccessKeyRef: "" },
+	});
+	assert.equal(secretNotPicked.ready, false, "★ 秘密密钥没选时必须判定为未就绪（不能带着空秘密去请求）");
+	assert.equal(secretNotPicked.fixIn, "credentials", "没选秘密密钥 → 去凭据那一栏选/建一条");
+
+	// ⚠️ 这三条的**文案必须互不相同**：一个让人去填/选、一个说明所选的钥匙串密钥已不存在。
 	// 都报成"凭据未配置"会让已经配过的用户以为自己填的东西丢了。
 	assert.notEqual(
 		gone.problem,
 		notChosen.problem,
-		"★ 「从未选择」与「所选密钥已不存在」必须是不同的提示（修法不同）"
+		"★ 「没填访问密钥 ID」与「所选密钥已不存在」必须是不同的提示（修法不同）"
+	);
+	assert.notEqual(
+		secretNotPicked.problem,
+		gone.problem,
+		"★ 「没选秘密密钥」与「所选密钥已不存在」必须是不同的提示（修法不同）"
 	);
 
 	// ============================================================

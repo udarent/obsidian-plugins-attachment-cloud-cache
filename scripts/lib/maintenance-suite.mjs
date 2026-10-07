@@ -279,7 +279,7 @@ export function runMaintenanceSuite(mod) {
 			region: "auto",
 			bucket: "b",
 			publicUrlBase: "https://img.example.com",
-			accessKeyIdRef: "",
+			accessKeyId: "",
 			secretAccessKeyRef: "",
 			forcePathStyle: true,
 			objectKeyTemplate: "{hash}.{ext}",

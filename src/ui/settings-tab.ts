@@ -114,18 +114,29 @@ export class SettingsTab extends PluginSettingTab {
 				control: { type: "text", key: "s3.region" },
 			},
 
-			// 凭据走 SecretComponent：它返回密钥的**名字**，值由 Obsidian 存进钥匙串。
-			// 用 render 是因为它需要 App 实例，而 control 的写法拿不到。
+			// ⚠️ 访问密钥 ID 用**普通文本框**，不是 SecretComponent。
+			//
+			// 早期版本把它做成密钥选择器，结果用户根本填不进去：那是"选择/新建具名密钥"的
+			// 控件，而 Obsidian 的密钥 **ID** 只能是小写字母数字加短横线
+			//（`SecretStorage.setSecret` 的 `@param id`，非法直接抛错），
+			// 而访问密钥 ID 常规就带大写（AWS 的 `AKIA…`、MinIO 生成的那种）。
+			//
+			// 它本来也不该进钥匙串：那是**标识符**（"是谁"），会出现在请求签名与服务端
+			// 日志里，单独拿到它对签名毫无用处。真正的秘密是下面那一项。
+			// 详细理由见 `types.ts` 的文件头。
 			{
 				name: this.t("s3AccessKey"),
 				desc: this.t("s3AccessKeyDesc"),
-				aliases: ["credential", "key", "token", "密钥"],
-				render: (setting) => this.renderSecret(setting, "accessKeyIdRef"),
+				aliases: ["access key", "minio", "key id", "访问密钥", "密钥"],
+				control: { type: "text", key: "s3.accessKeyId" },
 			},
+			// 秘密访问密钥走 SecretComponent：它返回密钥的**名字**，值由 Obsidian 存进钥匙串。
+			// 用 render 是因为它需要 App 实例，而 control 的写法拿不到。
 			{
 				name: this.t("s3SecretKey"),
 				desc: this.t("s3SecretKeyDesc"),
-				render: (setting) => this.renderSecret(setting, "secretAccessKeyRef"),
+				aliases: ["secret", "credential", "密钥"],
+				render: (setting) => this.renderSecret(setting),
 			},
 
 			{
@@ -143,14 +154,20 @@ export class SettingsTab extends PluginSettingTab {
 		];
 	}
 
-	/** 一个凭据选择器。用 `addComponent` 而不是 `addText`：`SecretComponent` 需要 `App`。 */
-	private renderSecret(setting: Setting, field: "accessKeyIdRef" | "secretAccessKeyRef"): void {
+	/**
+	 * 秘密访问密钥的选择器。
+	 *
+	 * 用 `addComponent` 而不是 `addText`：`SecretComponent` 需要 `App`。
+	 * 它交出的是那条密钥的**名字**，真正的值由 Obsidian 存进钥匙串 ——
+	 * 所以这里存进设置的是名字，不是密钥本身。
+	 */
+	private renderSecret(setting: Setting): void {
 		const s3 = this.plugin.settings.s3;
 		setting.addComponent((el) =>
 			new SecretComponent(this.app, el)
-				.setValue(s3[field])
+				.setValue(s3.secretAccessKeyRef)
 				.onChange(async (value) => {
-					s3[field] = String(value ?? "").trim();
+					s3.secretAccessKeyRef = String(value ?? "").trim();
 					await this.plugin.saveSettings();
 				})
 		);

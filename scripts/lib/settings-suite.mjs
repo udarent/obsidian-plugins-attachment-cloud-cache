@@ -65,30 +65,53 @@ export function runSettingsSuite(mod) {
 	);
 
 	// ============================================================
-	// 2. ⭐ 凭据绝不进 settings（必须走 SecretStorage）
-	// ============================================================
+	// 2. ⭐ **秘密**绝不进 settings（必须走 SecretStorage）
+	//
+	// ⚠️ 这条不变量原来写的是「凭据绝不进 settings」，把 `accessKeyId` 也算进去 ——
+	// 那是**过头**的，而且正是它导致了一个真实缺陷：访问密钥 ID 常规就带大写
+	//（AWS 的 `AKIA…`、MinIO 生成的那种），而 Obsidian 的密钥 ID
+	//（`SecretStorage.setSecret` 的 `@param id Lowercase alphanumeric ID`）
+	// **只能是小写字母数字加短横线，非法直接抛错** —— 于是用户想填自己的访问密钥时，
+	// 被挡在"名字不能有大写"这堵墙上（实测：他的 `accessKeyIdRef` 一直是空的，
+	// 也就是说这个字段从来没能被填上过）。
+	//
+	// 收窄的依据是**值本身的敏感度不同**：
+	// - 访问密钥 ID 是**标识符**（"是谁"），会出现在请求签名与服务端日志里，
+	//   单独拿到它对签名毫无用处 —— 所以可以明文存；
+	// - 秘密访问密钥是**秘密**（"证明你是"），泄露即可伪造请求 —— 必须进钥匙串。
+	//
+	// 所以现在是"秘密绝不进 settings"，而不是"凭据绝不进 settings"。
 	const s3Keys = Object.keys(SETTINGS_DEFAULTS.s3);
-	for (const forbidden of ["accessKeyId", "secretAccessKey", "accessKey", "secretKey", "password"]) {
+	for (const forbidden of ["secretAccessKey", "accessKey", "secretKey", "password"]) {
 		assert.ok(
 			!s3Keys.includes(forbidden),
-			`s3 配置里不得出现明文凭据字段 "${forbidden}" —— 凭据必须存 SecretStorage`
+			`s3 配置里不得出现明文**秘密**字段 "${forbidden}" —— 秘密必须存 SecretStorage`
 		);
 	}
 	assert.ok(
-		s3Keys.includes("accessKeyIdRef") && s3Keys.includes("secretAccessKeyRef"),
-		"s3 配置应只保存指向 SecretStorage 的**引用**（*Ref）"
+		s3Keys.includes("secretAccessKeyRef"),
+		"秘密访问密钥在设置里只保存指向 SecretStorage 的**引用**（*Ref）"
+	);
+	// 正向：访问密钥 ID 必须**在**设置里（它是标识符），且字段名不该再是 *Ref
+	assert.ok(
+		s3Keys.includes("accessKeyId"),
+		"★ 访问密钥 ID 应当作为普通设置项存在（它是标识符；密钥存储的 ID 不允许大写，装不下它）"
+	);
+	assert.ok(
+		!s3Keys.includes("accessKeyIdRef"),
+		"★ 访问密钥 ID 不该再有 *Ref 形式 —— 那个模型正是「填不进去」的原因"
 	);
 
 	// ⚠️ 只检查 SETTINGS_DEFAULTS 是不够的 —— 真正会漏的是**合并后的输出**：
-	// 用户旧版本留下的 data.json 里可能就有明文密钥，合并时必须把它丢掉，
-	// 而不是保留下来。这条断言正是为"合并结果也不能带凭据"而设。
-	const credentialFields = ["accessKeyId", "secretAccessKey", "accessKey", "secretKey", "password"];
+	// 用户旧版本留下的 data.json 里可能就有明文秘密，合并时必须把它丢掉，
+	// 而不是保留下来。这条断言正是为"合并结果也不能带秘密"而设。
+	const credentialFields = ["secretAccessKey", "accessKey", "secretKey", "password"];
 	const mergedWithLegacyCreds = mergePluginSettings(SETTINGS_DEFAULTS, {
 		...SETTINGS_DEFAULTS,
 		s3: {
 			...SETTINGS_DEFAULTS.s3,
-			accessKeyId: "AKIA-LEAKED",
 			secretAccessKey: "leaked-secret",
+			accessKey: "leaked-access-key",
 			password: "hunter2",
 		},
 	});

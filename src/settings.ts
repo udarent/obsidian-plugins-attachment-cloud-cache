@@ -18,9 +18,12 @@
  *
  * ## 两条硬约束
  *
- * - **凭据的值不在这里。** 这里只保存 SecretStorage 里那个密钥的**名字**
- *   （`accessKeyIdRef` / `secretAccessKeyRef`），密钥本身在操作系统钥匙串里。
- *   由 `test-settings.mjs` 钉住"不存在明文凭据字段"。
+ * - **秘密的值不在这里。** 秘密访问密钥只保存 SecretStorage 里那条密钥的**名字**
+ *   （`secretAccessKeyRef`），值在操作系统钥匙串里。
+ *   由 `test-settings.mjs` 钉住"不存在明文**秘密**字段"。
+ *   ⚠️ 注意这条**不含**访问密钥 ID：那是标识符、不是秘密，明文存在这里
+ *   （理由见 `types.ts` 的文件头 —— 简单说：Obsidian 的密钥 ID 不允许大写，
+ *   而访问密钥 ID 常规就带大写，装不进钥匙串）。
  * - **未知字段一律丢弃。** 因为只写字段表里列出的键，旧版本遗留的键
  *   （包括历史版本曾存过的明文凭据、或被砍掉的参数）**不可能**被带进合并结果。
  *   这正是这一版砍掉 5 个参数后**不需要写迁移代码**的原因：旧键自动消失，
@@ -69,7 +72,8 @@ function boolValue(): FieldReader<boolean> {
  *
  * 空串在本插件里是有意义的值，不是"没填"：
  * - `attachmentFolder` 空 = 跟随宿主的附件设置；
- * - `accessKeyIdRef` / `secretAccessKeyRef` 空 = 尚未在钥匙串里选密钥。
+ * - `accessKeyId` 空 = 尚未填写访问密钥 ID；
+ * - `secretAccessKeyRef` 空 = 尚未在钥匙串里选密钥。
  * 后者尤其不能回落成某个写死的名字 —— 那会指向一个不存在的密钥，
  * 表现为"提示密钥无效"却查不出原因。
  */
@@ -181,8 +185,9 @@ const S3_FALLBACKS: S3Config = {
 	region: "auto",
 	bucket: "",
 	publicUrlBase: "",
-	// 空 = 尚未在钥匙串里选密钥。**不给写死的默认名字** —— 见 textValue 的说明。
-	accessKeyIdRef: "",
+	// 空 = 尚未填写 / 尚未选。**不给写死的默认值** —— 见 textValue 的说明。
+	// ⚠️ 前者是明文标识符（可以含大写），后者才是钥匙串里的名字。
+	accessKeyId: "",
 	secretAccessKeyRef: "",
 	// path-style 默认开：R2 的 S3 端点不支持 virtual-host，而其余各家都接受 path-style
 	forcePathStyle: true,
@@ -196,7 +201,7 @@ const S3_SPEC: { [K in keyof S3Config]: FieldReader<S3Config[K]> } = {
 	region: requiredTextValue(),
 	bucket: textValue(),
 	publicUrlBase: textValue(),
-	accessKeyIdRef: textValue(),
+	accessKeyId: textValue(),
 	secretAccessKeyRef: textValue(),
 	forcePathStyle: boolValue(),
 	objectKeyTemplate: requiredTextValue(),

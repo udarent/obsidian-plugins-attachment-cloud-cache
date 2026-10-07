@@ -35,7 +35,7 @@ export function runInterceptSuite(mod) {
 			region: "auto",
 			bucket: "b",
 			publicUrlBase: "https://cdn.example.com",
-			accessKeyIdRef: "ak",
+			accessKeyId: "ak",
 			secretAccessKeyRef: "sk",
 			forcePathStyle: true,
 			objectKeyTemplate: "{hash}.{ext}",

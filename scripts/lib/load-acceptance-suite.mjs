@@ -356,14 +356,19 @@ export async function runLoadAcceptance(options = {}) {
 			region: "auto",
 			bucket: BUCKET,
 			publicUrlBase: `${endpoint}/${BUCKET}`,
-			accessKeyIdRef: "acc-test-ak",
+			// ⚠️ 这里填的是访问密钥 ID 的**值**（明文标识符），不是钥匙串条目的名字 ——
+			// 早期版本这里写的是 `accessKeyIdRef: "acc-test-ak"`（一个名字），
+			// 改成明文之后若照抄那个名字，签名就会拿 "acc-test-ak" 去算，
+			// 于是得到 403 SignatureDoesNotMatch（而原因只在 mock 服务端那句
+			// "Access Key ID 不匹配"里看得出来）。
+			accessKeyId: ACCESS_KEY_ID,
 			secretAccessKeyRef: "acc-test-sk",
 			forcePathStyle: true,
 			objectKeyTemplate: "{hash}.{ext}",
 		},
 	});
-	// 凭据进钥匙串（替身的 SecretStorage 是内存 Map）
-	app.secretStorage.setSecret("acc-test-ak", ACCESS_KEY_ID);
+	// 只有**秘密**进钥匙串（替身的 SecretStorage 是内存 Map）。
+	// 访问密钥 ID 不再进钥匙串 —— 那是标识符，且 Obsidian 的密钥 ID 不允许大写。
 	app.secretStorage.setSecret("acc-test-sk", SECRET_ACCESS_KEY);
 
 	// ── 询问接缝 ──

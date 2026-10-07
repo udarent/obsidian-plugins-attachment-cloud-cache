@@ -19,7 +19,7 @@ await runMutations({
 			name: "未选择密钥被当成正常（会带着空凭据去请求，报出来的却是 403）",
 			from: '\tif (trimmed === "") return { name: "", state: "unset" };',
 			to: '\tif (trimmed === "") return { name: "", state: "ok" };',
-			expect: "名字为空 = 从未选择",
+			expect: "不能报成 ok",
 		},
 		{
 			name: "取不到值也报成正常（所选密钥已失效却显示一切正常）",
@@ -43,16 +43,22 @@ await runMutations({
 			expect: "空串值不算有效密钥",
 		},
 		{
+			name: "访问密钥 ID 只判空而不去空白（一串空格被当成填了）",
+			from: '\tconst accessKeyIdPresent = String(s3.accessKeyId ?? "").trim() !== "";',
+			to: '\tconst accessKeyIdPresent = String(s3.accessKeyId ?? "") !== "";',
+			expect: "纯空白的访问密钥 ID 不算填了",
+		},
+		{
 			name: "纯空白的桶名被当成填了（带着一个假桶名去请求）",
 			from: '\tif (String(s3.bucket ?? "").trim() === "") {',
 			to: '\tif (String(s3.bucket ?? "") === "") {',
 			expect: "纯空白的桶名也不算填了",
 		},
 		{
-			name: "★「密钥已失效」与「从未选择」被合并成一类（提示指错方向）",
-			from: '\tif (status.accessKeyId.state === "missing" || status.secretAccessKey.state === "missing") {',
+			name: "★「密钥已失效」与「没选」被合并成一类（提示指错方向）",
+			from: '\tif (status.secretAccessKey.state === "missing") {',
 			to: "\tif (false) {",
-			expect: "所选密钥已不存在时必须判定为未就绪",
+			expect: "秘密密钥已不存在时必须判定为未就绪",
 		},
 	],
 });

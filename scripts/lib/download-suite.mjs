@@ -111,7 +111,7 @@ export async function runDownloadSuite(mod) {
 				region: "auto",
 				bucket: BUCKET,
 				publicUrlBase: `${endpoint}/${BUCKET}`,
-				accessKeyIdRef: "",
+				accessKeyId: "",
 				secretAccessKeyRef: "",
 				forcePathStyle: true,
 				objectKeyTemplate: "{hash}.{ext}",

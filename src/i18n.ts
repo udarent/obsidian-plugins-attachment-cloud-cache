@@ -31,9 +31,10 @@ export const I18N: Record<string, Locale> = {
 		s3RegionDesc: "Use auto for Cloudflare R2.",
 		s3AccessKey: "Access key ID",
 		s3AccessKeyDesc:
-			"Pick a secret from your keychain, or create one there. Only the secret's name is saved in the plugin's data.",
+			"Your storage's Access Key (MinIO's “Access Key”, AWS's “Access Key ID”). It is an identifier, not a secret, so it is typed here and may contain capital letters.",
 		s3SecretKey: "Secret access key",
-		s3SecretKeyDesc: "Same keychain secret can be shared with other plugins, and updated in one place.",
+		s3SecretKeyDesc:
+			"Pick a keychain secret, or create one there. ⚠️ When creating one, the name may only use lowercase letters, digits and dashes — so name it something like “minio-secret” and put the actual secret in the value field underneath the name.",
 		s3PublicUrlBase: "Public URL prefix",
 		s3PublicUrlBaseDesc: "Image links are built from this prefix plus the object path.",
 		testConnection: "Test connection",
@@ -189,9 +190,11 @@ export const I18N: Record<string, Locale> = {
 		s3Region: "区域",
 		s3RegionDesc: "Cloudflare R2 填 auto。",
 		s3AccessKey: "访问密钥 ID",
-		s3AccessKeyDesc: "从钥匙串里选择一条密钥，或在那里新建。插件数据里只保存这条密钥的名字。",
+		s3AccessKeyDesc:
+			"填存储服务上的 Access Key（MinIO 的「Access Key」、AWS 的「Access Key ID」）。它是标识符、不是密钥，所以直接填在这里，可以含大写字母。",
 		s3SecretKey: "秘密访问密钥",
-		s3SecretKeyDesc: "同一条钥匙串密钥可以和其他插件共用，改动只需改一处。",
+		s3SecretKeyDesc:
+			"从钥匙串里选择一条，或在那里新建。⚠️ 新建时「名字」只能用「小写字母、数字、短横线」（Obsidian 的规定）—— 所以名字随便起一个，比如 minio-secret，真正的密钥填在「名字下面那一格」。",
 		s3PublicUrlBase: "公开访问前缀",
 		s3PublicUrlBaseDesc: "笔记里的图片链接由这个前缀加上对象路径拼成。",
 		testConnection: "测试连接",

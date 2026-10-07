@@ -1,23 +1,40 @@
 /**
  * 插件的共享类型。
  *
- * ## 凭据：为什么这里是 `*Ref` 而不是密钥本身
+ * ## 凭据：哪些进设置，哪些进钥匙串
  *
- * Obsidian 1.11.4 起提供了 `SecretStorage` + `SecretComponent`。它的模型是：
- * **用户在钥匙串里给密钥起个名字，插件只存那个名字**，取用时用
- * `app.secretStorage.getSecret(name)` 换出真正的值。
- * 官方指南原话："When saved, your plugin settings contain **the name of the secret**,
- * not the actual secret value."
+ * 这两项的处理**不一样**，因为它们的性质不一样：
  *
- * 所以 `accessKeyIdRef` / `secretAccessKeyRef` 存的是**名字**，这是正确模型，不是抄来的包袱：
- * - `data.json` 会随 vault 同步、备份、分享 —— 里面**绝不能**出现密钥本身；
- * - 同一个密钥可以被多个插件共用，改一次全生效。
+ * | | 性质 | 存哪 | 为什么 |
+ * |---|---|---|---|
+ * | 访问密钥 ID | **标识符**（"是谁"）| `data.json`（明文）| 见下 |
+ * | 秘密访问密钥 | **秘密**（"证明你是"）| 操作系统钥匙串 | 泄露即可伪造请求 |
+ *
+ * 访问密钥 ID 之所以可以明文存，是两件事共同决定的：
+ *
+ * 1. 它**本来就出现在网络请求里**（SigV4 的 `Credential=<访问密钥>/日期/区域/…` 那一段），
+ *    也会进服务端日志与账单报表 —— 单独拿到它对签名毫无用处；
+ * 2. Obsidian 的密钥存储**装不下它**：`SecretStorage.setSecret` 的 ID 只能是
+ *    "lowercase alphanumeric with optional dashes"（非法直接抛错），
+ *    而访问密钥 ID 常规就带大写（AWS 的 `AKIA…`、MinIO 生成的那种）。
+ *
+ * 第 2 点不是推理，是实测撞出来的：早期版本把它建模成"指向钥匙串的引用"
+ *（`accessKeyIdRef`），用户想在选择器里填自己的访问密钥时，被挡在
+ * "名字不能有大写"那堵墙上 —— 实测那个字段**一直是空的**，从来没能被填上。
+ *
+ * 秘密访问密钥仍然只存**名字**（`secretAccessKeyRef`），取值走
+ * `app.secretStorage.getSecret(name)` —— 官方指南原话："When saved, your plugin
+ * settings contain the name of the secret, not the actual secret value."
  *
  * ⚠️ 一个容易搞错、值得单独记住的点：**`SecretComponent` 不是密码输入框**，
  * 而是"选择或新建一个具名密钥"的选择器（它返回的是**名字**）。
- * 所以设置项的值可以合法地为空 = "还没选"。这一点决定了这两个字段用
- * `textValue()` 而非 `requiredTextValue()`：空串是有意义的状态，
+ * 所以它的值可以合法地为空 = "还没选"；这一点决定了 `secretAccessKeyRef`
+ * 用 `textValue()` 而非 `requiredTextValue()`：空串是有意义的状态，
  * 不该被悄悄回落成一个指向不存在密钥的名字。
+ *
+ * ⚠️ 新建钥匙串条目时，**名字**只能用小写字母数字加短横线（Obsidian 的规定）。
+ * 名字随便起（如 `minio-secret`），**真正的密钥填在名字下面那一格** ——
+ * 设置页的说明文案里写明了这一点（不然用户会很自然地把密钥本身填进"名字"）。
  */
 
 /**
@@ -68,11 +85,18 @@ export interface S3Config {
 	/** 公开访问前缀，如 `https://img.example.com`。图片链接由它拼出来。 */
 	publicUrlBase: string;
 	/**
-	 * SecretStorage 里那个密钥的**名字**（用户在选择器里选/建）。
+	 * 访问密钥 ID（MinIO 的「Access Key」、AWS 的「Access Key ID」）。
+	 *
+	 * ⚠️ **明文存在设置里，这是有意的**：它是**标识符**而不是秘密
+	 *（会出现在请求签名与服务端日志里，单独拿到它对签名毫无用处），
+	 * 而且 Obsidian 的密钥存储只接受小写 ID、装不下它（详见文件头那段）。
+	 * 空串 = 尚未填写（合法状态）。
+	 */
+	accessKeyId: string;
+	/**
+	 * SecretStorage 里那条**秘密访问密钥**的名字（用户在选择器里选/建）。
 	 * 空串 = 尚未选择 —— 这是合法状态，不是错误值。
 	 */
-	accessKeyIdRef: string;
-	/** 同上，Secret Access Key 的名字。 */
 	secretAccessKeyRef: string;
 	/**
 	 * 是否用 path-style 寻址（`端点/桶/键`）。

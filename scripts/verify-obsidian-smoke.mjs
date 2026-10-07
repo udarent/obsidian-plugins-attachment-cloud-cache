@@ -13,7 +13,7 @@
  *
  * 这一步**只验证"不炸 + 接线在册"**，不验证交互（粘贴/拖拽要人工）。
  *
- * ## 三个环境要点（都踩过）
+ * ## 四个环境要点（都踩过）
  *
  * - 启动必须带 `--disable-gpu --no-sandbox`：只带 `--remote-debugging-port` 会以
  *   `GPU process isn't usable. Goodbye.` 退出（看起来就像"进程被环境回收了"）。
@@ -27,8 +27,15 @@
  *   遇到时的处理：关掉所有 Obsidian 窗口（或用 `-- --port 9231` 换端口并确认
  *   那个端口空闲）后重跑。⚠️ 结束别人的进程前先问一句 —— 那可能是用户正在用的
  *   Obsidian，强行结束有丢未保存内容的风险。
+ * - ⭐⭐ **必须显式指定要打开的 vault**（本脚本用 `obsidian://open?vault=…`）。
+ *   否则会依赖一个环境里**会消失**的状态：`obsidian.json` 里那个 vault 的 `open: true`。
+ *   实测踩到 —— 手动关掉 Obsidian 之后那个标记就没了，于是再启动时 Obsidian 停在
+ *   **vault 选择界面**：`app` 在、`app.plugins` 不在，本脚本报"宿主 60 秒内没有就绪"，
+ *   而真实原因与"宿主起不来"完全无关（看起来像 Obsidian 坏了）。
+ *   显式指定之后，无论之前打开过哪个 vault 都能跑。
  *
  * 用法：node verify-obsidian-smoke.mjs [--port 9222]
+ * 环境变量：OBSIDIAN_EXE / OBSIDIAN_VAULT / OBSIDIAN_DEBUG_PORT / OBSIDIAN_DEBUG_WAIT
  */
 
 import { execFile, spawn } from "node:child_process";
@@ -42,6 +49,18 @@ const PORT = Number(
 );
 /** Obsidian 可执行文件位置；换机器/换安装位置时用环境变量覆盖。 */
 const OBSIDIAN = process.env.OBSIDIAN_EXE ?? "C:/Program Files/Obsidian/Obsidian.exe";
+/**
+ * 要打开的 vault 名字（**必须显式指定**）。
+ *
+ * 为什么不能省：不指定就依赖 `obsidian.json` 里那个 vault 的 `open: true` 标记，
+ * 而那个标记**会消失**（手动关掉 Obsidian 之后就没了）。届时 Obsidian 会停在
+ * vault 选择界面 —— `app` 在、`app.plugins` 不在，本脚本报出来的却是
+ * "宿主 60 秒内没有就绪"，与真实原因（没打开 vault）毫无关系。
+ *
+ * ⚠️ 名字要**与 Obsidian 里显示的完全一致**（大小写敏感）。写错了同样会停在选择界面，
+ * 所以下面的报错里会把用到的名字打出来。
+ */
+const VAULT = process.env.OBSIDIAN_VAULT ?? "ObsidianVault";
 /**
  * 等调试端口的秒数。
  *
@@ -132,12 +151,24 @@ async function main() {
 	log("═".repeat(72));
 	log("真机烟雾验证：插件能否在真实 Obsidian 里加载并接线");
 	log("═".repeat(72));
+	log(`  打开的 vault：${VAULT}（可用 OBSIDIAN_VAULT 覆盖）`);
 
-	// ⚠️ 参数缺一不可：只给 remote-debugging-port 会因 GPU 进程崩溃而退出
-	const child = spawn(OBSIDIAN, [`--remote-debugging-port=${PORT}`, "--disable-gpu", "--no-sandbox"], {
-		stdio: "ignore",
-		detached: false,
-	});
+	// ⚠️ 参数缺一不可：只给 remote-debugging-port 会因 GPU 进程崩溃而退出。
+	// 末尾那个 URI 用来**显式打开目标 vault** —— 不指定就可能停在 vault 选择界面
+	//（原因见文件头第四个环境要点）。
+	const child = spawn(
+		OBSIDIAN,
+		[
+			`--remote-debugging-port=${PORT}`,
+			"--disable-gpu",
+			"--no-sandbox",
+			`obsidian://open?vault=${encodeURIComponent(VAULT)}`,
+		],
+		{
+			stdio: "ignore",
+			detached: false,
+		}
+	);
 	child.on("exit", (code) => log(`  （Obsidian 退出，code=${code}）`));
 
 	let client = null;
@@ -192,7 +223,28 @@ async function main() {
 				return false;
 			})()`
 		);
-		if (!hostReady) throw new Error("宿主在 60 秒内没有就绪（app.plugins 一直不可用）");
+		if (!hostReady) {
+			// ⚠️ 这个现象有两个**完全不同**的原因，而它们的处置也不同 —— 所以先把当前的
+			// 实际状态取回来再报，别只丢一句"没就绪"（那会让人去查 Obsidian 是不是坏了）：
+			//   ① 没有打开任何 vault（停在 vault 选择界面）⇒ `app` 在、`app.plugins` 不在；
+			//   ② vault 打开了但插件加载卡住/报错 ⇒ 那就是真的插件问题。
+			const state = await evaluate(
+				client,
+				`({
+					hasAppGlobals: typeof app !== "undefined",
+					hasPlugins: Boolean(app?.plugins?.plugins),
+					vault: app?.vault?.getName?.() ?? null,
+				})`
+			).catch(() => null);
+			const hint =
+				state && !state.vault
+					? `看起来**没有打开任何 vault**（停在 vault 选择界面）—— 本脚本请求打开的是「${VAULT}」，` +
+						`请确认这个名字与 Obsidian 里显示的完全一致（大小写敏感），或用 OBSIDIAN_VAULT 指定。`
+					: "vault 已经打开了，所以更像是插件本身没加载起来 —— 看上面的控制台输出。";
+			throw new Error(
+				`宿主在 60 秒内没有就绪（app.plugins 一直不可用）。\n  实际状态：${JSON.stringify(state)}\n  ${hint}`
+			);
+		}
 		log("  ✓ 宿主已就绪（app.plugins 可用）");
 
 		// 等插件加载完（Obsidian 会异步加载社区插件）
@@ -313,6 +365,15 @@ async function main() {
 					trashFile: typeof app.fileManager?.trashFile === "function",
 					hasDeleteModeSetting: "deleteMode" in (plugin?.settings ?? {}),
 					deleteModeControl: items.some((i) => i?.control?.key === "deleteMode"),
+					// ⭐ 访问密钥 ID 的形态：必须在设置里、且必须是一个**普通控件**
+					//（而不是密钥选择器）。这条非真机不可 —— 声明式设置页的控件类型
+					// 只有宿主渲染时才知道，而"它到底是不是密钥选择器"正是那个缺陷的定义。
+					// ⚠️ 注意上面这几行注释里一个反引号都没有：这段代码是模板字符串的内容，
+					// 里面出现反引号会把模板提前闭合（症状是 SyntaxError 指向后面十几行）。
+					// 这条纪律由 npm run check 里的 check-injected-snippets 兜着。
+					hasAccessKeyIdSetting: "accessKeyId" in (plugin?.settings?.s3 ?? {}),
+					accessKeyControlType:
+						items.find((i) => i?.control?.key === "s3.accessKeyId")?.control?.type ?? null,
 					controlKeys: items.map((i) => i?.control?.key).filter(Boolean),
 				};
 			})()`
@@ -324,6 +385,14 @@ async function main() {
 		log(
 			`  ${!removal.hasDeleteModeSetting && !removal.deleteModeControl ? "✓" : "✗"} ` +
 				`「缓存删除方式」这个备选确实不在了（设置值与设置项都不该有）`
+		);
+		// ⭐ 访问密钥 ID 必须是**普通文本框**：它的值可以含大写，
+		// 而 Obsidian 的密钥选择器只接受小写 ID —— 早期版本把它做成选择器，
+		// 结果是用户**根本填不进去**（实测那个字段一直是空的）。
+		const accessKeyIsPlainText = removal.hasAccessKeyIdSetting && removal.accessKeyControlType === "text";
+		log(
+			`  ${accessKeyIsPlainText ? "✓" : "✗"} 访问密钥 ID 是普通文本框` +
+				`（在设置里：${removal.hasAccessKeyIdSetting}，控件类型：${JSON.stringify(removal.accessKeyControlType)}）`
 		);
 		log(`    （设置页现有的 control key：${JSON.stringify(removal.controlKeys)}）`);
 
@@ -340,6 +409,7 @@ async function main() {
 			removal.trashFile &&
 			!removal.hasDeleteModeSetting &&
 			!removal.deleteModeControl &&
+			accessKeyIsPlainText &&
 			relevantErrors.length === 0;
 
 		log();

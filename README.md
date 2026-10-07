@@ -158,8 +158,10 @@ of re-rendering the whole tab, and simple rows need no read/write code at all. T
 worth stating plainly — users who have not updated Obsidian in the last few months cannot install
 this plugin, whereas the previous floor (1.11.4, set by `SecretStorage`) covered them.
 
-Access keys still go through `SecretStorage`/`SecretComponent` (1.11.4), which is below the floor and
-therefore no longer the constraint.
+The secret access key still goes through `SecretStorage`/`SecretComponent` (1.11.4), which is below the
+floor and therefore no longer the constraint. The access key **ID** deliberately does not: it is an
+identifier rather than a secret, and Obsidian's secret storage only accepts lowercase IDs — while
+access key IDs routinely contain capitals, so it could not have been stored there anyway (see below).
 
 The number is not an estimate. The `obsidian` type package is pinned to **exactly** `1.13.0`, which
 turns `tsc --noEmit` (part of `npm run build`) into a version gate — using anything added later fails
@@ -200,7 +202,11 @@ The plugin is not in the Community directory yet (it is under development). Manu
   endpoint **you** configure. It talks to no other service, and includes no telemetry.
 - **Files outside the vault**: not accessed. Everything the plugin reads or writes lives inside
   your vault.
-- Credentials are stored in Obsidian's secret storage (the OS keychain), not in `data.json`.
+- The **secret access key** is stored in Obsidian's secret storage (the OS keychain), never in
+  `data.json`. The **access key ID** is stored in `data.json` — it is an identifier, not a secret
+  (it is part of the signed request itself and appears in server logs), and Obsidian's secret storage
+  only accepts lowercase IDs while access key IDs routinely contain capitals. The ID alone cannot sign
+  anything; the secret is what must stay protected.
 
 ## Permissions & licensing
 

@@ -14,9 +14,10 @@
 		"manifest": "node scripts/check-manifest.mjs",
 		"check:api-floor": "node scripts/check-api-floor.mjs",
 		"check:mutate-files": "node scripts/check-mutate-files.mjs",
-		"check": "npm run build && npm run lint && npm run manifest && npm run check:api-floor && npm run check:mutate-files && npm run test:unit",
+		"check": "npm run build && npm run lint && npm run manifest && npm run check:api-floor && npm run check:mutate-files && npm run check:injected && npm run test:unit",
 		"version": "node version-bump.mjs && git add manifest.json versions.json",
-		"verify:real": "node scripts/verify-obsidian-smoke.mjs"
+		"verify:real": "node scripts/verify-obsidian-smoke.mjs",
+		"check:injected": "node scripts/check-injected-snippets.mjs"
 	},
 	"keywords": [
 		"s3",

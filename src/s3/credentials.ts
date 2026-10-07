@@ -1,7 +1,17 @@
 /**
  * 凭据的解析：把设置里存的**密钥名字**换成**密钥值**。
  *
- * ## 为什么要绕这一层
+ * ## 两项凭据的性质不同，处理也不同
+ *
+ * | | 存哪 | 状态 | 为什么 |
+ * |---|---|---|---|
+ * | 访问密钥 ID | 设置里（明文）| 只有"填了 / 没填" | 它是标识符；且钥匙串的 ID 不允许大写，装不下它 |
+ * | 秘密访问密钥 | 钥匙串（设置里只存名字）| 多一种"名字还在、密钥没了" | 它是秘密；且名字可能过期 |
+ *
+ * 所以**不是两项都需要"换名字"**：访问密钥 ID 直接从设置读，秘密才需要
+ * `getSecret(name)` 去换。这一层仍然值得存在，因为它把"两种失效"分清楚了。
+ *
+ * ## 为什么绕这一层
  *
  * Obsidian 1.11.4 起的密钥模型是「**中心化的具名密钥**」：
  * 用户在钥匙串里创建一条密钥（带个名字），插件只保存那个**名字**，
@@ -13,7 +23,7 @@
  * 好几个插件引用，用户改一次（或换一次）就全部生效，
  * 而不是逐个插件粘贴一遍。
  *
- * ## 三种状态必须分清楚（否则用户没法定位）
+ * ## 秘密访问密钥的三种状态必须分清楚（否则用户没法定位）
  *
  * | 状态 | 现象 | 用户该做什么 |
  * |---|---|---|
@@ -39,7 +49,7 @@ export interface SecretReader {
 	getSecret(id: string): string | null;
 }
 
-/** 凭据的**存在性**状态，供设置界面显示。 */
+/** 秘密访问密钥（钥匙串条目）的**存在性**状态，供设置界面显示。 */
 export type CredentialState =
 	/** 名字为空 —— 从未选择过。 */
 	| "unset"
@@ -48,7 +58,7 @@ export type CredentialState =
 	/** 名字非空且能取到值。 */
 	| "ok";
 
-/** 单项凭据的状态。 */
+/** 钥匙串条目的状态。 */
 export interface CredentialSlot {
 	/** 设置里存的名字（可能为空）。 */
 	name: string;
@@ -56,9 +66,17 @@ export interface CredentialSlot {
 }
 
 export interface CredentialStatus {
-	accessKeyId: CredentialSlot;
+	/**
+	 * 访问密钥 ID 是否已填。
+	 *
+	 * ⚠️ 它是**明文标识符**，所以只有"填了/没填"两种状态 ——
+	 * 没有"已丢失"可言（那种状态只属于钥匙串条目）。
+	 * 别为了对称把它做成 `CredentialSlot`：那会暗示它有一个可以失效的引用。
+	 */
+	accessKeyIdPresent: boolean;
+	/** 秘密访问密钥（钥匙串条目）：要区分"没选"与"选了但已不存在"。 */
 	secretAccessKey: CredentialSlot;
-	/** 两项都 `ok` —— 此时才可能连得上。 */
+	/** 两项都齐 —— 此时才可能连得上。 */
 	complete: boolean;
 }
 
@@ -88,12 +106,12 @@ function slotState(reader: SecretReader, name: string): CredentialSlot {
 
 /** 汇总两项凭据的状态。 */
 export function credentialStatus(reader: SecretReader, s3: S3Config): CredentialStatus {
-	const accessKeyId = slotState(reader, s3.accessKeyIdRef);
+	const accessKeyIdPresent = String(s3.accessKeyId ?? "").trim() !== "";
 	const secretAccessKey = slotState(reader, s3.secretAccessKeyRef);
 	return {
-		accessKeyId,
+		accessKeyIdPresent,
 		secretAccessKey,
-		complete: accessKeyId.state === "ok" && secretAccessKey.state === "ok",
+		complete: accessKeyIdPresent && secretAccessKey.state === "ok",
 	};
 }
 
@@ -119,11 +137,12 @@ export function connectionReadiness(reader: SecretReader, settings: PluginSettin
 	}
 
 	const status = credentialStatus(reader, s3);
-	if (status.accessKeyId.state === "unset" || status.secretAccessKey.state === "unset") {
-		return { ready: false, problem: "尚未选择访问密钥", fixIn: "credentials" };
+	if (!status.accessKeyIdPresent || status.secretAccessKey.state === "unset") {
+		return { ready: false, problem: "尚未填写访问密钥", fixIn: "credentials" };
 	}
-	if (status.accessKeyId.state === "missing" || status.secretAccessKey.state === "missing") {
-		// ⚠️ 与上一分支分开：这两种情况的修法不同（这里要"重新选"，不是"去配置"）。
+	if (status.secretAccessKey.state === "missing") {
+		// ⚠️ 与上一分支分开：这两种情况的修法不同（这里要**重新选**那条钥匙串密钥，
+		// 而不是"去配置"—— 用户已经配过了，笼统报"未配置"会让他以为填的东西丢了）。
 		return {
 			ready: false,
 			problem: "所选密钥在钥匙串里已不存在，请重新选择",
@@ -131,7 +150,9 @@ export function connectionReadiness(reader: SecretReader, settings: PluginSettin
 		};
 	}
 
-	const accessKeyId = reader.getSecret(status.accessKeyId.name) ?? "";
+	// 访问密钥 ID 直接取设置里的值（明文标识符，不需要去钥匙串换）；
+	// 只有秘密访问密钥需要换出真正的值。
+	const accessKeyId = String(s3.accessKeyId ?? "").trim();
 	const secretAccessKey = reader.getSecret(status.secretAccessKey.name) ?? "";
 
 	return {
