@@ -85,10 +85,13 @@ assert.deepEqual(
 // 会在磁盘上删掉文件而宿主仍认得它 → "看得见、读不到"的幽灵条目。
 //
 // ⚠️ 第一版这条守卫写得太宽（扫的是 `adapter.remove` 这个**字面量**），于是它
-// 立刻打在**两处既有的合法代码**上 —— 那些是原子写的收尾：
-// `cache/store.ts` 与 `host/site-store.ts` 各有一个 `removeQuietly()`，
-// 删的是插件**自己刚写下的 `.tmp` 中间产物**，不是任何用户可见的文件。
-// （这正是"静态守卫最容易犯的错：扫过头"。）
+// 立刻打在**合法的**代码上 —— 那是原子写的收尾：删插件**自己刚写下的 `.tmp`
+// 中间产物**，不是任何用户可见的文件。（这正是"静态守卫最容易犯的错：扫过头"。）
+//
+// ⚠️ 后来它又拦了一次，而那次拦得对：那两处 `removeQuietly()` 被合进了
+// `src/atomic-write.ts`（两个 store 的落盘实现原本逐字相同），于是
+// 允许列表里那两个文件**都不存在了**。守卫逼着人回头确认"新的这一处
+// 删的还是临时文件吗"—— 答案是没有变，只是从两份变成了一份。
 //
 // 所以收窄成两件事，各自都有明确的理由：
 //   ① 匹配**真的调用**（带括号），不匹配注释里的提及；
@@ -97,8 +100,8 @@ assert.deepEqual(
 const adapterRemoveSites = listSourceFiles().filter((file) => read(file).includes("adapter.remove("));
 assert.deepEqual(
 	adapterRemoveSites,
-	["src/cache/store.ts", "src/host/site-store.ts"],
-	`★ \`adapter.remove(\` 只允许出现在这两处（都是删自己的 .tmp 中间产物）。` +
+	["src/atomic-write.ts"],
+	`★ \`adapter.remove(\` 只允许出现在这一处（原子写收尾时删自己的 .tmp 中间产物）。` +
 		`新出现的地点要先确认它删的是临时文件而不是用户的文件 —— 实际：${JSON.stringify(adapterRemoveSites)}`
 );
 

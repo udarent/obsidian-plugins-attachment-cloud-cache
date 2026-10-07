@@ -40,6 +40,7 @@ import { renderObjectKey } from "../object-key";
 import type { S3Client } from "../s3/client";
 import { sha256Hex } from "../s3/hash";
 import type { LocalCopyAction, PluginSettings } from "../types";
+import { describeError } from "../error-text";
 import {
 	fallbackFileName,
 	parentFolderOf,
@@ -144,9 +145,6 @@ function resolveKeyExtension(name: unknown, mime: unknown): string {
 	return resolveExtension(name, mime) || FALLBACK_EXTENSION;
 }
 
-function describe(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
 
 /** 同时看宿主的文件索引与真实磁盘 —— 两者的滞后方向相反，只看任一个都会撞名。 */
 function makeExists(app: App): (path: string) => Promise<boolean> {
@@ -354,7 +352,7 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 		} catch (error) {
 			// 索引落盘失败不该让上传算失败（URL 已经能用）。
 			// 但要**说出来** —— 否则用户会在下次重启后发现缓存"不被认识"而莫名其妙。
-			deps.notify?.(`缓存索引保存失败：${describe(error)}`);
+			deps.notify?.(`缓存索引保存失败：${describeError(error)}`);
 		}
 	} else {
 		// 即便不留本地副本，也把旧记录清掉，否则会指向一个已被删除的文件
@@ -387,7 +385,7 @@ async function moveIntoCache(deps: IngestDeps, stagedPath: string, cachePath: st
 	try {
 		target = await uniqueVaultPath(cachePath, makeExists(app));
 	} catch (error) {
-		deps.notify?.(`缓存目录里的目标路径不可用：${describe(error)}`);
+		deps.notify?.(`缓存目录里的目标路径不可用：${describeError(error)}`);
 		return stagedPath;
 	}
 
@@ -399,7 +397,7 @@ async function moveIntoCache(deps: IngestDeps, stagedPath: string, cachePath: st
 			await app.vault.adapter.rename(stagedPath, target);
 			return target;
 		} catch (error) {
-			deps.notify?.(`缓存副本搬移失败：${describe(error)}`);
+			deps.notify?.(`缓存副本搬移失败：${describeError(error)}`);
 			return stagedPath;
 		}
 	}
@@ -410,7 +408,7 @@ async function moveIntoCache(deps: IngestDeps, stagedPath: string, cachePath: st
 		await app.fileManager.renameFile(file, target);
 		return target;
 	} catch (error) {
-		deps.notify?.(`缓存副本搬移失败：${describe(error)}`);
+		deps.notify?.(`缓存副本搬移失败：${describeError(error)}`);
 		return stagedPath;
 	}
 }

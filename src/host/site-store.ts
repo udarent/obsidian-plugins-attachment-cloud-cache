@@ -18,6 +18,8 @@ import type { App, DataAdapter } from "obsidian";
 
 import { SiteDecisions } from "../render/site-decisions";
 import { isPlainRecord } from "../records";
+import { describeError } from "../error-text";
+import { writeJsonAtomically } from "../atomic-write";
 
 /** 文件名。以点开头：`adapter.list` 会列出它，但不会进宿主的文件索引。 */
 export const SITE_DECISIONS_FILE = ".site-decisions.json";
@@ -31,7 +33,6 @@ export function siteDecisionsFilePath(pluginDir: string | undefined): string {
 }
 
 /** 写入过程中用的临时文件名（写完就改名，所以它不会长期存在）。 */
-const TEMP_SUFFIX = ".tmp";
 
 export interface LoadSiteDecisionsResult {
 	decisions: SiteDecisions;
@@ -53,7 +54,7 @@ export async function loadSiteDecisions(adapter: DataAdapter, path: string): Pro
 		text = await adapter.read(path);
 	} catch (error) {
 		// 读不到（权限、被占用、同步中的半截文件）→ 当作空记忆继续
-		return { decisions: new SiteDecisions(), existed: true, error: `读取失败：${describe(error)}` };
+		return { decisions: new SiteDecisions(), existed: true, error: `读取失败：${describeError(error)}` };
 	}
 
 	let parsed: unknown;
@@ -61,7 +62,7 @@ export async function loadSiteDecisions(adapter: DataAdapter, path: string): Pro
 		parsed = JSON.parse(text);
 	} catch (error) {
 		// 不是合法 JSON（多半是上次写入被打断）→ 空记忆，用户下次会被重新问一遍
-		return { decisions: new SiteDecisions(), existed: true, error: `JSON 解析失败：${describe(error)}` };
+		return { decisions: new SiteDecisions(), existed: true, error: `JSON 解析失败：${describeError(error)}` };
 	}
 
 	// ⚠️ "能解析成 JSON" 与 "是我们的格式" 是两件事。一份合法但形状不对的文件
@@ -81,52 +82,19 @@ export async function loadSiteDecisions(adapter: DataAdapter, path: string): Pro
 /**
  * 原子化写入记忆。
  *
- * 先写 `path.tmp` 再 `rename` 覆盖，避免"写到一半"留下截断的 JSON ——
- * 同步工具可能在任何时刻读到这份文件。
+ * 同步工具可能在任何时刻读到这份文件，所以必须原子落盘 —— 具体做法与兜底
+ * 收在 `atomic-write.ts` 里（与缓存索引**共用同一份**）。
  */
 export async function saveSiteDecisions(
 	adapter: DataAdapter,
 	path: string,
 	decisions: SiteDecisions
 ): Promise<void> {
-	const folder = path.replace(/\\/g, "/").replace(/^\/+/, "").split("/").slice(0, -1).join("/");
-	if (folder && !(await adapter.exists(folder))) {
-		// `DataAdapter.mkdir` 本身会建出中间层（桌面与移动的实现都是如此）。
-		// 父目录通常已存在；这一步是为了"用户手工删过插件目录下的文件"时能自愈。
-		await adapter.mkdir(folder);
-	}
-
-	const payload = JSON.stringify(decisions.toJSON());
-	const temp = `${path}${TEMP_SUFFIX}`;
-
-	await adapter.write(temp, payload);
-	try {
-		await adapter.rename(temp, path);
-	} catch (error) {
-		// 某些适配器可能不允许覆盖式改名。此时退回"直接写目标文件"，
-		// 并尽力清掉临时文件 —— 退化的只是原子性，不是可用性。
-		try {
-			await adapter.write(path, payload);
-		} finally {
-			await removeQuietly(adapter, temp);
-		}
-		void error;
-	}
+	await writeJsonAtomically(adapter, path, JSON.stringify(decisions.toJSON()));
 }
 
-/** 删掉临时文件；失败无所谓（它只是个中间产物），绝不能因此让主流程失败。 */
-async function removeQuietly(adapter: DataAdapter, path: string): Promise<void> {
-	try {
-		if (await adapter.exists(path)) await adapter.remove(path);
-	} catch {
-		// 忽略
-	}
-}
 
-function describe(error: unknown): string {
-	if (error instanceof Error) return error.message;
-	return String(error);
-}
+
 
 /** 记忆的读写。对象由它持有，接线层直接读 `.decisions`。 */
 export interface SiteStore {

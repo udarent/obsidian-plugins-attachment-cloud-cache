@@ -21,6 +21,8 @@
 
 import type { DataAdapter } from "obsidian";
 import { CacheIndex, type SkippedEntry } from "./index";
+import { describeError } from "../error-text";
+import { writeJsonAtomically } from "../atomic-write";
 
 /** 索引文件名。以点开头：`adapter.list` 会列出它，但不会进宿主的文件索引。 */
 export const CACHE_INDEX_FILE = ".cache-index.json";
@@ -34,7 +36,6 @@ export function indexFilePath(pluginDir: string): string {
 }
 
 /** 写入过程中用的临时文件名（写完就改名，所以它不会长期存在）。 */
-const TEMP_SUFFIX = ".tmp";
 
 export interface LoadCacheIndexResult {
 	index: CacheIndex;
@@ -65,7 +66,7 @@ export async function loadCacheIndex(adapter: DataAdapter, path: string): Promis
 			index: new CacheIndex(),
 			skipped: [],
 			existed: true,
-			error: `读取失败：${describe(error)}`,
+			error: `读取失败：${describeError(error)}`,
 		};
 	}
 
@@ -78,7 +79,7 @@ export async function loadCacheIndex(adapter: DataAdapter, path: string): Promis
 			index: new CacheIndex(),
 			skipped: [],
 			existed: true,
-			error: `JSON 解析失败：${describe(error)}`,
+			error: `JSON 解析失败：${describeError(error)}`,
 		};
 	}
 
@@ -90,48 +91,12 @@ export async function loadCacheIndex(adapter: DataAdapter, path: string): Promis
 /**
  * 原子化写入索引。
  *
- * 先写 `path.tmp` 再 `rename` 覆盖，避免"写到一半"留下截断的 JSON。
- * 父目录缺失时先建 —— 插件目录通常已存在，但自建目录能在
- * "用户手工删过插件目录下文件"的情况下自愈。
+ * 怎么原子、怎么兜底、怎么建目录都收在 `atomic-write.ts` 里（与站点记忆**共用同一份**）。
+ * 这里只负责把索引序列化好交给它 —— 所以两个 store 的落盘语义只可能一致。
  */
 export async function saveCacheIndex(adapter: DataAdapter, path: string, index: CacheIndex): Promise<void> {
-	const folder = path.replace(/\\/g, "/").replace(/^\/+/, "").split("/").slice(0, -1).join("/");
-	if (folder && !(await adapter.exists(folder))) {
-		// ⚠️ 此处**没有**跳过多层创建的余地：`DataAdapter.mkdir` 本身会建出中间层
-		// （桌面与移动的实现都是如此）。若将来某个宿主不这么做，
-		// 最坏结果是这一步抛错 —— 那会被下面的调用方当作"索引没存上"处理，
-		// 而不会影响上传本身。
-		await adapter.mkdir(folder);
-	}
-
-	const payload = JSON.stringify(index.toJSON());
-	const temp = `${path}${TEMP_SUFFIX}`;
-
-	await adapter.write(temp, payload);
-	try {
-		await adapter.rename(temp, path);
-	} catch (error) {
-		// 某些适配器可能不允许覆盖式改名。此时退回"直接写目标文件"，
-		// 并尽力清掉临时文件 —— 退化的只是原子性，不是可用性。
-		try {
-			await adapter.write(path, payload);
-		} finally {
-			await removeQuietly(adapter, temp);
-		}
-		void error;
-	}
+	await writeJsonAtomically(adapter, path, JSON.stringify(index.toJSON()));
 }
 
-/** 删掉临时文件；失败无所谓（它只是个中间产物），绝不能因此让主流程失败。 */
-async function removeQuietly(adapter: DataAdapter, path: string): Promise<void> {
-	try {
-		if (await adapter.exists(path)) await adapter.remove(path);
-	} catch {
-		// 忽略
-	}
-}
 
-function describe(error: unknown): string {
-	if (error instanceof Error) return error.message;
-	return String(error);
-}
+

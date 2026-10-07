@@ -41,6 +41,7 @@ import { cachePathFor } from "../cache-path";
 import { parentFolderOf, uniqueVaultPath } from "../vault-files";
 import { keyFromUrl } from "../render/render-target";
 import type { S3Client } from "../s3/client";
+import { describeError } from "../error-text";
 
 /** 一次补齐尝试的结果。 */
 export interface LocalCopyOutcome {
@@ -113,10 +114,6 @@ export function shouldReportDownloadFailure(error: unknown): boolean {
 	return true;
 }
 
-function describe(error: unknown): string {
-	if (error instanceof Error) return error.message;
-	return String(error);
-}
 
 /**
  * 造一个"补齐器"。返回的函数可以长期持有 —— **并发去重表挂在它内部**，
@@ -188,8 +185,8 @@ export function createLocalCopyEnsurer(deps: LocalCopyDeps) {
 			if (shouldReportDownloadFailure(error)) {
 				deps.notify?.(
 					deps.t
-						? deps.t("fallbackDownloadFailed", { error: describe(error) })
-						: `下载缓存副本失败：${describe(error)}`
+						? deps.t("fallbackDownloadFailed", { error: describeError(error) })
+						: `下载缓存副本失败：${describeError(error)}`
 				);
 			}
 			return { status: "failed", key, localPath: "", error };
@@ -224,16 +221,16 @@ export function createLocalCopyEnsurer(deps: LocalCopyDeps) {
 				// 索引落盘失败不该让"图上能看了"这件事作废：文件已经在磁盘上
 				deps.notify?.(
 					deps.t
-						? deps.t("fallbackIndexPersistFailed", { error: describe(error) })
-						: `缓存索引保存失败：${describe(error)}`
+						? deps.t("fallbackIndexPersistFailed", { error: describeError(error) })
+						: `缓存索引保存失败：${describeError(error)}`
 				);
 			}
 			return { status: "downloaded", key, localPath: path };
 		} catch (error) {
 			deps.notify?.(
 				deps.t
-					? deps.t("fallbackWriteFailed", { error: describe(error) })
-					: `下载的副本写入 vault 失败：${describe(error)}`
+					? deps.t("fallbackWriteFailed", { error: describeError(error) })
+					: `下载的副本写入 vault 失败：${describeError(error)}`
 			);
 			return { status: "failed", key, localPath: "", error };
 		}

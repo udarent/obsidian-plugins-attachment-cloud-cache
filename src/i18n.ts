@@ -85,7 +85,6 @@ export const I18N: Record<string, Locale> = {
 			"Addresses objects as endpoint/bucket/key. Keep this on for Cloudflare R2, MinIO and most self-hosted services; turn it off only if your provider requires bucket subdomains.",
 
 		// ── 出错 ──
-		uploadFailed: "The storage rejected this upload ({status}): {text}",
 		hookUploadFailedKeptLocal: "Upload failed, so the file was kept locally instead: {error}",
 		hookLocalFallbackFailed: "Could not save the file locally either: {error}",
 		// 未配置就粘贴：**没有接管**，图由 Obsidian 照常保存。
@@ -240,7 +239,6 @@ export const I18N: Record<string, Locale> = {
 		forcePathStyleDesc:
 			"以「地址/桶/键」的方式寻址。Cloudflare R2、MinIO 与多数自建服务都需要开着；只有服务商要求用桶名做子域时才关掉。",
 
-		uploadFailed: "对象存储拒绝了这次上传（{status}）：{text}",
 		hookUploadFailedKeptLocal: "上传失败，已改为保留本地文件：{error}",
 		hookLocalFallbackFailed: "本地文件也没能保存：{error}",
 		hookNotConfigured: "未上传（{problem}）。文件已按 Obsidian 的原有方式保存，不会丢。— {where}",

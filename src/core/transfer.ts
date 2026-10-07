@@ -30,6 +30,7 @@ import {
 } from "../editor/editor-hooks";
 import type { IngestRequest, IngestResult } from "./ingest";
 import type { PluginSettings } from "../types";
+import { describeError } from "../error-text";
 
 /** 编辑器的**最小**接口。只要这几个方法，便于用假对象穷举。 */
 export interface EditorLike {
@@ -73,9 +74,6 @@ async function readBytes(file: TransferFileLike): Promise<Uint8Array> {
 	return new Uint8Array(await file.arrayBuffer());
 }
 
-function describe(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
 
 /**
  * 逐个处理文件并插入链接。
@@ -104,7 +102,7 @@ export async function processTransfer(
 		} catch (error) {
 			// 连读都读不出来：这个文件我们没有任何办法留下
 			outcome.lost += 1;
-			deps.notify(deps.t("hookLocalFallbackFailed", { error: describe(error) }));
+			deps.notify(deps.t("hookLocalFallbackFailed", { error: describeError(error) }));
 			continue;
 		}
 
@@ -114,7 +112,7 @@ export async function processTransfer(
 		} catch (error) {
 			// 编排层承诺不抛错；真抛了也要收住，否则后面那些文件全都不处理了
 			outcome.lost += 1;
-			deps.notify(deps.t("hookLocalFallbackFailed", { error: describe(error) }));
+			deps.notify(deps.t("hookLocalFallbackFailed", { error: describeError(error) }));
 			continue;
 		}
 
@@ -123,12 +121,12 @@ export async function processTransfer(
 				parts.push(buildLocalImageEmbed(result.localPath, alt));
 				outcome.fallback += 1;
 				deps.notify(
-					deps.t("hookUploadFailedKeptLocal", { error: describe(result.error ?? "unknown") })
+					deps.t("hookUploadFailedKeptLocal", { error: describeError(result.error ?? "unknown") })
 				);
 			} else {
 				outcome.lost += 1;
 				deps.notify(
-					deps.t("hookLocalFallbackFailed", { error: describe(result.error ?? "unknown") })
+					deps.t("hookLocalFallbackFailed", { error: describeError(result.error ?? "unknown") })
 				);
 			}
 			continue;

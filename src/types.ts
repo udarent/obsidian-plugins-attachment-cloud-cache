@@ -22,15 +22,15 @@
  *（`accessKeyIdRef`），用户想在选择器里填自己的访问密钥时，被挡在
  * "名字不能有大写"那堵墙上 —— 实测那个字段**一直是空的**，从来没能被填上。
  *
- * 秘密访问密钥仍然只存**名字**（`secretAccessKeyRef`），取值走
- * `app.secretStorage.getSecret(name)` —— 官方指南原话："When saved, your plugin
+ * 秘密访问密钥：设置里只存**槽位名**（`secretAccessKeyRef`），值走
+ * `app.secretStorage.getSecret(name)` 取 —— 官方指南原话："When saved, your plugin
  * settings contain the name of the secret, not the actual secret value."
  *
- * ⚠️ 一个容易搞错、值得单独记住的点：**`SecretComponent` 不是密码输入框**，
- * 而是"选择或新建一个具名密钥"的选择器（它返回的是**名字**）。
- * 所以它的值可以合法地为空 = "还没选"；这一点决定了 `secretAccessKeyRef`
- * 用 `textValue()` 而非 `requiredTextValue()`：空串是有意义的状态，
- * 不该被悄悄回落成一个指向不存在密钥的名字。
+ * ⚠️ 那个槽位名是**插件自动生成**的，用户看不到也不用管：设置界面上它与访问密钥 ID
+ * **并排**，输入即写穿到钥匙串。成对签发、成对轮换的两项因此能在同一处改完 ——
+ * 早先用 `SecretComponent`（"选择或新建一条**具名**密钥"）时，这一对被拆到了两个地方。
+ * 空串 = 尚未存过秘密，所以用 `textValue()` 而非 `requiredTextValue()`：
+ * 空串是有意义的状态，不该被悄悄回落成一个指向不存在密钥的名字。
  *
  * ⚠️ 新建钥匙串条目时，**名字**只能用小写字母数字加短横线（Obsidian 的规定）。
  * 名字随便起（如 `minio-secret`），**真正的密钥填在名字下面那一格** ——

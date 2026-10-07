@@ -41,6 +41,7 @@ import { decideInterception, insertPointFrom } from "./intercept";
 import type { HostContext } from "./runtime";
 import { runTransfer } from "./runtime";
 import type { TransferLike } from "../editor/editor-hooks";
+import { describeError } from "../error-text";
 
 /** 事件里能拿到的最小信息集（抽出来是为了让插拔逻辑不依赖具体事件类）。 */
 export interface EditorEventLike {
@@ -127,7 +128,7 @@ export function createEditorHandlers(options: EditorBridgeOptions) {
 				// `processTransfer` 承诺不抛错；真抛了说明有没预料到的路径，
 				// 记录下来而不是让宿主吞掉 —— 否则用户只会看到"什么都没发生"。
 				options.onError?.(error);
-				host.notify(host.t("hookUnexpectedFailure", { error: describe(error) }));
+				host.notify(host.t("hookUnexpectedFailure", { error: describeError(error) }));
 			});
 	};
 
@@ -137,6 +138,3 @@ export function createEditorHandlers(options: EditorBridgeOptions) {
 	};
 }
 
-function describe(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}

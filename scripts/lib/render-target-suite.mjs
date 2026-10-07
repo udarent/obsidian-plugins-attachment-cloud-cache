@@ -10,7 +10,6 @@
  */
 
 import assert from "node:assert/strict";
-import { withLoadedTs } from "./load-ts.mjs";
 
 export function runRenderTargetSuite(mod) {
 	const { decideRenderTarget, keyFromUrl, urlPrefixes } = mod;

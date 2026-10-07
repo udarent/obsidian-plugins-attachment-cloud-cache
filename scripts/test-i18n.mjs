@@ -61,14 +61,18 @@ await withLoadedTs("src/i18n.ts", (mod) => {
 	// ============================================================
 	// 4. 替换行为
 	// ============================================================
+	// ⚠️ 夹具要用**真的在用的键**：原先这里用的是 `uploadFailed`，
+	// 而那个键从第一个提交起就**从未在 src 里接线过**（只有这条测试引用它）——
+	// 于是"文案键被使用"这件事被一个死键假装满足了。现在换成真正在用的那条
+	//（`core/transfer.ts` 上传失败时提示用户"已改为保留本地文件"）。
 	assert.equal(
-		translate("en", "uploadFailed", { status: 403, text: "Forbidden" }),
-		"The storage rejected this upload (403): Forbidden",
-		"应替换全部占位符"
+		translate("en", "hookUploadFailedKeptLocal", { error: "boom" }),
+		"Upload failed, so the file was kept locally instead: boom",
+		"应替换占位符"
 	);
 	assert.equal(
-		translate("zh", "uploadFailed", { status: 403, text: "Forbidden" }),
-		"对象存储拒绝了这次上传（403）：Forbidden"
+		translate("zh", "hookUploadFailedKeptLocal", { error: "boom" }),
+		"上传失败，已改为保留本地文件：boom"
 	);
 
 	// 未知 key → 返回 key 本身（一眼看出漏了哪条），而不是空串
@@ -80,33 +84,33 @@ await withLoadedTs("src/i18n.ts", (mod) => {
 	// 既没信息量、又掩盖了调用方传错参数这件事。
 	// `params` 是 Record<string, unknown>，类型系统保护不了 —— 必须在此断言钉住。
 	assert.equal(
-		translate("en", "uploadFailed", { status: {}, text: "x" }),
-		"The storage rejected this upload ({status}): x",
+		translate("en", "hookUploadFailedKeptLocal", { error: {} }),
+		"Upload failed, so the file was kept locally instead: {error}",
 		"对象参数应保持占位符原样，而不是渲染成 [object Object]"
 	);
 	assert.equal(
-		translate("en", "uploadFailed", { status: [1, 2], text: "x" }),
-		"The storage rejected this upload ({status}): x",
+		translate("en", "hookUploadFailedKeptLocal", { error: [1, 2] }),
+		"Upload failed, so the file was kept locally instead: {error}",
 		"数组参数同理"
 	);
 	assert.equal(
-		translate("en", "uploadFailed", { status: null, text: "x" }),
-		"The storage rejected this upload ({status}): x",
+		translate("en", "hookUploadFailedKeptLocal", { error: null }),
+		"Upload failed, so the file was kept locally instead: {error}",
 		"null 参数应保持占位符原样"
 	);
 	assert.equal(
-		translate("en", "uploadFailed", { status: undefined, text: "x" }),
-		"The storage rejected this upload ({status}): x",
+		translate("en", "hookUploadFailedKeptLocal", { other: "x" }),
+		"Upload failed, so the file was kept locally instead: {error}",
 		"未提供的占位符应保持原样（看得见），而不是变空"
 	);
 	// 标量都要能正常替换
-	assert.equal(translate("en", "uploadFailed", { status: 0, text: "t" }), "The storage rejected this upload (0): t");
-	assert.equal(translate("en", "uploadFailed", { status: false, text: "t" }), "The storage rejected this upload (false): t");
+	assert.equal(translate("en", "hookUploadFailedKeptLocal", { error: 0 }), "Upload failed, so the file was kept locally instead: 0");
+	assert.equal(translate("en", "hookUploadFailedKeptLocal", { error: false }), "Upload failed, so the file was kept locally instead: false");
 
 	// 未知语言 → 回落英文而不是崩溃
 	assert.equal(
-		translate("de", "uploadFailed", { status: 1, text: "t" }),
-		"The storage rejected this upload (1): t",
+		translate("de", "hookUploadFailedKeptLocal", { error: "t" }),
+		"Upload failed, so the file was kept locally instead: t",
 		"未知语言应回落英文"
 	);
 

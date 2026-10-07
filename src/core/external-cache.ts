@@ -43,6 +43,7 @@ import { ingestAttachment } from "./ingest";
 import { keyFromUrl } from "../render/render-target";
 import { hostOf, isBlockedHost } from "../render/external-decide";
 import { resolveExtension } from "../vault-files";
+import { describeError } from "../error-text";
 
 /**
  * 单张站外图的大小上限。
@@ -284,10 +285,6 @@ function toBytes(value: unknown): Uint8Array {
 	return new Uint8Array(0);
 }
 
-function describe(error: unknown): string {
-	if (error instanceof Error) return error.message;
-	return String(error);
-}
 
 /**
  * 下载一张站外图。**这一步之前必须已经拿到用户同意**（调用方负责，见模块头注释）。
@@ -312,7 +309,7 @@ export async function fetchExternalImage(
 	} catch (error) {
 		if (error instanceof TimeoutError) return { status: "timeout", detail: `超过 ${timeoutMs}ms` };
 		// 4xx/5xx 不抛（见上）⇒ 能抛出来的基本都在网络层（DNS / TLS / 断网）
-		return { status: "network", detail: describe(error) };
+		return { status: "network", detail: describeError(error) };
 	}
 
 	const status = typeof response?.status === "number" ? response.status : 0;
@@ -506,7 +503,7 @@ export function createExternalCacher(deps: ExternalCacherDeps): ExternalCacher {
 		);
 
 		if (ingested.status === "fallback" || !ingested.remoteUrl) {
-			say("upload-failed", { error: describe(ingested.error) });
+			say("upload-failed", { error: describeError(ingested.error) });
 			return {
 				...base,
 				status: "upload-failed",
@@ -531,7 +528,7 @@ export function createExternalCacher(deps: ExternalCacherDeps): ExternalCacher {
 			await deps.app.vault.modify(file, original.split(url).join(remoteUrl));
 		} catch (error) {
 			// 上传成功了但没改成 —— 半成品。绝不能谎报 `cached`
-			say("cached-no-rewrite", { error: describe(error) });
+			say("cached-no-rewrite", { error: describeError(error) });
 			return { ...uploaded, status: "cached-no-rewrite", error };
 		}
 

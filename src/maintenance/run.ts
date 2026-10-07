@@ -29,6 +29,7 @@ import type { RewriteRule } from "./references";
 import { selectUploadCandidates } from "./batch";
 import type { VaultFileLike } from "./batch";
 import type { IngestRequest, IngestResult } from "../core/ingest";
+import { describeError } from "../error-text";
 
 /** 一次清理的结果，供汇报。 */
 export interface CleanupResult {
@@ -174,7 +175,7 @@ export async function runCleanup(deps: MaintenanceDeps, plan: CleanupPlan): Prom
 			try {
 				await deps.persistIndex();
 			} catch (error) {
-				deps.notify(deps.t("maintainPersistFailed", { error: describe(error) }));
+				deps.notify(deps.t("maintainPersistFailed", { error: describeError(error) }));
 			}
 		}
 	}
@@ -200,7 +201,7 @@ export async function runCleanup(deps: MaintenanceDeps, plan: CleanupPlan): Prom
 			await removeCacheFile(deps.app, file);
 			result.removed += 1;
 		} catch (error) {
-			result.skipped.push({ path, reason: describe(error) });
+			result.skipped.push({ path, reason: describeError(error) });
 		}
 	}
 
@@ -265,7 +266,7 @@ export async function runEviction(deps: MaintenanceDeps, plan: EvictionPlan): Pr
 			// 只有"有索引记录"的才需要摘（孤儿本来就没有记录）
 			if (victim.key) removedKeys.push(victim.key);
 		} catch (error) {
-			result.skipped.push({ path: victim.cachePath, reason: describe(error) });
+			result.skipped.push({ path: victim.cachePath, reason: describeError(error) });
 		}
 	}
 
@@ -278,7 +279,7 @@ export async function runEviction(deps: MaintenanceDeps, plan: EvictionPlan): Pr
 			await deps.persistIndex();
 		} catch (error) {
 			// 摘记录失败不该让"文件已经淘汰"这件事看起来没发生 —— 但要留下话
-			deps.notify(deps.t("maintainPersistFailed", { error: describe(error) }));
+			deps.notify(deps.t("maintainPersistFailed", { error: describeError(error) }));
 		}
 	}
 
@@ -399,6 +400,3 @@ export async function runBatchUpload(deps: MaintenanceDeps): Promise<BatchResult
 	return result;
 }
 
-function describe(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
