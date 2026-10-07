@@ -225,7 +225,7 @@ The plugin is not in the Community directory yet (it is under development). Manu
 ```bash
 npm install
 npm run dev          # watch build
-npm run check        # type-check + build + lint + manifest + api-floor + verifier-consistency + tests
+npm run check        # build + lint + manifest + api-floor + verifier-consistency + guards + tests
 npm run test:unit    # tests only
 npm run mutate       # mutation-check that every rule's assertions actually have teeth
 ```
@@ -258,3 +258,11 @@ The same principle produced `scripts/check-api-floor.mjs`, which guards the `min
 described under [Supported Obsidian versions](#supported-obsidian-versions). That claim rests on the
 type package staying pinned, which is exactly the kind of invariant that decays quietly — so it is
 asserted rather than trusted.
+
+And `scripts/check-no-dev-doc-refs.mjs` keeps the repository free of references to its own
+development notes. Those notes — a design and scope document that compares other plugins, and an
+audit recording how this implementation's independence was checked — are deliberately kept outside
+this repository, and are not in its history either. The gate scans **every tracked file**, which is
+exactly what gets published, for either name. It exists because the next comment that wants "see the
+design doc" will be written quite naturally, and a reader would then go looking for a file that is
+not here.
