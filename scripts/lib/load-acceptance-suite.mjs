@@ -34,7 +34,7 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -641,21 +641,9 @@ export async function runLoadAcceptance(options = {}) {
 
 		const referencedCopy = entry.cachePath; // 仍被笔记引用的那份
 
-		// ⭐ 这一轮**显式**选「移入系统回收站」。
-		//
-		// 默认是「直接删除」（`vault.delete`），而这里刻意改成另一档，为的是让
-		// **两个原语都在端到端层被走一遍**：后台自动轮换那一节验默认的"立刻释放"，
-		// 这里验可选的可恢复路径。顺带确认"设置真的会改变实际调用的宿主 API" ——
-		// 只测默认值的话，接线错了（比如两个分支接反）也能全绿。
-		//
-		// ⚠️ 先存下原值再改、结束时还原：这样「缓存上限」那一节跑的就是**出厂默认**，
-		// 而不是被这一节改过的值（否则那一节看似在验默认行为，其实验的是 trash）。
-		const savedDeleteMode = plugin.settings.deleteMode;
-		plugin.settings.deleteMode = "trash";
-
 		// 记下确认框里到底写了什么。**这是必要的**：确认框是用户按下那个不可逆按钮前
-		// 唯一读到的安全信息，而它必须与"待会儿真的会怎么删"一致 ——
-		// 说"可以还原"而其实抹除，用户就不会再去找了（反之亦然）。
+		// 唯一读到的安全信息。缓存清理只有一种方式（直接删除），所以它必须说清
+		// "删了就没法撤销" —— 说"可以还原"会让用户以为删错也能找回。
 		// 不记下来的话，这段话没有任何断言看着，改错了也没人知道。
 		const confirms = [];
 		const captureConfirm = (result) => async (options) => {
@@ -679,31 +667,35 @@ export async function runLoadAcceptance(options = {}) {
 
 		assert.ok(await existsOnDisk(root, orphanVaultPath) === false, "★ 孤儿文件应当被拿掉");
 		assert.ok(
-			harness.calls.trash.includes(orphanVaultPath),
-			"★ 选了「移入回收站」就该走宿主的 trashFile"
+			harness.calls.delete.includes(orphanVaultPath),
+			"★ 缓存清理必须用 Vault.delete（它是唯一能立刻腾出空间的原语）"
 		);
+		// ⭐ 这条是"回收站那个备选已被去掉"在端到端层的钉子。它与 `test-remove.mjs` 的
+		// 静态守卫分工不同：静态守卫盯着"代码里还有没有回收站"，这条盯着
+		// "**跑起来**会不会走回收站" —— 而它的后果是可感知的：
+		// 走了回收站，磁盘空间就不会释放，用户会以为清理没生效。
 		assert.equal(
-			harness.calls.delete.length,
-			beforeCleanDelete,
-			"★ 选了回收站就**不该**也走直接删除（那是双删，可恢复的那一档就失去意义了）"
+			harness.calls.trash.length,
+			beforeCleanTrash,
+			"★ 缓存清理不许走回收站（回收站不释放物理空间，与「空间有限」的动机直接矛盾）"
 		);
-		assert.ok(harness.calls.trash.length > beforeCleanTrash, "回收站调用应当增加");
+		assert.ok(harness.calls.delete.length > beforeCleanDelete, "删除调用应当增加");
 		assert.ok(
 			await existsOnDisk(root, referencedCopy),
 			"★ 仍被笔记引用的副本**绝不能**被清理（那是离线可用的依赖）"
 		);
 
-		// ⭐ 确认框必须说清"可恢复"，且按钮写的也是"移入回收站"。
+		// ⭐ 确认框必须说清"无法撤销" —— 那是这个不可逆动作的唯一安全信息。
 		// 两种语言各留一条正则：套件不该假设界面语言。
-		const trashConfirm = confirms[confirms.length - 1];
-		assert.ok(trashConfirm, "清理应当先弹确认框");
+		const cleanConfirm = confirms[confirms.length - 1];
+		assert.ok(cleanConfirm, "清理应当先弹确认框");
 		assert.ok(
-			/can be restored|可以还原/.test(trashConfirm.lines.join(" ")),
-			`★ 选了回收站，确认框必须说清「可以还原」（实际：${trashConfirm.lines.join(" / ")}）`
+			/cannot be undone|无法撤销/.test(cleanConfirm.lines.join(" ")),
+			`★ 直接删除时确认框必须说清「无法撤销」（实际：${cleanConfirm.lines.join(" / ")}）`
 		);
 		assert.ok(
-			/Move to trash|移入回收站/.test(trashConfirm.cta),
-			`★ 按钮文案要跟着删除方式走（实际：${trashConfirm.cta}）`
+			/Delete permanently|彻底删除/.test(cleanConfirm.cta),
+			`★ 按钮文案要说清这是删除（实际：${cleanConfirm.cta}）`
 		);
 
 		// 取消时不执行任何清理 —— 这条路径最容易被漏测（用户点错命令时全靠它）
@@ -718,58 +710,17 @@ export async function runLoadAcceptance(options = {}) {
 			"★ 用户取消时**一个文件都不能动**（否则确认框等于没有）"
 		);
 
-		// ⭐ **同一个命令、换回默认的删除方式**再跑一次。
+		// ⚠️ 它已经完成使命（证明"取消不动"），必须**清掉**，否则会漏进后面的小节。
 		//
-		// 这一次验的是"设置真的会改变行为，且**两个入口行为一致**"：
-		// 后台自动淘汰走直接删除（见后面那一节），手动清理在默认设置下也必须走直接删除 ——
-		// 否则会出现"我清理了缓存，磁盘空间却没变"（而用户以为清理就等于腾出空间）。
-		plugin.settings.deleteMode = "permanent";
-		const thirdOrphan = "_attachment-cache/orphan3.png";
-		await writeFile(join(root, thirdOrphan), Buffer.from([7, 8, 9]));
+		// 这不是洁癖：批量上传是**全库扫描**（按扩展名 + 大小 + 不在索引里筛候选），
+		// 于是这个 `.png` 孤儿会被当成一个**上传候选**，让下面那条
+		// "批量上传应恰好 PUT 一次"数出 2 次 —— 而它想验的是**附件**被传上去，
+		// 与缓存目录里的杂物无关。这类"计数断言被别的东西满足/破坏"的坑，
+		// 在这个套件里已经踩过第二次（第一次是被另一个孤儿满足的）。
+		// 手法就是：让每一条断言只面对自己造出来的现场。
+		await rm(join(root, secondOrphan), { force: true });
 		await harness.refreshPathCache();
-
-		const beforeDefaultTrash = harness.calls.trash.length;
-		const beforeDefaultDelete = harness.calls.delete.length;
-		mockObsidian.Notice.instances.length = 0;
-		plugin.confirmMaintenance = captureConfirm(true);
-		runCommand("clean-cache");
-		await waitFor(
-			() => mockObsidian.Notice.instances.some((n) => /Cleaned|清理/.test(n.message)),
-			"默认方式下清理完成",
-			5000,
-			diagnose
-		);
-
-		assert.ok(await existsOnDisk(root, thirdOrphan) === false, "默认方式下孤儿文件应被拿掉");
-		assert.ok(
-			harness.calls.delete.includes(thirdOrphan),
-			"★ 默认的删除方式是**直接删除**（清理缓存就是为了腾空间，回收站不腾）"
-		);
-		assert.equal(
-			harness.calls.trash.length,
-			beforeDefaultTrash,
-			"★ 默认不该走回收站"
-		);
-		assert.ok(harness.calls.delete.length > beforeDefaultDelete, "删除调用应当增加");
-
-		// 确认框也必须跟着改口：默认这一档是不可撤销的，说"可以还原"会害人
-		const defaultConfirm = confirms[confirms.length - 1];
-		assert.ok(
-			/cannot be undone|无法撤销/.test(defaultConfirm.lines.join(" ")),
-			`★ 默认（直接删除）时确认框必须说清「无法撤销」（实际：${defaultConfirm.lines.join(" / ")}）`
-		);
-		assert.ok(
-			/Delete permanently|彻底删除/.test(defaultConfirm.cta),
-			`★ 按钮文案要跟着删除方式走（实际：${defaultConfirm.cta}）`
-		);
-
-		// 还原删除方式（并确认它回到了默认值）—— 见上面那段说明
-		plugin.settings.deleteMode = savedDeleteMode;
-		assert.equal(
-			plugin.settings.deleteMode,
-			"permanent",
-			"★ 删除方式的出厂默认必须是「直接删除」：上限要解决的正是空间问题，回收站不解它"
-		);
+		assert.ok(await existsOnDisk(root, secondOrphan) === false, "（清理现场：这条孤儿不该留在后面）");
 
 		// 批量上传：把 `attachments/pic.png` 传上去，并改写笔记里的本地链接
 		const attachmentPath = "attachments/pic.png";
@@ -953,17 +904,17 @@ export async function runLoadAcceptance(options = {}) {
 			await waitFor(() => !index.has(entry.key), "超限后自动淘汰了最久没用过的副本", 20000, diagnose);
 
 			assert.equal(await existsOnDisk(root, entry.cachePath), false, "★ 被淘汰的副本要真的离开磁盘");
-			// ⭐ 出厂默认是「直接删除」⇒ 磁盘空间**立刻**释放。
+			// ⭐ 缓存清理只有一种方式：`Vault.delete` ⇒ 磁盘空间**立刻**释放。
 			// 这条断言的意义就是"上限真的解决了空间问题"：走回收站的话文件会离开 vault，
 			// 但那份空间仍然占着，于是"设了上限，磁盘还是满的"。
 			assert.ok(
 				harness.calls.delete.includes(entry.cachePath),
-				"★ 默认的淘汰方式必须是**直接删除**（立刻释放空间才是设上限的目的）"
+				"★ 自动淘汰也必须用 Vault.delete（立刻释放空间才是设上限的目的）"
 			);
 			assert.equal(
 				harness.calls.trash.length,
 				trashedBefore,
-				"★ 默认不该走回收站（那会让物理空间不释放）—— 可恢复的那一档由上一节单独覆盖"
+				"★ 自动淘汰也不许走回收站（空间不会释放，而那正是设上限要解决的）"
 			);
 			assert.ok(index.size < entriesBefore, `索引条目数应减少（${entriesBefore} → ${index.size}）`);
 			assert.ok(harness.calls.delete.length > deletedBefore, "删除调用应当增加");

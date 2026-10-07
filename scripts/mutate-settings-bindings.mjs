@@ -43,13 +43,5 @@ await runMutations({
 			to: "\t\t\treturn true;",
 			expect: "空缓存目录不可写",
 		},
-		{
-			// 后果：一个认不出的枚举值被写进 data.json ⇒ 下次加载时被回落成默认值，
-			// 用户看到的是"改了没用"（而那一刻没有任何报错）。
-			name: "★ 枚举字段不再校验取值（坏值写进 data.json，重启后被静默重置）",
-			from: "\t\t\treturn isDeleteMode(value);",
-			to: "\t\t\treturn true;",
-			expect: "认不出的删除方式不可写",
-		},
 	],
 });

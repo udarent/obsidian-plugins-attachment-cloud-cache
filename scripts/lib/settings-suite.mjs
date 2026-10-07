@@ -53,16 +53,15 @@ export function runSettingsSuite(mod) {
 	assert.ok(!("localFileAction" in SETTINGS_DEFAULTS), "localFileAction 应已并入 localCopy");
 	assert.equal(SETTINGS_DEFAULTS.fallbackDownload, true, "回退下载默认开启（覆盖换设备场景）");
 
-	// ⭐ 删除方式默认必须是「直接删除」。
-	// 理由不是"更彻底"，而是**上限要解决的问题正是空间**：走回收站会让文件离开
-	// vault、物理空间却还占着，于是表现成"设了缓存上限，磁盘还是满的"，
-	// 而想释放就得再手动清空回收站 —— 没人会记得做这件事。
-	// 敢当默认还因为这里删的只是**缓存副本**：笔记里存的始终是远端地址，
-	// 被删掉的副本下次看到那张图时会自动重新下载 ⇒ 可恢复性由重新下载提供。
-	assert.equal(
-		SETTINGS_DEFAULTS.deleteMode,
-		"permanent",
-		"★ 缓存删除方式默认应为「直接删除」（立刻释放空间；走回收站会让上限形同虚设）"
+	// ⭐ 缓存清理**没有**「删除方式」这个设置项 —— 这个备选被有意去掉了。
+	//
+	// 加这条断言是因为它的失效方式很安静：把那个下拉框加回来不会有任何现有测试变红，
+	// 而它削弱的是一个明确的产品承诺（上限的用途是腾出空间）。
+	// 回收站不释放物理空间 —— 文件离开 vault 了，磁盘却还占着，于是"设了上限磁盘还是满的"，
+	// 想释放还得再手动清空回收站。那与"空间有限"直接矛盾，所以不留这个选项。
+	assert.ok(
+		!("deleteMode" in SETTINGS_DEFAULTS),
+		"★ 不该有 deleteMode 设置项（缓存清理只有一种方式：直接删除）"
 	);
 
 	// ============================================================
@@ -125,7 +124,7 @@ export function runSettingsSuite(mod) {
 
 	// 取值受限的字段必须换成**另一个合法值**，否则会被校验回落成默认值，
 	// 从而误报成"不能往返"。
-	const ALTERNATIVES = { localCopy: "trash", deleteMode: "trash" };
+	const ALTERNATIVES = { localCopy: "trash" };
 	for (const key of Object.keys(ALTERNATIVES)) {
 		assert.ok(key in SETTINGS_DEFAULTS, `ALTERNATIVES 里的 ${key} 已不在 SETTINGS_DEFAULTS 中（死键）`);
 	}
@@ -217,16 +216,10 @@ export function runSettingsSuite(mod) {
 	const wrong = mergePluginSettings(SETTINGS_DEFAULTS, {
 		autoUpload: "yes",
 		localCopy: "explode",
-		deleteMode: "explode",
 		enabledExtensions: "png",
 	});
 	assert.equal(wrong.autoUpload, true, "非布尔值应回落默认");
 	assert.equal(wrong.localCopy, SETTINGS_DEFAULTS.localCopy, "非法枚举应回落默认");
-	assert.equal(
-		wrong.deleteMode,
-		"permanent",
-		"★ 非法枚举应回落默认（认不出的删除方式按「直接删除」，与 remove.ts 的判定方向一致）"
-	);
 	assert.deepEqual(wrong.enabledExtensions, SETTINGS_DEFAULTS.enabledExtensions, "非数组应回落默认");
 
 	// ============================================================

@@ -43,9 +43,6 @@ export async function runRotationSuite(mod) {
 	const settingsWith = (overrides = {}) => ({
 		cacheFolder: "_attachment-cache",
 		cacheLimitMb: 1,
-		// 与出厂默认一致。轮换的提示文案要按它选一条，写反会让用户去回收站里
-		// 找一个根本不在那儿的文件（或者反过来，以为删掉的东西还能找回）。
-		deleteMode: "permanent",
 		...overrides,
 	});
 
@@ -212,22 +209,10 @@ export async function runRotationSuite(mod) {
 		assert.equal(h.notices.length, 1, "★ 真的淘汰了才提示，且只提示一次");
 		assert.match(
 			h.notices[0],
-			/cacheEvicted_permanent /,
-			`默认（直接删除）时应用「已删除」那条文案（实际 ${h.notices[0]}）`
+			/cacheEvicted /,
+			`应用「已删除」那条文案（实际 ${h.notices[0]}）`
 		);
 		assert.match(h.notices[0], /2\.0/, "提示里要带上腾出了多少 MB");
-	}
-
-	// ⭐ 文案必须跟着删除方式走 —— 说"进了回收站"而其实已删除，
-	// 用户会去回收站里找一个不在那儿的文件；反过来则以为丢了、其实还在。
-	{
-		const h = makeHarness({ ...overLimit, settings: settingsWith({ deleteMode: "trash" }) });
-		await h.rotator.maybeRotate("growth");
-		assert.match(
-			h.notices[0],
-			/cacheEvicted_trash /,
-			`选了回收站时文案要跟着换（实际 ${h.notices[0]}）`
-		);
 	}
 
 	// 仍然超出（例如执行时被跳过）→ 必须报出来，不能假装成功
@@ -241,7 +226,7 @@ export async function runRotationSuite(mod) {
 		assert.equal(summary.overBy, 0.5 * MB, "★ 「还超多少」要用**实际**回收量算，而不是计划里的数字");
 		assert.match(
 			h.notices[0],
-			/cacheEvictedPartial_permanent /,
+			/cacheEvictedPartial /,
 			"还超出时应换一条文案，把「仍超出」说出来"
 		);
 	}

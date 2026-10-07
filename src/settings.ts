@@ -28,14 +28,14 @@
  *   旧组合 `cacheEnabled: true + localFileAction: "cache"` 的效果。
  */
 
-import { DELETE_MODES, LOCAL_COPY_ACTIONS, isDeleteMode, isLocalCopyAction } from "./types";
-import type { DeleteMode, LocalCopyAction, PluginSettings, S3Config } from "./types";
+import { LOCAL_COPY_ACTIONS, isLocalCopyAction } from "./types";
+import type { LocalCopyAction, PluginSettings, S3Config } from "./types";
 import { CACHE_LIMIT_MB_MAX } from "./types";
 import { isPlainRecord } from "./records";
 
 // 枚举类型守卫定义在 types.ts（与枚举本身同处一地，避免两个模块各存一份）。
 // 这里转出去，让"读设置的模块"同时就是"拿守卫的模块"。
-export { isDeleteMode, isLocalCopyAction };
+export { isLocalCopyAction };
 
 /** 默认启用的图片格式。 */
 const DEFAULT_IMAGE_EXTENSIONS = [
@@ -152,18 +152,6 @@ const FACTORY_SETTINGS = {
 	// ① 自动淘汰是"后台删文件"，用户没要求就不该发生；
 	// ② 它默认关着，"离线可用"这个主承诺就不会被悄悄打折。
 	cacheLimitMb: 0,
-	// ⚠️ 默认**直接删除**（磁盘空间立刻释放）。
-	//
-	// 这条默认值是被明确要求过的：上限的用途是"别让缓存把空间吃光"，
-	// 而回收站**不解**这个问题 —— 文件离开了 vault，物理空间却还占着，
-	// 表现成"设了上限，磁盘还是满的"。想立刻释放就得再手动清空回收站，
-	// 而没人会记得做这件事。
-	//
-	// 敢把它当默认，是因为这里删的**只是缓存副本**：笔记里存的始终是远端地址
-	//（从没被改写），所以被删掉的副本下次看到那张图时会**自动重新下载**——
-	// 代价是"重新拉一遍"，不是"图没了"。可恢复性因此由**重新下载**提供，
-	// 而不是由回收站提供。
-	deleteMode: "permanent" as DeleteMode,
 } as const;
 
 /**
@@ -186,7 +174,6 @@ const SETTINGS_SPEC: {
 	fallbackDownload: boolValue(),
 	externalImageCache: boolValue(),
 	cacheLimitMb: numberValue({ min: 0, max: CACHE_LIMIT_MB_MAX }),
-	deleteMode: oneOfValue(DELETE_MODES),
 };
 
 const S3_FALLBACKS: S3Config = {

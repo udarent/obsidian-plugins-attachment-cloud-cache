@@ -14,10 +14,8 @@ cache folder — so images still render when you are offline.
 > other sites** — off by default; once you turn it on, an image from another site is asked about
 > **once per site**, and if you agree it is downloaded, uploaded to your storage and the link in your
 > note is rewritten (a site you declined is never asked about again); **a cache size limit** — off by
-> default; set a limit and the least recently used copies are removed in the background
-> (they come back when you view them again — and by default they are deleted outright, so the disk
-> space is freed right away; a setting switches that to the system trash if you would rather have
-> them recoverable); and four maintenance
+> default; set a limit and the least recently used copies are deleted in the background, freeing the
+> disk space right away (they come back when you view them again); and four maintenance
 > commands (show cache usage, repair the index, clean up unused cache files, upload existing
 > attachments). Everything runs on Obsidian 1.13.0+ on desktop and mobile.
 >
@@ -106,7 +104,7 @@ Being precise about what has actually been exercised matters more than a long fe
 | The upload chain: byte-identical content, exactly one PUT and zero GETs, the local file being moved rather than copied, a failed upload keeping the bytes, same-name files never clobbered | The same real HTTP server plus a real filesystem |
 | Paste/drop decisions | Exhaustive boundary tests over the decision alone, since misjudging one can swallow your content |
 | Paste/drop execution | A recording editor stub asserting what text is inserted, where it is inserted, and that nothing was lost |
-| The plugin **actually being wired up** | The real built `main.js` is loaded, `onload()` runs, and everything is driven end-to-end: a paste (exactly one PUT, byte-identical cached copy, link inserted, a second identical paste issuing zero PUTs), rendering in **both** reading view and live preview (src swapped to the local copy, **zero** requests, a third-party image left alone), `clean-cache` in both removal modes (the orphan goes through the host's trash when that mode is chosen — with the confirmation text checked to match — and is deleted outright under the default, where a referenced copy survives and **cancelling touches nothing**), and batch upload (both link forms rewritten, originals kept). Removing any registration line in `src/main.ts` fails this test — that is the point of it |
+| The plugin **actually being wired up** | The real built `main.js` is loaded, `onload()` runs, and everything is driven end-to-end: a paste (exactly one PUT, byte-identical cached copy, link inserted, a second identical paste issuing zero PUTs), rendering in **both** reading view and live preview (src swapped to the local copy, **zero** requests, a third-party image left alone), `clean-cache` (the orphan is deleted through `Vault.delete` and the system trash is never touched, the confirmation text says so, a referenced copy survives, and **cancelling touches nothing**), and batch upload (both link forms rewritten, originals kept). Removing any registration line in `src/main.ts` fails this test — that is the point of it |
 | Hashing | Cross-checked byte-for-byte against `node:crypto` over padding and key-length boundaries |
 
 **Not yet verified:** no real S3 provider (R2/MinIO/AWS) has been exercised end-to-end yet, and
@@ -121,11 +119,11 @@ interception installs without breaking anything and leaves third-party addresses
 
 It also answers the question a type declaration cannot: **whether the host APIs this plugin calls
 actually exist at runtime.** That is not hypothetical here — `adapter.getBasePath` is declared and
-throws on mobile. So the check now also confirms `Vault.delete` and `FileManager.trashFile` are both
-really there (the two removal primitives), that the removal mode reads back as its default on a real
-vault (whose `data.json` predates the field, so it exercises the fallback path an upgrading user
-takes), and that the removal setting reaches the rendered settings tab as a dropdown with exactly
-two options.
+throws on mobile. So the check also confirms `Vault.delete` is really there (the one place that
+removes a cache file), that `FileManager.trashFile` is there too (still used by "do not keep a local
+copy" after an upload, which deletes your own file), and — the mirror image of the same question —
+that the settings tab really does **not** carry the cache-removal option that was dropped: neither
+the setting nor a control for it exists once the host has rendered the tab.
 
 What that does **not** cover is anything requiring a human at the keyboard: pasting and dropping an
 image for real, whether the link lands where you expect, whether Obsidian's own paste handling is

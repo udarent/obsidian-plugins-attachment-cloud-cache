@@ -35,7 +35,6 @@ import { createIndexStore, makeSerializer } from "./host/runtime";
 import type { HostContext } from "./host/runtime";
 import { createEditorHandlers } from "./host/editor-bridge";
 import { auditForCleanup, collectCacheFiles, runBatchUpload, runCleanup, runEviction, scanReferences } from "./maintenance/run";
-import { deleteModeSuffix } from "./maintenance/remove";
 import type { MaintenanceDeps } from "./maintenance/run";
 import { createCacheRotator } from "./maintenance/rotation";
 import type { CacheRotator } from "./maintenance/rotation";
@@ -354,7 +353,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		new Notice(this.t("maintainRepaired", { healed: result.healed, skipped: result.skipped.length }));
 	}
 
-	/** 清理未使用的缓存（**破坏性**：先确认，按设置里的方式删除）。 */
+	/** 清理未使用的缓存（**破坏性**：先确认，删除不可撤销）。 */
 	private async cleanCache(): Promise<void> {
 		const deps = this.maintenanceDeps();
 		const { plan } = await auditForCleanup(deps, (url) => this.keyOfUrl(url));
@@ -367,20 +366,17 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		}
 
 		const mb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1);
-		// ⚠️ 确认框里的每一句话都取决于"待会儿真的会怎么删"：
-		// 这是用户按下确认前**唯一**的安全信息，说反了比不写更糟
-		//（说"可还原"而其实已抹除 ⇒ 他以为还能找回）。后缀与执行层同源
-		//（`remove.ts` 的 `deleteModeSuffix`），所以两者不可能分叉。
-		const mode = deleteModeSuffix(this.settings.deleteMode);
+		// ⚠️ 确认框里那句话是用户按下**不可逆**按钮前唯一读到的安全信息：
+		// 它必须说清"删了没法撤销、空间立刻释放"，否则用户会以为还能找回。
 		const confirmed = await this.confirmMaintenance({
 			title: this.t("maintainCleanTitle"),
 			lines: [
-				this.t(`maintainCleanSummary_${mode}`, { count: plan.all.length, mb: mb(plan.bytes) }),
+				this.t("maintainCleanSummary", { count: plan.all.length, mb: mb(plan.bytes) }),
 				...plan.preview,
 				...(plan.hidden > 0 ? [this.t("maintainCleanMore", { count: plan.hidden })] : []),
-				this.t(`maintainCleanSafety_${mode}`),
+				this.t("maintainCleanSafety"),
 			],
-			cta: this.t(`maintainCleanCta_${mode}`),
+			cta: this.t("maintainCleanCta"),
 			destructive: true,
 		});
 		if (!confirmed) {

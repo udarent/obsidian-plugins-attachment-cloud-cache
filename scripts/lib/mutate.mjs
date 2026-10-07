@@ -203,6 +203,27 @@ export async function runMutations({ source, entries, reexportDefault, suite, mu
 		console.log("");
 	}
 
+	// ⭐ 锚点预检：**在做任何耗时动作之前**把所有 `from` 校验一遍。
+	//
+	// 为什么要前置：`from` 写的是源码里的**字面片段**，所以它会在无声中被改签名毁掉 ——
+	// "变异点未找到"就是这么来的，而它在原来的顺序里要等**基线跑完**才报，
+	// 于是"跑十分钟、最后告诉你一条锚点过期了"（我连踩过三次，每次都是同一个签名改动）。
+	// 一次遍历的代价换掉整轮空跑，很划算。
+	//
+	// ⚠️ 这里只**预检**、不代替运行时的判断：真正执行前仍会再查一次
+	//（源码在运行过程中会被临时改写，条件与此刻不同）。
+	const staleAnchors = mutations.filter((mutation) => !original.includes(mutation.from));
+	if (staleAnchors.length > 0) {
+		console.log(`✗ ${staleAnchors.length} 条变异的锚点在 ${source} 里找不到 —— 先更新变异脚本：`);
+		for (const mutation of staleAnchors) {
+			// 只打第一行，避免把多行锚点刷屏
+			console.log(`    · ${mutation.name}`);
+			console.log(`      期望源码含：${JSON.stringify(mutation.from.split("\n")[0])}`);
+		}
+		await rm(backupPathFor(sourcePath), { force: true });
+		process.exit(1);
+	}
+
 	// ⚠️ 必须 await：签名与网络类的套件是 async 的（要起 mock S3 服务、
 	// 要 await crypto）。若漏掉 await，套件返回的 Promise 被丢弃，
 	// 里面的断言失败会变成**未处理的拒绝**，而这里看到的是"通过" ——

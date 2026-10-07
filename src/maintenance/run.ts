@@ -9,7 +9,7 @@
  *    （刚同步进来的文件还没被索引），此时 `getAbstractFileByPath` 返回 null。
  *    用 `adapter.remove` 硬删会**绕过宿主的文件索引** —— 文件从磁盘上没了，
  *    而宿主仍然认得它，留下"看得见、读不到"的幽灵条目 —— 所以宁可跳过并如实汇报。
- *    至于这一步到底走回收站还是直接删，由 `remove.ts` 按设置里那一项决定。
+ *    至于"怎么删"，由 `remove.ts` 统一决定（只有一种方式：直接删除）。
  * 3. **改笔记前先把原文取到手。** `vault.modify` 是**整文件覆盖**：若写入的是空串
  *    （例如读取失败却继续往下走），用户的笔记就没了。所以读失败一律跳过该文件。
  */
@@ -157,7 +157,7 @@ export async function auditForCleanup(
 }
 
 /**
- * 执行清理：**先自愈，再按设置的方式删掉清单里的文件**。
+ * 执行清理：**先自愈，再删掉清单里的文件**。
  *
  * 顺序写死在这里，不给调用方选 —— 顺序搞反会白丢文件（见 `audit.ts`）。
  */
@@ -179,7 +179,7 @@ export async function runCleanup(deps: MaintenanceDeps, plan: CleanupPlan): Prom
 		}
 	}
 
-	// ── 2. 清理：按设置里的方式删除（见 `remove.ts`）──
+	// ── 2. 清理：删除（唯一实现见 `remove.ts`）──
 	for (const path of plan.all) {
 		// 双保险：清单理论上只含缓存目录内的路径，但这是**删文件**的循环，
 		// 少一层校验的代价不可逆。
@@ -197,7 +197,7 @@ export async function runCleanup(deps: MaintenanceDeps, plan: CleanupPlan): Prom
 		}
 
 		try {
-			await removeCacheFile(deps.app, file, deps.settings().deleteMode);
+			await removeCacheFile(deps.app, file);
 			result.removed += 1;
 		} catch (error) {
 			result.skipped.push({ path, reason: describe(error) });
@@ -215,7 +215,7 @@ export interface EvictionRunResult extends EvictionOutcome {
 }
 
 /**
- * 按计划执行淘汰：**把文件按设置的方式拿掉，并摘掉它们的索引记录**。
+ * 按计划执行淘汰：**把文件删掉，并摘掉它们的索引记录**。
  *
  * ## ⚠️ 为什么一定要摘索引
  *
@@ -229,16 +229,15 @@ export interface EvictionRunResult extends EvictionOutcome {
  *
  * 两个入口都通过 `remove.ts` 删文件（走宿主 API、拿不到删除凭据就**跳过**、
  * 绝不退化成 `adapter.remove`）。这是**自动**运行的路径、没人在旁边看，
- * 所以纪律更要守；而"直接删除还是进回收站"由设置里那一项决定 ——
- * 一处定义，两个入口行为一致。
+ * 所以纪律更要守；而"怎么删"只有一处定义，两个入口不可能分叉。
  *
- * ## 为什么默认是"直接删除"
+ * ## 为什么是"直接删除"而不是先进回收站
  *
  * 上限的用途是"别让缓存把磁盘吃光"，而回收站**不解**这个问题：文件离开了 vault，
- * 物理空间却还占着，于是表现成"设了上限，磁盘还是满的"。而这里删的只是缓存副本 ——
- * 笔记里存的始终是远端地址，副本下次看到那张图时会重新下载 ——
- * 所以可恢复性由**重新下载**提供，不必由回收站提供。
- * 想换成可恢复的那一档，设置里选「移入系统回收站」。
+ * 物理空间却还占着，于是表现成"设了上限，磁盘还是满的"。
+ * 而这里删的只是**缓存副本**（笔记里存的始终是远端地址），副本下次看到那张图时
+ * 会自动重新下载 —— 所以可恢复性由**重新下载**提供，不必由回收站提供。
+ * 那个"移入回收站"的备选因此被有意去掉了，理由详见 `remove.ts`。
  */
 export async function runEviction(deps: MaintenanceDeps, plan: EvictionPlan): Promise<EvictionRunResult> {
 	const result: EvictionRunResult = { evicted: 0, freed: 0, skipped: [], unindexed: 0 };
@@ -260,7 +259,7 @@ export async function runEviction(deps: MaintenanceDeps, plan: EvictionPlan): Pr
 		}
 
 		try {
-			await removeCacheFile(deps.app, file, deps.settings().deleteMode);
+			await removeCacheFile(deps.app, file);
 			result.evicted += 1;
 			result.freed += Math.max(0, victim.bytes);
 			// 只有"有索引记录"的才需要摘（孤儿本来就没有记录）

@@ -127,11 +127,12 @@ await runMutations({
 			expect: "清理回调",
 		},
 		{
-			// 后果：确认框的措辞与实际行为分叉。用户按下的按钮是**不可逆**的，
-			// 而他据此判断要不要按 —— 说"可以还原"而其实抹除，他会以为删错了也能找回。
-			name: "★ 确认框的措辞写死（不说清是抹除还是可还原）",
-			from: "\t\tconst mode = deleteModeSuffix(this.settings.deleteMode);",
-			to: '\t\tconst mode = "trash";',
+			// 后果：确认框不再说明后果。用户按下的按钮是**不可逆**的，
+			// 而那句话是他在按下之前唯一读到的安全信息 ——
+			// 少了它，"删掉就找不回来"这件事只存在于文档里。
+			name: "★ 确认框不再说明「无法撤销」（不可逆动作失去唯一的安全提示）",
+			from: '\t\t\t\tthis.t("maintainCleanSafety"),\n',
+			to: "\t\t\t\t// 变异：去掉安全说明\n",
 			expect: "无法撤销",
 		},
 	],

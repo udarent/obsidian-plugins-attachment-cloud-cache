@@ -288,12 +288,13 @@ async function main() {
 		//
 		// 为什么非验不可：类型声明里有、运行时没有的 API 在本项目**真实存在**
 		// （`adapter.getBasePath` 就是 —— 移动端类型里有、跑起来抛错）。
-		// 若 `vault.delete` 也是这种，默认的删除方式会在第一次淘汰时抛错，
+		// 若 `vault.delete` 也是这种，删缓存的唯一那条路径会在第一次淘汰时抛错，
 		// 而那时报告里写的是"跳过"，用户只会看到"缓存一直不降"。
 		//
-		// 顺带确认"设置真的读进来了"：`deleteMode` 的默认值必须在真机上是 `permanent`
-		//（`data.json` 里多半还没有这个字段 —— 那样走的正是字段表的回落路径，
-		// 恰好是"升级后老用户拿到什么"的真实情形）。
+		// ⭐ 同时验证**去掉的那个备选确实不在了**：设置页里不该再有 `deleteMode` 这一项。
+		// 这条非真机不可 —— 声明式设置页有哪些项，只有宿主渲染时才知道；
+		// 单元套件验的是我们自己的数据（`SETTINGS_DEFAULTS`），
+		// 而"界面上真的没那一项"要在真机上看。
 		const removal = await evaluate(
 			client,
 			`(() => {
@@ -304,30 +305,27 @@ async function main() {
 				const defs = tab?.getSettingDefinitions?.() ?? [];
 				const items = defs.flatMap((g) => g.items ?? []);
 				// 认键不看文案：文案会随语言变，键不会
-				const item = items.find((i) => i?.control?.key === "deleteMode");
 				return {
 					vaultDelete: typeof app.vault.delete === "function",
+					// trashFile 仍被使用：上传后不留本地副本那条路径（删的是用户自己的文件）。
+					// ⚠️ 注入的这段代码里**不能出现反引号** —— 它会把外层模板字符串提前闭合，
+					// 报错却指向后面某一行（"missing ) after argument list"），极难归因。
 					trashFile: typeof app.fileManager?.trashFile === "function",
-					mode: plugin?.settings?.deleteMode,
-					itemFound: Boolean(item),
-					controlType: item?.control?.type,
-					optionKeys: item?.control?.options ? Object.keys(item.control.options) : [],
+					hasDeleteModeSetting: "deleteMode" in (plugin?.settings ?? {}),
+					deleteModeControl: items.some((i) => i?.control?.key === "deleteMode"),
 					controlKeys: items.map((i) => i?.control?.key).filter(Boolean),
 				};
 			})()`
 		);
-		log(`  ${removal.vaultDelete ? "✓" : "✗"} Vault.delete 存在（「直接删除」这一档的落点）`);
-		log(`  ${removal.trashFile ? "✓" : "✗"} FileManager.trashFile 存在（「移入回收站」那一档的落点）`);
+		log(`  ${removal.vaultDelete ? "✓" : "✗"} Vault.delete 存在（删缓存的唯一落点）`);
 		log(
-			`  ${removal.mode === "permanent" ? "✓" : "✗"} 删除方式在真机上读到了默认值：${JSON.stringify(removal.mode)}`
+			`  ${removal.trashFile ? "✓" : "✗"} FileManager.trashFile 存在（仍被「上传后不留本地副本」使用）`
 		);
 		log(
-			`  ${removal.itemFound && removal.optionKeys.length === 2 ? "✓" : "✗"} 设置页里有「删除方式」这一项` +
-				`（${removal.controlType ?? "?"}，选项 ${JSON.stringify(removal.optionKeys)}）`
+			`  ${!removal.hasDeleteModeSetting && !removal.deleteModeControl ? "✓" : "✗"} ` +
+				`「缓存删除方式」这个备选确实不在了（设置值与设置项都不该有）`
 		);
-		if (!removal.itemFound) {
-			log(`    （设置页现有的 control key：${JSON.stringify(removal.controlKeys)}）`);
-		}
+		log(`    （设置页现有的 control key：${JSON.stringify(removal.controlKeys)}）`);
 
 		const ok =
 			loaded &&
@@ -340,9 +338,8 @@ async function main() {
 			settings.ok &&
 			removal.vaultDelete &&
 			removal.trashFile &&
-			removal.mode === "permanent" &&
-			removal.itemFound &&
-			removal.optionKeys.length === 2 &&
+			!removal.hasDeleteModeSetting &&
+			!removal.deleteModeControl &&
 			relevantErrors.length === 0;
 
 		log();

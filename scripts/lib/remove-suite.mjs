@@ -1,19 +1,24 @@
 /**
- * 「缓存文件怎么删」的断言套件（`src/maintenance/remove.ts`）。
+ * 「把缓存文件拿掉」这一步的断言套件（`src/maintenance/remove.ts`）。
  *
  * ## 这里要钉住什么
  *
- * 这一个判断的两个取值，在用户眼里只差一件事：**磁盘空间是现在释放，
- * 还是等清空回收站**。选错了不会报错、也不会留下痕迹 —— 只会让用户觉得
- * "设了缓存上限，磁盘却一点没变"，或者反过来"我的文件被直接删了没处找"。
+ * 缓存清理**只有一种方式：直接删除**，磁盘空间立刻释放 —— 那正是「设上限」要解决的问题。
+ * 「移入系统回收站」这个备选被**有意去掉了**：它让物理空间一直占着，
+ * 与"空间有限"这个动机直接矛盾（用户设上限的期待是"空间被腾出来"）。
  *
- * 所以要有四组断言：
+ * 所以本套件守三件事：
  *
- * 1. **认得出 `trash`**，且认不出的一律当默认（直接删除）—— 与设置层的回落方向一致；
- * 2. **文案后缀与真实原语必须一致**（不能出现"提示说进了回收站、其实已经删除"）；
- * 3. **两个原语各自只被调一个**；
- * 4. **失败必须抛出去**（吞掉失败会让上层把"没删掉"记成"删掉了"，
- *    于是汇报里腾出来的空间是假的）。
+ * 1. **不许碰回收站。** 替身**同时**提供 `trashFile` 与 `delete` —— 这样"没走回收站"
+ *    是一条真断言，而不是"因为它没有那个 API 所以走不了"（后者是假通过）。
+ * 2. **必须等删除真的完成。** 调用方（淘汰与清理）紧接着就要摘索引记录；
+ *    不等的话记录先被摘掉而文件还在磁盘上，渲染层会以为本地没有副本、
+ *    又去下载一个**其实还在**的文件。
+ * 3. **失败必须抛出去。** 吞掉失败等于把"没删掉"记成"已删掉、腾出 N MB"。
+ *
+ * ⚠️ 这里删的**只是缓存副本**（笔记里存的始终是远端地址，副本会重新下载）；
+ * 与"上传后不留本地副本"（`localCopy: "trash"`）删**用户自己的文件**是两回事 ——
+ * 后者仍然走回收站，不受本套件约束。那条边界由 `test-remove.mjs` 的静态守卫把着。
  */
 
 import assert from "node:assert/strict";
@@ -24,7 +29,7 @@ import assert from "node:assert/strict";
  * 刻意不用 `mock-obsidian.mjs`：那条路要连真实磁盘，而这里要看的只有一件事 ——
  * **调用了哪个宿主 API**。记账写在这里，断言才有依据。
  */
-function makeAppRecorder() {
+function makeAppRecorder(options = {}) {
 	const calls = { trash: [], delete: [], deleteForce: undefined };
 	const app = {
 		fileManager: {
@@ -34,6 +39,10 @@ function makeAppRecorder() {
 		},
 		vault: {
 			async delete(file, force) {
+				if (options.deleteDelayMs) {
+					await new Promise((resolve) => setTimeout(resolve, options.deleteDelayMs));
+				}
+				if (options.deleteThrows) throw new Error("删除失败");
 				calls.delete.push(file.path);
 				// 记下第二个参数：`Vault.delete` 的 `force` 只管"文件夹里有隐藏子项"，
 				// 传它会让读代码的人以为"force = 强制永久删除"。真实调用不该传。
@@ -50,102 +59,82 @@ function makeFile(path) {
 }
 
 export async function runRemoveSuite(mod) {
-	const { usesSystemTrash, deleteModeSuffix, removeCacheFile } = mod;
-
-	// ============================================================
-	// 1. 谁走回收站：只认 `trash`
-	// ============================================================
-	assert.equal(usesSystemTrash("trash"), true, "选了回收站就该走回收站");
-	assert.equal(usesSystemTrash("permanent"), false, "选了直接删除就不该走回收站");
-
-	// ⭐ 认不出的一律按**默认值**处理。理由不是"随便选一个"，而是：
-	//   设置层（`settings.ts` 的字段表）已经把坏值回落成默认值了，
-	//   所以这里保持一致 —— 两层对同一个坏值给出同一个答案。
-	//   反过来写会得到一个极糟的状态：设置页显示"直接删除"，实际却送进了回收站，
-	//   于是"空间没释放"成了一件查不出原因的事。
-	const weirdValues = [undefined, null, "", "TRASH", "Trash", 42, {}, [], true];
-	for (const weird of weirdValues) {
-		assert.equal(
-			usesSystemTrash(weird),
-			false,
-			`认不出的取值（${JSON.stringify(weird)}）必须与设置层的回落方向一致（默认直接删除）`
-		);
-	}
-
-	// ============================================================
-	// 2. ⭐ 文案后缀必须与真实行为同源
-	// ============================================================
-	// 这两者一旦分叉，症状是**误导用户**：提示说"已移入回收站"而文件其实被删了，
-	// 用户会去回收站里找一个根本不在那儿的文件（反之则以为丢了、其实还在）。
-	for (const mode of ["permanent", "trash", ...weirdValues]) {
-		assert.equal(
-			deleteModeSuffix(mode) === "trash",
-			usesSystemTrash(mode),
-			`对 ${JSON.stringify(mode)}：文案说「${deleteModeSuffix(mode)}」而实际走的是${usesSystemTrash(mode) ? "回收站" : "直接删除"} —— 两者必须一致`
-		);
-	}
-	// 后缀就是 i18n 的键名片段（`cacheEvicted_${suffix}`），所以取值只能是这两个
-	assert.equal(deleteModeSuffix("permanent"), "permanent", "后缀就是取值本身");
-	assert.equal(deleteModeSuffix("trash"), "trash", "同上");
-
+	const { removeCacheFile } = mod;
 	const file = makeFile("_attachment-cache/a.png");
 
 	// ============================================================
-	// 3. 两个原语各自只被调一个
+	// 1. ⭐ 绝不碰回收站 —— 这是"备选方案已被去掉"的核心断言
 	// ============================================================
+	// ⚠️ 这条**刻意排在最前**：把实现换成 `trashFile` 的变异，应当在**这一条**上失败，
+	// 而不是先撞上"没调用 delete"（那会让报出的原因与变异意图不符）。
+	//
+	// 替身**提供了** `trashFile`，所以这条不是"因为没有才没用"。
+	// 它同时也是防回归的钉子：将来若有人把"移入回收站"这个备选加回来，
+	// 这一条会立刻红 —— 而那个决定的后果是具体的：
+	// 用户设了上限，磁盘空间却一直不释放。
 	{
 		const { app, calls } = makeAppRecorder();
-		await removeCacheFile(app, file, "trash");
-		assert.deepEqual(calls.trash, [file.path], "★ 选了回收站就该走宿主的 trashFile");
-		assert.deepEqual(calls.delete, [], "★ 同时**绝不能**也调直接删除（那是双删，且绕过了回收站）");
-	}
-	{
-		const { app, calls } = makeAppRecorder();
-		await removeCacheFile(app, file, "permanent");
-		assert.deepEqual(calls.delete, [file.path], "★ 选了直接删除就该走 Vault.delete");
+		await removeCacheFile(app, file);
 		assert.deepEqual(
 			calls.trash,
 			[],
-			"★ 同时不该走回收站 —— 空间不会立刻释放，而这正是这个取值唯一的目的"
+			"★ 缓存清理不许走回收站 —— 回收站不释放物理空间，与「空间有限」的动机直接矛盾"
 		);
+	}
+
+	// ============================================================
+	// 2. 只用 `Vault.delete`，且**恰好一次**
+	// ============================================================
+	// ⚠️ 计数断言排在 `deepEqual` 之前：它是更**具体**的那条 —— "删了两次"与
+	// "删错了对象"是两种不同的失效，而重复删除的变异应该报出前者。
+	{
+		const { app, calls } = makeAppRecorder();
+		await removeCacheFile(app, file);
+		assert.equal(calls.delete.length, 1, "★ 缓存文件必须被 Vault.delete 删除，且恰好一次");
+		assert.deepEqual(calls.delete, [file.path], "★ 要走 Vault.delete（立刻释放空间的那个原语），且删的是那个文件");
+	}
+
+	// ============================================================
+	// 3. ⭐ 必须等删除真的完成（调用方紧接着要摘索引记录）
+	// ============================================================
+	// 这条断言的形状是刻意的：让替身的 `delete` 慢一拍，然后**在 await 之后**检查。
+	// 实现若写成 `void app.vault.delete(file)`（不 await），这里会看到"还没删"。
+	{
+		const { app, calls } = makeAppRecorder({ deleteDelayMs: 5 });
+		await removeCacheFile(app, file);
+		assert.deepEqual(
+			calls.delete,
+			[file.path],
+			"★ `removeCacheFile` 返回时删除必须已经完成 —— 调用方紧接着就要摘索引记录"
+		);
+	}
+
+	// ============================================================
+	// 4. 不传 `Vault.delete` 的第二个参数
+	// ============================================================
+	// `force` 的语义是"文件夹里有隐藏子项时也照删"，对单个文件没有意义。
+	// 传它会让后来的人把这行读成"强制永久删除"，而那句解释是错的。
+	{
+		const { app, calls } = makeAppRecorder();
+		await removeCacheFile(app, file);
 		assert.equal(
 			calls.deleteForce,
 			undefined,
-			"不该传 `Vault.delete` 的第二个参数：它只管文件夹的隐藏子项，传了会被读成「强制删除」"
+			"不该传 `Vault.delete` 的第二个参数（它只管文件夹的隐藏子项，不是「强制删除」）"
 		);
 	}
-	{
-		// 坏值 → 与设置层的回落一致（直接删除）
-		const { app, calls } = makeAppRecorder();
-		await removeCacheFile(app, file, "TRASH");
-		assert.deepEqual(calls.delete, [file.path], "认不出的取值按默认（直接删除）处理");
-	}
 
 	// ============================================================
-	// 4. ⭐ 失败必须抛出去
+	// 5. ⭐ 失败必须抛出去
 	// ============================================================
-	// 吞掉失败的后果很具体：`runEviction` 会把**没删掉**的文件计成"已淘汰 N 个、
-	// 腾出 M MB"，并把它的索引记录摘掉 —— 于是汇报是假的；而记录一摘，
-	// 渲染层会以为本地没有副本，又去重新下载一个**其实还在**的文件。
-	const boom = new Error("回收站不可用");
+	// 吞掉失败的后果很具体：`runEviction` / `runCleanup` 会把**没删掉**的文件计成
+	// "已删掉 N 个、腾出 M MB"，并把它的索引记录摘掉 —— 于是汇报是假的；
+	// 而记录一摘，渲染层会以为本地没有副本，又去重新下载一个**其实还在**的文件。
 	await assert.rejects(
-		removeCacheFile(
-			{ fileManager: { trashFile: async () => Promise.reject(boom) }, vault: {} },
-			file,
-			"trash"
-		),
-		/回收站不可用/,
-		"★ 回收站失败要如实抛给调用方"
-	);
-	await assert.rejects(
-		removeCacheFile(
-			{ fileManager: {}, vault: { delete: async () => Promise.reject(boom) } },
-			file,
-			"permanent"
-		),
-		/回收站不可用/,
-		"★ 直接删除失败同样要抛给调用方"
+		removeCacheFile(makeAppRecorder({ deleteThrows: true }).app, file),
+		/删除失败/,
+		"★ 删除失败要如实抛给调用方（吞掉会让上层把「没删掉」记成「已腾出空间」）"
 	);
 
-	return { modes: 3, unknownValues: weirdValues.length, failurePaths: 2 };
+	return { primitives: 1, awaitsCompletion: true, failurePaths: 1 };
 }

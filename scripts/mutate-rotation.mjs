@@ -71,8 +71,8 @@ await runMutations({
 		{
 			// 后果：什么都没删也照样弹提示 ⇒ 后台保洁任务在用户读笔记时反复插嘴。
 			name: "★ 什么都没删也会提示（后台任务开始插嘴）",
-			from: "\t\tif (outcome.evicted > 0) announce(outcome, overBy, settings);\n",
-			to: "\t\tannounce(outcome, overBy, settings);\n",
+			from: "\t\tif (outcome.evicted > 0) announce(outcome, overBy);\n",
+			to: "\t\tannounce(outcome, overBy);\n",
 			expect: "不该提示",
 		},
 		{
@@ -84,12 +84,13 @@ await runMutations({
 			expect: "绝不能抛给调用方",
 		},
 		{
-			// 后果：提示写死成"已移入回收站"（或反之）⇒ 用户去回收站里找那些
-			// 其实已经被删除的副本。文案与"实际用了哪个删除 API"必须同源。
-			name: "★ 提示文案不再跟着删除方式（说进了回收站，其实已删除）",
-			from: "\t\t\tconst suffix = deleteModeSuffix(settings.deleteMode);",
-			to: '\t\t\tconst suffix = "trash";',
-			expect: "已删除",
+			// 后果：腾不到目标时改用"成功"那条文案 ⇒ 用户以为事务已经办完，
+			// 而缓存其实**仍然超限**（执行时被跳过的文件不会自己消失）。
+			// 那条"仍超出"的提示是这个后台任务唯一能说出"我没做到"的地方。
+			name: "★ 腾不到目标时也报成成功（用户以为已经腾够了）",
+			from: '\t\t\t\tdeps.t("cacheEvictedPartial", {',
+			to: '\t\t\t\tdeps.t("cacheEvicted", {',
+			expect: "仍超出",
 		},
 	],
 });

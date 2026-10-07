@@ -53,7 +53,6 @@ import {
 	sumIndexedBytes,
 } from "./eviction";
 import type { EvictionOutcome, EvictionPlan } from "./eviction";
-import { deleteModeSuffix } from "./remove";
 
 /** 为什么触发一次检查。 */
 export type RotationReason = "startup" | "growth" | "settings" | "interval";
@@ -136,22 +135,19 @@ export function createCacheRotator(deps: CacheRotationDeps): CacheRotator {
 	 * 提示一句。**自己的 try**：提示失败（例如宿主界面出问题）
 	 * 不该把已经完成的淘汰结果吞掉（那会让调用方以为"什么都没发生"）。
 	 */
-	const announce = (outcome: EvictionOutcome, overBy: number, settings: PluginSettings): void => {
+	const announce = (outcome: EvictionOutcome, overBy: number): void => {
 		try {
 			const mb = formatMegabytes(outcome.freed);
-			// ⚠️ 文案按"删除方式"二选一（后缀与"实际用了哪个 API"同源，不会分叉）：
-			// 说"移入了回收站"而其实已删除 ⇒ 用户会去回收站里找一个不在那儿的文件。
-			const suffix = deleteModeSuffix(settings.deleteMode);
 			if (overBy > 0) {
 				deps.notify(
-					deps.t(`cacheEvictedPartial_${suffix}`, {
+					deps.t("cacheEvictedPartial", {
 						mb,
 						count: outcome.evicted,
 						overMb: formatMegabytes(overBy),
 					})
 				);
 			} else {
-				deps.notify(deps.t(`cacheEvicted_${suffix}`, { mb, count: outcome.evicted }));
+				deps.notify(deps.t("cacheEvicted", { mb, count: outcome.evicted }));
 			}
 		} catch (error) {
 			report(error);
@@ -188,7 +184,7 @@ export function createCacheRotator(deps: CacheRotationDeps): CacheRotator {
 		// 执行时可能有文件被跳过（宿主索引滞后），那时真实的超出量更大。
 		// 报小了会让用户以为上限已经生效。
 		const overBy = Math.max(0, totalBytes - outcome.freed - limitBytes);
-		if (outcome.evicted > 0) announce(outcome, overBy, settings);
+		if (outcome.evicted > 0) announce(outcome, overBy);
 
 		return {
 			reason,

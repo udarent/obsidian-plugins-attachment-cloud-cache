@@ -113,19 +113,12 @@ await runMutations({
 			expect: "本地副本默认应",
 		},
 		{
-			// 后果：默认变成回收站 ⇒ 文件离开了 vault、磁盘空间却还占着，
-			// 于是"设了缓存上限，磁盘还是满的"—— 而上限要解决的正是空间问题。
-			name: "★ 删除方式默认改成回收站（设了上限磁盘却不释放，上限形同虚设）",
-			from: '\tdeleteMode: "permanent" as DeleteMode,',
-			to: '\tdeleteMode: "trash" as DeleteMode,',
-			expect: "删除方式默认应为",
-		},
-		{
-			// 后果：认不出的取值不再回落，而是**原样透传** ⇒ 一个手改过 data.json
-			// 或旧版本遗留的值会一路流到删除判定里，而那一层只认 `trash`。
-			name: "★ 删除方式的枚举校验被去掉（坏值原样透传）",
-			from: "\tdeleteMode: oneOfValue(DELETE_MODES),",
-			to: "\tdeleteMode: textValue(),",
+			// 后果：本地副本的处置不再受枚举约束，而是原样透传 ⇒ 一个手改过
+			// data.json、或旧版本遗留的值会一路流到处置判定里（那一层只认三个取值），
+			// 表现成"上传后本地副本的行为不是我选的那个"。
+			name: "★ localCopy 的枚举校验被去掉（坏值原样透传）",
+			from: "\tlocalCopy: oneOfValue(LOCAL_COPY_ACTIONS),",
+			to: "\tlocalCopy: textValue(),",
 			expect: "非法枚举应回落默认",
 		},
 		{

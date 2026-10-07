@@ -39,7 +39,6 @@ import { fromControlValue, isWritableValue, readByKey, toControlValue, writeByKe
 import {
 	classifyConnectionFailure,
 	connectionFailureKey,
-	deleteModeOptions,
 	describeRememberedSites,
 	localCopyOptions,
 	shouldShowCacheFolder,
@@ -256,18 +255,6 @@ export class SettingsTab extends PluginSettingTab {
 				// 这个上限永远不会触发 —— 显示一个永远不起作用的开关比不显示更糟。
 				visible: () => shouldShowCacheFolder(this.plugin.settings.localCopy),
 				control: { type: "text", key: "cacheLimitMb", placeholder: this.t("cacheLimitPlaceholder") },
-			},
-			{
-				name: this.t("deleteMode"),
-				desc: this.t("deleteModeDesc"),
-				aliases: ["delete", "trash", "permanent", "disk space", "删除", "回收站", "释放空间"],
-				// ⚠️ 不加 `visible` 条件：它对**自动轮换**和**「清理缓存文件」命令**都有效，
-				// 所以即便上限设成 0（不限制），手动清理那条路仍然会用到它。
-				control: {
-					type: "dropdown",
-					key: "deleteMode",
-					options: deleteModeOptions((value) => this.t(`deleteMode_${value}`)),
-				},
 			},
 			{
 				name: this.t("fallbackDownload"),
