@@ -1,5 +1,7 @@
 # Attachment Cloud Cache
 
+**English** · [简体中文](./README.zh.md)
+
 Upload your note attachments to **your own** S3-compatible storage and keep a local copy in a
 cache folder — so images still render when you are offline.
 
@@ -20,9 +22,10 @@ cache folder — so images still render when you are offline.
 > commands (show cache usage, repair the index, clean up unused cache files, upload existing
 > attachments). Everything runs on Obsidian 1.13.0+ on desktop and mobile.
 >
-> **Not built yet:** no real S3 provider has been exercised end-to-end, and **neither iOS nor Android
-> has ever been run** — see "Verified scope" below for exactly what that leaves unproven. Desktop is a
-> different story: it *has* been driven for real, Obsidian and all (`npm run verify:real`).
+> **What is still unproven:** the connection test has been exercised against a real MinIO instance,
+> but **uploading and downloading have not**, and **neither iOS nor Android has ever been run** — see
+> "Verified scope" below for exactly what that leaves unproven. Desktop is a different story: it *has*
+> been driven for real, Obsidian and all (`npm run verify:real`).
 
 ## Why another attachments plugin?
 
@@ -52,11 +55,12 @@ file first, it would already have removed the local copy, and there would be not
 - **Never loses an image**: if an upload fails, the file is written into your attachment folder and
   a working local link is inserted, with the reason shown
 - **Desktop and mobile**
-- **Credentials in secret storage** — access keys are never written to `data.json`
+- **The secret key stays in secret storage** — only the access key **ID** is written to `data.json`,
+  and that one is an identifier rather than a secret (see "Disclosures")
 
 ### Implementation notes worth knowing
 
-- **No AWS SDK.** The SigV4 signer is written from scratch (about 200 lines) and verified against
+- **No AWS SDK.** The SigV4 signer is written from scratch (about 160 lines of code) and verified against
   published AWS test vectors, so the plugin has no heavyweight dependency and no bundled SDK.
   Raising a mis-signed request is the kind of bug that is expensive to find, so the signer is
   pinned by vectors that AWS itself published: a wrong byte anywhere makes the signature differ.
@@ -108,14 +112,16 @@ Being precise about what has actually been exercised matters more than a long fe
 | The plugin **actually being wired up** | The real built `main.js` is loaded, `onload()` runs, and everything is driven end-to-end: a paste (exactly one PUT, byte-identical cached copy, link inserted, a second identical paste issuing zero PUTs), rendering in **both** reading view and live preview (src swapped to the local copy, **zero** requests, a third-party image left alone), `clean-cache` (the orphan is deleted through `Vault.delete` and the system trash is never touched, the confirmation text says so, a referenced copy survives, and **cancelling touches nothing**), and batch upload (both link forms rewritten, originals kept). Removing any registration line in `src/main.ts` fails this test — that is the point of it |
 | Hashing | Cross-checked byte-for-byte against `node:crypto` over padding and key-length boundaries |
 
-**Not yet verified:** no real S3 provider (R2/MinIO/AWS) has been exercised end-to-end yet, and
-**iOS has not been tested at all** — it cannot be tested on this machine. The code avoids APIs
-known to be missing there and falls back when optional APIs are absent, but that is reasoning, not
+**Partly verified against a real provider:** the connection test — a single signed `HEAD` against the
+bucket — passes against a real MinIO instance, which means the endpoint, the credentials, the SigV4
+signature and the bucket name have all been exercised for real. **Upload and download have not.**
+Nor has **iOS been tested at all** — it cannot be tested on this machine. The code avoids APIs known
+to be missing there and falls back when optional APIs are absent, but that is reasoning, not
 evidence. Android has not been run on a real device either.
 
 A **real-desktop smoke check does pass** (`npm run verify:real`, driving Obsidian over the DevTools
 protocol): the plugin loads in a real host, all four commands register, the settings tab renders
-(4 groups, 19 items), and — the part that only a real WebView can settle — the live-preview `src`
+(4 groups, 18 items), and — the part that only a real WebView can settle — the live-preview `src`
 interception installs without breaking anything and leaves third-party addresses alone.
 
 It also answers the question a type declaration cannot: **whether the host APIs this plugin calls
@@ -178,9 +184,6 @@ check that has quietly stopped checking is worse than no check.
 `minAppVersion` is per release: if a later version needs a newer API, the floor rises for that
 version and `versions.json` keeps older Obsidian builds on the last compatible release.
 
-`minAppVersion` is per release: if a later version needs a newer API, the floor rises for that
-version and `versions.json` keeps older Obsidian builds on the last compatible release.
-
 ## Installation
 
 The plugin is not in the Community directory yet (it is under development). Manual installation:
@@ -194,7 +197,9 @@ The plugin is not in the Community directory yet (it is under development). Manu
 
 1. Open **Settings → Attachment Cloud Cache**
 2. Fill in **Endpoint**, **Bucket**, **Region**, and **Public URL base**
-3. Pick your **Access key / Secret key** through secret storage (not plain text settings)
+3. Type your **Access key ID** (a plain text field — it is an identifier, not a secret, and capitals
+   are normal), then type the **secret access key** in the field right below it; that one is written
+   into Obsidian's secret storage, not into the plugin's data
 4. Click **Test connection**
 
 ## Disclosures

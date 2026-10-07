@@ -39,7 +39,8 @@
  */
 
 import { execFile, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 const PORT = Number(
@@ -59,8 +60,35 @@ const OBSIDIAN = process.env.OBSIDIAN_EXE ?? "C:/Program Files/Obsidian/Obsidian
  *
  * ⚠️ 名字要**与 Obsidian 里显示的完全一致**（大小写敏感）。写错了同样会停在选择界面，
  * 所以下面的报错里会把用到的名字打出来。
+ *
+ * 默认值是**中性名字** `TestVault`，刻意不写开发者自己的 vault 目录名 —— 脚本会进仓库、
+ * 也会在别的机器上跑，默认值不该带上某个人的本地环境。你自己的库用
+ * `OBSIDIAN_VAULT=<你的 vault 名>` 指定；名字不对时报错会列出本机已知的 vault。
  */
-const VAULT = process.env.OBSIDIAN_VAULT ?? "ObsidianVault";
+const VAULT = process.env.OBSIDIAN_VAULT ?? "TestVault";
+
+/**
+ * 本机 Obsidian 认得哪些 vault —— **只用于报错时提示**。
+ *
+ * 理由：默认名是中性的 `TestVault`，而大多数人的 vault 另叫别的名字。名字不对的症状是
+ * "停在 vault 选择界面"，看起来像 Obsidian 坏了；把可用名字列出来，改一行环境变量就好。
+ *
+ * 读不到就返回空数组 —— 这只是提示，不该因为它让验证失败。
+ */
+function knownVaultNames() {
+	if (!process.env.APPDATA) return [];
+	const configPath = join(process.env.APPDATA, "obsidian", "obsidian.json");
+	if (!existsSync(configPath)) return [];
+	try {
+		const config = JSON.parse(readFileSync(configPath, "utf8"));
+		const names = Object.values(config.vaults ?? {})
+			.map((entry) => (typeof entry?.path === "string" ? entry.path.split(/[\\/]/).filter(Boolean).pop() : null))
+			.filter(Boolean);
+		return [...new Set(names)].sort();
+	} catch {
+		return [];
+	}
+}
 /**
  * 等调试端口的秒数。
  *
@@ -295,16 +323,39 @@ async function main() {
 					vault: app?.vault?.getName?.() ?? null,
 				})`
 			).catch(() => null);
+			const known = knownVaultNames();
 			const hint =
 				state && !state.vault
 					? `看起来**没有打开任何 vault**（停在 vault 选择界面）—— 本脚本请求打开的是「${VAULT}」，` +
-						`请确认这个名字与 Obsidian 里显示的完全一致（大小写敏感），或用 OBSIDIAN_VAULT 指定。`
+						`请确认这个名字与 Obsidian 里显示的完全一致（大小写敏感）。` +
+						(known.length > 0
+							? `本机 Obsidian 认得这些 vault：${known.map((name) => `「${name}」`).join("、")} —— ` +
+								`用 OBSIDIAN_VAULT=<名字> 指定其中之一。`
+							: `也可以用 OBSIDIAN_VAULT 指定别的名字。`)
 					: "vault 已经打开了，所以更像是插件本身没加载起来 —— 看上面的控制台输出。";
 			throw new Error(
 				`宿主在 60 秒内没有就绪（app.plugins 一直不可用）。\n  实际状态：${JSON.stringify(state)}\n  ${hint}`
 			);
 		}
 		log("  ✓ 宿主已就绪（app.plugins 可用）");
+
+		// ⭐ 实际打开的是不是我们**请求**的那个 vault？
+		//
+		// ⚠️ 实测踩到：请求一个**不存在**的 vault 名时，Obsidian 不报错，而是**退回上次打开的
+		// vault**。于是整轮探针跑在另一个 vault 上、全部通过，而人以为"验证过了"。
+		// 这比失败危险得多 —— 失败会让人去查，静默地验证错对象只会让人相信。
+		const actualVault = await evaluate(client, `app?.vault?.getName?.() ?? null`);
+		if (actualVault !== VAULT) {
+			const available = knownVaultNames();
+			const availableHint =
+				available.length > 0 ? `本机 Obsidian 认得这些 vault：${available.join("、")}。` : "";
+			throw new Error(
+				`请求打开的 vault 是「${VAULT}」，实际打开的是「${actualVault}」。\n` +
+					`  ⚠️ Obsidian 在名字对不上时**不会报错**，它会退回上次打开的 vault —— 于是这一轮\n` +
+					`  探针验证的是另一个 vault。${availableHint}用 OBSIDIAN_VAULT=<正确的名字> 重跑。`
+			);
+		}
+		log(`  ✓ 打开的确实是指定的 vault：「${actualVault}」`);
 
 		// 等插件加载完（Obsidian 会异步加载社区插件）
 		const loaded = await evaluate(
