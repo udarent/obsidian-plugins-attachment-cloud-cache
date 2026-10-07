@@ -161,7 +161,7 @@ export function runSettingsUiSuite(mod) {
 	// ============================================================
 	// 8. 哪些值可以写进设置
 	// ============================================================
-	assert.equal(isWritableValue("cacheFolder", "attachments-cache"), true, "非空目录名可写");
+	assert.equal(isWritableValue("cacheFolder", "image-cache"), true, "非空目录名可写");
 	assert.equal(
 		isWritableValue("cacheFolder", ""),
 		false,

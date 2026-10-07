@@ -18,7 +18,7 @@
  * 服务端返回的 XML 在 `SignatureDoesNotMatch` 时**会带上 `StringToSign` 等内容**，
  * 虽然正常不含 secret，但"正常不含"不足以作为依据 ——
  * 中间代理、自建 MinIO 或错误配置都可能把请求回显出来。
- * 所以这里对每条外发文案做一次**无条件脱敏**，而不是相信上游。
+ * 所以这里对每条外发文案做一次**无条件脱敏**，而不是相信服务端返回的文本。
  */
 
 import { isPlainRecord } from "../records";

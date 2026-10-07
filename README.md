@@ -215,10 +215,6 @@ The plugin is not in the Community directory yet (it is under development). Manu
 - This is an **independent implementation**, written from scratch: not a fork of, and sharing no
   code with, any other plugin. Its scope was decided from publicly documented behaviour of other
   plugins, never by reusing someone else's implementation.
-- What that claim rests on: a line-by-line comparison against the codebase this project started
-  from finds **zero** shared lines, and none of its function names appear here. A line comparison
-  can show the absence of copied lines, not the absence of influence — worth stating plainly
-  instead of overclaiming.
 
 ## Development
 
@@ -260,9 +256,7 @@ type package staying pinned, which is exactly the kind of invariant that decays 
 asserted rather than trusted.
 
 And `scripts/check-no-dev-doc-refs.mjs` keeps the repository free of references to its own
-development notes. Those notes — a design and scope document that compares other plugins, and an
-audit recording how this implementation's independence was checked — are deliberately kept outside
-this repository, and are not in its history either. The gate scans **every tracked file**, which is
-exactly what gets published, for either name. It exists because the next comment that wants "see the
-design doc" will be written quite naturally, and a reader would then go looking for a file that is
-not here.
+development notes, which live outside the repository (and are not in its history either). The gate
+scans **every tracked file**, which is exactly what gets published. It exists because the next
+comment that wants "see the design doc" will be written quite naturally — and a reader would then go
+looking for a file that is not here.
