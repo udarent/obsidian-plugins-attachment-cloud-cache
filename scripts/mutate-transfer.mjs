@@ -44,7 +44,7 @@ await runMutations({
 		},
 		{
 			name: "读字节失败被当成成功继续（插一条指向不存在文件的链接）",
-			from: "\t\t\toutcome.lost += 1;\n\t\t\tdeps.notify(deps.t(\"hookLocalFallbackFailed\", { error: describe(error) }));\n\t\t\tcontinue;\n\t\t}\n\n\t\tlet result: IngestResult;",
+			from: "\t\t\toutcome.lost += 1;\n\t\t\tdeps.notify(deps.t(\"hookLocalFallbackFailed\", { error: describeError(error) }));\n\t\t\tcontinue;\n\t\t}\n\n\t\tlet result: IngestResult;",
 			to: "\t\t\tcontinue;\n\t\t}\n\n\t\tlet result: IngestResult;",
 			expect: "必须明确报错",
 		},

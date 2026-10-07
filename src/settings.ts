@@ -1,3 +1,5 @@
+import { normalizePath } from "obsidian";
+
 /**
  * 设置：默认值、类型守卫、合并。
  *
@@ -79,6 +81,28 @@ function boolValue(): FieldReader<boolean> {
  */
 function textValue(): FieldReader<string> {
 	return (raw, fallback) => (typeof raw === "string" ? raw : fallback);
+}
+
+/**
+ * vault 路径：**读进来那一刻就归一**，并区分「必填」与「可空」两档。
+ *
+ * ⚠️ 官方 guideline 要求：接受用户给的 vault 路径时必须过 normalizePath()。
+ * 不归一的后果很具体：用户从别处粘一个反斜杠分隔或带双斜杠的路径（Windows 上很自然），
+ * 会被**逐字**拼进缓存路径 ⇒ 生成 vault 里根本不存在的层级，
+ * 而症状是「缓存目录里没有文件」「清理命令找不到东西」，看不出与那次粘贴有关。
+ *
+ * 两个调用点的「空」含义不同，所以保留与 textValue / requiredTextValue 一致的两档：
+ * - cacheFolder **必填**：归一后为空（用户只敲了斜杠）就回落默认目录；
+ * - attachmentFolder **可空**：空 = 跟随宿主的附件设置，是**有意义**的状态。
+ */
+function pathValue(options: { required?: boolean } = {}): FieldReader<string> {
+	const required = options.required ?? false;
+	return (raw, fallback) => {
+		if (typeof raw !== "string") return fallback;
+		const normalized = normalizePath(raw.trim());
+		if (normalized !== "") return normalized;
+		return required ? fallback : "";
+	};
 }
 
 /** 非空字符串：用于**为空会直接导致功能不可用**的字段（如目录名、key 模板）。 */
@@ -170,11 +194,11 @@ const SETTINGS_SPEC: {
 } = {
 	autoUpload: boolValue(),
 	enabledExtensions: textListValue(),
-	attachmentFolder: textValue(),
+	attachmentFolder: pathValue(),
 	localCopy: oneOfValue(LOCAL_COPY_ACTIONS),
 	// ⚠️ 用 requiredTextValue 而不是 textValue：缓存目录为空会让缓存**静默失效**
 	// （路径推不出来 → 永远不命中），比"回落到默认目录"糟得多。
-	cacheFolder: requiredTextValue(),
+	cacheFolder: pathValue({ required: true }),
 	fallbackDownload: boolValue(),
 	externalImageCache: boolValue(),
 	cacheLimitMb: numberValue({ min: 0, max: CACHE_LIMIT_MB_MAX }),

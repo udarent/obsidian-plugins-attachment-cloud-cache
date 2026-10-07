@@ -92,5 +92,14 @@ await runMutations({
 			to: "if (!clean) return clean;",
 			expect: "空路径应报错",
 		},
+		{
+			// 后果：归一退化成"只把反斜杠换掉"（也就是刚被替掉的那份私有实现），
+			// 于是 `a//b`、`a/` 这类写法与宿主写进索引的写法对不上 ——
+			// 同一个副本会被判成"缺失"或"孤儿"，而审计/淘汰据此给出错误结论。
+			name: "★ 路径归一不再走宿主的 normalizePath（重复/末尾斜杠对不上）",
+			from: '\treturn typeof path === "string" ? normalizePath(path) : "";',
+			to: '\treturn typeof path === "string" ? path.replace(/\\\\/g, "/") : "";',
+			expect: "重复斜杠要折叠",
+		},
 	],
 });

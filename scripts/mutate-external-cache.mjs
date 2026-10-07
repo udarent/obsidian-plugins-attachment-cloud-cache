@@ -33,7 +33,7 @@ await runMutations({
 			// 后果：图已进存储但链接没改，却报「成功」⇒ 用户以为搬好了，
 			// 而笔记仍指向站外，且站点记忆已 allow —— 不会再问第二次。半成品被伪装成完成品。
 			name: "★ 改写失败却报告成功（半成品被伪装成完成品）",
-			from: '\t\t\tsay("cached-no-rewrite", { error: describe(error) });\n\t\t\treturn { ...uploaded, status: "cached-no-rewrite", error };',
+			from: '\t\t\tsay("cached-no-rewrite", { error: describeError(error) });\n\t\t\treturn { ...uploaded, status: "cached-no-rewrite", error };',
 			to: '\t\t\treturn { ...uploaded, status: "cached" };',
 			expect: "谎报",
 		},

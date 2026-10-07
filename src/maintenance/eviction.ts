@@ -33,6 +33,9 @@
 import type { CacheEntry } from "../cache/index";
 import { isUnderCacheFolder } from "../cache-path";
 import type { DiskFile } from "./audit";
+// 路径归一用**共享**的实现（`vault-files.ts` → 宿主的 `normalizePath`）：
+// 淘汰要拿索引里的路径与磁盘上的路径做比较，两侧必须同源。
+import { normalizeVaultPath } from "../vault-files";
 
 /**
  * 刚放进缓存多久之内的副本不参与淘汰。
@@ -83,11 +86,6 @@ export function formatMegabytes(bytes: unknown): string {
 	return (value / (1024 * 1024)).toFixed(1);
 }
 
-/** 路径归一化，只用于**比较**（与索引里的写法可能有前导斜杠/反斜杠差异）。 */
-function normalize(path: unknown): string {
-	if (typeof path !== "string") return "";
-	return path.replace(/\\/g, "/").replace(/^\/+/, "");
-}
 
 /** ISO 时间串 → 毫秒；解析不出来返回 0（= 不确知）。 */
 function parseTime(value: unknown): number {
@@ -140,14 +138,14 @@ export function buildEvictionCandidates(input: CandidateInput): EvictionCandidat
 	const disk = new Map<string, DiskFile>();
 	for (const file of input.files) {
 		if (!isUnderCacheFolder(file.path, input.cacheFolder)) continue;
-		disk.set(normalize(file.path), file);
+		disk.set(normalizeVaultPath(file.path), file);
 	}
 
 	const out: EvictionCandidate[] = [];
 	const indexedPaths = new Set<string>();
 
 	for (const entry of input.entries) {
-		const path = normalize(entry.cachePath);
+		const path = normalizeVaultPath(entry.cachePath);
 		// ⚠️ 只管缓存目录里的副本：附件目录里的那份是用户的正常附件。
 		//
 		// 这一道与上面（构造磁盘映射时）的过滤是**刻意的双保险**，与 `runCleanup` 同一条纪律：

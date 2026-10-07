@@ -47,8 +47,8 @@ await runMutations({
 			// 所以那个方向上是刻意的双保险（与 `runCleanup` 的"双保险"同一条纪律），
 			// 不追求"每道都能被单独杀掉"。
 			name: "★ 磁盘文件不再限定在缓存目录内（开始自动删用户的正常附件）",
-			from: "\t\tif (!isUnderCacheFolder(file.path, input.cacheFolder)) continue;\n\t\tdisk.set(normalize(file.path), file);",
-			to: "\t\tdisk.set(normalize(file.path), file);",
+			from: "\t\tif (!isUnderCacheFolder(file.path, input.cacheFolder)) continue;\n\t\tdisk.set(normalizeVaultPath(file.path), file);",
+			to: "\t\tdisk.set(normalizeVaultPath(file.path), file);",
 			expect: "附件",
 		},
 		{

@@ -224,6 +224,19 @@ export async function runMutations({ source, entries, reexportDefault, suite, mu
 		process.exit(1);
 	}
 
+	// ⭐ **只查锚点**的开关：`MUTATION_PREFLIGHT_ONLY=1` 时到这里就退出。
+	//
+	// 为什么值得有：锚点会在**改名**时整批失效（实测一次重命名就让三个脚本同时过期）。
+	// 而运行器默认会继续跑基线+每条变异 —— 于是一轮排查要几分钟，
+	// 而"还有没有别的过期锚点"要等下一轮才知道。
+	// 有了它，改名之后可以一条命令把 34 个脚本的锚点全过一遍（每个只要一次 import 的时间）：
+	//   MUTATION_PREFLIGHT_ONLY=1 npm run mutate
+	if (process.env.MUTATION_PREFLIGHT_ONLY === "1") {
+		console.log(`✓ 锚点预检通过：${source}（${mutations.length} 条变异）`);
+		await rm(backupPathFor(sourcePath), { force: true });
+		process.exit(0);
+	}
+
 	// ⚠️ 必须 await：签名与网络类的套件是 async 的（要起 mock S3 服务、
 	// 要 await crypto）。若漏掉 await，套件返回的 Promise 被丢弃，
 	// 里面的断言失败会变成**未处理的拒绝**，而这里看到的是"通过" ——

@@ -35,6 +35,10 @@
 
 import type { CacheEntry } from "../cache/index";
 import { isUnderCacheFolder } from "../cache-path";
+// 路径归一用**共享**的实现（`vault-files.ts` → 宿主的 `normalizePath`）。
+// 审计要拿「索引里记的路径」与「磁盘上枚举到的路径」做字符串比较，所以两侧必须同源；
+// 原来是这里自己写的一份，规则与宿主不完全一致（`a//b`、`a/` 对不上）。
+import { normalizeVaultPath } from "../vault-files";
 
 /** 磁盘上的一个缓存文件。 */
 export interface DiskFile {
@@ -100,7 +104,7 @@ export function auditCache(input: CacheAuditInput): CacheAudit {
 		// 只认缓存目录内的文件：`localCopy: "keep"` 时副本在附件目录里，
 		// 那些是用户的正常附件，绝不能被当成孤儿清掉。
 		if (!isUnderCacheFolder(file.path, input.cacheFolder)) continue;
-		onDisk.set(normalize(file.path), file);
+		onDisk.set(normalizeVaultPath(file.path), file);
 	}
 
 	const indexedPaths = new Set<string>();
@@ -110,7 +114,7 @@ export function auditCache(input: CacheAuditInput): CacheAudit {
 	const outsideCache: CacheEntry[] = [];
 
 	for (const entry of input.entries) {
-		const path = normalize(entry.cachePath);
+		const path = normalizeVaultPath(entry.cachePath);
 
 		// ⚠️ 只管缓存目录里的副本。`localCopy: "keep"` 时副本在附件目录，
 		// 那是用户的正常附件 —— 既不归我们自愈，更不归我们清理。
@@ -153,22 +157,11 @@ export function auditCache(input: CacheAuditInput): CacheAudit {
 	let reclaimable = 0;
 	for (const file of orphans) reclaimable += file.bytes;
 	for (const entry of unused) {
-		const file = onDisk.get(normalize(entry.cachePath));
+		const file = onDisk.get(normalizeVaultPath(entry.cachePath));
 		if (file) reclaimable += file.bytes;
 	}
 
 	return { missingCopies, orphans, unused, healthy, outsideCache, bytes: { total, reclaimable } };
-}
-
-/**
- * 路径归一化，只用于**比较**（与索引里的写法可能有前导斜杠/反斜杠差异）。
- *
- * ⚠️ 先判类型再转：对对象调用  会得到 `[object Object]`，
- * 那会让一个坏条目匹配上另一个毫无关系的路径（lint 的 `no-base-to-string` 拦的正是这个）。
- */
-function normalize(path: unknown): string {
-	if (typeof path !== "string") return "";
-	return path.replace(/\\/g, "/").replace(/^\/+/, "");
 }
 
 export interface CleanupOptions {
@@ -203,7 +196,7 @@ export function planCleanup(options: CleanupOptions): CleanupPlan {
 	const limit = options.previewLimit ?? 10;
 	const audit = options.audit;
 
-	const all = [...audit.orphans.map((file) => normalize(file.path)), ...audit.unused.map((entry) => normalize(entry.cachePath))];
+	const all = [...audit.orphans.map((file) => normalizeVaultPath(file.path)), ...audit.unused.map((entry) => normalizeVaultPath(entry.cachePath))];
 
 	const preview = all.slice(0, Math.max(0, limit));
 	const hidden = all.length - preview.length;

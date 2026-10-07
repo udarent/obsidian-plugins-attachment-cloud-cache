@@ -246,6 +246,47 @@ export function runSettingsSuite(mod) {
 	assert.deepEqual(wrong.enabledExtensions, SETTINGS_DEFAULTS.enabledExtensions, "非数组应回落默认");
 
 	// ============================================================
+	// 4b. ⭐ 用户填的**路径**要在读进来那一刻就归一
+	// ============================================================
+	//
+	// 官方 guideline 明确要求：接受用户给的 vault 路径时必须过 `normalizePath()`。
+	//
+	// 不归一的具体后果：用户从别处粘一个反斜杠分隔、或带双斜杠的路径
+	//（Windows 上很自然），会被**逐字**拼进缓存路径 —— 于是生成一个 vault 里
+	// 根本不存在的层级，而症状是"缓存目录里没有文件""清理命令找不到任何东西"，
+	// 看不出与那次粘贴有关。
+	{
+		const messy = mergePluginSettings(SETTINGS_DEFAULTS, {
+			...SETTINGS_DEFAULTS,
+			cacheFolder: "//attachments\\cache//",
+			attachmentFolder: ".\\images//sub/",
+		});
+		assert.equal(messy.cacheFolder, "attachments/cache", "★ 缓存目录要归一（反斜杠、重复斜杠、前后斜杠）");
+		assert.equal(messy.attachmentFolder, "images/sub", "★ 附件目录同理");
+
+		// 已归一的路径不该被再次改动（幂等）—— 否则每次读设置都会变一点
+		const again = mergePluginSettings(SETTINGS_DEFAULTS, {
+			...SETTINGS_DEFAULTS,
+			cacheFolder: "attachments/cache",
+		});
+		assert.equal(again.cacheFolder, "attachments/cache", "归一必须幂等");
+
+		// 只敲斜杠 ⇒ 归一后为空。必填字段回落默认，而不是拿空目录名去建目录
+		const slashOnly = mergePluginSettings(SETTINGS_DEFAULTS, {
+			...SETTINGS_DEFAULTS,
+			cacheFolder: "/",
+		});
+		assert.equal(slashOnly.cacheFolder, SETTINGS_DEFAULTS.cacheFolder, "★ 归一后为空的必填路径要回落默认");
+
+		// 附件目录是**可选**的：空 = 跟随宿主设置，是有意义的状态，不能回落成某个目录名
+		const emptyAttachment = mergePluginSettings(SETTINGS_DEFAULTS, {
+			...SETTINGS_DEFAULTS,
+			attachmentFolder: "/",
+		});
+		assert.equal(emptyAttachment.attachmentFolder, "", "附件目录归一后为空应保持为空（= 跟随宿主设置）");
+	}
+
+	// ============================================================
 	// 5. 枚举守卫本身要能用（供 UI 与合并共用）
 	// ============================================================
 	for (const good of ["cache", "keep", "trash"]) assert.equal(isLocalCopyAction(good), true, good);

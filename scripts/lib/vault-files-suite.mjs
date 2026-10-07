@@ -26,6 +26,7 @@ export async function runVaultFilesSuite(mod) {
 		resolveContentType,
 		resolveExtension,
 		uniqueVaultPath,
+		normalizeVaultPath,
 	} = mod;
 
 	// ============================================================
@@ -194,6 +195,26 @@ export async function runVaultFilesSuite(mod) {
 	// 反向守护：只要有一个空位就必须返回它，不得"因为嫌麻烦就直接报错"
 	const almostAllTaken = (candidate) => candidate !== "a 7.png";
 	assert.equal(await uniqueVaultPath("a.png", almostAllTaken), "a 7.png", "应在有限的尝试内找到唯一的空位");
+
+	// ============================================================
+	// ⭐ 路径归一（`normalizeVaultPath`）
+	//
+	// 审计与淘汰都要拿"索引里记的路径"与"磁盘上枚举到的路径"做**字符串比较**，
+	// 所以两侧的写法必须同源。原来两处各写了一份自己的归一（只处理反斜杠与前导斜杠），
+	// 而正确做法是走宿主的 `normalizePath()` —— 那正是宿主往索引里写路径时用的规则。
+	//
+	// ⚠️ 两者的差别是**真实存在**的：老实现保留 `a//b` 与 `a/`，
+	// 新实现把它们折成 `a/b` 与 `a`。把差别写进断言，是为了让"行为变了"
+	// 这件事显式可见，而不是靠人去读 diff。
+	// ============================================================
+	assert.equal(normalizeVaultPath("a\\b.png"), "a/b.png", "反斜杠要折成正斜杠");
+	assert.equal(normalizeVaultPath("a//b.png"), "a/b.png", "重复斜杠要折叠（老实现不会折叠）");
+	assert.equal(normalizeVaultPath("/a/b/"), "a/b", "前后斜杠要去掉");
+	assert.equal(normalizeVaultPath("./a.png"), "a.png", "开头的 ./ 要去掉");
+	assert.equal(normalizeVaultPath(""), "", "空串还是空串");
+	assert.equal(normalizeVaultPath(null), "", "非字符串给空串（调用方拿它当'无路径'）");
+	assert.equal(normalizeVaultPath(undefined), "", "undefined 同理");
+	assert.equal(normalizeVaultPath("a/b.png"), "a/b.png", "归一必须幂等");
 
 	return {
 		extensionCases: 12 + 9 + 6 + 9 + 6,

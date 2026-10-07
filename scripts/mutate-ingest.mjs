@@ -104,7 +104,7 @@ await runMutations({
 		},
 		{
 			name: "索引落盘失败被静默吞掉（用户永远不知道缓存不被认识）",
-			from: '\t\t\tdeps.notify?.(`缓存索引保存失败：${describe(error)}`);',
+			from: '\t\t\tdeps.notify?.(`缓存索引保存失败：${describeError(error)}`);',
 			to: "\t\t\tvoid error;",
 			expect: "必须让用户知道",
 		},

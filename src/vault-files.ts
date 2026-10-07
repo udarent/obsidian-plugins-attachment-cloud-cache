@@ -20,6 +20,31 @@
  * 只有"文件名唯一化"这一步自己来。
  */
 
+import { normalizePath } from "obsidian";
+
+/**
+ * 把"可能是路径的东西"归一成宿主认得的写法。
+ *
+ * ## 为什么必须走宿主的 `normalizePath()`
+ *
+ * 审计与淘汰都要拿**索引里记的路径**与**磁盘上枚举到的路径**做字符串比较
+ *（同一个副本在两边写法不同，就会被判成"孤儿"或"缺失"）。而往索引里写路径的
+ * 是宿主自己 —— 所以归一必须用**它用的那套规则**，而不是我们另写一套。
+ * 官方 guideline 也正是这么要求的：接受用户提供的 vault 路径时必须过 `normalizePath()`。
+ *
+ * ## ⚠️ 这里替掉了原来的两份私有实现
+ *
+ * `maintenance/audit.ts` 与 `maintenance/eviction.ts` 原本各有一个
+ * `normalize(path)`，只处理反斜杠与前导斜杠 —— 于是 `a//b`、`a/` 这类写法
+ * 与宿主的写法**对不上**。差别是真实存在的（新实现把它们折成 `a/b`、`a`），
+ * 而且它顺手把"用户从 Windows 粘过来的反斜杠路径"也一并处理了。
+ *
+ * 非字符串一律给空串：调用方拿它当"没有路径"用（索引记录里可能缺字段）。
+ */
+export function normalizeVaultPath(path: unknown): string {
+	return typeof path === "string" ? normalizePath(path) : "";
+}
+
 /** 扩展名 → 默认 Content-Type。只需覆盖默认启用的图片格式。 */
 const CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
 	avif: "image/avif",

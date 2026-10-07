@@ -14,12 +14,17 @@ await runMutations({
 	suite: runSiteStoreSuite,
 	mutations: [
 		{
-			// 后果：跳过「临时文件 + 改名」，直接写目标文件 ⇒ 写到一半被中断（崩溃/断电/同步冲突）
-			// 就留下一段截断的 JSON。最终内容看着是对的，所以只有崩溃时才显形。
-			name: "★ 不再走临时文件 + 改名（崩溃会留下半截 JSON）",
-			from: "\tawait adapter.write(temp, payload);",
-			to: "\tawait adapter.write(path, payload);",
-			expect: "临时文件",
+			// 后果：记忆**看着写成功了、其实一个字节都没落盘** ⇒
+			// 下次启动用户的回答全没了，于是"我明明点过'不再询问'"。
+			//
+			// ⚠️ 这条是在把原子写**抽成共享模块**之后补的。原来这里有两条约会写细节的变异
+			//（"不走临时文件"、"不先建目录"）—— 那些实现已经搬进 `src/atomic-write.ts`，
+			// 由 `mutate-atomic-write.mjs` 的同名变异继续守着；本文件改成守
+			// **"这个 store 到底有没有把东西交给落盘层"**。
+			name: "★ 保存被静默跳过（记忆看着写成功、其实没落盘）",
+			from: "\tawait writeJsonAtomically(adapter, path, JSON.stringify(decisions.toJSON()));",
+			to: "\tvoid decisions; // 变异：根本不落盘",
+			expect: "写入后应存在",
 		},
 		{
 			// 后果：一份合法但不是我们格式的文件（`{"decisions":"nope"}`）被当成"空记忆且无错" ⇒
@@ -28,14 +33,6 @@ await runMutations({
 			from: '\tif (!Array.isArray(parsed.decisions)) {\n\t\treturn { decisions: new SiteDecisions(), existed: true, error: "结构不对：decisions 不是数组" };\n\t}\n',
 			to: "\t// 变异：不检查 decisions 的形状\n",
 			expect: "留下错误原因",
-		},
-		{
-			// 后果：父目录不存在时写入失败。真实适配器的 `write` 不会替你建目录
-			// （替身会，所以这条只能靠套件里那个严格的假适配器抓）。
-			name: "★ 不再先建目录（真实适配器上直接写不进去）",
-			from: "\t\tawait adapter.mkdir(folder);\n",
-			to: "\t\tvoid folder; // 变异：不建目录\n",
-			expect: "先建",
 		},
 	],
 });

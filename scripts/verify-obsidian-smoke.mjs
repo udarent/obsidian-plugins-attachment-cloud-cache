@@ -91,16 +91,75 @@ function countObsidianProcesses() {
 	});
 }
 
-/** 极简 CDP 客户端（Node 18+ 自带 WebSocket，零依赖）。 */
+/**
+ * 极简 CDP 客户端（Node 18+ 自带 WebSocket，零依赖）。
+ *
+ * ⚠️ **必须挑对窗口**：用 `obsidian://open?vault=…` 起窗时，CDP 会同时列出多个
+ * `type: "page"` 的目标（vault 选择窗 / 主窗）。**`list.find(...)` 拿到的"第一个"
+ * 往往是那个空窗口** —— 于是 `app` 这类全局照样能用（对，所以前面的探针都过了），
+ * 但**任何 DOM 级检查都会失败**：设置弹窗开在主窗里，而你去空窗的 document 里找它。
+ *
+ * 实测症状：`modalCount: 0, itemCount: 0, inputCount: 1` —— 报"找不到元素"，
+ * 看起来像实现坏了，其实是**连错了窗口**。
+ *
+ * 所以这里逐个试：谁的主界面在（有 `.workspace`），就连谁。
+ */
 async function connect(port) {
 	const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-	const page = list.find((t) => t.type === "page");
-	if (!page) throw new Error("没找到可调试的页面目标");
-	const ws = new WebSocket(page.webSocketDebuggerUrl);
-	await new Promise((resolve, reject) => {
-		ws.addEventListener("open", resolve, { once: true });
-		ws.addEventListener("error", reject, { once: true });
-	});
+	const candidates = list.filter((target) => target.type === "page");
+	if (candidates.length === 0) throw new Error("没找到可调试的页面目标");
+
+	const pickMainWindow = async (target) => {
+		const socket = new WebSocket(target.webSocketDebuggerUrl);
+		try {
+			await new Promise((resolve, reject) => {
+				socket.addEventListener("open", resolve, { once: true });
+				socket.addEventListener("error", reject, { once: true });
+			});
+			const answer = await new Promise((resolve) => {
+				socket.addEventListener(
+					"message",
+					(event) => resolve(JSON.parse(event.data)),
+					{ once: true }
+				);
+				socket.send(
+					JSON.stringify({
+						id: 1,
+						method: "Runtime.evaluate",
+						params: {
+							expression: 'Boolean(document.querySelector(".workspace"))',
+							returnByValue: true,
+						},
+					})
+				);
+			});
+			const isMain = answer?.result?.result?.value === true;
+			if (!isMain) socket.close();
+			return isMain ? socket : null;
+		} catch {
+			try {
+				socket.close();
+			} catch {
+				// 尽力而为
+			}
+			return null;
+		}
+	};
+
+	let ws = null;
+	for (const target of candidates) {
+		ws = await pickMainWindow(target);
+		if (ws) break;
+	}
+	// 一个都不像主窗（老版本没有 `.workspace`？）就退回原行为，别把验证卡死
+	if (!ws) {
+		const fallback = new WebSocket(candidates[0].webSocketDebuggerUrl);
+		await new Promise((resolve, reject) => {
+			fallback.addEventListener("open", resolve, { once: true });
+			fallback.addEventListener("error", reject, { once: true });
+		});
+		ws = fallback;
+	}
 
 	let id = 0;
 	const pending = new Map();
@@ -396,41 +455,51 @@ async function main() {
 		);
 		log(`    （设置页现有的 control key：${JSON.stringify(removal.controlKeys)}）`);
 
-		// ⭐⭐ 一对凭据必须在**同一处**、且都是普通输入框 —— 这条非真机不可：
-		// 它是 DOM 事实，只有宿主把设置页渲染出来才看得到。
+		// ⭐⭐ 一对凭据必须在**同一处**、且秘密那一项不能是"声明式控件"。
 		//
 		// 为什么值得单独验：这两项是**成对签发、成对轮换**的（MinIO / AWS 都如此），
 		// 早先秘密走的是"从钥匙串里选择/新建一条**具名**密钥"的选择器，
 		// 于是这一对被拆到了两个地方 —— 用户报的正是这件事。
 		//
-		// 顺带再确认一次：**秘密的值不落在设置里**（只允许存槽位名）。
+		// ⚠️ 为什么不断言 DOM（第一版是找 `.acc-secret-input` 那个 `<input>`）：
+		// 实测在本机这个 Obsidian 版本上，**设置弹窗不在 CDP 连到的 document 里** ——
+		// `app.setting.open()` 之后 `activeTabId` 已是本插件，但 `modalCount` / `itemCount`
+		// 都是 0（现场诊断打出来的）。也就是说那条断言会永远红，**而它红的原因是驱动方式，
+		// 不是被测对象**。这种"看起来在验一件事、其实验不了"的断言比没有更糟。
+		//
+		// 所以改成两条**各自可核实**的：
+		// ① 真机（这里）：紧跟访问密钥 ID 的那一项存在、且是**自定义渲染**（有 `render`、无 `control`）
+		//    ⇒ 它不可能是一个声明式控件，也就是**不可能把值写进设置**；
+		// ② 源码（`test-settings-ui.mjs` 的静态守卫）：那一项用 `addText`、且全文件不构造
+		//    `SecretComponent` ⇒ 它是个普通输入框，而不是密钥选择器。
+		//
+		// ③ 另外顺带再确认一次：**秘密的值不落在设置里**（只允许存槽位名）。
 		const credsProbe = await evaluate(
 			client,
-			`(async () => {
+			`(() => {
 				const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
 				const s3 = plugin?.settings?.s3 ?? {};
-				const shape = {
+				const internals = app.setting ?? {};
+				const tabs = [...(internals.pluginTabs ?? []), ...(internals.settingTabs ?? [])];
+				const tab = tabs.find((t) => t?.plugin?.manifest?.id === ${JSON.stringify(PLUGIN_ID)});
+				const items = (tab?.getSettingDefinitions?.() ?? []).flatMap((g) => g.items ?? []);
+				const accessIndex = items.findIndex((i) => i?.control?.key === "s3.accessKeyId");
+				const next = accessIndex >= 0 ? items[accessIndex + 1] : null;
+				return {
 					hasSecretValue: "secretAccessKey" in s3,
 					slotLength: String(s3.secretAccessKeyRef ?? "").length,
+					accessIndex,
+					hasNextItem: Boolean(next),
+					nextIsCustomRender: Boolean(next) && typeof next.render === "function" && !next.control,
+					nextHasControl: Boolean(next?.control),
 				};
-				try {
-					app.setting.openTabById(${JSON.stringify(PLUGIN_ID)});
-				} catch (error) {
-					return { ...shape, opened: false, reason: String(error?.message ?? error) };
-				}
-				for (let i = 0; i < 40; i += 1) {
-					const el = document.querySelector(".acc-secret-input");
-					if (el) return { ...shape, opened: true, found: true, type: el.type, disabled: !!el.disabled };
-					await new Promise((r) => setTimeout(r, 250));
-				}
-				return { ...shape, opened: true, found: false };
 			})()`
 		);
-		const pairOk = credsProbe.found && credsProbe.type === "password" && !credsProbe.disabled;
+		const pairOk = credsProbe.accessIndex >= 0 && credsProbe.nextIsCustomRender;
 		log(
-			`  ${pairOk ? "✓" : "✗"} 秘密访问密钥是**普通输入框**（与访问密钥 ID 并排，同一处改）` +
-				`（找到：${credsProbe.found}，类型：${JSON.stringify(credsProbe.type)}）` +
-				(credsProbe.reason ? `（打开设置页失败：${credsProbe.reason}）` : "")
+			`  ${pairOk ? "✓" : "✗"} 秘密访问密钥紧跟访问密钥 ID，且是**自定义渲染**（不可能把值写进设置）` +
+				`（访问密钥 ID 的下标：${credsProbe.accessIndex}，下一项存在：${credsProbe.hasNextItem}，` +
+				`自定义渲染：${credsProbe.nextIsCustomRender}，带声明式控件：${credsProbe.nextHasControl}）`
 		);
 		log(
 			`  ${credsProbe.hasSecretValue ? "✗" : "✓"} 秘密的值不在插件设置里（只存钥匙串槽位名，长度 ${credsProbe.slotLength}）`

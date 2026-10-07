@@ -39,8 +39,8 @@ await runMutations({
 		{
 			// 后果：清理清单被截断 ⇒ 用户以为清干净了，其实还有一堆文件占着空间。
 			name: "★ 执行清单也用截断后的（清理静默漏掉后面的对象）",
-			from: "\tconst all = [...audit.orphans.map((file) => normalize(file.path)), ...audit.unused.map((entry) => normalize(entry.cachePath))];",
-			to: "\tconst all = [...audit.orphans.map((file) => normalize(file.path)), ...audit.unused.map((entry) => normalize(entry.cachePath))].slice(0, limit);",
+			from: "\tconst all = [...audit.orphans.map((file) => normalizeVaultPath(file.path)), ...audit.unused.map((entry) => normalizeVaultPath(entry.cachePath))];",
+			to: "\tconst all = [...audit.orphans.map((file) => normalizeVaultPath(file.path)), ...audit.unused.map((entry) => normalizeVaultPath(entry.cachePath))].slice(0, limit);",
 			expect: "必须**全量**",
 		},
 		{

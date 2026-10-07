@@ -36,13 +36,19 @@ await runMutations({
 			name: "字符串读取把非字符串透传（undefined 漏进设置）",
 			from: 'return (raw, fallback) => (typeof raw === "string" ? raw : fallback);',
 			to: "return (raw, fallback) => (raw === undefined ? fallback : raw);",
-			expect: "attachmentFolder 收到类型不对的值",
+			// ⚠️ 期望记的是**实测先红的那条**。原来这里是 `attachmentFolder`，
+			// 但那个字段已改用 `pathValue()`（它自己判类型），于是先红的是仍在用
+			// `textValue()` 的 s3 字段。变异本身没变，只是它现在照亮的断言换了。
+			expect: "s3.endpoint 收到类型不对的值",
 		},
 		{
-			name: "非空字符串不再拒绝空串（cacheFolder 被清空 → 缓存静默失效）",
+			// ⚠️ 同理：`cacheFolder` 已改用 `pathValue()`（归一后为空会回落默认），
+			// 所以这条变异现在照的是仍在用 `requiredTextValue()` 的 s3 字段 ——
+			// 它守的性质（"为空会直接不可用的字段不接受空串"）没有变。
+			name: "非空字符串不再拒绝空串（会直接不可用的字段被清空）",
 			from: 'return (raw, fallback) => (typeof raw === "string" && raw.trim() !== "" ? raw : fallback);',
 			to: 'return (raw, fallback) => (typeof raw === "string" ? raw : fallback);',
-			expect: "cacheFolder 为",
+			expect: "s3.region 为",
 		},
 		{
 			name: "枚举不再校验（非法值直接生效）",
@@ -132,6 +138,22 @@ await runMutations({
 			from: "\tconst rawS3 = isPlainRecord(raw.s3) ? raw.s3 : {};",
 			to: "\tconst rawS3 = {};",
 			expect: "s3.bucket 必须能往返",
+		},
+		{
+			// 后果：用户粘进来的反斜杠/双斜杠路径被**逐字**落进 data.json 并拼进缓存路径 ⇒
+			// 生成 vault 里不存在的层级，症状是"缓存目录里没有文件"，与那次粘贴看不出关系。
+			name: "★ 用户填的路径不再归一（反斜杠/双斜杠逐字落盘）",
+			from: "\t\tconst normalized = normalizePath(raw.trim());",
+			to: "\t\tconst normalized = raw.trim();",
+			expect: "缓存目录要归一",
+		},
+		{
+			// 后果：只敲了斜杠时归一成空串，而必填字段拿了空目录名 ⇒
+			// 缓存目录变成 vault 根目录，清理命令会去扫描整个库。
+			name: "★ 必填路径归一后为空时不再回落默认（缓存目录变成库根）",
+			from: "\t\treturn required ? fallback : \"\";",
+			to: '\t\treturn "";',
+			expect: "归一后为空的必填路径要回落默认",
 		},
 	],
 });
