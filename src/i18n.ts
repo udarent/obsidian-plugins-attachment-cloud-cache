@@ -34,7 +34,9 @@ export const I18N: Record<string, Locale> = {
 			"Your storage's Access Key (MinIO's “Access Key”, AWS's “Access Key ID”). It is an identifier, not a secret, so it is typed here and may contain capital letters.",
 		s3SecretKey: "Secret access key",
 		s3SecretKeyDesc:
-			"Pick a keychain secret, or create one there. ⚠️ When creating one, the name may only use lowercase letters, digits and dashes — so name it something like “minio-secret” and put the actual secret in the value field underneath the name.",
+			"The other half of the pair — change it here, next to the Access Key above. It is kept in your OS keychain, never in the plugin's data.",
+		s3SecretKeyPlaceholder: "Stored in your keychain",
+		s3SecretStoreFailed: "Could not save the secret to your keychain: {error}",
 		s3PublicUrlBase: "Public URL prefix",
 		s3PublicUrlBaseDesc: "Image links are built from this prefix plus the object path.",
 		testConnection: "Test connection",
@@ -194,7 +196,9 @@ export const I18N: Record<string, Locale> = {
 			"填存储服务上的 Access Key（MinIO 的「Access Key」、AWS 的「Access Key ID」）。它是标识符、不是密钥，所以直接填在这里，可以含大写字母。",
 		s3SecretKey: "秘密访问密钥",
 		s3SecretKeyDesc:
-			"从钥匙串里选择一条，或在那里新建。⚠️ 新建时「名字」只能用「小写字母、数字、短横线」（Obsidian 的规定）—— 所以名字随便起一个，比如 minio-secret，真正的密钥填在「名字下面那一格」。",
+			"与上面那一项成对使用 —— 换密钥时在同一处改完即可。它存在系统钥匙串里，不会写进插件的数据。",
+		s3SecretKeyPlaceholder: "已存入系统钥匙串",
+		s3SecretStoreFailed: "无法把该密钥写入系统钥匙串：{error}",
 		s3PublicUrlBase: "公开访问前缀",
 		s3PublicUrlBaseDesc: "笔记里的图片链接由这个前缀加上对象路径拼成。",
 		testConnection: "测试连接",

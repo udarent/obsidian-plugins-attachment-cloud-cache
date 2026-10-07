@@ -396,6 +396,46 @@ async function main() {
 		);
 		log(`    （设置页现有的 control key：${JSON.stringify(removal.controlKeys)}）`);
 
+		// ⭐⭐ 一对凭据必须在**同一处**、且都是普通输入框 —— 这条非真机不可：
+		// 它是 DOM 事实，只有宿主把设置页渲染出来才看得到。
+		//
+		// 为什么值得单独验：这两项是**成对签发、成对轮换**的（MinIO / AWS 都如此），
+		// 早先秘密走的是"从钥匙串里选择/新建一条**具名**密钥"的选择器，
+		// 于是这一对被拆到了两个地方 —— 用户报的正是这件事。
+		//
+		// 顺带再确认一次：**秘密的值不落在设置里**（只允许存槽位名）。
+		const credsProbe = await evaluate(
+			client,
+			`(async () => {
+				const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+				const s3 = plugin?.settings?.s3 ?? {};
+				const shape = {
+					hasSecretValue: "secretAccessKey" in s3,
+					slotLength: String(s3.secretAccessKeyRef ?? "").length,
+				};
+				try {
+					app.setting.openTabById(${JSON.stringify(PLUGIN_ID)});
+				} catch (error) {
+					return { ...shape, opened: false, reason: String(error?.message ?? error) };
+				}
+				for (let i = 0; i < 40; i += 1) {
+					const el = document.querySelector(".acc-secret-input");
+					if (el) return { ...shape, opened: true, found: true, type: el.type, disabled: !!el.disabled };
+					await new Promise((r) => setTimeout(r, 250));
+				}
+				return { ...shape, opened: true, found: false };
+			})()`
+		);
+		const pairOk = credsProbe.found && credsProbe.type === "password" && !credsProbe.disabled;
+		log(
+			`  ${pairOk ? "✓" : "✗"} 秘密访问密钥是**普通输入框**（与访问密钥 ID 并排，同一处改）` +
+				`（找到：${credsProbe.found}，类型：${JSON.stringify(credsProbe.type)}）` +
+				(credsProbe.reason ? `（打开设置页失败：${credsProbe.reason}）` : "")
+		);
+		log(
+			`  ${credsProbe.hasSecretValue ? "✗" : "✓"} 秘密的值不在插件设置里（只存钥匙串槽位名，长度 ${credsProbe.slotLength}）`
+		);
+
 		const ok =
 			loaded &&
 			commands.length >= 4 &&
@@ -410,6 +450,8 @@ async function main() {
 			!removal.hasDeleteModeSetting &&
 			!removal.deleteModeControl &&
 			accessKeyIsPlainText &&
+			pairOk &&
+			!credsProbe.hasSecretValue &&
 			relevantErrors.length === 0;
 
 		log();

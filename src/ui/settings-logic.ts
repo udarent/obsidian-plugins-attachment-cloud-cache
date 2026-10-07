@@ -10,6 +10,62 @@ import type { LocalCopyAction } from "../types";
 import { CACHE_LIMIT_MB_MAX, LOCAL_COPY_ACTIONS } from "../types";
 
 /**
+ * 秘密访问密钥在钥匙串里那条槽位的名字前缀。
+ *
+ * 用户**看不到**这个名字（界面上是一个普通输入框，值写穿到钥匙串），
+ * 但它在系统钥匙串里是可见的 —— 所以前缀要能让人认出"这是哪个插件建的"。
+ */
+export const SECRET_SLOT_PREFIX = "attachment-cloud-cache-s3-secret";
+
+/**
+ * 一条随机串，用作槽位名的随机部分。
+ *
+ * 放在这里是为了让"生成规则"只有一处；`Math.random().toString(36)` 给出的是
+ * 小写字母数字（正是 SecretStorage 允许的字符集）。
+ */
+export function randomSlotPart(): string {
+	return Math.random().toString(36).slice(2, 10);
+}
+
+/**
+ * 秘密访问密钥的**钥匙串槽位名**：没有就生成一个，已有就原样沿用。
+ *
+ * ## 为什么要有这么一个槽位名
+ *
+ * 秘密不能存进设置（`data.json` 是明文，且会随 vault 同步/备份/分享）——
+ * 它必须进钥匙串。而钥匙串是**具名**的，所以要有个名字才能取回来。
+ *
+ * 但这个名字**不该由用户起**：访问密钥 ID 与秘密访问密钥是**成对签发、成对轮换**的
+ *（MinIO / AWS 都如此），把其中一个变成"先去钥匙串给条目起个名"，
+ * 就等于把一对凭据拆到两个地方去改。让它自动生成、写穿进去，
+ * 用户就只需要面对"两个相邻的输入框"。
+ *
+ * ## ⚠️ 为什么必须**自己净化**传进来的字符
+ *
+ * `SecretStorage.setSecret` 对非法 ID 会直接**抛错**，而它只接受
+ * 「小写字母、数字、短横线」。不能指望调用方给的东西干净 —— 更不能等到
+ * `setSecret` 抛错才发现（那时秘密已经丢了）。
+ *
+ * ## ⚠️ 已有槽位**绝不改名**
+ *
+ * 改名等于把已经存进钥匙串的秘密孤儿化：设置页里那个框还是满的（我们从钥匙串读回值），
+ * 但读取用的名字变了 —— 表现为"凭据被拒"，而一切看起来都配好了。极难归因，
+ * 所以"沿用"这条有专门的断言（并且要断言**没有**去调用生成器）。
+ *
+ * @param existing 当前设置里存的槽位名（可能为空 = 还没存过秘密）
+ * @param randomPart 新的随机部分；**调用方必须给非空值**（见 `randomSlotPart`）
+ */
+export function ensureSecretSlot(existing: string, randomPart: string): string {
+	const trimmed = String(existing ?? "").trim();
+	if (trimmed !== "") return trimmed;
+	// 只留下 SecretStorage 允许的字符：小写字母与数字（短横线由我们自己拼）
+	const safe = String(randomPart ?? "")
+		.toLowerCase()
+		.replace(/[^a-z0-9]/g, "");
+	return `${SECRET_SLOT_PREFIX}-${safe}`;
+}
+
+/**
  * 下拉选项：由**类型清单**生成 `{取值: 文案}`（正是 `SettingDropdownControl.options` 的形状）。
  *
  * 从清单生成而不是手写，是为了让"界面上能选的值"与"类型允许的值"只有一处定义 ——

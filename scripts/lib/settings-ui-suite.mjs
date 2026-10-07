@@ -25,6 +25,8 @@ export function runSettingsUiSuite(mod) {
 		classifyConnectionFailure,
 		connectionFailureKey,
 		describeRememberedSites,
+		ensureSecretSlot,
+		SECRET_SLOT_PREFIX,
 		// settings-bindings
 		splitKey,
 		readByKey,
@@ -368,4 +370,49 @@ export function runSettingsUiSuite(mod) {
 		"c.example.net — 不再询问",
 		"★ 不认识的决定值要落到保守的一侧（显示成「缓存」会让用户以为它会被处理）"
 	);
+
+	// ============================================================
+	// 钥匙串槽位名（`ensureSecretSlot`）
+	//
+	// 秘密访问密钥与访问密钥 ID 是**成对**的，所以两者都在设置页同一处编辑：
+	// 访问密钥 ID 是普通设置项，秘密则是**写穿**到钥匙串 ——
+	// 槽位名由插件自动生成，用户看不到、也不用管（这正是不再需要 SecretComponent 的原因）。
+	// ============================================================
+	{
+		// ⭐ 生成的名字**必须**符合 SecretStorage 的 ID 规则：小写字母、数字、短横线。
+		// 这不是洁癖 —— `setSecret` 对非法 ID 会**抛错**，
+		// 而"ID 不允许大写"正是把访问密钥 ID 挤出钥匙串的那个原因（见 types.ts 文件头）。
+		const fresh = ensureSecretSlot("", "AB12cd34");
+		assert.match(
+			fresh,
+			/^[a-z0-9-]+$/,
+			"★ 生成的槽位名必须只含小写字母、数字、短横线（否则 setSecret 直接抛错）"
+		);
+		assert.ok(
+			fresh.startsWith(SECRET_SLOT_PREFIX),
+			"生成的槽位名要有固定前缀 —— 用户在系统的钥匙串里看到它时得能认出是谁建的"
+		);
+		assert.ok(fresh.includes("ab12cd34"), "随机部分要净化成小写后拼进去（传进来的是大写）");
+
+		// 已经有槽位时**原样沿用、绝不重新生成**：换名字等于把已存的秘密丢了
+		//（用户会看到"凭据被拒"，而设置页里那个框还是满的 —— 极难归因）。
+		let generateCalls = 0;
+		const kept = ensureSecretSlot("attachment-cloud-cache-s3-secret-abc123", () => {
+			generateCalls += 1;
+			return "should-not-be-used";
+		});
+		assert.equal(kept, "attachment-cloud-cache-s3-secret-abc123", "★ 已有槽位名要原样沿用");
+		assert.equal(generateCalls, 0, "★ 已有槽位时**不该**再去生成一个（否则旧秘密被孤儿化）");
+
+		// 纯空白视同没有（用户可能只敲了空格）
+		assert.match(ensureSecretSlot("   ", "x1"), /^[a-z0-9-]+$/, "纯空白的槽位名视同没有");
+		assert.notEqual(ensureSecretSlot("   ", "x1"), "   ", "纯空白不该被当成有效槽位名");
+
+		// 随机部分里的非法字符要被清掉（不能指望传进来的东西干净）
+		const dirty = ensureSecretSlot("", "a_B.C/d e");
+		assert.match(dirty, /^[a-z0-9-]+$/, "★ 随机部分里的非法字符必须被清掉，而不是原样拼进去");
+
+		// 两次生成必须不同（否则两个 vault 会共用同一条钥匙串密钥 —— 静默串味）
+		assert.notEqual(ensureSecretSlot("", "aaa1"), ensureSecretSlot("", "bbb2"), "不同的随机部分要生成不同的槽位");
+	}
 }

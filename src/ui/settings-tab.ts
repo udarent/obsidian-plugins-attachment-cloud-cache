@@ -29,7 +29,7 @@
  * 而绑定错了的症状是设置**静默存不进**。理由详见那个模块的头注释。
  */
 
-import { Notice, PluginSettingTab, SecretComponent } from "obsidian";
+import { Notice, PluginSettingTab } from "obsidian";
 import type { App, Setting, SettingDefinitionItem, SettingGroupItem } from "obsidian";
 
 import type AttachmentCloudCachePlugin from "../main";
@@ -40,7 +40,9 @@ import {
 	classifyConnectionFailure,
 	connectionFailureKey,
 	describeRememberedSites,
+	ensureSecretSlot,
 	localCopyOptions,
+	randomSlotPart,
 	shouldShowCacheFolder,
 } from "./settings-logic";
 
@@ -130,13 +132,17 @@ export class SettingsTab extends PluginSettingTab {
 				aliases: ["access key", "minio", "key id", "访问密钥", "密钥"],
 				control: { type: "text", key: "s3.accessKeyId" },
 			},
-			// 秘密访问密钥走 SecretComponent：它返回密钥的**名字**，值由 Obsidian 存进钥匙串。
-			// 用 render 是因为它需要 App 实例，而 control 的写法拿不到。
+			// ⚠️ 秘密访问密钥**紧挨着**上一项，也是普通输入框（值写穿到钥匙串）。
+			//
+			// 这两项是**成对签发、成对轮换**的（MinIO / AWS 都如此），所以必须能在一处改完。
+			// 早先把它交给 `SecretComponent`（"选择或新建一条**具名**密钥"）时，
+			// 这一对就被拆开了：ID 在文本框里，秘密却要先给钥匙串条目起个名字 ——
+			// 用户报的正是这件事（"没有一起修改是不对的"）。
 			{
 				name: this.t("s3SecretKey"),
 				desc: this.t("s3SecretKeyDesc"),
 				aliases: ["secret", "credential", "密钥"],
-				render: (setting) => this.renderSecret(setting),
+				render: (setting) => this.renderSecretInput(setting),
 			},
 
 			{
@@ -155,22 +161,63 @@ export class SettingsTab extends PluginSettingTab {
 	}
 
 	/**
-	 * 秘密访问密钥的选择器。
+	 * 秘密访问密钥的输入框 —— 与上面的访问密钥 ID **并排**，两个都在这里改。
 	 *
-	 * 用 `addComponent` 而不是 `addText`：`SecretComponent` 需要 `App`。
-	 * 它交出的是那条密钥的**名字**，真正的值由 Obsidian 存进钥匙串 ——
-	 * 所以这里存进设置的是名字，不是密钥本身。
+	 * ## 为什么不用 `SecretComponent`
+	 *
+	 * 那是"从钥匙串里选择或新建一条**具名**密钥"的控件。用它就意味着：
+	 * 访问密钥 ID 在文本框里填，秘密却要先给钥匙串条目**起个名字** ——
+	 * 而这两项是**成对签发、成对轮换**的（MinIO / AWS 都如此），
+	 * 一对凭据被拆到两个地方去改，用户报的正是这件事。
+	 *
+	 * ## 值写穿到钥匙串（设置里只有槽位名）
+	 *
+	 * 秘密**不能**进设置：`data.json` 是明文，且会随 vault 同步、备份、分享出去。
+	 * 所以这里输入的值直接 `setSecret` 进钥匙串，槽位名由 `ensureSecretSlot` 自动生成
+	 *（一次生成、此后沿用）—— 用户看不到也不用管这个名字。
 	 */
-	private renderSecret(setting: Setting): void {
+	private renderSecretInput(setting: Setting): void {
 		const s3 = this.plugin.settings.s3;
-		setting.addComponent((el) =>
-			new SecretComponent(this.app, el)
-				.setValue(s3.secretAccessKeyRef)
-				.onChange(async (value) => {
-					s3.secretAccessKeyRef = String(value ?? "").trim();
-					await this.plugin.saveSettings();
-				})
-		);
+		setting.addText((text) => {
+			// 掩码显示：避免肩窥，也提醒这是秘密。内容仍可从钥匙串读回（见下）。
+			text.inputEl.type = "password";
+			// 稳定的钩子：真机探针靠它确认"这个字段是普通输入框"，而不必猜 DOM 结构
+			text.inputEl.addClass("acc-secret-input");
+			text.setPlaceholder(this.t("s3SecretKeyPlaceholder"));
+			// ⚠️ 设置里存的是**槽位名**，值要从钥匙串读回来 —— 不读的话，
+			// 用户每次打开设置页都会看到一个空框，以为自己的密钥没存上、于是再填一次。
+			text.setValue(this.readStoredSecret(s3.secretAccessKeyRef));
+			text.onChange(async (value) => {
+				const slot = ensureSecretSlot(s3.secretAccessKeyRef, randomSlotPart());
+				s3.secretAccessKeyRef = slot;
+				try {
+					this.app.secretStorage.setSecret(slot, String(value ?? ""));
+				} catch (error) {
+					// ⚠️ 写不进钥匙串必须**如实说**。静默的话，用户以为存上了，
+					// 而"测试连接"会报"凭据被拒" —— 于是他会去怀疑密钥本身写错了。
+					new Notice(
+						this.t("s3SecretStoreFailed", { error: error instanceof Error ? error.message : String(error) })
+					);
+				}
+				await this.plugin.saveSettings();
+			});
+		});
+	}
+
+	/**
+	 * 从钥匙串读回已存的秘密。
+	 *
+	 * 槽位名为空（从未存过）或读取出错（宿主实现差异、锁定等）一律当空串 ——
+	 * 设置页要能显示"读不到"，而不是整个崩掉。
+	 */
+	private readStoredSecret(slot: string): string {
+		const trimmed = String(slot ?? "").trim();
+		if (trimmed === "") return "";
+		try {
+			return this.app.secretStorage.getSecret(trimmed) ?? "";
+		} catch {
+			return "";
+		}
 	}
 
 	/**

@@ -78,5 +78,33 @@ await runMutations({
 			to: "\treturn `failure_${kind}`;",
 			expect: "每类失败都要有文案 key",
 		},
+
+		// ── 秘密访问密钥的钥匙串槽位名 ──
+		{
+			// 后果：槽位名里出现大写/非法字符 ⇒ `setSecret` **直接抛错**，
+			// 秘密存不进去，而用户看到的只是"凭据被拒"。
+			// 这正是最初那个缺陷的形态（密钥 ID 不允许大写），所以值得钉住。
+			name: "★ 槽位名不再净化（非法字符会让 setSecret 直接抛错）",
+			from: '\t\t.toLowerCase()\n\t\t.replace(/[^a-z0-9]/g, "");',
+			to: "\t\t;",
+			expect: "生成的槽位名必须只含小写字母、数字、短横线",
+		},
+		{
+			// 后果：每次保存都换一个新槽位名 ⇒ 旧秘密被孤儿化，
+			// 设置页那个框还是满的（从钥匙串读回的），但读取用的名字变了 ——
+			// 表现为"凭据被拒"，而一切看起来都配好了。
+			name: "★ 已有槽位名被丢弃、每次重新生成（旧秘密被孤儿化）",
+			from: '\tconst trimmed = String(existing ?? "").trim();\n\tif (trimmed !== "") return trimmed;',
+			to: '\tconst trimmed = String(existing ?? "").trim();\n\tvoid trimmed;',
+			expect: "已有槽位名要原样沿用",
+		},
+		{
+			// 后果：纯空白的槽位名被当成有效 ⇒ 拿一个空白名字去 getSecret/setSecret，
+			// 秘密永远取不回来（而设置里那个字段看起来"有值"）。
+			name: "纯空白的槽位名被当成有效",
+			from: '\tconst trimmed = String(existing ?? "").trim();',
+			to: '\tconst trimmed = String(existing ?? "");',
+			expect: "纯空白的槽位名视同没有",
+		},
 	],
 });
