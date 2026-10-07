@@ -13,7 +13,7 @@ await runMutations({
 	suite: runDownloadSuite,
 	mutations: [
 		{
-			// 后果：SCOPE 的红线被越过 —— 站外图会被拉进用户 vault
+			// 后果：「站外图永不下载」这条红线被越过 —— 站外图会被拉进用户 vault
 			//（那正是另一个插件的定位，而且会带来存储与合规问题）。
 			name: "★ 不再复核 URL 归属（站外图会被下载进 vault，越过红线）",
 			from: "\t\tif (derived !== key) {\n\t\t\treturn { status: \"refused\", key, localPath: \"\" };\n\t\t}\n",

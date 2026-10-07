@@ -46,7 +46,7 @@ export default defineConfig(
 	{
 		// ─────────────────────── 移动端安全门 ───────────────────────
 		//
-		// `docs/SCOPE.md` 把移动端列为 P0，并把技术约束写死为：
+		// 本项目把「移动端可用」列为 P0，并把技术约束写死为：
 		// **只使用两端都有的 API**。而 Node 内置模块与 Node 全局
 		// 只在桌面端存在 —— 用了就"桌面全绿、手机上直接崩"，
 		// 且类型系统看不出来（`@types/node` 让 `import fs from "fs"` 编译通过）。
@@ -80,7 +80,7 @@ export default defineConfig(
 						"assert",
 					].map((name) => ({
 						name,
-						message: `移动端没有 Node 内置模块。请改用 Obsidian 的 vault / adapter / requestUrl，或自带实现（见 docs/SCOPE.md 的移动端约束）。`,
+						message: `移动端没有 Node 内置模块。请改用 Obsidian 的 vault / adapter / requestUrl，或自带一份实现 —— 本项目承诺移动端可用，平台分支不是可选项。`,
 					})),
 					patterns: [
 						{

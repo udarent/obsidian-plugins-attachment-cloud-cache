@@ -534,7 +534,7 @@ export function createAppMock(rootDir, opts = {}) {
 			calls.getBasePath += 1;
 			if (mobile) {
 				throw new Error(
-					"getBasePath() 在移动端不可用 —— 插件必须只用 Vault / DataAdapter API（见 docs/SCOPE.md 的移动端约束）"
+					"getBasePath() 在移动端不可用 —— 插件必须只用 Vault / DataAdapter API（不使用只在桌面端存在的 API）"
 				);
 			}
 			return rootDir;

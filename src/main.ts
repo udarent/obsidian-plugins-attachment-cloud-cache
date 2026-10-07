@@ -556,7 +556,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 索引指向的本地副本其实不存在 → 把这条记录摘掉并落盘。
 	 *
 	 * 这是**自愈**而不是清理：只改索引，不动任何文件。发生的时机是渲染时
-	 * `<img>` 加载失败（用户删了缓存目录 —— SCOPE 明确承诺那可以随时做）。
+	 * `<img>` 加载失败（用户删了缓存目录 —— 那随时可做，是承诺过的）。
 	 * 不摘掉的话，这个 key 会**永远**被判为"本地已有"，于是永远不去下载。
 	 */
 	private async forgetLocalCopy(key: string): Promise<void> {

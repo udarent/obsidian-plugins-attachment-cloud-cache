@@ -15,8 +15,8 @@
  *
  * 索引文件在插件目录里，而它是 `.obsidian/` 下的东西 ——
  * 宿主的 `vault` API 看不见这类路径（也不该看见）。`adapter` 是直接的文件访问层，
- * 正好用于这种"插件自己的数据文件"。手机上同样可用（这正是 SCOPE 里
- * "不用 Node fs、只用 DataAdapter"那条约束的实际落点）。
+ * 正好用于这种"插件自己的数据文件"。手机上同样可用 —— 这正是"不用 Node fs、
+ * 只用 DataAdapter"那条约束的实际落点。
  */
 
 import type { DataAdapter } from "obsidian";

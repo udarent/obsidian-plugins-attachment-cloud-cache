@@ -5,7 +5,7 @@ import { runRenderTargetSuite } from "./lib/render-target-suite.mjs";
  * 变异验证：渲染目标判定（`src/render/render-target.ts`）。
  *
  * 这一层判错的后果是**断网时图是破的**（该换本地却没换）或**把别人的图拉进 vault**
- * （认错了站外图越过 SCOPE 划的红线）。两种都不报错，所以每条规则都要能被单独打坏。
+ * （认错了站外图越过了「站外图永不下载」这条红线）。两种都不报错，所以每条规则都要能被单独打坏。
  */
 await runMutations({
 	source: "src/render/render-target.ts",

@@ -2,7 +2,7 @@
  * AWS Signature Version 4（`AWS4-HMAC-SHA256`，header 形式）。
  *
  * 目的是**不依赖任何 SDK** 地支持 S3 兼容存储（Cloudflare R2 / MinIO / AWS S3 /
- * Backblaze B2 / Wasabi / 阿里云 OSS / 腾讯 COS）—— 见 `docs/SCOPE.md` 的"不做什么"。
+ * Backblaze B2 / Wasabi / 阿里云 OSS / 腾讯 COS），且不依赖任何 SDK。
  *
  * ## 为什么值得自己写
  *

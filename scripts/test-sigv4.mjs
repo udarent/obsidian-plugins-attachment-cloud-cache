@@ -4,7 +4,7 @@ import { runSigv4Suite } from "./lib/sigv4-suite.mjs";
 /**
  * SigV4 签名的测试。
  *
- * 不依赖任何 SDK（SCOPE 里明确"不依赖 PicGo / 单一提供商"，也要避免为了签名
+ * 不依赖任何 SDK（本项目明确"不依赖 PicGo / 单一提供商"，也要避免为了签名
  * 拖进一个几百 KB 的 AWS SDK），所以正确性必须由**规范本身**保证。
  * 办法是把 AWS 公开发布过的三个向量钉在这里：签名对上 ⇔ 规范化请求逐字节正确。
  *

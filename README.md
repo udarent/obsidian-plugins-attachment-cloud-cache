@@ -3,8 +3,9 @@
 Upload your note attachments to **your own** S3-compatible storage and keep a local copy in a
 cache folder — so images still render when you are offline.
 
-> **Status: early development (0.1.0).** The project is being built feature by feature under TDD;
-> see [Scope & roadmap](./docs/SCOPE.md) for what is done and what is planned.
+> **Status: early development (0.1.0).** The project is built feature by feature under TDD.
+> "What works today" and "Verified scope" below are the authoritative lists of what is done,
+> and of what is deliberately not done yet.
 >
 > **What works today:** the settings tab (connection settings, a "test connection" button);
 > **uploading** — pasting or dropping image files uploads them, keeps a local copy, and rewrites the
@@ -211,14 +212,13 @@ The plugin is not in the Community directory yet (it is under development). Manu
 ## Permissions & licensing
 
 - Licensed under the **MIT** license — see [LICENSE](./LICENSE).
-- This is an **independent implementation**, written from scratch. It is not a fork of, and shares
-  no code with, any other plugin. The feature comparison in
-  [docs/SCOPE.md](./docs/SCOPE.md) is based on publicly documented behaviour of other plugins.
-- How that independence was actually checked — the method, the result, and the parts that could
-  not be verified — is recorded in [docs/INDEPENDENCE.md](./docs/INDEPENDENCE.md). The short
-  version: a line-by-line comparison against the upstream sources finds **zero** shared lines, and
-  none of upstream's function names appear here. The document also states plainly what a line
-  comparison cannot prove.
+- This is an **independent implementation**, written from scratch: not a fork of, and sharing no
+  code with, any other plugin. Its scope was decided from publicly documented behaviour of other
+  plugins, never by reusing someone else's implementation.
+- What that claim rests on: a line-by-line comparison against the codebase this project started
+  from finds **zero** shared lines, and none of its function names appear here. A line comparison
+  can show the absence of copied lines, not the absence of influence — worth stating plainly
+  instead of overclaiming.
 
 ## Development
 

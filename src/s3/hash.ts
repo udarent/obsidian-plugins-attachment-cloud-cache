@@ -3,7 +3,7 @@
  *
  * ## 为什么不用 `node:crypto`
  *
- * 移动端没有它。本项目有一条已确认的硬约束（见 `docs/SCOPE.md`）：
+ * 移动端没有它。本项目有一条已确认的硬约束：
  * **代码只使用两端都有的 API**，否则移动端一跑就崩。所以签名原语不能用 Node 内置模块。
  *
  * ## 为什么也不能只靠 `crypto.subtle`
@@ -12,11 +12,11 @@
  * - 桌面（Electron `app://`）：可用。
  * - Android（Capacitor `http://localhost`）：可用（localhost 属潜在可信来源）。
  * - ⚠️ **iOS（Capacitor `capacitor://localhost`）：自定义 scheme，`crypto.subtle` 可能为 `undefined`。**
- *   这是 Capacitor 上的已知差异，而本项目**无法在本机验证 iOS**（见 SCOPE 的说明）。
+ *   这是 Capacitor 上的已知差异，而本项目**无法在本机验证 iOS**（没有可用的 iOS 设备）。
  *
  * 所以策略是**优先 WebCrypto、缺失时降级到自带实现**，而不是"假定它存在"。
  * 这样一来：性能路径在能用的地方照走，iOS 上也不会因为一个 `undefined` 就整个签名崩掉。
- * 这与 SCOPE 里"不做平台分支，而是不做平台假设"是同一条纪律。
+ * 这与本项目"不做平台分支，而是不做平台假设"是同一条纪律。
  *
  * ## 自带实现凭什么可信
  *

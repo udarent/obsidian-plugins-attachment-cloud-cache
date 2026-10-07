@@ -12,7 +12,7 @@
  * - 设置项会进入 Obsidian 的**设置搜索**（`aliases` 还能补同义词）；
  * - 分组、样式与 Obsidian 自身设置页一致。
  *
- * 代价是 minAppVersion 必须 ≥ 1.13.0 —— 这是明确接受的取舍（见 `docs/SCOPE.md`）。
+ * 代价是 minAppVersion 必须 ≥ 1.13.0 —— 这是明确接受的取舍，不是疏忽。
  *
  * ## 什么时候仍然用 `render`
  *
