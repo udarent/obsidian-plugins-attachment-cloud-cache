@@ -322,7 +322,7 @@ function makeEditor() {
 }
 
 /** 一次"粘贴了这些文件"的事件替身。默认带文本 ⇒ 判定层会放行，所以默认不带。 */
-function makePasteEvent(files, { withText = false } = {}) {
+function makePasteEvent(files, { withText = false, alsoInItems = false } = {}) {
 	let prevented = false;
 	return {
 		preventDefault() {
@@ -333,7 +333,17 @@ function makePasteEvent(files, { withText = false } = {}) {
 		},
 		clipboardData: {
 			files,
-			items: files.map(() => ({ kind: "file" })),
+			// ⭐ `alsoInItems` 模拟**真实剪贴板**：同一个文件在 `files` 与 `items` 两处都有，
+			// 而 `getAsFile()` 给的是**另一个 File 对象**、时间戳也不同
+			//（宿主新建那个对象时取的是"此刻"）。默认那份 items 里没有 `getAsFile`，
+			// 所以它一点也没碰这条路径 —— 用户实测报的"一次粘贴出现两张相同图片"正是从这里漏的。
+			items: alsoInItems
+				? files.map((file) => ({
+						kind: "file",
+						type: file.type,
+						getAsFile: () => ({ ...file, lastModified: 2 }),
+					}))
+				: files.map(() => ({ kind: "file" })),
 			getData: (type) => (withText && type === "text/plain" ? "一段文字" : ""),
 		},
 	};
@@ -570,6 +580,25 @@ export async function runLoadAcceptance(options = {}) {
 			server.countByMethod("PUT"),
 			before,
 			"★ 内容相同应命中缓存，不得再 PUT 一次"
+		);
+
+		// ⭐⭐ 真实剪贴板的形状：同一个文件在 `files` 与 `items` 两处都有，而 `getAsFile()`
+		// 给的是**另一个 File 对象**（时间戳也不同）。这就是用户实测报的那件事 ——
+		// "复制粘贴图片的时候，发现出现了两张相同图片"（他那里一次粘贴插了 3 条一模一样的链接）。
+		// 判据落在**插入的文本条数**上：一次粘贴只能留下一张图。
+		const dupeEditor = makeEditor();
+		app.workspace.trigger(
+			"editor-paste",
+			makePasteEvent([makeFile("dupe.png", HOSTILE_BYTES)], { alsoInItems: true }),
+			dupeEditor,
+			info
+		);
+		await waitFor(() => dupeEditor.replaced.length > 0, "重复载荷的粘贴插入链接", 5000, diagnose);
+		const dupeLines = dupeEditor.replaced[0].split("\n").filter((line) => line !== "");
+		assert.equal(
+			dupeLines.length,
+			1,
+			`★ 一次粘贴只该插一条链接（实际 ${dupeLines.length} 条：${JSON.stringify(dupeEditor.replaced[0])}）`
 		);
 
 		// ============================================================

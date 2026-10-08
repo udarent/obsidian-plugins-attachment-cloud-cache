@@ -13,7 +13,8 @@ const result = await runLoadAcceptance();
 console.log(
 	`Load acceptance passed (built main.js loads and registers ${JSON.stringify(result.registrations)}; ` +
 		"a real paste went through: 1 PUT + cached copy byte-identical + link inserted, a second identical paste " +
-		"issued 0 PUT; rendering rewrote the src to the local copy with **zero** requests in both reading view and " +
+		"issued 0 PUT, and a clipboard that hands the same image over twice (once in `files`, once in `items`) still " +
+		"leaves exactly one link — one paste must not show the same picture twice; rendering rewrote the src to the local copy with **zero** requests in both reading view and " +
 		"live preview, while a third-party image was left alone; clean-cache deleted only the orphan through " +
 		"Vault.delete (never the trash), said so in the confirmation text, left the referenced copy alone, and " +
 		"cancelling touched nothing; batch upload rewrote both link forms, kept the originals and left " +

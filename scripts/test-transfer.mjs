@@ -32,7 +32,9 @@ await withLoadedTs(
 				"nothing gets swallowed, files are de-duplicated when they appear in both `files` and " +
 				"`items`, duplicates are never merged when they cannot be identified, and execution " +
 				"inserts remote links (or a local embed on upload failure) at the position captured " +
-				"before the network call, once, with nothing lost)."
+				"before the network call, once per distinct image — the clipboard handing the same picture over " +
+				"twice (different wrappers, different timestamps) still leaves one link, while two genuinely " +
+				"different images both stay — with nothing lost)."
 		);
 	}
 );

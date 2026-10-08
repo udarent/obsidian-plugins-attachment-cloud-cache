@@ -207,6 +207,18 @@ export async function runTransferSuite(mod) {
 	assert.equal(fileIdentity("not-a-file"), null, "非对象不该抛错");
 	// 有 size 但没名字 → 仍然算有身份
 	assert.notEqual(fileIdentity({ size: 1 }), null, "有 size 就足以区分");
+	// ⭐⭐ `lastModified` **不属于**"这是哪张图"。
+	//
+	// 同一个剪贴板条目的两个包装对象（`clipboardData.files[0]` 与 `items[i].getAsFile()`）
+	// 是**两个不同的 File**，而宿主给它们的时间戳**不保证相同**
+	//（Chromium 那份是调用 `getAsFile()` 时才新建的，时间戳自然是那一刻）。
+	// 把它算进身份串，去重就会漏 —— 实测症状是**一次粘贴插入 2~3 条一模一样的外链**
+	//（用户报的"复制粘贴图片时出现了两张相同图片"）。
+	assert.equal(
+		fileIdentity(png()),
+		fileIdentity(makeFile("shot.png", "image/png", IMAGE_BYTES, { lastModified: 99 })),
+		"★ 时间戳不是身份的一部分：同一张图的两个包装对象必须同身份"
+	);
 
 	// ============================================================
 	// 2. filesFromTransfer —— 两个来源都要看，并且去重
@@ -252,6 +264,29 @@ export async function runTransferSuite(mod) {
 			filesFromTransfer(makeTransfer({ files: protoFiles })),
 			protoFiles,
 			"⭐ 两个不同的文件都必须保留 —— 去重不能退化成『按序列化结果比较』，那会把所有文件合成一个"
+		);
+
+		// ⭐⭐ 真实剪贴板的形状：`files[0]` 与 `items[0].getAsFile()` 是**两个不同的 File**，
+		// 而时间戳可以不同（宿主新建那个对象时取的是"此刻"）。
+		// 这一条是用户实测报的场景 —— 一次粘贴，笔记里出现 3 条一模一样的链接。
+		// ⚠️ 放在上面那条**之后**：套件是"第一条失败的断言决定报错"，
+		// 插到前面会把"去重退化成序列化比较"那条变异的报错换掉（它的 `expect` 就对不上了）。
+		const realClipboard = filesFromTransfer(
+			makeTransfer({
+				files: [makeFile("image.png", "image/png")],
+				items: [
+					{
+						kind: "file",
+						type: "image/png",
+						getAsFile: () => makeFile("image.png", "image/png", IMAGE_BYTES, { lastModified: 12345 }),
+					},
+				],
+			})
+		);
+		assert.equal(
+			realClipboard.length,
+			1,
+			`★ 同一张图的两个包装对象（时间戳不同）必须去重 —— 否则一次粘贴插入两条相同链接（实际 ${realClipboard.length} 条）`
 		);
 
 		// 非文件类型的 item 要跳过（text/plain 之类）
@@ -504,6 +539,41 @@ export async function runTransferSuite(mod) {
 		const entry = h.index.toArray()[0];
 		assert.ok(entry, "索引里应有登记");
 		assert.equal(await h.exists(entry.cachePath), true, "缓存副本应真的在磁盘上");
+	});
+
+	// 7a2. ⭐⭐ 同一张图在列表里出现两次 → **只插一条链接**。
+	//
+	// 这是兜底，也是最要紧的一条：即使上游没去掉重复条目，用户也**不该**看到两张一样的图。
+	// 判据落在**结果**上（同一份字节 = 同一个 key = 同一个 URL），
+	// 所以它不依赖剪贴板的元数据是否一致 —— 那是我们控制不了的东西。
+	// ⚠️ 用户实测报的就是这个："复制粘贴图片的时候，发现出现了两张相同图片"。
+	await withHarness(mod, {}, async (h) => {
+		const { editor } = makeEditor();
+		const same = () => makeFile("shot.png", "image/png");
+		const outcome = await processTransfer(h.deps, editor, [same(), same()]);
+
+		const lines = outcome.text.split("\n").filter((line) => line !== "");
+		assert.equal(lines.length, 1, `★ 同一张图重复出现时只该插一条链接（实际 ${JSON.stringify(outcome.text)}）`);
+		assert.equal(h.server.countByMethod("PUT"), 1, "只该上传一次（第二次命中缓存）");
+		assert.equal(h.index.size, 1, "索引里也只该有一条记录");
+	});
+
+	// 7a3. 反向：**两张不同的图**必须各插一条。
+	//
+	// ⚠️ 这一条是给上面那条兜底用的：去重若按"名字 + 大小"这种粗口径做，
+	// 两张都叫 `image.png` 的图会被合并成一条 —— 那就变成"少插一张"，比重复更坏
+	//（用户以为图没粘上）。所以去重只能按**同一份字节**判。
+	await withHarness(mod, {}, async (h) => {
+		const { editor } = makeEditor();
+		const otherBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x99, 0x88]);
+		const outcome = await processTransfer(h.deps, editor, [
+			makeFile("image.png", "image/png"),
+			makeFile("image.png", "image/png", otherBytes),
+		]);
+
+		const lines = outcome.text.split("\n").filter((line) => line !== "");
+		assert.equal(lines.length, 2, `★ 两张不同的图必须各插一条（实际 ${JSON.stringify(outcome.text)}）`);
+		assert.equal(h.index.size, 2, "两张不同内容应当各有一条记录");
 	});
 
 	// 7b. 捕获好的插入位置优先于当前位置（上传耗时期间用户可能已经点走）

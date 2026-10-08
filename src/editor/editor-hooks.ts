@@ -88,7 +88,12 @@ export function fileIdentity(file: TransferFileLike | null | undefined): string 
 	const hasSize = typeof file.size === "number";
 	const hasType = typeof file.type === "string" && file.type !== "";
 	if (!hasName && !hasSize && !hasType) return null;
-	return [file.name ?? "", file.size ?? "", file.lastModified ?? "", file.type ?? ""].join("\u0000");
+	// ⚠️ 刻意**不含** `lastModified`：它不是"这是哪张图"的一部分，而且**同一个剪贴板条目
+	// 的两个包装对象拿到的不是同一个时间戳** —— `clipboardData.files[0]` 与
+	// `items[i].getAsFile()` 是两个不同的 `File`，后者常常是调用时才新建的（时间戳=此刻）。
+	// 把它算进身份串，去重就会在这种**最常见的**场景下失效：一次粘贴插入 2~3 条一模一样的外链
+	//（用户实测报过："复制粘贴图片的时候，发现出现了两张相同图片"）。
+	return [file.name ?? "", file.size ?? "", file.type ?? ""].join("\u0000");
 }
 
 /**

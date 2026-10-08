@@ -151,5 +151,14 @@ await runMutations({
 			to: 'const path = String(vaultPath ?? "").trim();',
 			expect: "反斜杠要归一化",
 		},
+		{
+			// 后果：剪贴板把同一张图给成多份（files 一份 + items 一份）时去重失效 ——
+			// 两个包装对象的名字/大小/类型都一样，**只有时间戳不同**，
+			// 而后者是宿主新建那个对象时取的"此刻"。一次粘贴就插 2~3 条相同外链（实测报过）。
+			name: "★ 去重键含 lastModified（同一张图的两个包装对象被当成两张）",
+			from: '\treturn [file.name ?? "", file.size ?? "", file.type ?? ""].join("\\u0000");',
+			to: '\treturn [file.name ?? "", file.size ?? "", file.lastModified ?? "", file.type ?? ""].join("\\u0000");',
+			expect: "时间戳不是身份的一部分",
+		},
 	],
 });

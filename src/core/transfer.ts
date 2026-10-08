@@ -90,6 +90,25 @@ export async function processTransfer(
 	const parts: string[] = [];
 	const outcome: TransferOutcome = { text: "", uploaded: 0, reused: 0, fallback: 0, lost: 0 };
 
+	/**
+	 * 插入去重：**同一次粘贴里，同一张图只插一条链接**。
+	 *
+	 * 剪贴板完全可能把同一张图给成多份：`files` 里一份、`items` 里一份，甚至多个"表示"。
+	 * 上游（`filesFromTransfer`）已经按内容身份去过一次重，但那是**元数据**判据
+	 * （名字 + 大小 + 类型）—— 宿主给的元数据一旦有出入，去重就会漏。
+	 *
+	 * 这里的判据是**结果**：同一份字节 ⇒ 同一个 key ⇒ 同一个 URL ⇒ 同一条文本。
+	 * 于是它不依赖剪贴板长什么样；用户看到的就是"粘了一次，出现一张图"。
+	 * ⚠️ 反过来，两张**内容不同**的图各有各的 URL，即使同名同大小也不会被合并 ——
+	 * "少插一张"比"多插一张"更坏（用户会以为图丢了）。
+	 */
+	const inserted = new Set<string>();
+	const pushPart = (text: string): void => {
+		if (inserted.has(text)) return;
+		inserted.add(text);
+		parts.push(text);
+	};
+
 	for (const file of files) {
 		const name = typeof file.name === "string" && file.name !== "" ? file.name : undefined;
 		// alt 用**主干**而不是整个文件名：`![shot](…)` 比 `![shot.png](…)` 更像说明文字，
@@ -118,7 +137,7 @@ export async function processTransfer(
 
 		if (result.status === "fallback") {
 			if (result.localPath) {
-				parts.push(buildLocalImageEmbed(result.localPath, alt));
+				pushPart(buildLocalImageEmbed(result.localPath, alt));
 				outcome.fallback += 1;
 				deps.notify(
 					deps.t("hookUploadFailedKeptLocal", { error: describeError(result.error ?? "unknown") })
@@ -132,7 +151,7 @@ export async function processTransfer(
 			continue;
 		}
 
-		parts.push(buildRemoteImageMarkdown(result.remoteUrl, alt));
+		pushPart(buildRemoteImageMarkdown(result.remoteUrl, alt));
 		if (result.status === "reused") outcome.reused += 1;
 		else outcome.uploaded += 1;
 	}

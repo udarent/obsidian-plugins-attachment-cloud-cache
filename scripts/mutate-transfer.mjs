@@ -32,8 +32,8 @@ await runMutations({
 	mutations: [
 		{
 			name: "降级时不插入任何内容（⭐ 图保住了，但笔记里什么都没有）",
-			from: "\t\t\tif (result.localPath) {\n\t\t\t\tparts.push(buildLocalImageEmbed(result.localPath, alt));",
-			to: "\t\t\tif (false) {\n\t\t\t\tparts.push(buildLocalImageEmbed(result.localPath, alt));",
+			from: "\t\t\tif (result.localPath) {\n\t\t\t\tpushPart(buildLocalImageEmbed(result.localPath, alt));",
+			to: "\t\t\tif (false) {\n\t\t\t\tpushPart(buildLocalImageEmbed(result.localPath, alt));",
 			expect: "降级也必须插回内容",
 		},
 		{
@@ -77,6 +77,15 @@ await runMutations({
 			from: "\tif (text) insertText(editor, text, insertPoint);",
 			to: "\tinsertText(editor, text, insertPoint);",
 			expect: "不该插入任何东西",
+		},
+		{
+			// 后果：同一次粘贴里同一张图被插两条（或更多）链接 —— 用户看到的是
+			// "粘了一张图，出现两张一样的图"（实测报过）。剪贴板把同一张图给成多份
+			// 是常态（files 一份 + items 一份，包装对象不同、元数据也可能不同）。
+			name: "★ 插入不再去重（同一张图被插成两条链接）",
+			from: "\t\tif (inserted.has(text)) return;",
+			to: "\t\tif (false) return;",
+			expect: "同一张图重复出现时只该插一条链接",
 		},
 	],
 });
