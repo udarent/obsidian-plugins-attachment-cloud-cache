@@ -6,10 +6,13 @@ on:
       - "*"
 
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
+    # contents: 创建 release；id-token / attestations: 生成「构建来源证明」（见下面的 attest 步骤）
     permissions:
       contents: write
+      id-token: write
+      attestations: write
 
     steps:
       - uses: actions/checkout@v4
@@ -39,10 +42,33 @@ jobs:
       - name: Verify release assets exist
         run: node scripts/check-manifest.mjs --expect-version "$GITHUB_REF_NAME"
 
-      - name: Create release
-        uses: softprops/action-gh-release@v2
+      # 对三个发布资产生成**签名**的构建来源证明（sigstore）。
+      #
+      # 官方模板里有这一步，并注明"提交到社区目录时推荐"。它把"这个 main.js 是在
+      # 这个 tag 的这个提交上、由这条工作流构建出来的"变成可验证的公开事实 ——
+      # 否则用户只能选择相信 release 附件与仓库源码一致（本项目是开源的、
+      # 且 main.js 不入库，所以正是这一步在衔接两者）。
+      #
+      # ⚠️ 必须在 `npm run build` 之后：它签名的是**产物本身**。
+      - name: Generate artifact attestation
+        uses: actions/attest@v4
         with:
-          files: |
+          subject-path: |
             main.js
             manifest.json
             styles.css
+
+      # 先建 **draft**，人工核对三个附件后再手动 Publish。
+      #
+      # ⚠️ 顺序有意义：draft release 对 Obsidian 目录是**不可见**的。所以"发布"
+      # 这一步必须由人确认后才发生 —— 一个附件缺失或版本号不对的 release
+      # 一旦公开，就已经在给用户下载了。（用第一方 `gh` 而不是第三方 action：
+      # 发布链路不再多一个需要信任的依赖。）
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title="$GITHUB_REF_NAME" \
+            --draft \
+            main.js manifest.json styles.css
