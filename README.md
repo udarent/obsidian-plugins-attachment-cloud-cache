@@ -5,12 +5,12 @@
 Upload your note attachments to **your own** S3-compatible storage and keep a local cache copy — so
 images still render when you are offline.
 
-> **Status: 0.1.0, early development.**
+> **Status: 1.0.0.**
 > **What works:** upload on paste/drop, offline rendering, fetching missing copies on demand, optional
 > third-party image caching and a cache size limit, and four maintenance commands.
-> **What is not proven yet:** the connection test passes against a real MinIO instance, but
-> **upload and download have not been tried against a real provider**; iOS and Android have never
-> been run.
+> **Verified:** the full upload / download round trip is proven against a real MinIO instance — see
+> **How far it is verified** below.
+> **Not proven yet:** iOS has never been run, and Android has not been run on a real device.
 
 ## Why use it
 
@@ -84,8 +84,14 @@ Open **Settings → Attachment Cloud Cache**, then:
 
 ## Privacy & security
 
-- **It only talks to your storage.** The plugin sends the attachments you choose to upload to the
-  endpoint you configured. It talks to no other service and contains no telemetry.
+- **It normally talks only to your storage.** The plugin sends the attachments you choose to upload
+  to the endpoint you configured. It contains no telemetry, no analytics and no ads.
+- **One optional feature reaches other sites — and only if you turn it on.** "Cache images from other
+  sites" is **off by default**. Once it is on, opening a note with an image hosted elsewhere asks you
+  **once per site**: choosing "Cache and remember this site" makes the plugin request that image
+  **directly from that site**, upload it to your storage and rewrite the link; sites you answered
+  "Don't ask for this site" for are never requested. The request carries nothing beyond the image's
+  own address. With the feature off, the plugin makes no request to any site other than your storage.
 - **Nothing outside your vault is touched.** Everything it reads or writes lives inside your vault.
 - **The secret access key lives in the OS keychain**, never in `data.json`. **The access key ID is
   written to `data.json`** — it is an identifier, not a secret (it is part of the signed request
