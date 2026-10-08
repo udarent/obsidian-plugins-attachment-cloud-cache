@@ -31,10 +31,11 @@ images are both **yours** and **always visible**, with zero remote requests when
 - **Images render offline** from the local copy, with zero remote requests
 - **Never loses or overwrites a file**: a failed upload keeps the bytes locally and inserts a working
   link plus the reason; a same-named file becomes `a 1.png`, never replaced
-- **Two optional features, both off by default**: caching images from other sites (asked once per
-  site), and a cache size limit that cleans up least-recently-used copies in the background
-- **Four maintenance commands**: show cache usage · repair the local-copy index · clean up unused
-  cache files · upload existing attachments
+- **Two optional features, both off by default**: caching images from other sites (nothing happens
+  until you say so, and you can pick individual images), and a cache size limit that cleans up
+  least-recently-used copies in the background
+- **Five maintenance commands**: show cache usage · repair the local-copy index · clean up unused
+  cache files · upload existing attachments · pick which off-site images to cache
 
 Works on desktop and mobile.
 
@@ -83,13 +84,15 @@ In **Settings → Attachment Cloud Cache**:
 
 - **It normally talks only to your storage**, and touches nothing outside your vault. No telemetry, no
   analytics, no ads.
-- **One optional feature reaches other sites — only if you turn it on.** "Cache images from other
-  sites" is **off by default**; once on, opening a note with an externally hosted image asks you
-  **once per site**, and only on "cache this site" does the plugin request that image **directly from
-  that site**, upload it to your storage and rewrite the link. The "upload existing attachments"
-  command follows the same rule: it **names the sites it would visit**, and only your confirmation
-  makes it fetch from them. Sites you answered "don't ask" for are never requested, and the request
-  carries nothing beyond the image's own address.
+- **One optional feature reaches other sites — only if you turn it on and tell it to act.** "Cache
+  images from other sites" is **off by default**, and once on it still **does nothing by default**.
+  To actually move an image off someone else's server you do one of two things: (1) set "When a note
+  has an image from another site" to **cache straight away** — then opening such a note requests the
+  image **directly from that site**, uploads it to your storage and rewrites the link; or (2) use the
+  **"Cache images from other sites…"** command / the button in the settings, tick the specific images
+  you want, and **only those** are fetched. That command, like "upload existing attachments", **names
+  the sites it would visit** and only fetches after you confirm. The request carries nothing beyond
+  the image's own address.
 - **The secret access key lives in the OS keychain**, never in `data.json`. The **access key ID is
   written to `data.json`**: it is an identifier, not a secret — it is part of the signed request and
   appears in server logs — and Obsidian's keychain accepts only lowercase IDs while access key IDs

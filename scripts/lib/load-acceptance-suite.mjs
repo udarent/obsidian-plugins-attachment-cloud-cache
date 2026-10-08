@@ -384,17 +384,6 @@ export async function runLoadAcceptance(options = {}) {
 	// 访问密钥 ID 不再进钥匙串 —— 那是标识符，且 Obsidian 的密钥 ID 不允许大写。
 	app.secretStorage.setSecret("acc-test-sk", SECRET_ACCESS_KEY);
 
-	// ── 询问接缝 ──
-	//
-	// ⚠️ 真通知在测试里点不了，所以这里覆写入口暴露的那个接缝。
-	// 它也是这条链路**唯一**能被端到端驱动的地方：不覆写就永远只测到"没询问"。
-	const askCalls = [];
-	let askDecision = "cache";
-	plugin.askExternalCache = async (info) => {
-		askCalls.push(info);
-		return askDecision;
-	};
-
 	// ── 兜住"插件忘了登记清理函数" ──
 	//
 	// ⚠️ 套件自己记录 `onload` 期间创建的定时器，收尾时**不管有没有被 `register` 登记**都清掉。
@@ -574,17 +563,18 @@ export async function runLoadAcceptance(options = {}) {
 
 		// 站外图一个字都不该动（红线：不碰别人的图）
 		const foreignImg = makeFakeImage("https://third-party.example.net/x.png");
-		for (const processor of plugin.postProcessors) processor(makeFakeContainer([foreignImg]), {});
+		externalHostRequests.length = 0;
+		for (const processor of plugin.postProcessors) processor(makeFakeContainer([foreignImg]), { sourcePath: "notes/任意.md" });
 		assert.equal(
 			foreignImg.getAttribute("src"),
 			"https://third-party.example.net/x.png",
 			"★ 站外图必须原样保留（既不下载也不改写）"
 		);
-		// ⭐ 而且**连问都不该问**：站外缓存默认关闭，一个没打开的插件不该来打扰用户。
+		// ⭐ 而且**一个请求都不该发**：站外缓存默认关闭，一个没打开的插件不该去访问别人的站点。
 		assert.equal(
-			askCalls.length,
+			externalHostRequests.length,
 			0,
-			`★ 默认关闭时不该为站外图询问（实际问了 ${askCalls.length} 次）`
+			`★ 默认关闭时不该为站外图发任何请求（实际发了 ${externalHostRequests.length} 次）`
 		);
 
 		// ============================================================
@@ -649,12 +639,12 @@ export async function runLoadAcceptance(options = {}) {
 		// 而不是只断言"命令注册了"。确认框通过 `confirmMaintenance` 这个
 		// 可替换接缝自动确认 —— 真弹窗点不了，而那正是"确认后执行"这条路径。
 		// ============================================================
-		const commandIds = plugin.commands.map((command) => command.id).sort();
-		assert.deepEqual(
-			commandIds,
-			["audit-cache", "clean-cache", "repair-index", "upload-attachments"],
-			"★ 四条维护命令都要注册（少一条就是「功能写了但用户找不到」）"
-		);
+	const commandIds = plugin.commands.map((command) => command.id).sort();
+	assert.deepEqual(
+		commandIds,
+		["audit-cache", "clean-cache", "pick-external-images", "repair-index", "upload-attachments"],
+		"★ 五条维护命令都要注册（少一条就是「功能写了但用户找不到」）"
+	);
 
 		const runCommand = (id) => {
 			const command = plugin.commands.find((c) => c.id === id);
@@ -809,11 +799,14 @@ export async function runLoadAcceptance(options = {}) {
 		);
 
 		// ============================================================
-		// ============================================================
-		// 8b. 站外图：开启后「询问 → 下载 → 上传 → 改写链接」
+		// 8b. 站外图：默认设成「直接缓存」时，打开笔记即「下载 → 上传 → 改写链接」
 		//
 		// ⚠️ 这是全库唯一会下载**别人的图**、也是唯一会**改写用户笔记**的链路，
 		// 所以它必须在接线层面被走一遍（而不是只靠单元套件间接推断）。
+		//
+		// ⚠️ 早先这里走的是"按站点询问 → 用户答缓存 → 才下载"。询问已经整条拆掉，
+		// 现在**显式动作**是"设置里选「直接缓存」"或"在弹窗里勾选"，所以这一段
+		// 直接把默认值设成 `cache` 来驱动它。
 		// ============================================================
 		{
 			const externalUrl = EXTERNAL_IMAGE_URL;
@@ -824,19 +817,15 @@ export async function runLoadAcceptance(options = {}) {
 			await writeFile(join(root, notePath), originalNote, "utf8");
 			await harness.refreshPathCache();
 
-			// 打开功能（默认是关的），并让接缝回答「缓存」
+			// 打开功能（默认关），并选「直接缓存」
 			plugin.settings.externalImageCache = true;
-			askCalls.length = 0;
-			askDecision = "cache";
+			plugin.settings.externalImageDefault = "cache";
 			externalHostRequests.length = 0;
 			const putsBefore = server.countByMethod("PUT");
 
 			for (const processor of plugin.postProcessors) {
 				processor(makeFakeContainer([makeFakeImage(externalUrl)]), { sourcePath: notePath });
 			}
-
-			assert.equal(askCalls.length, 1, "★ 开启后遇到站外图应询问一次");
-			assert.equal(askCalls[0].host, EXTERNAL_HOST, `询问要带上站点（实际 ${JSON.stringify(askCalls[0])}）`);
 
 			// ⚠️ 等的是**改写完成**，不是 PUT 完成：这条链是"下载 → 上传 → 改写"，
 			// 所以 PUT 结束时笔记还没改（等早了会读到一个还没改写的笔记）。
@@ -849,39 +838,66 @@ export async function runLoadAcceptance(options = {}) {
 
 			assert.equal(server.countByMethod("PUT"), putsBefore + 1, "★ 恰好一次 PUT");
 
-			// 决定必须**落盘**：不落盘的话，用户下次启动还要重新回答一遍 ——
-			// 而他会以为自己已经答过了（记忆只活在内存里的症状就是这样）。
-			await waitFor(
-				async () => {
-					try {
-						return (await readFile(join(root, SITE_MEMORY_PATH), "utf8")).includes(EXTERNAL_HOST);
-					} catch {
-						return false;
-					}
-				},
-				"站点决定被写进记忆文件",
-				5000,
-				diagnose
-			);
-
 			const rewritten = await readFile(join(root, notePath), "utf8");
 			assert.equal(rewritten.includes(externalUrl), false, "★ 笔记里的站外链接必须被改写");
 			assert.equal(rewritten.includes(PUBLIC_BASE), true, "★ 换上的是自己存储的公开地址（配置的前缀）");
 			assert.equal(rewritten.includes("# 站外图"), true, "★ 笔记的其它内容必须原样保留");
 			assert.equal(externalHostRequests.length, 1, "★ 站外图只该下载一次");
 
-			// ⭐ 再渲染一次：这个站点已被记住 → 不该再问（渲染会因滚动、切视图反复发生）
-			const askedSoFar = askCalls.length;
+			// ⭐ 再渲染一次（渲染会因滚动、切视图反复发生）：此时元素上的地址已经是**自己的**
+			// 公开地址，判定层认出"属于本存储"⇒ 不该再下载一次。
 			const downloadsSoFar = externalHostRequests.length;
 			for (const processor of plugin.postProcessors) {
 				processor(makeFakeContainer([makeFakeImage(externalUrl)]), { sourcePath: notePath });
 			}
-			assert.equal(askCalls.length, askedSoFar, "★ 答过之后不该再问（否则每个站点都会被反复打扰）");
 			assert.equal(
 				externalHostRequests.length,
 				downloadsSoFar,
-				"（这条路径上要清理的是记忆，而不是重新下载）"
+				"★ 同一个地址不该被下载两次（去重表在这条路径上也要生效）"
 			);
+
+			plugin.settings.externalImageCache = false;
+		}
+
+		// ============================================================
+		// 8b1. ⭐⭐ 默认「什么都不做」时：一个请求都不发，笔记一个字都不动
+		//
+		// 这是这条链路的**红线**。设置里明明写着"什么都不做"，插件却在后台把图
+		// 下载上传、还改写了用户的笔记 —— 这是最严重的一种坏法：偏好被无视，而且静默。
+		// ============================================================
+		{
+			const externalUrl = EXTERNAL_IMAGE_URL;
+			const notePath = "notes/站外不动.md";
+			const originalNote = `# 别动我\n\n![x](${externalUrl})\n`;
+
+			await writeFile(join(root, notePath), originalNote, "utf8");
+			await harness.refreshPathCache();
+
+			plugin.settings.externalImageCache = true;
+			plugin.settings.externalImageDefault = "skip";
+			externalHostRequests.length = 0;
+			const putsBefore = server.countByMethod("PUT");
+
+			for (const processor of plugin.postProcessors) {
+				processor(makeFakeContainer([makeFakeImage(externalUrl)]), { sourcePath: notePath });
+			}
+			// 给 fire-and-forget 一点时间：若实现判反了，这里就会看到请求
+			await new Promise((resolve) => setTimeout(resolve, 500));
+
+			assert.equal(externalHostRequests.length, 0, "★ 默认「什么都不做」时，一个字节都不该下载");
+			assert.equal(server.countByMethod("PUT"), putsBefore, "★ 也不该上传任何东西");
+			assert.equal(
+				await readFile(join(root, notePath), "utf8"),
+				originalNote,
+				"★ 笔记必须逐字符不变（改写别人的笔记是不可逆的）"
+			);
+
+			// 收拾干净：这一段造的那篇笔记里**刻意留着**那条站外链接（那正是它的意义），
+			// 而它会被后面"命令扫全库"那段算成候选 —— 不删掉就会让那一段的请求计数变成 2。
+			// 用完即删，比让后面的断言去"减去它"清楚得多。
+			const leftover = app.vault.getAbstractFileByPath(notePath);
+			if (leftover) await app.vault.delete(leftover, true);
+			await harness.refreshPathCache();
 
 			plugin.settings.externalImageCache = false;
 		}
@@ -897,15 +913,16 @@ export async function runLoadAcceptance(options = {}) {
 		// 而**真正的授权发生在命令的确认框里** —— 所以确认框必须把站点列出来。
 		// 下面三段分别钉住：确认即授权（且记住）、取消 = 什么都没发生、不再询问 = 一个请求都不发。
 		//
-		// ⚠️ 位置必须在 8b **之后**：它会断言"同站第一次遇到要问一次"，
-		// 而这一段会把同一个站点记成「缓存」，排在前面就会把它那条断言弄红。
+		// ⚠️ 这一段与 8b 的区别：8b 走的是"渲染路径按默认行为自动搬"，
+		// 这里走的是**命令**（显式动作）—— 它必须能处理 `wait`（默认不动手）那些图，
+		// 否则用户把默认设成「什么都不做」之后，这条命令会什么都不做。
 		// ============================================================
 		{
 			const externalUrl = EXTERNAL_IMAGE_URL;
 			const externalNote = "notes/外链待迁移.md";
 			plugin.settings.externalImageCache = true;
-			// 先回到"用户还没答过这个站点"的状态（8b 已经把它记成 allow 了）
-			plugin.siteDecisionsSnapshot().clear();
+			// ⭐ 故意设成「什么都不做」：命令是显式动作，不受这一档影响
+			plugin.settings.externalImageDefault = "skip";
 			await writeFile(join(root, externalNote), `# 外链\n\n![x](${externalUrl})\n`, "utf8");
 			await harness.refreshPathCache();
 
@@ -940,16 +957,9 @@ export async function runLoadAcceptance(options = {}) {
 				externalLines.includes(EXTERNAL_HOST),
 				`★ 确认框必须列出即将访问的站点（那是授权凭据）：${externalLines}`
 			);
-			// ⭐ 确认即授权：站点要记成「缓存」，以后看笔记不再问
-			assert.equal(
-				plugin.siteDecisionsSnapshot().get(EXTERNAL_HOST),
-				"allow",
-				"★ 确认即授权 —— 站点必须被记成「缓存」（否则下次看笔记还会为它再问一遍）"
-			);
 
-			// ── 取消 = 什么都没发生（既没下载，也没把站点记下来）──
+			// ── 取消 = 什么都没发生（一个请求都不发，笔记一个字都不动）──
 			const cancelNote = "notes/外链取消.md";
-			plugin.siteDecisionsSnapshot().clear();
 			await writeFile(join(root, cancelNote), `![y](${externalUrl})\n`, "utf8");
 			await harness.refreshPathCache();
 			externalHostRequests.length = 0;
@@ -958,57 +968,32 @@ export async function runLoadAcceptance(options = {}) {
 			await new Promise((resolve) => setTimeout(resolve, 300));
 
 			assert.equal(externalHostRequests.length, 0, "★ 取消之后**不得**下载任何站外图");
-			assert.equal(
-				plugin.siteDecisionsSnapshot().get(EXTERNAL_HOST),
-				undefined,
-				"★ 取消不得把站点记成「缓存」—— 用户没有同意过（这条等于替他签了名）"
-			);
 			assert.ok(
 				(await readFile(join(root, cancelNote), "utf8")).includes(externalUrl),
 				"取消之后笔记必须一个字都没动"
 			);
 
-			// ── 「不再询问」的站点：一个请求都不发（用户明确划的线）──
-			const deniedNote = "notes/外链不再询问.md";
-			plugin.siteDecisionsSnapshot().set(EXTERNAL_HOST, "deny");
-			await writeFile(join(root, deniedNote), `![z](${externalUrl})\n`, "utf8");
-			await harness.refreshPathCache();
-			externalHostRequests.length = 0;
-			plugin.confirmMaintenance = async () => true;
-			runCommand("upload-attachments");
-			await new Promise((resolve) => setTimeout(resolve, 300));
-
-			assert.equal(
-				externalHostRequests.length,
-				0,
-				"★ 被标成「不再询问」的站点，命令也不得发起任何请求（那是用户明确拒绝过的）"
-			);
-			assert.ok(
-				(await readFile(join(root, deniedNote), "utf8")).includes(externalUrl),
-				"被拒绝的站点：笔记原样不动"
-			);
-
-			plugin.siteDecisionsSnapshot().clear();
 			plugin.settings.externalImageCache = false;
+			plugin.settings.externalImageDefault = "skip";
 		}
 
 		// ============================================================
-		// 8b3. ⭐⭐「清除站点记忆」必须让**当前打开着的**笔记重新被问一次
+		// 8b3. ⭐⭐ 改了「遇到外链图片时」之后，**当前打开着的**笔记要立刻重新判定
 		//
-		// 这条是**实测踩到**的用户缺陷：清完记忆，站外图再也不问了，唯一办法是重启
-		// Obsidian。两层原因，缺一不可：
-		//   ① 编排层曾经还有一张"问过就永久记住"的表 ⇒ 记忆清了也压着不问；
-		//   ② 记忆虽然空了，但**已经渲染出来的图不会自己重跑判定** ⇒ 用户点完按钮
-		//      什么都看不到，只会以为按钮坏了。
-		// 所以这里从设置页那个按钮的入口（`clearSiteDecisions`）一路验到底。
+		// 站外图那条判定是**渲染时**做的，而改设置不会让已经渲染出来的图重跑 ——
+		// 少了这一步，用户把默认值改成「直接缓存」之后**什么都看不到**，
+		// 要等下次重开笔记才生效。这正是本项目一直在防的那类"改了设置没反应"。
+		//
+		// 这条断言不真的去下载（默认值设成「什么都不做」），只验"确实重看了一遍"。
 		// ============================================================
 		{
 			plugin.settings.externalImageCache = true;
+			plugin.settings.externalImageDefault = "skip";
 			const externalUrl = EXTERNAL_IMAGE_URL;
 			// 造一个"打开着的笔记视图"：容器里挂着一张站外图。
 			// ⚠️ `contains` 不能少 —— 归属解析判的是"这个元素在不在这个视图的容器里"
-			//（真实的 `containerEl` 是 DOM 节点，天然有它）。少了它，那条图会被判成
-			// "不在任何笔记里"而跳过 —— 这条断言第一次就是因此超时的。
+			//（真实的 `containerEl` 是 DOM 节点，天然有它）。少了它，那张图会被判成
+			// "不在任何笔记里"而跳过 —— 这类断言第一次就是因此超时的。
 			const displayed = makeFakeImage(externalUrl);
 			const fakeLeaf = {
 				view: {
@@ -1021,22 +1006,25 @@ export async function runLoadAcceptance(options = {}) {
 			};
 			app.workspace.leaves.push(fakeLeaf);
 			try {
-				// 等价于"用户上次选过「不再询问」"
-				plugin.siteDecisionsSnapshot().set(EXTERNAL_HOST, "deny");
-				askCalls.length = 0;
-				askDecision = "never"; // 这次别真的去下载
-
-				const cleared = plugin.clearSiteDecisions();
-				assert.equal(cleared, 1, `清除记忆应返回清掉的条数（实际 ${cleared}）`);
-
-				// 等的只是 live 队列那一个微任务 + 询问，不用长超时
-				await waitFor(
-					() => askCalls.length > 0,
-					"清除站点记忆之后重新询问当前显示的站外图",
-					3000,
-					diagnose
-				);
-				assert.equal(askCalls[0].host, EXTERNAL_HOST, `询问要带上那个站点（实际 ${JSON.stringify(askCalls[0])}）`);
+				// 包一层记账：重看的表现就是"把容器里的图重新丢进 live 队列"
+				const queue = plugin.externalLive;
+				const originalSee = queue.see.bind(queue);
+				const seen = [];
+				queue.see = (element) => {
+					seen.push(element);
+					return originalSee(element);
+				};
+				try {
+					await plugin.saveSettings();
+					assert.equal(
+						seen.length,
+						1,
+						`★ 改完设置要立刻重看当前打开的笔记（实际重看了 ${seen.length} 张）—— 否则用户会以为改了没生效`
+					);
+					assert.equal(seen[0], displayed, "重看的应当就是容器里那张图");
+				} finally {
+					queue.see = originalSee;
+				}
 			} finally {
 				app.workspace.leaves.pop();
 				plugin.settings.externalImageCache = false;

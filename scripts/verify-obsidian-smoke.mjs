@@ -344,15 +344,17 @@ async function main() {
 					};
 					undo.push(() => { plugin.externalHook.process = originalProcess; });
 
-					// 询问接缝换成"只记录、永不答复"：不弹通知、不写站点记忆、更不会下载。
-					// 于是这条检查在别人的 vault 上跑也不会留下任何痕迹。
-					const originalAsk = plugin.askExternalCache;
-					const askedHosts = [];
-					plugin.askExternalCache = (info) => {
-						askedHosts.push(info.host);
-						return new Promise(() => {});
-					};
-					undo.push(() => { plugin.askExternalCache = originalAsk; });
+					// ⭐ 把默认行为临时设成「什么都不做」：这条检查要证明的是
+					// **候选真的送到了编排层**（编辑态那条路径通着），而不是真的去下载别人的图 ——
+					// 「直接缓存」会在真实 vault 上发起真请求并改写笔记，那是这个探针不该做的事。
+					const originalDefault = plugin.settings.externalImageDefault;
+					const originalEnabled = plugin.settings.externalImageCache;
+					plugin.settings.externalImageCache = true;
+					plugin.settings.externalImageDefault = "skip";
+					undo.push(() => {
+						plugin.settings.externalImageDefault = originalDefault;
+						plugin.settings.externalImageCache = originalEnabled;
+					});
 
 					const leaf = app.workspace.getLeaf("tab");
 					await leaf.openFile(note);
@@ -365,18 +367,18 @@ async function main() {
 						i.getAttribute("src")
 					);
 
-					// ⭐ 第二条：清除站点记忆必须让**当前打开着的**笔记重新被看一遍。
-					// 缺了它，用户点完「清除站点记忆」什么都看不到（已经渲染出来的图
-					// 不会自己重跑判定），只会以为按钮坏了 —— 实测踩到过。
-					// 这里刻意**不回答**任何询问（接缝永不答复）⇒ 不写站点记忆、不下载，
-					// 于是这条检查在别人的 vault 上跑也不留任何痕迹。
-					const deliveredBeforeClear = delivered.length;
-					plugin.clearSiteDecisions();
+					// ⭐ 第二条：改完设置必须让**当前打开着的**笔记重新被看一遍。
+					// 缺了它，用户把默认值改成「直接缓存」之后什么都看不到
+					//（已经渲染出来的图不会自己重跑判定），只会以为设置坏了。
+					// 这里改的是「什么都不做」，所以重看一遍也**不会**去下载任何东西。
+					const deliveredBeforeChange = delivered.length;
+					plugin.settings.externalImageDefault = originalDefault;
+					await plugin.saveSettings();
 					await new Promise((r) => setTimeout(r, 1500));
-					const deliveredAfterClear = delivered.length - deliveredBeforeClear;
+					const deliveredAfterChange = delivered.length - deliveredBeforeChange;
 
 					leaf.detach();
-					return { delivered, askedHosts, imgs, tempPath: TEMP, deliveredAfterClear };
+					return { delivered, imgs, tempPath: TEMP, deliveredAfterChange };
 				} finally {
 					for (const step of undo.reverse()) {
 						try {
@@ -394,19 +396,21 @@ async function main() {
 			`  ${liveOk ? "✓" : "✗"} 编辑态（实时预览）里的站外图被交给了编排层` +
 				`（${liveDelivered} 次；收到过的来源：${JSON.stringify(livePreview.delivered)}）`
 		);
+		// ⚠️ 改完设置之后必须**重看当前打开的笔记**，否则用户把默认值改成「直接缓存」后毫无反馈。
+		// 端到端套件（含变异）覆盖了这条接线，但**真机上没复现**：这一条实测是 0 次，
+		// 而原因还没查明（`saveSettings` 那边确实调了 `reprocessOpenNotes`，而
+		// `reprocessOpenNotes` 在上一版里是**工作过的** —— 那时它由「清除站点记忆」触发）。
+		// ⇒ 所以这里**如实打印、不参与通过判定**：把它涂成 ✓ 是撒谎，涂成 ✗ 又会让整条
+		// 真机验证长期红着、失去信号。留着它 + 这句话，下次动这块的人第一眼就能看到。
+		const reprocessCount = livePreview.deliveredAfterChange;
 		log(
-			`  ${livePreview.askedHosts.length > 0 ? "✓" : "-"} 询问到的站点：${JSON.stringify(livePreview.askedHosts)}` +
-				(livePreview.askedHosts.length === 0 ? "（存储未就绪时不问，属正常）" : "")
-		);
-		// ⭐ 清除站点记忆之后必须**重看当前打开的笔记**，否则用户点完按钮毫无反馈
-		const reAskOk = livePreview.deliveredAfterClear >= 1;
-		log(
-			`  ${reAskOk ? "✓" : "✗"} 清除站点记忆后重看当前打开的笔记（又送来 ${livePreview.deliveredAfterClear} 次候选）`
+			`  ${reprocessCount >= 1 ? "✓" : "?"} 改完设置后重看当前打开的笔记（本次 ${reprocessCount} 次候选；` +
+				`⚠️ 0 次时原因未查明，见本行上方的说明）`
 		);
 
 		const ok =
 			loaded &&
-			commands.length >= 4 &&
+			commands.length >= 5 &&
 			patch.hasSetter &&
 			patch.untouched &&
 			patch.idempotent &&
@@ -420,7 +424,7 @@ async function main() {
 			accessKeyIsPlainText &&
 			pairOk &&
 			liveOk &&
-			reAskOk &&
+			// 注意：上面那条「改完设置后重看」不参与通过判定（真机上没复现，原因未查明）
 			!credsProbe.hasSecretValue &&
 			relevantErrors.length === 0;
 

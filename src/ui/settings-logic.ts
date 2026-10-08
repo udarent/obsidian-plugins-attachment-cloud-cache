@@ -6,8 +6,8 @@
  * 拆成纯函数才能穷举，也才能在不用真实 Obsidian 的情况下验证。
  */
 
-import type { LocalCopyAction } from "../types";
-import { CACHE_LIMIT_MB_MAX, LOCAL_COPY_ACTIONS } from "../types";
+import type { ExternalImageDefault, LocalCopyAction } from "../types";
+import { CACHE_LIMIT_MB_MAX, EXTERNAL_IMAGE_DEFAULTS, LOCAL_COPY_ACTIONS } from "../types";
 
 /**
  * 秘密访问密钥在钥匙串里那条槽位的名字前缀。
@@ -74,6 +74,15 @@ export function ensureSecretSlot(existing: string, randomPart: string): string {
 export function localCopyOptions(labelOf: (value: LocalCopyAction) => string): Record<string, string> {
 	const options: Record<string, string> = {};
 	for (const value of LOCAL_COPY_ACTIONS) options[value] = labelOf(value);
+	return options;
+}
+
+/** 同上，给「遇到外链图片时」那一档用。 */
+export function externalImageDefaultOptions(
+	labelOf: (value: ExternalImageDefault) => string
+): Record<string, string> {
+	const options: Record<string, string> = {};
+	for (const value of EXTERNAL_IMAGE_DEFAULTS) options[value] = labelOf(value);
 	return options;
 }
 
@@ -153,26 +162,6 @@ export function classifyConnectionFailure(error: unknown): ConnectionFailureKind
 }
 
 /** 归类 → 文案 key。 */
-/**
- * 把"已记住的站点"整理成给用户看的文本（**纯函数**，便于穷举）。
- *
- * 单独成函数而不是写在 `render` 回调里，理由与这个文件里其它几个一样：
- * 这种"值 → 给人看的一行字"的翻译最容易写错（漏了空态、把两个决定搞反），
- * 而它写在渲染回调里就**没有办法断言**。
- *
- * 每一行都是 `站点 — 决定`。用 `allow`/`deny` 之外的东西当标签（由调用方传入已翻译的文案），
- * 因为用户看不懂 `allow`。
- */
-export function describeRememberedSites(
-	records: readonly { host: string; decision: string }[],
-	labels: { allow: string; deny: string; empty: string }
-): string {
-	if (records.length === 0) return labels.empty;
-	return records
-		.map((record) => `${record.host} — ${record.decision === "allow" ? labels.allow : labels.deny}`)
-		.join("\n");
-}
-
 /**
  * 解析用户在设置里填的缓存上限（MB）。**纯函数**。
  *

@@ -16,7 +16,7 @@
  * 第二类是同一件事的另一半：那些图同样**没进你自己的存储**（它们在别人的服务器上），
  * 而用户跑这条命令的意图就是"把我还没搬走的图搬走"。
  * 外链那边**不另立标准** —— 一律走 `decideExternalCache`（按需缓存那条链路的判定），
- * 于是"功能关掉 / 自己的存储 / 回环地址 / 用户标过不再询问"全都自动一致。
+ * 于是"功能关掉 / 自己的存储 / 回环地址 / 存储未就绪"全都自动一致。
  *
  * ## 谨慎的地方：这是唯一会改动**用户笔记**的功能
  *
@@ -33,8 +33,7 @@
 import type { PluginSettings } from "../types";
 import type { CacheIndex } from "../cache/index";
 import { isExtensionEnabled } from "../settings";
-import { decideExternalCache } from "../render/external-decide";
-import type { SiteDecisions } from "../render/site-decisions";
+import { decideExternalCache, isCacheableExternal } from "../render/external-decide";
 
 /** 库内文件的最小形状。 */
 export interface VaultFileLike {
@@ -110,8 +109,6 @@ export interface ExternalSiteSummary {
 	host: string;
 	/** 这个站点下有多少张图。 */
 	count: number;
-	/** 用户**还没答过**这个站点 ⇒ 本次执行前必须拿到授权。 */
-	needsConsent: boolean;
 }
 
 /** 一张待处理的外链图。 */
@@ -124,8 +121,6 @@ export interface ExternalCandidate {
 
 export interface ExternalCandidateOptions {
 	settings: PluginSettings;
-	/** 站点记忆（**同步内存读**）。用户标过「不再询问」的站点一律跳过。 */
-	decisions: SiteDecisions;
 	/** 存储是否就绪（调用方同步算好）。 */
 	configured: boolean;
 	/** 安全拦截的可替换接缝；默认 `isBlockedHost`。 */
@@ -137,14 +132,12 @@ export interface ExternalSelection {
 	candidates: ExternalCandidate[];
 	/** 站点汇总，按主机名排序（顺序稳定，便于断言与展示）。 */
 	sites: ExternalSiteSummary[];
-	/** 有站点需要本次授权（确认框要因此多说明一句）。 */
-	needsConsent: boolean;
 	/**
 	 * 跳过原因统计（诊断用，与库内那部分同一个形状）。
 	 *
-	 * ⚠️ 刻意**不做**"因为被你标成不再询问而跳过了 N 张"这种展示：
-	 * 那个数**算不准** —— 功能关掉、自己的存储地址、回环地址都会**先一步**
-	 * 把图挡掉，此时说"被你的不再询问列表跳过"就是假的。
+	 * ⚠️ 刻意**不做**"因为 XX 而跳过了 N 张"这种展示：那个数**算不准** ——
+	 * 功能关掉、自己的存储地址、回环地址、存储未就绪都会**先一步**把图挡掉，
+	 * 归到任何一句给用户看的话上都可能是假的。
 	 * 判定层给的原因是**诊断**（谁挡的、为什么），不是给用户看的分类。
 	 */
 	skipped: { reason: string; count: number }[];
@@ -195,14 +188,20 @@ function isHttpUrl(value: string): boolean {
  *
  * 每一张图都交给 `decideExternalCache` —— 也就是"看笔记时按需缓存"那条链路用的
  * **同一个判定**。于是这些性质自动一致：功能关掉就不碰、自己的存储地址不当外链、
- * 回环/链路本地地址一律不碰、**用户标过「不再询问」的站点直接跳过**。
- * 命令与按需缓存对"该不该处理这张图"永远不会有第二种答案。
+ * 回环/链路本地地址一律不碰、存储没配好时不出现在清单里。
+ *
+ * ## ⭐ `wait` 也算候选（这是"默认不缓存"那一档能用的前提）
+ *
+ * 候选的判据是 `isCacheableExternal`（"**能不能**搬"），**不是**"这次就该搬"。
+ * 否则用户把默认设成「什么都不做」之后，这条命令与选择器会列出一份空清单 ——
+ * 两个显式入口等于不存在。`wait` 的语义是"等你来挑"，不是"不许碰"。
  *
  * ## 授权不在这里做
  *
- * 判定只会告诉调用方 `needsConsent`（这个站点用户还没答过）。**真正的授权发生在
- * 命令的确认框里** —— 点确认就是对列出来的那些站点授权，随后它们会被记成
- * 「缓存」。这条链路与按需缓存一样守着那条红线：**未获明确同意前，站外图永不下载**。
+ * 判定只回答"能不能搬"。**真正的授权是两个显式动作**：
+ * 这条命令的确认框（点确认 = 同意去访问列出来的那些站点），
+ * 以及「选择要缓存的外链图片」里的勾选。红线仍然是
+ * **「没有用户的显式动作，站外图永不下载」**。
  */
 export function selectExternalUploadCandidates(
 	notes: readonly NoteTextLike[],
@@ -226,15 +225,13 @@ export function selectExternalUploadCandidates(
 			const decision = decideExternalCache({
 				src: url,
 				settings: options.settings,
-				decisions: options.decisions,
 				configured: options.configured,
 				blockedHost: options.blockedHost,
 			});
 
-			if (decision.action === "ignore") {
-				// 跳过的**原因**照实记下来（诊断用）。用户标过「不再询问」的站点也走这里 ——
-				// 判定层给的正是那句原因，不需要我再猜。
-				bump(decision.reason);
+			if (!isCacheableExternal(decision)) {
+				// 跳过的**原因**照实记下来（诊断用）。判定层给的就是那句原因，不需要我再猜。
+				if (decision.action === "ignore") bump(decision.reason);
 				continue;
 			}
 
@@ -243,7 +240,7 @@ export function selectExternalUploadCandidates(
 
 			const summary = bySite.get(host);
 			if (summary) summary.count += 1;
-			else bySite.set(host, { host, count: 1, needsConsent: decision.action === "ask" });
+			else bySite.set(host, { host, count: 1 });
 		}
 	}
 
@@ -253,7 +250,6 @@ export function selectExternalUploadCandidates(
 	return {
 		candidates,
 		sites,
-		needsConsent: sites.some((site) => site.needsConsent),
 		skipped: [...reasons].map(([reason, count]) => ({ reason, count })),
 	};
 }

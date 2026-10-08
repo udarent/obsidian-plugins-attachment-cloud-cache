@@ -342,23 +342,22 @@ export function runMaintenanceSuite(mod) {
 	);
 	assert.deepEqual(externalImageUrlsIn(""), [], "空文本安全返回空");
 
-	// ── 2. 挑选：站点记忆、自己的存储、授权标记 ──
+	// ── 2. 挑选：候选的判据是"能不能搬"，与默认行为无关 ──
 	{
-		const externalSettings = { ...settings, externalImageCache: true };
+		// ⚠️ 刻意把默认设成「什么都不做」：命令与选择器是**显式动作**，
+		// 它们的候选必须照旧列出来 —— 否则用户把默认调成「什么都不做」之后，
+		// 这两个入口会列出一份空清单（等于功能不存在）。
+		const externalSettings = { ...settings, externalImageCache: true, externalImageDefault: "skip" };
 		const notes = [
 			{
 				path: "notes/one.md",
 				// ⚠️ 第三行是**同一张图写第二遍**：它必须只算一个候选（改写时两处一起换）
 				text: "![x](https://offsite.test/a.png)\n![](https://offsite.test/b.png)\n![dup](https://offsite.test/a.png)",
 			},
-			{ path: "notes/two.md", text: "![](https://allowed.test/c.png)\n![](https://denied.test/d.png)" },
+			{ path: "notes/two.md", text: "![](https://other.test/c.png)\n![](https://third.test/d.png)" },
 			{ path: "notes/three.md", text: "![](https://img.example.com/cached.png)" },
 		];
-		const decisions = new SiteDecisions([
-			{ host: "allowed.test", decision: "allow" },
-			{ host: "denied.test", decision: "deny" },
-		]);
-		const options = { settings: externalSettings, decisions, configured: true };
+		const options = { settings: externalSettings, configured: true };
 
 		const picked = selectExternalUploadCandidates(notes, options);
 		assert.deepEqual(
@@ -366,26 +365,20 @@ export function runMaintenanceSuite(mod) {
 			[
 				"notes/one.md https://offsite.test/a.png",
 				"notes/one.md https://offsite.test/b.png",
-				"notes/two.md https://allowed.test/c.png",
+				"notes/two.md https://other.test/c.png",
+				"notes/two.md https://third.test/d.png",
 			],
 			"★ 候选要带上「它出现在哪篇笔记里」—— 改写链接时必须指名道姓，且同一篇里写两遍只算一次"
 		);
 		assert.deepEqual(
-			picked.sites.map((s) => `${s.host}:${s.count}:${s.needsConsent}`),
-			["allowed.test:1:false", "offsite.test:2:true"],
-			"站点汇总要按主机名排序，并标出哪些还没答过（确认框据此说明授权范围）"
+			picked.sites.map((s) => `${s.host}:${s.count}`),
+			["offsite.test:2", "other.test:1", "third.test:1"],
+			"站点汇总要按主机名排序（确认框据此列出即将访问哪些站点）"
 		);
-		assert.equal(picked.needsConsent, true, "有站点没答过 → 需要本次授权");
 		assert.equal(
 			picked.candidates.some((c) => c.url.includes("img.example.com")),
 			false,
 			"★ 自己存储的地址不该被当外链处理（判定层认得出，命令不另立标准）"
-		);
-		// ⭐ 「不再询问」的站点确实被跳过了（行为要求），而且**原因如实来自判定层**
-		assert.equal(
-			picked.skipped.some((s) => s.reason.includes("不再询问")),
-			true,
-			"★ 用户标过「不再询问」的站点必须被跳过，且原因如实记录（诊断用）"
 		);
 
 		// 站点排序固定：输出稳定，展示与断言都不会因为扫库顺序而变
@@ -403,30 +396,44 @@ export function runMaintenanceSuite(mod) {
 		});
 		assert.deepEqual(off.candidates, [], "★ 功能关着时命令不得去碰任何站外图（那是用户对外的隐私立场）");
 		assert.equal(
-			off.skipped.some((s) => s.reason.includes("不再询问")),
-			false,
-			"功能关着时不该报「被你的不再询问列表跳过」—— 真正挡住它的是那个开关（原因必须如实）"
+			off.skipped.some((s) => s.reason.includes("功能")),
+			true,
+			"跳过的原因要如实来自判定层（这里是「功能已关闭」）"
 		);
 
-		// ── 4. 存储没就绪：不会**问**（与按需缓存一致）──
+		// ── 4. 存储没就绪：不该出现在候选清单里 ──
 		//
-		// ⚠️ 已经授权过的站点仍会算候选 —— 那不是"漏判"：判定层对 `allow` 的答复是
-		// "该缓存它"，能不能上传由执行层自己看客户端（没有就报 `unavailable`）。
-		// 而这条命令在更早的地方就拦掉了未配置的情形，所以实际跑不到这里。
+		// 没有客户端就搬不了，列出来只会让用户勾完才发现做不成。
 		const unconfigured = selectExternalUploadCandidates(notes, { ...options, configured: false });
+		assert.deepEqual(unconfigured.candidates, [], "★ 存储没就绪时不该产生任何候选");
 		assert.equal(
-			unconfigured.candidates.some((c) => c.host === "offsite.test"),
-			false,
-			"★ 存储没就绪时不该把「还没答过」的站点列成候选 —— 那时问了也白问"
+			unconfigured.skipped.some((s) => s.reason.includes("未就绪")),
+			true,
+			"跳过的原因应当说明是「存储未就绪」"
 		);
-		assert.equal(unconfigured.needsConsent, false, "没就绪时不会产生「需要授权」—— 那些站点根本不会被处理");
 
-		// ── 5. 回环 / 链路本地地址：无条件不碰（连用户标过的 allow 也不能越过）──
+		// ── 5. 回环 / 链路本地地址：无条件不碰 ──
 		const loopback = selectExternalUploadCandidates(
 			[{ path: "notes/x.md", text: "![](http://127.0.0.1/secret.png)\n![](http://169.254.169.254/meta.png)" }],
-			{ ...options, decisions: new SiteDecisions([{ host: "127.0.0.1", decision: "allow" }]) }
+			options
 		);
-		assert.deepEqual(loopback.candidates, [], "★ 回环与链路本地地址永远不是候选（安全先于站点记忆）");
+		assert.deepEqual(loopback.candidates, [], "★ 回环与链路本地地址永远不是候选（安全优先于任何偏好）");
+		assert.equal(
+			loopback.skipped.some((s) => s.reason.includes("本地")),
+			true,
+			"跳过的原因应当指出是本地/链路本地地址（诊断要能一眼看出是安全拦截）"
+		);
+
+		// ── 5b. ⭐ 默认设成「直接缓存」时，候选一模一样 ──
+		const cached = selectExternalUploadCandidates(notes, {
+			...options,
+			settings: { ...externalSettings, externalImageDefault: "cache" },
+		});
+		assert.deepEqual(
+			cached.candidates.map((c) => c.url),
+			picked.candidates.map((c) => c.url),
+			"★ 候选清单与默认行为无关（那一档说的是「现在动不动手」，不是「能不能搬」）"
+		);
 
 		// ── 6. 坏输入不该让整批失败 ──
 		assert.deepEqual(

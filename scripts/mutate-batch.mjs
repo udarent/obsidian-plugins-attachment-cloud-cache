@@ -25,7 +25,7 @@ await runMutations({
 		"src/cache-path",
 		"src/settings",
 		"src/types",
-		"src/render/site-decisions",
+		"src/render/external-decide",
 	],
 	suite: runMaintenanceSuite,
 	mutations: [
@@ -41,19 +41,10 @@ await runMutations({
 			// 后果：判定层被绕过 ⇒ **用户自己的存储地址、他明确标过「不再询问」的站点、
 			// 以及回环/链路本地地址全都会变成候选**。这是这条命令最严重的一种坏法：
 			// 它会去访问用户从未同意过的地方，甚至去请求本机与云元数据端点。
-			name: "★ 外链候选不再经过判定层（自己的存储与「不再询问」的站点都会被下载）",
-			from: '\t\t\tif (decision.action === "ignore") {\n',
+			name: "★ 外链候选不再经过判定层（自己的存储、回环地址、未就绪的存储都会被下载）",
+			from: '\t\t\tif (!isCacheableExternal(decision)) {\n',
 			to: "\t\t\tif (false) {\n",
 			expect: "候选要带上",
-		},
-		{
-			// 后果：`needsConsent` 是**授权信号** —— 确认框靠它决定"要不要说明
-			// 点确认就等于授权"，调用方也靠它决定"要不要把站点记成「缓存」"。
-			// 报成 false 的话，用户会在没有任何提示的情况下授权一次下载。
-			name: "★ 不再标出「这个站点还没答过」（用户会在毫无提示的情况下授权下载）",
-			from: 'needsConsent: decision.action === "ask"',
-			to: "needsConsent: false",
-			expect: "标出哪些还没答过",
 		},
 	],
 });

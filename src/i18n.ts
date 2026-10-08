@@ -152,26 +152,37 @@ export const I18N: Record<string, Locale> = {
 		maintainBatchCta: "Upload and rewrite links",
 		maintainBatchExternal:
 			"Also {count} image(s) hosted elsewhere, on {sites} site(s): {hosts}",
-		maintainBatchExternalConsent:
-			"Confirming also allows downloading from those sites, and remembers them as sites to cache.",
 		maintainBatchDone:
 			"Uploaded {uploaded}, already there {reused}, failed {failed}. Rewrote {links} link(s) across {notes} note(s).",
 
 		// ── 站外图片 ──
 		externalImageCache: "Cache images from other sites",
 		externalImageCacheDesc:
-			"When you open a note containing an image from another site, you are asked once per site whether to download it, upload it to your storage and rewrite the link. Off by default. Cached copies are always kept locally.",
-		rememberedSites: "Sites you have answered for",
-		rememberedSitesDesc:
-			'Sites you have answered for. "Cache" sites are handled automatically; "never ask" sites are left alone.',
-		rememberedSitesEmpty: "No sites remembered yet.",
-		rememberedSitesClear: "Clear",
-		rememberedSitesCleared: "Cleared {count} remembered site(s).",
-		rememberedSiteAllow: "cache",
-		rememberedSiteDeny: "never ask",
-		externalAskMessage: "Image from {host} — cache it into your storage?",
-		externalAskCache: "Cache and remember this site",
-		externalAskNever: "Don't ask for this site",
+			"Whether the plugin may handle images that live on other sites at all. Off by default: while it is off those images are left completely alone.",
+		externalImageDefault: "When a note has an image from another site",
+		externalImageDefaultDesc:
+			"What to do by default. \"Leave it alone\" never touches it; \"Cache straight away\" downloads it, uploads it to your storage and rewrites the link in the note. Either way you can pick individual images with the button below.",
+		externalDefault_skip: "Leave it alone",
+		externalDefault_cache: "Cache straight away",
+		externalPickName: "Pick specific images",
+		externalPickDesc:
+			"Choose images from the current note or from the whole vault, and only those are cached. Picking one is the same as agreeing to it — the default above does not apply.",
+		externalPickButton: "Choose images…",
+		externalPickTitle: "Choose images to cache",
+		externalPickScope: "Where to look",
+		externalPickScopeNote: "Current note",
+		externalPickScopeVault: "Whole vault",
+		externalPickEmpty:
+			"No images to cache here (they may already be in your own storage, or the feature or the storage connection is not set up).",
+		externalPickAll: "Select all",
+		externalPickNone: "Select none",
+		externalPickCta: "Cache the {count} selected",
+		externalPickCancel: "Cancel",
+		externalPickDisabled: "Turn on \"Cache images from other sites\" first.",
+		externalPickNothing: "No images were cached.",
+		externalPickDone:
+			"Cached {cached} image(s); {partial} were uploaded but their link could not be rewritten; {failed} failed.",
+		cmdPickExternal: "Cache images from other sites…",
 		externalCached: "Cached the image from {host} and rewrote the link.",
 		externalCachedNoRewrite: "The image was uploaded, but the link in this note could not be rewritten: {error}",
 		externalNoNote: "Could not read the note this image is in, so nothing was downloaded or changed.",
@@ -309,24 +320,36 @@ export const I18N: Record<string, Locale> = {
 		maintainBatchKeepsOriginals: "原文件会保留在原处 —— 不删任何东西，所以不会丢。",
 		maintainBatchCta: "上传并改写链接",
 		maintainBatchExternal: "另有 {count} 张图片托管在站外，来自 {sites} 个站点：{hosts}",
-		maintainBatchExternalConsent: "点确认即表示允许从这些站点下载，它们会被记住为「缓存」站点。",
 		maintainBatchDone:
 			"上传 {uploaded} 个、已存在 {reused} 个、失败 {failed} 个。在 {notes} 篇笔记里改写了 {links} 处链接。",
 
 		// ── 站外图片 ──
 		externalImageCache: "缓存站外图片",
 		externalImageCacheDesc:
-			"打开含站外图片的笔记时，会按站点询问一次：是否下载、上传到你的存储并改写链接。默认关闭。缓存副本始终保留在本地。",
-		rememberedSites: "已记住的站点",
-		rememberedSitesDesc: "你回答过的站点。选了「缓存」的站点会自动处理；选了「不再询问」的站点不再打扰。",
-		rememberedSitesEmpty: "尚未记住任何站点。",
-		rememberedSitesClear: "清除",
-		rememberedSitesCleared: "已清除 {count} 个已记住的站点。",
-		rememberedSiteAllow: "缓存",
-		rememberedSiteDeny: "不再询问",
-		externalAskMessage: "来自 {host} 的图片 —— 缓存到你的存储？",
-		externalAskCache: "缓存并记住该站点",
-		externalAskNever: "此站点不再询问",
+			"是否允许插件处理别处的图片。默认关闭；关着时这类图片一步都不会被碰。",
+		externalImageDefault: "遇到外链图片时",
+		externalImageDefaultDesc:
+			"默认怎么做。「什么都不做」绝不碰它；「直接缓存」会下载、上传到你的存储、并改写笔记里的链接。两种情况都能用下面那颗按钮逐张挑。",
+		externalDefault_skip: "什么都不做",
+		externalDefault_cache: "直接缓存",
+		externalPickName: "挑选要缓存的图片",
+		externalPickDesc:
+			"在「当前笔记」或「全库」里勾选图片，只处理你勾中的那些。勾选本身就是同意，与上面的默认设置无关。",
+		externalPickButton: "选择图片…",
+		externalPickTitle: "选择要缓存的图片",
+		externalPickScope: "范围",
+		externalPickScopeNote: "当前笔记",
+		externalPickScopeVault: "全库",
+		externalPickEmpty:
+			"这个范围里没有可缓存的图片（可能已经在你自己的存储里，或者功能/存储连接还没配好）。",
+		externalPickAll: "全选",
+		externalPickNone: "全不选",
+		externalPickCta: "缓存选中的 {count} 张",
+		externalPickCancel: "取消",
+		externalPickDisabled: "请先打开「缓存站外图片」。",
+		externalPickNothing: "没有缓存任何图片。",
+		externalPickDone: "已缓存 {cached} 张；{partial} 张已上传但没能改写链接；{failed} 张失败。",
+		cmdPickExternal: "缓存站外图片（可挑选）…",
 		externalCached: "已缓存来自 {host} 的图片并改写链接。",
 		externalCachedNoRewrite: "图片已上传，但没能改写本篇笔记里的链接：{error}",
 		externalNoNote: "读不到这张图所在的笔记，因此没有下载、也没有改动任何内容。",

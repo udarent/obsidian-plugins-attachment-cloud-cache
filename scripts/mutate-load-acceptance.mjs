@@ -84,15 +84,7 @@ await runMutations({
 			name: "★ 后处理器里不接站外编排（用户点了「缓存」却什么都不发生）",
 			from: "\t\t\tthis.externalHook?.process(element, ctx);\n",
 			to: "\t\t\t// 变异：不接站外编排\n",
-			expect: "应询问一次",
-		},
-		{
-			// 后果：决定只活在内存里 ⇒ 用户重启后再打开同一篇笔记，又被问一遍，
-			// 而他确信自己已经答过了。
-			name: "★ 站点决定不落盘（重启后用户被重新问一遍）",
-			from: "\t\tawait this.serialize(() => store.save());\n",
-			to: "\t\tvoid store;\n",
-			expect: "记忆文件",
+			expect: "站外图被下载",
 		},
 		{
 			// 后果：上限默认是 0（不限制），于是"忘了装配轮换器"在界面上**毫无痕迹** ——
@@ -152,20 +144,13 @@ await runMutations({
 			expect: "确认框必须列出即将访问的站点",
 		},
 		{
-			// 后果：确认了却不记授权 ⇒ 以后每看一次那篇笔记，都会为同一个站点再问一遍。
-			name: "★ 确认之后不记住授权（同一个站点每次看笔记都再问一遍）",
-			from: '\t\t\t\tif (site.needsConsent) this.siteDecisionsSnapshot().set(site.host, "allow");',
-			to: "\t\t\t\t// 变异：不记住授权",
-			expect: "确认即授权",
-		},
-		{
-			// 后果：记忆清空了，但**已经渲染出来的图不会自己重跑判定** ⇒
-			// 用户点完「清除站点记忆」什么都看不到，只会以为按钮坏了。
-			//（另一半原因在编排层：那张"问过就永久记住"的表，见 `mutate-external-hook.mjs`。）
-			name: "★ 清除站点记忆后不重看当前打开的笔记（点完按钮什么都没发生）",
-			from: "\t\tthis.reprocessOpenNotes();\n",
+			// 后果：站外图那条判定是**渲染时**做的，改设置不会让它重跑 ⇒
+			// 用户把默认值改成「直接缓存」之后什么都看不到，要等下次重开笔记才生效
+			//（"改了设置没反应"是本项目一直在防的一类症状）。
+			name: "★ 改完设置不重看当前打开的笔记（改了默认行为却看不到效果）",
+			from: "\t\tif (this.settings.externalImageCache) this.reprocessOpenNotes();\n",
 			to: "\t\t// 变异：不重看当前打开的笔记\n",
-			expect: "清除站点记忆之后重新询问当前显示的站外图",
+			expect: "立刻重看当前打开的笔记",
 		},
 	],
 });

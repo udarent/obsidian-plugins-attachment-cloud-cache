@@ -27,7 +27,7 @@ export function runSettingsUiSuite(mod) {
 		classifyPublicLink,
 		publicLinkKey,
 		publicLinkTone,
-		describeRememberedSites,
+		externalImageDefaultOptions,
 		ensureSecretSlot,
 		SECRET_SLOT_PREFIX,
 		// settings-bindings
@@ -382,41 +382,30 @@ export function runSettingsUiSuite(mod) {
 	);
 
 	// ============================================================
-	// 「已记住的站点」列表（`describeRememberedSites`）
+	// 3b. 「遇到外链图片时」那一档的选项（`externalImageDefaultOptions`）
 	//
-	// 这是用户**唯一**能撤销"此站点不再询问"的地方，所以它必须：
-	// 空态说人话、两种决定显示成用户看得懂的字（而不是 `allow` / `deny`）。
+	// 与上面 `localCopyOptions` 同一个纪律：**由类型清单生成**，于是"界面能选的"
+	// 与"类型允许的"只有一处定义。漏一个取值的后果很具体 ——
+	// 用户在下拉里选不到它，而那个取值在代码里是支持的（功能静默地不可达）。
 	// ============================================================
-	const labels = { allow: "缓存", deny: "不再询问", empty: "尚未记住任何站点。" };
-
-	assert.equal(describeRememberedSites([], labels), "尚未记住任何站点。", "★ 空态要说人话（而不是空串）");
-	assert.equal(
-		describeRememberedSites([{ host: "a.example.net", decision: "allow" }], labels),
-		"a.example.net — 缓存",
-		"★ allow 要显示成用户看得懂的「缓存」，不能把 allow 原样给他看"
-	);
-	assert.equal(
-		describeRememberedSites([{ host: "b.example.net", decision: "deny" }], labels),
-		"b.example.net — 不再询问",
-		"★ deny 要显示成「不再询问」"
-	);
-	assert.equal(
-		describeRememberedSites(
-			[
-				{ host: "a.example.net", decision: "allow" },
-				{ host: "b.example.net", decision: "deny" },
-			],
-			labels
-		),
-		"a.example.net — 缓存\nb.example.net — 不再询问",
-		"多个站点要逐行列出（顺序沿用记忆自己的排序，落盘顺序由此稳定）"
-	);
-	// 不认识的决定值不能显示成"缓存"（宁可显示成否定的那个 —— 保守，用户会去检查）
-	assert.equal(
-		describeRememberedSites([{ host: "c.example.net", decision: "???" }], labels),
-		"c.example.net — 不再询问",
-		"★ 不认识的决定值要落到保守的一侧（显示成「缓存」会让用户以为它会被处理）"
-	);
+	{
+		const externalOptions = externalImageDefaultOptions((value) => `label:${value}`);
+		assert.deepEqual(
+			Object.keys(externalOptions).sort(),
+			["cache", "skip"],
+			"选项集合必须与 EXTERNAL_IMAGE_DEFAULTS 完全一致（不多不少）"
+		);
+		assert.equal(externalOptions.skip, "label:skip", "每个取值都要有文案（少一个就是一个选不中的选项）");
+		assert.equal(externalOptions.cache, "label:cache", "同上");
+		// ⭐ 顺序也有意义：下拉里的第一项就是"用户第一眼看到的那个"，必须是出厂值。
+		// 这里写死 `skip` 是刻意的 —— 它就是文档里写给用户的那个出厂值，
+		// 改名要同时改文档、类型清单与 `settings.ts` 的出厂表（那三处由各自的断言把着）。
+		assert.equal(
+			Object.keys(externalImageDefaultOptions((value) => value))[0],
+			"skip",
+			"★ 下拉第一项必须是出厂值「什么都不做」"
+		);
+	}
 
 	// ============================================================
 	// 钥匙串槽位名（`ensureSecretSlot`）

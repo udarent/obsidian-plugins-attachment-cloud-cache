@@ -16,7 +16,7 @@ await withLoadedTs(
 		"src/cache-path",
 		"src/settings",
 		"src/types",
-		"src/render/site-decisions",
+		"src/render/external-decide",
 	],
 	(mod) => {
 		runMaintenanceSuite(mod);
@@ -25,9 +25,9 @@ await withLoadedTs(
 				"preview truncated but execution list full; link spans for wikilink/alias/subpath/title/angle forms; " +
 				"rewrites preserve aliases and never touch unrelated links; reference scan only counts our own storage; " +
 				"batch candidates skip non-enabled, empty and already-indexed files; off-site candidates are images only " +
-				"(never plain links or wikilinks), skip the sites you marked do-not-ask with their real reason recorded, " +
-				"and are never produced when the feature is off, the host is loopback, or an unanswered site's storage " +
-				"is not ready)."
+				"(never plain links or wikilinks), they include the ones the default setting leaves alone — otherwise " +
+				"turning that default off would leave these explicit actions with an empty list — and they are never " +
+				"produced when the feature is off, the host is loopback, or the storage is not ready)."
 		);
 	}
 );

@@ -41,8 +41,8 @@ import {
 	classifyConnectionFailure,
 	classifyPublicLink,
 	connectionFailureKey,
-	describeRememberedSites,
 	ensureSecretSlot,
+	externalImageDefaultOptions,
 	localCopyOptions,
 	publicLinkKey,
 	publicLinkTone,
@@ -391,6 +391,27 @@ export class SettingsTab extends PluginSettingTab {
 				aliases: ["external", "hotlink", "third-party", "站外", "外链", "图床"],
 				control: { type: "toggle", key: "externalImageCache" },
 			},
+			{
+				name: this.t("externalImageDefault"),
+				desc: this.t("externalImageDefaultDesc"),
+				aliases: ["cache", "auto", "default", "默认", "自动", "外链"],
+				// ⚠️ 条件显示：功能关着时这一档没有任何意义（判定层第一步就忽略了）。
+				// 与「缓存目录」那条同一个纪律：**看不见的字段不会产生矛盾组合**。
+				visible: () => this.plugin.settings.externalImageCache,
+				control: {
+					type: "dropdown",
+					key: "externalImageDefault",
+					options: externalImageDefaultOptions((value) => this.t(`externalDefault_${value}`)),
+				},
+			},
+			{
+				name: this.t("externalPickName"),
+				desc: this.t("externalPickDesc"),
+				aliases: ["pick", "choose", "select", "选择", "挑选", "缓存"],
+				// 同上：功能关着时连候选都挑不出来（判定层会全部判掉）
+				visible: () => this.plugin.settings.externalImageCache,
+				render: (setting) => this.renderExternalPicker(setting),
+			},
 		];
 
 		return items;
@@ -422,45 +443,28 @@ export class SettingsTab extends PluginSettingTab {
 				aliases: ["path-style", "virtual-host", "兼容", "寻址"],
 				control: { type: "toggle", key: "s3.forcePathStyle" },
 			},
-			{
-				name: this.t("rememberedSites"),
-				desc: this.t("rememberedSitesDesc"),
-				aliases: ["sites", "ask", "站点", "询问"],
-				// 放这里而不是"离线副本"组：这是一个**查看与撤销**已经做过的决定的地方，
-				// 不是一个日常会调的开关。
-				render: (setting) => this.renderRememberedSites(setting),
-			},
 		];
 	}
 
 	/**
-	 * 「已记住的站点」列表 + 清除按钮。
+	 * 「选择要缓存的外链图片」那颗按钮。
 	 *
-	 * 这个列表存在的意义是**让用户能撤销**：选了「不再询问」之后，
-	 * 除了这里没有别的地方能把它改回来（而人一定会误点一次）。
+	 * 用 `render` 而不是 `control`：这是一个**动作**，不是一个要存下来的值
+	 *（官方给 `render` 的场景之一就是这类"不是普通输入控件"的东西）。
+	 *
+	 * ⚠️ 它调的**就是命令那条链的实现**（`plugin.cachePickedExternalImages`）——
+	 * 设置页只是"另一个入口"，候选范围、勾选逻辑、汇总提示都不另写一份。
+	 * 两个入口行为不同是这类功能最典型的坏法：按钮能用、命令不能用（或反之），
+	 * 而且没人会发现。
 	 */
-	private renderRememberedSites(setting: Setting): void {
-		const records = this.plugin.siteDecisionsSnapshot().toArray();
-		setting.setDesc(
-			describeRememberedSites(records, {
-				allow: this.t("rememberedSiteAllow"),
-				deny: this.t("rememberedSiteDeny"),
-				empty: this.t("rememberedSitesEmpty"),
-			})
-		);
-		if (records.length === 0) return;
-
+	private renderExternalPicker(setting: Setting): void {
 		setting.addButton((button) =>
-			button.setButtonText(this.t("rememberedSitesClear")).onClick(async () => {
-				const cleared = this.plugin.clearSiteDecisions();
-				await this.plugin.persistSiteDecisions();
-				// ⚠️ 提示里带上条数：这正是 `clear()` 返回计数的用途
-				new Notice(this.t("rememberedSitesCleared", { count: cleared }));
-				// ⚠️ 用 `update()` 而不是 `display()`：1.13 起设置页是**声明式**的，
-				// 重新调 `display()` **不会**刷新（lint 也拦这一条）。结果是
-				// "清掉了、提示也弹了，但列表还挂着旧内容" —— 用户会以为没生效。
-				this.update();
-			})
+			button
+				.setButtonText(this.t("externalPickButton"))
+				.setCta()
+				.onClick(() => {
+					void this.plugin.cachePickedExternalImages();
+				})
 		);
 	}
 }

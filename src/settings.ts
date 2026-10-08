@@ -33,14 +33,14 @@ import { normalizePath } from "obsidian";
  *   旧组合 `cacheEnabled: true + localFileAction: "cache"` 的效果。
  */
 
-import { LOCAL_COPY_ACTIONS, isLocalCopyAction } from "./types";
-import type { LocalCopyAction, PluginSettings, S3Config } from "./types";
+import { EXTERNAL_IMAGE_DEFAULTS, LOCAL_COPY_ACTIONS, isExternalImageDefault, isLocalCopyAction } from "./types";
+import type { ExternalImageDefault, LocalCopyAction, PluginSettings, S3Config } from "./types";
 import { CACHE_LIMIT_MB_MAX } from "./types";
 import { isPlainRecord } from "./records";
 
 // 枚举类型守卫定义在 types.ts（与枚举本身同处一地，避免两个模块各存一份）。
 // 这里转出去，让"读设置的模块"同时就是"拿守卫的模块"。
-export { isLocalCopyAction };
+export { isExternalImageDefault, isLocalCopyAction };
 
 /** 默认启用的图片格式。 */
 const DEFAULT_IMAGE_EXTENSIONS = [
@@ -176,6 +176,9 @@ const FACTORY_SETTINGS = {
 	// 而这种动作的同意应当显式；何况默认开会让已有 vault 里所有站外图站点
 	// 在首次渲染时集体弹常驻通知 —— 一次更新就满屏弹窗。
 	externalImageCache: false,
+	// ⚠️ 出厂「什么都不做」。打开上面那个开关**不等于**同意去下载别人的图 ——
+	// 那件事靠用户把这个值改成 `cache`、或者在「选择要缓存的外链图片」里逐张勾选来显式表达。
+	externalImageDefault: "skip" as ExternalImageDefault,
 	// ⚠️ 默认**不限制**（0）。上限默认关着有两层理由：
 	// ① 自动淘汰是"后台删文件"，用户没要求就不该发生；
 	// ② 它默认关着，"离线可用"这个主承诺就不会被悄悄打折。
@@ -201,6 +204,7 @@ const SETTINGS_SPEC: {
 	cacheFolder: pathValue({ required: true }),
 	fallbackDownload: boolValue(),
 	externalImageCache: boolValue(),
+	externalImageDefault: oneOfValue(EXTERNAL_IMAGE_DEFAULTS),
 	cacheLimitMb: numberValue({ min: 0, max: CACHE_LIMIT_MB_MAX }),
 };
 

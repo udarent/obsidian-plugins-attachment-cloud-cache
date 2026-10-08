@@ -14,8 +14,7 @@
 import assert from "node:assert/strict";
 
 export function runExternalDecideSuite(mod) {
-	const { decideExternalCache, hostOf, ownHosts, isBlockedHost } = mod;
-	const { SiteDecisions } = mod;
+	const { decideExternalCache, hostOf, ownHosts, isBlockedHost, isCacheableExternal } = mod;
 
 	const address = {
 		endpoint: "https://s3.example.com",
@@ -37,13 +36,10 @@ export function runExternalDecideSuite(mod) {
 		...overrides,
 	});
 
-	const withMemory = (entries) => new SiteDecisions(entries.map(([host, decision]) => ({ host, decision })));
-
 	const decide = (src, options = {}) =>
 		decideExternalCache({
 			src,
 			settings: settingsWith(options.settings),
-			decisions: options.decisions ?? new SiteDecisions(),
 			configured: options.configured ?? true,
 			blockedHost: options.blockedHost,
 		});
@@ -56,19 +52,17 @@ export function runExternalDecideSuite(mod) {
 		const d = decideExternalCache({
 			src,
 			settings: offSettings,
-			decisions: new SiteDecisions(),
 			configured: true,
 		});
 		assert.equal(d.action, "ignore", `★ 功能关着时必须 ignore（${src}）—— 默认关，不能打扰`);
 	}
-	// 关着时**即使记忆里是 allow** 也不该动（用户关掉的是整个功能）
-	const offWithAllow = decideExternalCache({
+	// 关着时**即使默认值设成了「直接缓存」**也不该动（用户关掉的是整个功能）
+	const offWithCacheDefault = decideExternalCache({
 		src: "https://third-party.example.net/x.png",
-		settings: offSettings,
-		decisions: withMemory([["third-party.example.net", "allow"]]),
+		settings: settingsWith({ externalImageCache: false, externalImageDefault: "cache" }),
 		configured: true,
 	});
-	assert.equal(offWithAllow.action, "ignore", "★ 开关优先于记忆：关掉功能后，记住的站点也不该再处理");
+	assert.equal(offWithCacheDefault.action, "ignore", "★ 开关优先于默认行为：关掉功能后，默认值不该有任何作用");
 
 	// ============================================================
 	// 2. 不是可处理的地址 → ignore
@@ -125,11 +119,11 @@ export function runExternalDecideSuite(mod) {
 	]) {
 		assert.equal(decide(src).action, "ignore", `★ 回环/链路本地地址必须 ignore（${label}）—— 不能把内网探测发出去`);
 	}
-	// 回环地址即使被记忆标成 allow 也必须拦（安全优先于用户设置）
+	// 回环地址即使设置里选了「直接缓存」也必须拦（安全优先于偏好）
 	assert.equal(
-		decide("http://127.0.0.1/x.png", { decisions: withMemory([["127.0.0.1", "allow"]]) }).action,
+		decide("http://127.0.0.1/x.png", { settings: { externalImageDefault: "cache" } }).action,
 		"ignore",
-		"★ 安全拦截优先于记忆：回环地址不该因为记过 allow 就被下载"
+		"★ 安全拦截优先于偏好：回环地址不该因为默认值设成「直接缓存」就被下载"
 	);
 
 	// ⭐ 但**局域网**（RFC1918）不能拦 —— 家庭 NAS / 局域网自建图床是合法用法
@@ -138,71 +132,91 @@ export function runExternalDecideSuite(mod) {
 		["10.x", "http://10.0.0.5/x.png"],
 		["172.16-31.x", "http://172.20.3.4/x.png"],
 	]) {
-		assert.equal(decide(src).action, "ask", `★ 局域网地址要照常询问（${label}）—— 自建图床是合法用法`);
+		assert.equal(decide(src).action, "wait", `★ 局域网地址照常算可搬的候选（${label}）—— 自建图床是合法用法`);
+		assert.equal(isCacheableExternal(decide(src)), true, `局域网地址要能进候选清单（${label}）`);
 	}
 
 	// ============================================================
-	// 5. 站点记忆
+	// 5. ⭐⭐ 默认行为：什么都不做（`wait`）/ 直接缓存（`cache`）
+	//
+	// 这两个结果的区别是"**现在**动不动手"，不是"能不能搬" —— 后者由上面那些
+	// 安全与归属检查回答。分开是**必要的**：命令与选择器要用"能不能搬"
+	// （`isCacheableExternal`）来列候选，否则用户把默认设成「什么都不做」之后，
+	// 那两个显式入口会列出一份空清单 —— 等于功能不存在。
 	// ============================================================
 	assert.equal(
-		decide("https://third-party.example.net/x.png", {
-			decisions: withMemory([["third-party.example.net", "deny"]]),
-		}).action,
+		decide("https://third-party.example.net/x.png").action,
+		"wait",
+		"★ 出厂是「什么都不做」：打开功能**不等于**同意去下载别人的图、改写自己的笔记"
+	);
+	assert.equal(
+		decide("https://third-party.example.net/x.png", { settings: { externalImageDefault: "cache" } }).action,
+		"cache",
+		"★ 选了「直接缓存」就该直接搬，不再问任何问题"
+	);
+
+	// ⭐ `wait` 仍然算"可搬" —— 这正是两个显式入口能列出它的前提
+	assert.equal(isCacheableExternal(decide("https://third-party.example.net/x.png")), true, "★ wait 必须算候选");
+	assert.equal(
+		isCacheableExternal(decide("https://third-party.example.net/x.png", { settings: { externalImageDefault: "cache" } })),
+		true,
+		"cache 当然算候选"
+	);
+	assert.equal(isCacheableExternal(decide("http://127.0.0.1/x.png")), false, "被安全拦下的不算候选");
+
+	// 两个结果都要带主机名：命令的确认框要据此列出"即将访问哪些站点"（那就是它的披露）
+	assert.equal(decide("https://third-party.example.net/x.png").host, "third-party.example.net", "wait 要带主机名");
+	assert.equal(
+		decide("https://third-party.example.net/x.png", { settings: { externalImageDefault: "cache" } }).host,
+		"third-party.example.net",
+		"cache 要带主机名"
+	);
+
+	// ⭐ 默认值**不能越过**安全与归属判断（偏好排在事实之后）
+	assert.equal(
+		decide("http://127.0.0.1/x.png", { settings: { externalImageDefault: "cache" } }).action,
 		"ignore",
-		"★ 标记「不再询问」的站点必须 ignore"
+		"★ 选了「直接缓存」也不能去请求回环地址（安全优先于偏好）"
 	);
 	assert.equal(
-		decide("https://third-party.example.net/x.png", {
-			decisions: withMemory([["third-party.example.net", "allow"]]),
-		}).action,
-		"cache",
-		"★ 已记住的站点（allow）应直接 cache，不再弹询问"
+		decide("https://img.example.com/k1.png", { settings: { externalImageDefault: "cache" } }).action,
+		"ignore",
+		"★ 选了「直接缓存」也不会把自己的存储地址当站外图搬（那是无意义的一次往返）"
 	);
-	// 大小写：记忆是小写，URL 是大写
+
+	// 主机名照旧要归一（命令那份清单按它分组、按它披露）
+	assert.equal(decide("https://THIRD-PARTY.Example.NET/x.png").host, "third-party.example.net", "主机名要归一大小写");
 	assert.equal(
-		decide("https://THIRD-PARTY.Example.NET/x.png", {
-			decisions: withMemory([["third-party.example.net", "allow"]]),
-		}).action,
-		"cache",
-		"★ 记忆查询要归一化大小写（用户答过一次就该一直生效）"
-	);
-	// 端口与主机要区分
-	assert.equal(
-		decide("https://third-party.example.net:8443/x.png", {
-			decisions: withMemory([["third-party.example.net", "deny"]]),
-		}).action,
-		"ask",
-		"★ 带端口的主机与不带端口的是两个站点（合并会让本地测试的决定作用到生产）"
+		decide("https://third-party.example.net:8443/x.png").host,
+		"third-party.example.net:8443",
+		"★ 带端口的主机与不带端口的是两个站点（披露与分组都按它分）"
 	);
 
 	// ============================================================
-	// 6. 未配置 → ignore（渲染路径上不能刷屏）
+	// 6. 未配置 → ignore（渲染路径上不能刷屏、也不该列进候选）
 	// ============================================================
 	assert.equal(
 		decide("https://third-party.example.net/x.png", { configured: false }).action,
 		"ignore",
-		"★ 未配置时不该询问（渲染路径上每张图都会走到这里）"
+		"★ 未配置时不该动手（渲染路径上每张图都会走到这里）"
 	);
-	// 未配置也**不能**落到 cache（那会去下载+上传，而根本没有客户端）
+	// ⭐ 即使设置里选了「直接缓存」也一样：没有客户端就拿不到图，
+	// 列进候选只会让用户勾完才发现做不成
 	assert.equal(
 		decide("https://third-party.example.net/x.png", {
 			configured: false,
-			decisions: withMemory([["third-party.example.net", "allow"]]),
+			settings: { externalImageDefault: "cache" },
 		}).action,
-		"cache",
-		"（记忆为 allow 时判定层给 cache —— 执行层会自己复核「未配置」并静默退出）"
+		"ignore",
+		"★ 存储没配好时，即使选了「直接缓存」也不动手（没有客户端可发请求）"
 	);
+	assert.equal(isCacheableExternal(decide("https://third-party.example.net/x.png", { configured: false })), false, "未就绪的不进候选");
 
 	// ============================================================
-	// 7. 首次遇到 → ask
+	// 7. ⭐ 只认主机，不认文件名（清单与披露都按主机）
 	// ============================================================
-	const first = decide("https://third-party.example.net/x.png");
-	assert.equal(first.action, "ask", "★ 首次遇到的站外图应询问");
-	assert.equal(first.host, "third-party.example.net", "ask 必须带上主机名（询问文案要显示它）");
-
-	// ⭐ 认主机，不认文件名：长得像但不是同一台主机
 	const lookalike = decide("https://img.example.com.evil.com/k1.png");
-	assert.equal(lookalike.action, "ask", "★ 只认主机不认文件名（`img.example.com.evil.com` 是另一个站点）");
+	assert.equal(lookalike.action, "wait", "★ 只认主机不认文件名（`img.example.com.evil.com` 是另一个站点）");
 	assert.equal(lookalike.host, "img.example.com.evil.com", "主机要如实取出");
 
 	// ============================================================

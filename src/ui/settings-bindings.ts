@@ -26,7 +26,7 @@
  */
 
 import { formatCacheLimitMb, formatExtensionList, parseCacheLimitMb, parseExtensionList } from "./settings-logic";
-import { isLocalCopyAction } from "../types";
+import { isExternalImageDefault, isLocalCopyAction } from "../types";
 
 /** 把点号键切成路径段。`""` 与只含空段的键视为非法。 */
 export function splitKey(key: unknown): string[] | null {
@@ -137,6 +137,8 @@ export function isWritableValue(key: unknown, value: unknown): boolean {
 		// 写坏了要等下次加载时被回落成默认值才发现，而那时的症状是"改了没用"。
 		case "localCopy":
 			return isLocalCopyAction(value);
+		case "externalImageDefault":
+			return isExternalImageDefault(value);
 		default:
 			return true;
 	}

@@ -74,6 +74,36 @@ export function isLocalCopyAction(value: unknown): value is LocalCopyAction {
 	return typeof value === "string" && (LOCAL_COPY_ACTIONS as readonly string[]).includes(value);
 }
 
+/**
+ * 遇到**站外**图片时**默认**怎么做。
+ *
+ * ## 为什么这是一个显式设置，而不是"每次都问"
+ *
+ * 早先的行为是"首次遇到某个站点时弹通知问一次"。那个设计有两个问题：
+ * - **打扰**：询问出现在**阅读**路径上，而"要不要把这张图搬进我的存储"并不是件紧急的事；
+ * - **粒度太粗**：它记住的是**站点**，于是"这个站点别的图都要，就这一张不要"根本表达不出来。
+ *
+ * 现在改成两件事的组合：
+ * 1. 这个设置说**默认**怎么办（用户自己选的，不猜）；
+ * 2. 想逐张控制时，用「选择要缓存的外链图片」那条命令/按钮**显式勾选** ——
+ *    勾选本身就是同意，不受这里的"默认"影响。
+ *
+ * ⚠️ 出厂是 `skip`（**什么都不做**）：打开功能**不等于**同意去下载别人的图、
+ * 更不等于同意改写自己的笔记。
+ */
+export type ExternalImageDefault =
+	/** 遇到站外图时**什么都不做**（默认）。 */
+	| "skip"
+	/** 遇到站外图时直接下载 → 上传 → 改写链接。 */
+	| "cache";
+
+/** 下拉里能选的值。**由它生成选项**，于是"界面能选的"与"类型允许的"只有一处定义。 */
+export const EXTERNAL_IMAGE_DEFAULTS: readonly ExternalImageDefault[] = ["skip", "cache"];
+
+export function isExternalImageDefault(value: unknown): value is ExternalImageDefault {
+	return typeof value === "string" && (EXTERNAL_IMAGE_DEFAULTS as readonly string[]).includes(value);
+}
+
 /** S3 兼容存储的连接参数。 */
 export interface S3Config {
 	/** 服务端点，如 `https://abc.r2.cloudflarestorage.com`。 */
@@ -150,15 +180,21 @@ export interface PluginSettings {
 	 */
 	fallbackDownload: boolean;
 	/**
-	 * 遇到**站外**图片时，按站点询问一次：是否下载、上传到自己的存储、并改写链接。
+	 * 是否**启用**「处理站外图片」这条链路（默认**关**）。
 	 *
-	 * ⚠️ 默认**关**。打开后插件会对外发 PUT 并**改写笔记里的链接** ——
-	 * 这类动作的同意应当显式给出，而不是默默替用户做掉。
-	 *
-	 * 关闭时站外图**一步都不碰**（不下载、不改写、也不询问）：
+	 * ⚠️ 关着时站外图**一步都不碰**（不下载、不改写、也不列进任何候选）：
 	 * 渲染路径会原样保留远端地址，行为与没装这个插件一致。
+	 *
+	 * 打开本项目**不等于**同意去下载别人的图 —— 那件事由
+	 * {@link externalImageDefault} 与「选择要缓存的外链图片」那条命令显式表达。
 	 */
 	externalImageCache: boolean;
+	/**
+	 * 遇到站外图片时**默认**怎么做：什么都不做（出厂）/ 直接缓存。
+	 *
+	 * ⚠️ 只在 {@link externalImageCache} 打开时才有意义（设置页里也是这么显示的）。
+	 */
+	externalImageDefault: ExternalImageDefault;
 	/**
 	 * 缓存目录的大小上限（MB）。**0 = 不限制**（默认）。
 	 *

@@ -18,11 +18,11 @@ console.log(
 		"Vault.delete (never the trash), said so in the confirmation text, left the referenced copy alone, and " +
 		"cancelling touched nothing; batch upload rewrote both link forms, kept the originals and left " +
 		"no stray copy behind; an unconfigured paste is left to Obsidian; batch upload also picks up the images notes " +
-		"link to elsewhere — the dialog names the sites it will visit (that confirmation is the authorisation, and it is " +
-		"remembered), cancelling downloads nothing and remembers nothing, and a site you marked do-not-ask gets no " +
-		"request at all; with the feature switched on, an image from another site was asked about once, downloaded, " +
-		"uploaded and its link rewritten; clearing the site memory makes the plugin look at the notes that are open " +
-		"right now and ask again; and with a cache limit set, the background rotation deleted the least recently used " +
+		"link to elsewhere, and its dialog names the sites it will visit (that confirmation is the authorisation) " +
+		"while cancelling downloads nothing; with the feature on and the default set to \"cache straight away\" such " +
+		"an image is downloaded, uploaded and its link rewritten, whereas the default \"leave it alone\" sends no " +
+		"request and leaves the note byte-for-byte identical; changing that setting makes the plugin look at the notes " +
+		"that are open right now; and with a cache limit set, the background rotation deleted the least recently used " +
 		"copies outright (freeing the space now) and removed their index entries, without ever going near the trash, " +
 		"and with the note itself untouched))."
 );

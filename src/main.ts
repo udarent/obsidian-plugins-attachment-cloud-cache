@@ -39,7 +39,7 @@ import type { MaintenanceDeps } from "./maintenance/run";
 import { createCacheRotator } from "./maintenance/rotation";
 import type { CacheRotator } from "./maintenance/rotation";
 import { selectExternalUploadCandidates, selectUploadCandidates } from "./maintenance/batch";
-import type { NoteTextLike } from "./maintenance/batch";
+import type { ExternalCandidate, NoteTextLike } from "./maintenance/batch";
 import { ingestAttachment } from "./core/ingest";
 import { confirmWithModal } from "./ui/confirm-modal";
 import type { ConfirmOptions } from "./ui/confirm-modal";
@@ -51,14 +51,14 @@ import { createLocalCopyEnsurer } from "./core/download";
 import type { LocalCopyOutcome } from "./core/download";
 import { installImageSrcPatch, processImages } from "./render/render-hook";
 import type { ImageElementLike, RenderHookDeps } from "./render/render-hook";
-import { createSiteStore } from "./host/site-store";
-import { SiteDecisions } from "./render/site-decisions";
 import { createExternalHook } from "./render/external-hook";
-import type { ExternalAskChoice, ExternalAskInfo, ExternalHook } from "./render/external-hook";
+import type { ExternalHook } from "./render/external-hook";
 import { createExternalLiveQueue } from "./render/external-live";
 import type { ExternalLiveQueue, OpenViewLike } from "./render/external-live";
 import { createExternalCacher } from "./core/external-cache";
-import { askExternalCacheWithNotice } from "./ui/external-notice";
+import { pickExternalImagesWithModal } from "./ui/external-picker-modal";
+import type { ExternalCandidateLoader } from "./ui/external-picker-modal";
+import type { ExternalPickItem, ExternalPickScope } from "./ui/external-picker-logic";
 
 /**
  * 启动后延迟多久做第一次缓存上限检查。
@@ -101,9 +101,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 */
 	private readonly serialize = makeSerializer();
 
-	/** 站点决定记忆的持久化。**稳定单例**（`load()` 之后对象会换，所以要现取）。 */
-	private siteStore: ReturnType<typeof createSiteStore> | null = null;
-
 	/** 站外缓存的编排。**必须是稳定的一份** —— 去重表挂在它的闭包里。 */
 	private externalHook: ExternalHook | null = null;
 
@@ -112,7 +109,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 *
 	 * ⚠️ 必须是**稳定的一份**：待处理的那批挂在上面的闭包里。
 	 * 而且不能省 —— 后处理器**在实时预览下不跑**（真机实测 0 次），
-	 * 少了这条，编辑态里「缓存外站图片」就完全没有反应。
+	 * 少了这条，编辑态里「缓存站外图片」就完全没有反应。
 	 */
 	private externalLive: ExternalLiveQueue | null = null;
 
@@ -120,17 +117,25 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	private rotation: CacheRotator | null = null;
 
 	/**
-	 * 询问接缝。
+	 * 「选择要缓存的外链图片」那个弹窗的接缝。
 	 *
-	 * ⚠️ 默认是**真实的通知**；入口验收测试会覆写它（真通知在测试里点不了）。
+	 * ⚠️ 默认是**真弹窗**；入口验收测试会覆写它（真弹窗在测试里点不了）。
 	 * 这条接缝是这条链路唯一能被端到端驱动的地方 —— 没有它，
-	 * "用户选「缓存」之后到底发生了什么"就只能靠单元套件间接推断。
+	 * "用户勾了几张之后到底发生了什么"就只能靠单元套件间接推断。
 	 */
-	askExternalCache: (info: ExternalAskInfo) => Promise<ExternalAskChoice> = (info) =>
-		askExternalCacheWithNotice({
-			message: this.t("externalAskMessage", { host: info.host }),
-			cacheLabel: this.t("externalAskCache"),
-			neverLabel: this.t("externalAskNever"),
+	pickExternalImages: (
+		load: ExternalCandidateLoader
+	) => Promise<ExternalPickItem[] | null> = (load) =>
+		pickExternalImagesWithModal(this.app, load, {
+			title: this.t("externalPickTitle"),
+			scopeName: this.t("externalPickScope"),
+			scopeNote: this.t("externalPickScopeNote"),
+			scopeVault: this.t("externalPickScopeVault"),
+			empty: this.t("externalPickEmpty"),
+			selectAll: this.t("externalPickAll"),
+			selectNone: this.t("externalPickNone"),
+			cta: this.t("externalPickCta"),
+			cancel: this.t("externalPickCancel"),
 		});
 
 	async onload(): Promise<void> {
@@ -142,10 +147,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		this.addSettingTab(new SettingsTab(this.app, this));
 
 		await this.loadCacheIndex();
-		// 站点决定记忆要**在渲染挂钩子之前**载入：渲染路径上的判定是同步的，
-		// 只能读内存 —— 那时读不到记忆就等于"用户答过也照问"。
-		this.siteStore = createSiteStore(this.app, this.manifest.dir, this.manifest.id);
-		await this.loadSiteDecisions();
 
 		// 粘贴与拖拽注册在这两个事件上（`@since 1.1.0`），而不是 document 上的 DOM 事件：
 		// 宿主会把 `Editor` 直接递过来，不必自己判断"哪个编辑器有焦点"，
@@ -174,11 +175,12 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			t: (key, params) => this.t(key, params),
 		});
 
-		// ── 站外图：按站点询问一次，同意后下载 → 上传 → 改写链接 ──
+		// ── 站外图：按设置里的默认行为处理（默认什么都不做），也可以由用户在
+		//    「选择要缓存的外链图片」里逐张勾选 ──
 		//
 		// ⚠️ 这里是全库**唯一**会下载"别人的图"、也是唯一会**改写用户笔记**的链路。
-		// 它的前置条件是"用户明确同意"，而那个同意由 `askExternalCache` 拿到；
-		// 执行层还会再复核一次（用户可能在询问与执行之间把功能关掉）。
+		// 它的前置条件是"用户的显式动作"（把默认值改成「直接缓存」，或者在弹窗里勾中），
+		// 执行层还会再复核一次（功能可能在两者之间被关掉）。
 		const cacheExternalImage = createExternalCacher({
 			app: this.app,
 			settings: () => this.settings,
@@ -189,39 +191,29 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			t: (key, params) => this.t(key, params),
 		});
 
-		// ⚠️ 稳定单例：三张去重表（正在问的站点 / 问过的站点 / 正在下载的 URL）
-		// 都挂在它的闭包里。每次渲染新建一份 = 没有去重 = 同一篇文章里
-		// 同一个站点被反复询问（而渲染会因滚动、切视图而反复发生）。
+		// ⚠️ 稳定单例：那张"正在下载/上传的 URL"表挂在它的闭包里。
+		// 每次渲染新建一份 = 没有去重 = 同一张图会被反复下载上传
+		//（渲染会因滚动、切视图而反复发生）。
 		this.externalHook = createExternalHook({
 			settings: () => this.settings,
-			decisions: () => this.siteDecisionsSnapshot(),
 			// 同步算：判定层是同步的，而一次渲染里只算一次
 			configured: () => connectionReadiness(this.app.secretStorage, this.settings).ready,
-			ask: (info) => this.askExternalCache(info),
-			remember: (host, decision) => {
-				this.siteDecisionsSnapshot().set(host, decision);
-				// 落盘失败不该让这次操作算失败（决定在本次会话内已经生效），
-				// 所以只记日志 —— 与索引落盘失败的处理方式一致。
-				void this.persistSiteDecisions().catch((error) =>
-					console.error("[attachment-cloud-cache] 站点决定记忆写入失败", error)
-				);
-			},
 			cache: (url, notePath) => cacheExternalImage(url, notePath),
 			onError: (error) => console.error("[attachment-cloud-cache] 站外图片处理出错", error),
 		});
 
 		// ⚠️ 后处理器**在实时预览（编辑态）下根本不跑**（真机实测：同一篇笔记
 		// 阅读视图触发 5 次、编辑态 0 次），而编辑态是用户待得最久的地方 ——
-		// 少了这条，站外图在编辑态里既不问也不缓存，症状是"什么都没发生"。
+		// 少了这条，站外图在编辑态里完全没有反应。
 		//
 		// 候选从 `src` 拦截里来（那条路能收到编辑器造的每一张图），
 		// 而"这张图属于哪篇笔记"必须**等元素进了 DOM** 之后才问得出来（也是实测的）。
 		this.externalLive = createExternalLiveQueue({
 			openViews: () => this.openNoteViews(),
 			handle: (element, notePath) => {
-				// 复用同一个编排（含三张去重表）：容器只有这一个元素。
-				// 于是"问过一次"的判断在两条路径之间是**共享**的 —— 同一个站点
-				// 不会因为在编辑态和阅读态各渲染一次而被问两遍。
+				// 复用同一个编排（含那张去重表）：容器只有这一个元素。
+				// 于是"这个 URL 正在处理"在两条路径之间是**共享**的 ——
+				// 同一个地址不会因为在编辑态和阅读态各渲染一次而被下载两遍。
 				this.externalHook?.process({ querySelectorAll: () => [element] }, { sourcePath: notePath });
 			},
 			onError: (error) => console.error("[attachment-cloud-cache] 站外图片（实时预览）处理出错", error),
@@ -263,13 +255,13 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		// 两条路径缺一不可：阅读视图（后处理器）与实时预览（setter 拦截）。
 		// 只做前者，用户在离线时编辑笔记会看到满屏破图；只做后者，导出与阅读模式不受益。
 		//
-		// 站外图的询问与缓存也挂在这条路径上（第二个参数 `ctx.sourcePath` 是
+		// 站外图的判定与缓存也挂在这条路径上（第二个参数 `ctx.sourcePath` 是
 		// "该改哪篇笔记"的唯一权威来源 —— 没有它就没法改写，链路也就没有意义）。
 		this.registerMarkdownPostProcessor((element, ctx) => {
 			// ⚠️ 这里**同步**完成，不 await —— 一旦 await，元素可能已连上 DOM
 			// 并开始加载远端图片，"零请求"就不成立了。理由见 render-hook 的头注释。
 			processImages(element, this.renderDeps());
-			// 站外图：判定同样只查内存记忆（同步），真正的下载/上传是 fire-and-forget。
+			// 站外图：判定是同步的，真正的下载/上传是 fire-and-forget。
 			this.externalHook?.process(element, ctx);
 		});
 
@@ -322,6 +314,17 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			name: this.t("cmdUploadAttachments"),
 			callback: () => void this.uploadExistingAttachments(),
 		});
+
+		// ⭐ 逐张挑选要缓存的外链图。
+		//
+		// 与上面那条命令的分工：那条是"把还没搬的全搬"，这条是"我只要这几张"。
+		// 两者与设置里的默认行为**都不冲突** —— 显式动作用的是"能不能搬"那个判据，
+		// 不受"默认动不动手"影响（否则默认设成「什么都不做」之后这两个入口都会空转）。
+		this.addCommand({
+			id: "pick-external-images",
+			name: this.t("cmdPickExternal"),
+			callback: () => void this.cachePickedExternalImages(),
+		});
 	}
 
 	/** 维护命令共用的依赖装配。 */
@@ -357,12 +360,15 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	/**
 	 * 站外图的"下载 → 上传 → 改写链接"（批量上传复用同一条链）。
 	 *
-	 * ⚠️ 这里**刻意不给 `notify`**：那条链默认每张图弹一条通知 —— 按需缓存时是对的
+	/**
+	 * ⚠️ `report` 默认 **false**：那条链默认每张图弹一条通知 —— 按需缓存时是对的
 	 * （用户正看着那张图），批量命令里就是刷屏（50 张图 = 50 条）。
-	 * 逐张的说明留给"打开那篇笔记"那条路：失败的外链仍然留在笔记里，
-	 * 再看它一次就会重新问、也会重新报。命令这边只报总数。
+	 *
+	 * 而**用户亲手勾的那几张**要用 `report: true`：他刚做完选择，
+	 * "成了没有、为什么没成"正是他在等的东西。执行层自己会过滤掉不值得打扰的
+	 * 几种结局（超时 / 断网 / 未配置），所以这里不会变成刷屏。
 	 */
-	private cacheExternalImage(url: string, notePath: string | undefined) {
+	private cacheExternalImage(url: string, notePath: string | undefined, report = false) {
 		return createExternalCacher({
 			app: this.app,
 			settings: () => this.settings,
@@ -370,6 +376,9 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			client: () => this.buildClient(),
 			index: () => this.currentIndex(),
 			persistIndex: () => this.hostContext().persistIndex(),
+			...(report
+				? { notify: (message: string) => new Notice(message), t: (key: string, params?: Record<string, unknown>) => this.t(key, params) }
+				: {}),
 		})(url, notePath);
 	}
 
@@ -474,10 +483,11 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		// ⭐ 笔记里的**外链图**也算候选：这条命令补的是"把还没进你自己存储的图搬进去"，
 		// 而指向别处的图同样没进存储 —— 只是它们在别人的服务器上。
 		// 判定用的是**按需缓存那一条**（`decideExternalCache`），所以"功能关掉 /
-		// 自己的存储 / 回环地址 / 用户标过「不再询问」"全都自动一致，不另立一套标准。
+		// 自己的存储 / 回环地址 / 存储未就绪"全都自动一致，不另立一套标准。
+		// ⚠️ 候选收 `wait`（默认不动手那些）：**点这个确认框本身就是显式动作**，
+		// 否则用户把默认设成「什么都不做」之后这条命令会什么都不做。
 		const external = selectExternalUploadCandidates(await this.readAllNoteTexts(), {
 			settings: this.settings,
-			decisions: this.siteDecisionsSnapshot(),
 			configured: connectionReadiness(this.app.secretStorage, this.settings).ready,
 		});
 
@@ -498,7 +508,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		];
 
 		if (external.candidates.length > 0) {
-			// ⚠️ 必须把**站点**列出来：**这个确认框就是那份授权**（未获明确同意前，
+			// ⚠️ 必须把**站点**列出来：这个确认框就是那份授权（没有用户的显式动作，
 			// 站外图永不下载）。只说"还有 3 张站外图"等于让用户盲签一份许可。
 			lines.push(
 				this.t("maintainBatchExternal", {
@@ -507,7 +517,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 					hosts: external.sites.map((site) => site.host).join(", "),
 				})
 			);
-			if (external.needsConsent) lines.push(this.t("maintainBatchExternalConsent"));
 		}
 
 		const confirmed = await this.confirmMaintenance({
@@ -520,18 +529,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			return;
 		}
 
-		// 点确认 = 对这些站点授权。**必须记在跑之前**：那条链在路上只看记忆，
-		// 它并不知道用户答没答过（按需缓存那条路是"先问、问到了才调它"）。
-		// 记下来之后，以后看笔记也不会为同一个站点再打扰他。
-		if (external.needsConsent) {
-			for (const site of external.sites) {
-				if (site.needsConsent) this.siteDecisionsSnapshot().set(site.host, "allow");
-			}
-			void this.persistSiteDecisions().catch((error) =>
-				console.error("[attachment-cloud-cache] 站点决定记忆写入失败", error)
-			);
-		}
-
 		const result = await runBatchUpload(deps, { external });
 		new Notice(
 			this.t("maintainBatchDone", {
@@ -542,6 +539,88 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				links: result.linksRewritten,
 			})
 		);
+	}
+
+	/**
+	 * 「选择要缓存的外链图片」：弹窗让用户勾，然后只搬他勾中的那些。
+	 *
+	 * ## 勾选**就是**授权
+	 *
+	 * 与那条批量命令一样，这里也不碰"默认行为"那一档：用户明确挑出来的东西，
+	 * 就是他此刻的意图（判定层只负责回答"这些地址**能不能**搬"）。
+	 *
+	 * ## 为什么逐张 `await` 而不是并发
+	 *
+	 * 用户勾的是个位数到几十张，而每一次都是一轮"下载 + 上传"。
+	 * 串行既不给对方站点压力，也让"正在处理第几张"这件事在失败时更好归因。
+	 *
+	 * ## 为什么最后还要给一句汇总
+	 *
+	 * 逐张的通知只说"这一张怎么样了"，而用户真正想知道的是
+	 * "我勾的那几张三张里成了几张"。两句都给：单张的细节 + 一句总账。
+	 */
+	async cachePickedExternalImages(): Promise<void> {
+		if (!this.settings.externalImageCache) {
+			// 功能关着时连候选都挑不出来（判定层第一步就会判掉），所以这里早退而不是弹一个空清单
+			new Notice(this.t("externalPickDisabled"));
+			return;
+		}
+		if (!this.buildClient()) {
+			new Notice(this.t("maintainNotConfigured"));
+			return;
+		}
+
+		const picked = await this.pickExternalImages((scope) => this.externalCandidates(scope));
+		// `null` = 取消（含直接关掉弹窗）；空数组 = 看了但一张都没勾。两者都不做事。
+		if (!picked || picked.length === 0) {
+			new Notice(this.t("externalPickNothing"));
+			return;
+		}
+
+		let cached = 0;
+		let partial = 0;
+		let failed = 0;
+		for (const item of picked) {
+			const outcome = await this.cacheExternalImage(item.url, item.notePath, true);
+			if (outcome.status === "cached") cached += 1;
+			else if (outcome.status === "cached-no-rewrite") partial += 1;
+			else failed += 1;
+		}
+
+		new Notice(this.t("externalPickDone", { cached, partial, failed }));
+	}
+
+	/**
+	 * 某个范围下的外链候选。
+	 *
+	 * ⭐ 两个范围走**同一个**候选挑选（当前笔记只是"一篇笔记的清单"）——
+	 * 于是"功能关掉 / 自己的存储 / 回环地址 / 存储未就绪"这些过滤只有一份实现，
+	 * 界面看到的清单与命令要处理的东西永远一致。
+	 */
+	private async externalCandidates(scope: ExternalPickScope): Promise<ExternalCandidate[]> {
+		const notes = scope === "note" ? await this.readActiveNoteText() : await this.readAllNoteTexts();
+		const selection = selectExternalUploadCandidates(notes, {
+			settings: this.settings,
+			configured: connectionReadiness(this.app.secretStorage, this.settings).ready,
+		});
+		return selection.candidates;
+	}
+
+	/**
+	 * 当前笔记的正文（"只挑这一篇"那个范围用）。
+	 *
+	 * 没有打开笔记、或读不到 → 返回空清单（弹窗会显示空态说明）。
+	 * ⚠️ **不用 `getActiveFile()` 猜"用户在看哪篇"来处理别的动作** ——
+	 * 这里只是"列出这一篇里的外链"，列错了最坏也只是清单不对，不会写坏东西。
+	 */
+	private async readActiveNoteText(): Promise<NoteTextLike[]> {
+		const file = this.app.workspace.getActiveFile();
+		if (!file) return [];
+		try {
+			return [{ path: file.path, text: await this.app.vault.read(file) }];
+		} catch {
+			return [];
+		}
 	}
 
 	/**
@@ -571,50 +650,24 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		// 事件与 prototype 补丁都由 `registerEvent` / `register` 自动撤销，无需手写。
 		// 这里只清掉自有引用，避免插件实例被延长引用（热重载时尤其明显）。
 		this.indexStore = null;
-		this.siteStore = null;
 		this.externalHook = null;
 		this.externalLive = null;
 		this.rotation = null;
 	}
 
 	/**
-	 * 载入站点决定记忆。
-	 *
-	 * 读失败**不是**致命错误（`loadSiteDecisions` 已经降级为空记忆）：
-	 * 代价只是"用户要重新回答一遍"，而为此让插件起不来完全不成比例。
-	 */
-	private async loadSiteDecisions(): Promise<void> {
-		const store = this.siteStore;
-		if (!store) return;
-		const result = await store.load();
-		if (result.error) {
-			console.error("[attachment-cloud-cache] 站点决定记忆读取失败，已按空记忆继续", result.error);
-		}
-	}
-
-	/** 站点决定记忆的当前快照（设置页与本文件都用它；`load()` 后对象会换）。 */
-	siteDecisionsSnapshot(): SiteDecisions {
-		return this.siteStore?.decisions ?? new SiteDecisions();
-	}
-
-	/** 清掉全部已记住的站点；返回清掉的条数（设置页据此汇报）。 */
-	clearSiteDecisions(): number {
-		const cleared = this.siteDecisionsSnapshot().clear();
-		// ⚠️ 清完还要让**当前打开着的笔记重新走一遍判定**：记忆虽然空了，
-		// 但已经渲染出来的那些图不会自己重跑 —— 用户点完「清除」什么都看不到，
-		// 只会以为按钮坏了（实测踩到过：清完记忆，站外图再也不问了）。
-		this.reprocessOpenNotes();
-		return cleared;
-	}
-
-	/**
 	 * 让当前打开着的笔记重新走一遍站外图判定。
+	 *
+	 * 用途：用户刚在设置里把「遇到外链图片时」改成别的取值（见 `saveSettings`）。
+	 * 那条判定是**渲染时**做的，而改设置不会让已经渲染出来的图重跑 ——
+	 * 少了这一步，"改成直接缓存"之后用户什么都看不到，要等下次重开笔记才生效
+	 * （这类"改了设置没反应"是本项目一直在防的一类症状）。
 	 *
 	 * 复用 `externalLive` 那条路（它自带攒批、以及"等元素进 DOM 之后再解析归属"），
 	 * 而不是另写一套扫描：于是"哪张图属于哪篇笔记"、去重表、错误隔离都只有一份实现。
 	 *
 	 * 属于本存储的图会被判定层直接忽略（`app://` 不是 http(s)），所以多走一遍是安全的 ——
-	 * 真正会被处理的只有站外图，而它们本来就该在记忆变化之后重新判定一次。
+	 * 真正会被处理的只有站外图。
 	 */
 	private reprocessOpenNotes(): void {
 		this.app.workspace.iterateAllLeaves((leaf) => {
@@ -628,13 +681,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				if (image) this.externalLive?.see(image);
 			}
 		});
-	}
-
-	/** 把记忆落盘（串行化，避免两次写入互相插队）。 */
-	async persistSiteDecisions(): Promise<void> {
-		const store = this.siteStore;
-		if (!store) return;
-		await this.serialize(() => store.save());
 	}
 
 	/** 当前索引（`load` 之后对象会换，所以要现取）。 */
@@ -765,6 +811,12 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		// ⚠️ 这条路径每次改设置都会被调到（包括每敲一个字符），
 		// 所以轮换器自带**节流**，而门槛检查只花一次内存求和 —— 不会变成打字卡顿。
 		void this.rotation?.maybeRotate("settings");
+
+		// 站外图那条链路的判定是**渲染时**做的，改设置不会让它重跑 ——
+		// 少了这一步，把「遇到外链图片时」改成「直接缓存」之后**什么都看不到**，
+		// 要等下次重开笔记才生效（"改了设置没反应"是本项目一直在防的一类症状）。
+		// 只在功能开着时做：关着时判定第一步就忽略，扫一遍纯属白费。
+		if (this.settings.externalImageCache) this.reprocessOpenNotes();
 	}
 
 	/**
