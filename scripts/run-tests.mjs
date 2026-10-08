@@ -31,6 +31,19 @@
  * 用法：
  *   node scripts/run-tests.mjs              # 全部
  *   node scripts/run-tests.mjs settings     # 只跑文件名含 "settings" 的
+ *   node scripts/run-tests.mjs --exclude=ingest,transfer,download   # 排除几个（`check:fast` 用）
+ *
+ * ⭐ `--exclude` 是为 `npm run check:fast` 加的：那三个真盘真网套件占了全套件耗时的大半
+ * （ingest 30s / transfer 11s / download 9s ≈ 三分之二），日常迭代时跳过它们，
+ * 全套留给发版前的 `npm run check`。
+ *
+ * ⚠️ 这里**刻意保持串行**。曾试过改成"一个套件一个子进程并行"，实测**否决**：
+ * ① 耗时**反而更长** —— 这些套件是 CPU 密集的（真实 HTTP + 真实磁盘 + 加密），
+ *    6 个逻辑核上并发 5 路把每个套件拖慢 1.2~2.8 倍，同时两个入口为 `src/main`
+ *    的宽图套件只能独占跑；
+ * ② 更糟的是**间歇性卡死**：同一份代码跑两次，一次 53 秒通过、一次 `test-download`
+ *    再也不返回（卡了 5 分钟以上、零输出）。门禁"偶尔挂住"比慢危险得多。
+ * ⇒ **串行 + 分层**才是这台机器上的正解，见上面的 `--exclude`。
  */
 
 import { readdir } from "node:fs/promises";
@@ -38,7 +51,15 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const filter = process.argv[2];
+
+// 参数：位置参数 = "文件名含这个片段才选中"；`--exclude=a,b,c` = 排除含这些片段的。
+// 两者都按**子串**匹配（与原来一致），所以 `--exclude=ingest` 只命中 test-ingest.mjs。
+let includeFilter = null;
+const excludeFilters = [];
+for (const arg of process.argv.slice(2)) {
+	if (arg.startsWith("--exclude=")) excludeFilters.push(...arg.slice("--exclude=".length).split(",").filter(Boolean));
+	else includeFilter = arg;
+}
 
 const entries = await readdir(HERE);
 const files = entries.filter((f) => /^test-.*\.mjs$/.test(f)).sort();
@@ -48,9 +69,14 @@ if (files.length === 0) {
 	process.exit(1);
 }
 
-const selected = filter ? files.filter((f) => f.includes(filter)) : files;
+let selected = files;
+if (includeFilter) selected = selected.filter((f) => f.includes(includeFilter));
+if (excludeFilters.length > 0) selected = selected.filter((f) => !excludeFilters.some((e) => f.includes(e)));
+
 if (selected.length === 0) {
-	console.error(`✗ 没有匹配 "${filter}" 的测试文件。可用：${files.join(", ")}`);
+	console.error(
+		`✗ 没有匹配的测试文件（include=${includeFilter ?? "全部"}、exclude=${excludeFilters.join(",") || "无"}）。可用：${files.join(", ")}`
+	);
 	process.exit(1);
 }
 
