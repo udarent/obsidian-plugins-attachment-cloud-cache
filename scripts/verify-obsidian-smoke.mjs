@@ -13,6 +13,14 @@
  *
  * 这一步**只验证"不炸 + 接线在册"**，不验证交互（粘贴/拖拽要人工）。
  *
+ * ⚠️ 有一条例外，它连"行为"一起验：**编辑态（实时预览）里的站外图必须被交给编排层**。
+ * 理由是这一条**只能真机验** —— 后处理器在实时预览下不跑（官方文档写明它只作用于
+ * reading mode，实测同一篇笔记阅读视图 5 次、编辑态 0 次），而候选是从
+ * `src` 拦截的 setter 里来的，那条路在 Node 里没有真 WebView 可测。
+ * 于是脚本在 vault 里临时造一篇带站外图的笔记、用编辑态打开、断言候选确实被送出，
+ * 然后删掉笔记并把两处接缝都还原（询问接缝换成"永不答复"，所以不会弹通知、
+ * 不会写站点记忆、更不会下载 —— 在别人的 vault 上跑也不留痕迹）。
+ *
  * ## 四个环境要点（都踩过）
  *
  * - 启动必须带 `--disable-gpu --no-sandbox`：只带 `--remote-debugging-port` 会以
@@ -299,6 +307,87 @@ async function main() {
 			`  ${credsProbe.hasSecretValue ? "✗" : "✓"} 秘密的值不在插件设置里（只存钥匙串槽位名，长度 ${credsProbe.slotLength}）`
 		);
 
+		// ⭐ 实时预览（编辑态）里的站外图**必须**被解析出归属并交给编排层。
+		//
+		// 这条检查守的是一个真实缺陷：站外缓存原先只有后处理器一个入口，而那个钩子
+		// **在实时预览下不跑**（真机实测：同一篇笔记阅读视图 5 次、编辑态 0 次）——
+		// 于是编辑态里那个功能完全没反应（既不问也不缓存，连站点记忆文件都不生成）。
+		//
+		// ⚠️ 刻意**不依赖用户的配置**：`externalHook.process()` 是无条件被调用的
+		// （要不要问由它内部判定），所以即便这个 vault 还没配好存储，这条接线检查照样成立。
+		// 配置没配好时下面的"询问到的站点"会是空的 —— 那是正常的，不算失败。
+		const livePreview = await evaluate(
+			client,
+			`(async () => {
+				const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+				const TEMP = "_acc-smoke-live-preview.md";
+				const URL = "https://example.com/acc-smoke-external.png";
+				const undo = [];
+				try {
+					// ⚠️ 第二参 force = true 会**绕过回收站**：这篇临时笔记是我们自己造的，
+					// 不该在用户的 .trash 里留一条。默认行为是进回收站 —— 实测跑完
+					// .trash 的修改时间会变，说明确实留了东西。
+					const stale = app.vault.getAbstractFileByPath(TEMP);
+					if (stale) await app.vault.delete(stale, true);
+					const note = await app.vault.create(TEMP, "![](" + URL + ")\\\\n");
+					undo.push(async () => {
+						const f = app.vault.getAbstractFileByPath(TEMP);
+						if (f) await app.vault.delete(f, true);
+					});
+
+					// 记录编排层被谁调用过（带上来源笔记）—— 这就是"候选真的送到了"的证据
+					const originalProcess = plugin.externalHook.process;
+					const delivered = [];
+					plugin.externalHook.process = (root, ctx) => {
+						delivered.push(ctx?.sourcePath ?? null);
+						return originalProcess.call(plugin.externalHook, root, ctx);
+					};
+					undo.push(() => { plugin.externalHook.process = originalProcess; });
+
+					// 询问接缝换成"只记录、永不答复"：不弹通知、不写站点记忆、更不会下载。
+					// 于是这条检查在别人的 vault 上跑也不会留下任何痕迹。
+					const originalAsk = plugin.askExternalCache;
+					const askedHosts = [];
+					plugin.askExternalCache = (info) => {
+						askedHosts.push(info.host);
+						return new Promise(() => {});
+					};
+					undo.push(() => { plugin.askExternalCache = originalAsk; });
+
+					const leaf = app.workspace.getLeaf("tab");
+					await leaf.openFile(note);
+					const view = leaf.view;
+					// 强制**实时预览（编辑态）**—— 后处理器不跑的就是这个模式
+					view.setState({ ...view.getState(), mode: "source" }, { history: false });
+					await new Promise((r) => setTimeout(r, 3000));
+
+					const imgs = [...view.containerEl.querySelectorAll(".cm-editor img")].map((i) =>
+						i.getAttribute("src")
+					);
+					leaf.detach();
+					return { delivered, askedHosts, imgs, tempPath: TEMP };
+				} finally {
+					for (const step of undo.reverse()) {
+						try {
+							await step();
+						} catch (e) {
+							/* 清理尽力而为 */
+						}
+					}
+				}
+			})()`
+		);
+		const liveDelivered = (livePreview.delivered ?? []).filter((path) => path === livePreview.tempPath).length;
+		const liveOk = liveDelivered >= 1;
+		log(
+			`  ${liveOk ? "✓" : "✗"} 编辑态（实时预览）里的站外图被交给了编排层` +
+				`（${liveDelivered} 次；收到过的来源：${JSON.stringify(livePreview.delivered)}）`
+		);
+		log(
+			`  ${livePreview.askedHosts.length > 0 ? "✓" : "-"} 询问到的站点：${JSON.stringify(livePreview.askedHosts)}` +
+				(livePreview.askedHosts.length === 0 ? "（存储未就绪时不问，属正常）" : "")
+		);
+
 		const ok =
 			loaded &&
 			commands.length >= 4 &&
@@ -314,6 +403,7 @@ async function main() {
 			!removal.deleteModeControl &&
 			accessKeyIsPlainText &&
 			pairOk &&
+			liveOk &&
 			!credsProbe.hasSecretValue &&
 			relevantErrors.length === 0;
 

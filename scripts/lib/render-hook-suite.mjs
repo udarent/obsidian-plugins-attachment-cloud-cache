@@ -330,6 +330,94 @@ export async function runRenderHookSuite(mod) {
 	}
 	assert.equal(patchThrown, null, "拿不到 prototype 时应静默跳过，而不是抛错");
 
+	// ============================================================
+	// 9. ⭐ 实时预览里的**站外**图：把候选交给宿主
+	//
+	// 这是「缓存外站图片」在编辑态**唯一**的入口 —— 后处理器在实时预览下**根本不跑**
+	//（真机实测：同一篇笔记，阅读视图触发 5 次、编辑态 **0 次**）。缺了这条，
+	// 用户在编辑态测这个功能会**完全没有反应**（连询问都不会弹）。
+	// ============================================================
+	const { view: view2, restore: restore2 } = makeFakeImageElementClass();
+	{
+		const seen = [];
+		// ⚠️ 这里**带上** ensureLocalCopy：生产接线里它总是有的，
+		// 所以"属于本存储但没有副本"的图走的是 fetch 那条分支，不该被当成站外候选。
+		const deps2 = depsWith({
+			ensureLocalCopy: async () => null,
+			onExternalSrc: (element, src) => seen.push([element, src]),
+		});
+		const uninstall2 = installImageSrcPatch(deps2, { view: view2 });
+
+		// ① 站外 http(s) → 原样交出去（带笔记里的原始地址）
+		const outside = new view2.HTMLImageElement();
+		outside.src = "https://other.example.net/a.png";
+		assert.deepEqual(
+			seen,
+			[[outside, "https://other.example.net/a.png"]],
+			"★ 实时预览里的站外图必须原样交出去 —— 否则编辑态永远不会询问、也不会缓存"
+		);
+		assert.equal(
+			outside.getAttribute("src"),
+			"https://other.example.net/a.png",
+			"候选本身不该被改写（站外图的地址由那条链路处理，这里只是上报）"
+		);
+
+		// ② 属于本存储的图**不走**这条路：索引命中走 local、缺副本走 fetch
+		//    （否则会对着用户**自己的**存储地址弹「要不要缓存这张站外图」）
+		seen.length = 0;
+		const oursLocal = new view2.HTMLImageElement();
+		oursLocal.src = `${BASE}/cached.png`;
+		const oursFetch = new view2.HTMLImageElement();
+		oursFetch.src = `${BASE}/missing.png`;
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		assert.deepEqual(seen, [], "★ 属于本存储的图绝不能当站外候选交出去（会对自己存储的地址发问）");
+
+		// ③ 非 http(s) 的一律不是候补
+		seen.length = 0;
+		for (const [label, src] of [
+			["本地资源", "app://local/x.png"],
+			["data URI", "data:image/png;base64,AAAA"],
+			["相对路径", "attachments/x.png"],
+			["空串", ""],
+		]) {
+			const el = new view2.HTMLImageElement();
+			el.src = src;
+			assert.deepEqual(seen, [], `★ ${label} 不该被当成站外候选`);
+		}
+
+		uninstall2();
+	}
+
+	{
+		// ④ 交给宿主时**绝不能抛错**：这条路径跑在全 app 的图片赋值上，
+		//    一次未捕获的异常会让整篇笔记渲染不出来。
+		const logged = [];
+		const uninstall4 = installImageSrcPatch(
+			depsWith({
+				onExternalSrc: () => {
+					throw new Error("宿主那侧炸了");
+				},
+			}),
+			{ view: view2, log: (error) => logged.push(error) }
+		);
+		const el9 = new view2.HTMLImageElement();
+		let thrown = null;
+		try {
+			el9.src = "https://other.example.net/a.png";
+		} catch (error) {
+			thrown = error;
+		}
+		assert.equal(thrown, null, "★ 站外交接出问题也必须让地址照常写进去（否则整篇笔记渲染不出来）");
+		assert.equal(
+			el9.getAttribute("src"),
+			"https://other.example.net/a.png",
+			"地址要原样落地（出错的是上报，不是这次赋值）"
+		);
+		assert.equal(logged.length, 1, "要把这个错误记下来（而不是静默吞掉）");
+		uninstall4();
+		restore2();
+	}
+
 }
 
 /**

@@ -17,7 +17,8 @@ await withLoadedTs(
 		console.log(
 			"Render hook passed (index hit → local src with the remote URL never written; third-party/local/data ignored; " +
 				"no usable local path → nothing written; missing copy → download then swap; local file gone → fall back to " +
-				"remote exactly once; idempotent; preview `src` setter interception with uninstall)."
+				"remote exactly once; idempotent; preview `src` setter interception with uninstall; and only http(s) " +
+				"third-party URLs are reported as off-site candidates, never our own storage)."
 		);
 	}
 );

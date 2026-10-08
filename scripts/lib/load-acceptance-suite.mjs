@@ -406,7 +406,11 @@ export async function runLoadAcceptance(options = {}) {
 	// 而 `try` 块里的 `const` 在 `finally` 里是看不见的。
 	const realSetTimeout = window.setTimeout;
 	const realSetInterval = window.setInterval;
+	const realClearTimeout = window.clearTimeout;
+	const realClearInterval = window.clearInterval;
 	const createdTimers = [];
+	/** 被清掉过的定时器 id（用于第 9b 节按效果判"清理回调确实有效"）。 */
+	const clearedTimers = [];
 	window.setTimeout = (...args) => {
 		const id = realSetTimeout(...args);
 		createdTimers.push(["timeout", id]);
@@ -416,6 +420,14 @@ export async function runLoadAcceptance(options = {}) {
 		const id = realSetInterval(...args);
 		createdTimers.push(["interval", id]);
 		return id;
+	};
+	window.clearTimeout = (id) => {
+		clearedTimers.push(id);
+		return realClearTimeout(id);
+	};
+	window.clearInterval = (id) => {
+		clearedTimers.push(id);
+		return realClearInterval(id);
 	};
 
 	try {
@@ -433,19 +445,22 @@ export async function runLoadAcceptance(options = {}) {
 		await plugin.onload();
 		/** `onload` 完成的时刻 —— 用来等"启动那一轮定时器"跑完（见 8c）。 */
 		const loadedAt = Date.now();
+		/**
+		 * `onload` 期间建的定时器 —— 第 9b 节按效果验"清理回调真的把它们清掉了"。
+		 *
+		 * ⚠️ 必须是**这个前缀快照**，不能拿整个 `createdTimers` 去比"有没有被 clear 过"：
+		 * 后面几条链路（下载超时、索引落盘防抖）也会建短定时器，而它们**自然触发**过、
+		 * 从来不需要谁去 clear —— 拿"建过但没被 clear"当判据会把它们全误报成残留
+		 *（这一版就是这么红的：一堆 `_idleTimeout: 10` 的已触发定时器被标成"还在"）。
+		 */
+		const onloadTimers = createdTimers.slice();
 
 		assert.ok(plugin.settingTabs.length >= 1, "★ 设置页必须被注册（否则用户连配置入口都没有）");
 
-		// ⭐ 后台自动轮换必须**真的接上了**：
-		// 轮换器存在（忘了 new 就等于没有这个功能），而且注册过清理函数 ——
-		// prototype 补丁 + 启动定时器 + 周期定时器共三个。
-		// 少了定时器的那两个，症状是"设了上限却永远不会自动轮换"，而界面上毫无痕迹。
+		// ⭐ 后台自动轮换必须**真的接上了**：轮换器存在（忘了 new 就等于没有这个功能），
+		// 而它依赖的两个定时器必须**登记了清理回调** —— 后者放在第 9b 节按**效果**验
+		//（这里原本是一条 `登记数 >= 3` 的阈值断言，被一次新增 register 撑破而失效，见 9b 的说明）。
 		assert.ok(plugin.rotation, "★ 入口必须装配缓存轮换器（否则上限设了也不会生效）");
-		const cleanups = plugin.registrations.filter((r) => r.kind === "register").length;
-		assert.ok(
-			cleanups >= 3,
-			`★ 至少要登记 3 个清理回调（prototype 补丁 + 启动定时器 + 周期定时器），实际 ${cleanups}`
-		);
 
 
 		// 注册了不等于**能用**：设置页若在取定义时抛错，用户点齿轮只会看到报错。
@@ -974,6 +989,40 @@ export async function runLoadAcceptance(options = {}) {
 			"注销后不应还有粘贴处理器"
 		);
 
+		// ============================================================
+		// 9b. ⭐ 登记的清理回调必须**真的**把 onload 建的定时器清掉
+		//
+		// 判据刻意是**效果**，不是 `register` 的条数：条数只是阈值断言，
+		// 任何一条别的 register 都会把"漏登记了一个定时器"悄悄撑过去。
+		// 实测踩到过 —— 一次改动新增了一条 register（站外候选队列的 dispose），
+		// 「忘了登记周期定时器」「忘了登记启动定时器」两条变异就**同时漏过**了，
+		// 而那时 `登记数 >= 3` 依旧成立。
+		//
+		// 留下没清的定时器也是**最难查**的一类失效：测试全绿却退不出去、
+		// 被外层超时杀掉，日志里什么都没有（套件开头那段正是为它写的）。
+		// ============================================================
+		assert.ok(
+			onloadTimers.length >= 2,
+			`onload 期间应至少建两个定时器（启动那一轮 + 周期兜底），实际 ${onloadTimers.length}`
+		);
+		// 与真实宿主一致：卸载时按登记顺序的反向调用清理回调
+		for (const cleanup of [...(plugin.cleanups ?? [])].reverse()) {
+			try {
+				cleanup();
+			} catch {
+				// 清理回调抛错不该打断卸载
+			}
+		}
+		// 这两个都是**长**定时器（秒级、分钟级），不可能在这段测试里自然触发过 ——
+		// 所以"没被 clear 过"就等价于"还挂着"，判据在这里是准的。
+		const stillPending = onloadTimers.map(([, id]) => id).filter((id) => !clearedTimers.includes(id));
+		assert.deepEqual(
+			stillPending,
+			[],
+			"★ 登记的清理回调必须把 onload 建的每个定时器都清掉 —— 漏掉的那个会让「设了缓存上限" +
+				"却永远不会自动轮换」，而且界面上毫无痕迹"
+		);
+
 		return {
 			registrations: plugin.registrations.map((r) => r.kind),
 			putCount: server.countByMethod("PUT"),
@@ -994,6 +1043,8 @@ export async function runLoadAcceptance(options = {}) {
 		// 再兜一层：连"没被 register 登记"的定时器也清掉（理由见套件开头那段）
 		window.setTimeout = realSetTimeout;
 		window.setInterval = realSetInterval;
+		window.clearTimeout = realClearTimeout;
+		window.clearInterval = realClearInterval;
 		for (const [kind, id] of createdTimers) {
 			if (kind === "interval") window.clearInterval(id);
 			else window.clearTimeout(id);

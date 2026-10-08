@@ -11,6 +11,19 @@
  * 为什么必须两条都做：**阅读视图是离线阅读的主路径，而编辑态是用户待得最久的地方**。
  * 只做前者，用户在离线时编辑笔记会看到一堆破图；只做后者，导出的 HTML 与阅读模式不受益。
  *
+ * ## ⚠️ 这张表还有第二个用途：实时预览是**站外图**的唯一入口
+ *
+ * 「缓存外站图片」原先只有后处理器那一个入口，而那个钩子**在实时预览下根本不跑**
+ * （官方 API 文档写明它只作用于 reading mode；真机实测：同一篇笔记阅读视图 5 次、
+ * 编辑态 **0 次**）。于是编辑态里那个功能**没有任何反应** —— 既不问也不缓存，
+ * 连站点记忆文件都不会生成。
+ *
+ * 所以 `src` 拦截这一层还要把"看起来是站外的 http(s) 地址"**上报**出去
+ * （见 {@link RenderHookDeps.onExternalSrc}）。上报的只是候选：
+ * 要不要问、要不要缓存由 `render/external-decide.ts` 判定，而"这张图属于哪篇笔记"
+ * 由 `render/external-live.ts` **等元素进 DOM 之后**再解析 —— 因为此处的赋值那一刻
+ * 元素还没连上文档（真机实测）。
+ *
  * ## ⚠️ 为什么是"拦 prototype 的 setter"而不是 MutationObserver
  *
  * 观察 DOM 变更的问题在**时机**：`<img src="https://…">` 一旦插入文档，
@@ -82,6 +95,22 @@ export interface RenderHookDeps {
 	onLocalCopyUsed?: (key: string) => void;
 	/** 用户可见提示（可选）。 */
 	notify?: (message: string) => void;
+	/**
+	 * 赋值的是一个 **http(s) 的站外地址**（不属于本存储）—— 把候选交出去。
+	 *
+	 * 只有实时预览那条路径会调它：阅读视图里的站外图由后处理器整批交给编排层
+	 * （那里天然带着 `ctx.sourcePath`，不需要延后）。
+	 *
+	 * ⚠️ 这里**只做候选筛选**，真正的判定在 `render/external-decide.ts`
+	 * （还要看功能开关、站点记忆、安全拦截、存储是否就绪）。
+	 * 交出去的**可能多、不会少**：编排层那个判定才是权威 ——
+	 * 多给一个它也不要紧（它会按主机认出"这是用户自己的存储"并忽略）。
+	 *
+	 * ⚠️ **这里不能去问"这张图属于哪篇笔记"**：真机实测，赋值那一刻元素还没连上文档
+	 * （`closest(".cm-editor")` 为 `null`），问了也只会得到空答案。
+	 * 调用方必须延后再解析（见 `render/external-live.ts`，那里的延后时长是实测出来的）。
+	 */
+	onExternalSrc?: (element: ImageElementLike, src: string) => void;
 }
 
 export interface ProcessImagesResult {
@@ -212,6 +241,18 @@ function wireFallback(
 	});
 }
 
+/**
+ * 这个值是不是一个 http(s) 地址（**便宜的前置筛**，用于挑出站外候选）。
+ *
+ * ⚠️ 它**不是**"这是不是站外图"的判定 —— 真正的判定在 `render/external-decide.ts`
+ * （还要看开关、站点记忆、安全拦截、存储是否就绪，以及"这个主机是不是用户自己的存储"）。
+ * 这里只负责挡掉 `app://` / `data:` / `blob:` / 相对路径这类**连 http(s) 都不是**的值，
+ * 免得把全 app 的每一次图片赋值都转成一次跨模块调用。
+ */
+function isHttpUrl(value: unknown): boolean {
+	return typeof value === "string" && /^https?:\/\//i.test(value.trim());
+}
+
 // ─────────────────────────── 实时预览的兜底 ───────────────────────────
 
 /** 拦截 `src` setter 需要的最小环境（抽出来才能在假 document 上测）。 */
@@ -304,6 +345,10 @@ export function installImageSrcPatch(deps: RenderHookDeps, env: SrcPatchEnvironm
 								if (resourceUrl) applySrc(element, resourceUrl);
 							})
 							.catch(() => {});
+					} else if (deps.onExternalSrc && isHttpUrl(value)) {
+						// 站外图（阅读视图那条路已在后处理器里处理；这里是**实时预览**的唯一入口）。
+						// 同上：这一层不负责措辞与判定，只把候选交出去。
+						deps.onExternalSrc(element, String(value).trim());
 					}
 				} catch (error) {
 					// 任何意外都不能让图片赋值失败 —— 那会让整篇笔记渲染不出来

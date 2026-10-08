@@ -54,6 +54,8 @@ import { createSiteStore } from "./host/site-store";
 import { SiteDecisions } from "./render/site-decisions";
 import { createExternalHook } from "./render/external-hook";
 import type { ExternalAskChoice, ExternalAskInfo, ExternalHook } from "./render/external-hook";
+import { createExternalLiveQueue } from "./render/external-live";
+import type { ExternalLiveQueue, OpenViewLike } from "./render/external-live";
 import { createExternalCacher } from "./core/external-cache";
 import { askExternalCacheWithNotice } from "./ui/external-notice";
 
@@ -103,6 +105,15 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 
 	/** 站外缓存的编排。**必须是稳定的一份** —— 去重表挂在它的闭包里。 */
 	private externalHook: ExternalHook | null = null;
+
+	/**
+	 * 实时预览下的站外图：`src` 拦截上报候选 → 攒批 → 延后解析归属 → 交给上面那份编排。
+	 *
+	 * ⚠️ 必须是**稳定的一份**：待处理的那批挂在上面的闭包里。
+	 * 而且不能省 —— 后处理器**在实时预览下不跑**（真机实测 0 次），
+	 * 少了这条，编辑态里「缓存外站图片」就完全没有反应。
+	 */
+	private externalLive: ExternalLiveQueue | null = null;
 
 	/** 缓存上限的自动轮换。同上：节流与并发标志挂在它的闭包里。 */
 	private rotation: CacheRotator | null = null;
@@ -198,6 +209,24 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			onError: (error) => console.error("[attachment-cloud-cache] 站外图片处理出错", error),
 		});
 
+		// ⚠️ 后处理器**在实时预览（编辑态）下根本不跑**（真机实测：同一篇笔记
+		// 阅读视图触发 5 次、编辑态 0 次），而编辑态是用户待得最久的地方 ——
+		// 少了这条，站外图在编辑态里既不问也不缓存，症状是"什么都没发生"。
+		//
+		// 候选从 `src` 拦截里来（那条路能收到编辑器造的每一张图），
+		// 而"这张图属于哪篇笔记"必须**等元素进了 DOM** 之后才问得出来（也是实测的）。
+		this.externalLive = createExternalLiveQueue({
+			openViews: () => this.openNoteViews(),
+			handle: (element, notePath) => {
+				// 复用同一个编排（含三张去重表）：容器只有这一个元素。
+				// 于是"问过一次"的判断在两条路径之间是**共享**的 —— 同一个站点
+				// 不会因为在编辑态和阅读态各渲染一次而被问两遍。
+				this.externalHook?.process({ querySelectorAll: () => [element] }, { sourcePath: notePath });
+			},
+			onError: (error) => console.error("[attachment-cloud-cache] 站外图片（实时预览）处理出错", error),
+		});
+		this.register(() => this.externalLive?.dispose());
+
 		// ── 缓存上限：后台自动轮换（超限时淘汰最久没用过的副本） ──
 		//
 		// 默认**不限制**（`cacheLimitMb: 0`），此时这一整条链路连一次 I/O 都不会做。
@@ -243,10 +272,18 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			this.externalHook?.process(element, ctx);
 		});
 
-		const uninstallSrcPatch = installImageSrcPatch(this.renderDeps(), {
-			view: typeof window === "undefined" ? null : window,
-			log: (error) => console.error("[attachment-cloud-cache] 改写图片地址时出错", error),
-		});
+		const uninstallSrcPatch = installImageSrcPatch(
+			{
+				...this.renderDeps(),
+				// 站外候选只从**这条路**上报：阅读视图那边的外站图由上面的后处理器
+				// 整批交给编排（那里天然带着 `ctx.sourcePath`，不需要延后解析归属）。
+				onExternalSrc: (element) => this.externalLive?.see(element),
+			},
+			{
+				view: typeof window === "undefined" ? null : window,
+				log: (error) => console.error("[attachment-cloud-cache] 改写图片地址时出错", error),
+			}
+		);
 		// 卸载时把原 setter 放回去 —— 插件卸载后还在改全局 prototype 是最典型的
 		// "卸载不干净"，而且症状出现在**别的插件**身上，极难归因。
 		this.register(() => uninstallSrcPatch());
@@ -458,6 +495,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		this.indexStore = null;
 		this.siteStore = null;
 		this.externalHook = null;
+		this.externalLive = null;
 		this.rotation = null;
 	}
 
@@ -543,6 +581,30 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	}
 
 	/** 交给渲染钩子的依赖。 */
+	/**
+	 * 打开着的、可能承载笔记内容的视图（容器根节点 + 笔记路径）。
+	 *
+	 * ⚠️ 只用来回答"**这个元素**在哪篇笔记里"，**不是**为了拿"当前笔记"：
+	 * 分屏时正在渲染的可能正是没有焦点的那一篇，按活动笔记去猜会改写**另一篇**
+	 * —— 而这条链路的产出就是改写笔记，写错文件等于损坏用户数据。
+	 *
+	 * 返回数组而不是边查边处理：一次 flush 里所有候补共用同一份视图列表
+	 * （一屏几十张图时这是几十倍的差别）。
+	 */
+	private openNoteViews(): OpenViewLike[] {
+		const views: OpenViewLike[] = [];
+		this.app.workspace.iterateAllLeaves((leaf) => {
+			const view = leaf.view as unknown as {
+				file?: { path?: unknown };
+				containerEl?: { contains?: (node: unknown) => unknown } | null;
+			};
+			const path = view?.file?.path;
+			// 只收"确实承载着一篇笔记"的视图：设置页、图谱、别的插件面板都没有 `file.path`
+			if (typeof path === "string" && path) views.push({ root: view.containerEl, path });
+		});
+		return views;
+	}
+
 	private renderDeps(): RenderHookDeps {
 		return {
 			settings: () => this.settings,

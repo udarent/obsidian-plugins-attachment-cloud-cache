@@ -63,5 +63,39 @@ await runMutations({
 			to: "\t\t\t\t\t\t\t// 变异：不记录使用\n",
 			expect: "刚被看到",
 		},
+		{
+			// 后果：实时预览里**再也没有站外候选** ⇒ 编辑态里「缓存外站图片」完全没有反应
+			//（既不询问也不缓存）。这正是这次修掉的那个用户可见缺陷 —— 别让它回来。
+			name: "★ 不再上报站外候选（编辑态里站外缓存彻底哑火）",
+			from:
+				"\t\t\t\t\t} else if (deps.onExternalSrc && isHttpUrl(value)) {\n" +
+				"\t\t\t\t\t\t// 站外图（阅读视图那条路已在后处理器里处理；这里是**实时预览**的唯一入口）。\n" +
+				"\t\t\t\t\t\t// 同上：这一层不负责措辞与判定，只把候选交出去。\n" +
+				"\t\t\t\t\t\tdeps.onExternalSrc(element, String(value).trim());\n" +
+				"\t\t\t\t\t}\n",
+			to: "\t\t\t\t\t}\n",
+			expect: "实时预览里的站外图必须原样交出去",
+		},
+		{
+			// 后果：`app://` / `data:` / 相对路径都被当成站外候选上报，
+			// 全 app 的每一次图片赋值都变成一次跨模块调用。
+			name: "站外候选不再做 http(s) 前置筛（本地资源也被上报）",
+			from: "deps.onExternalSrc && isHttpUrl(value)",
+			to: "deps.onExternalSrc",
+			expect: "不该被当成站外候选",
+		},
+		{
+			// 后果：上报环节一抛错就**连带把地址赋值也毁了** —— 整篇笔记渲染不出来。
+			// 这条路径跑在全 app 的图片赋值上，容错必须留在这里。
+			name: "★ 上报抛错时不再兜住（整篇笔记渲染不出来）",
+			from:
+				"\t\t\t\t} catch (error) {\n" +
+				"\t\t\t\t\t// 任何意外都不能让图片赋值失败 —— 那会让整篇笔记渲染不出来\n" +
+				"\t\t\t\t\tlog(error);\n" +
+				"\t\t\t\t\tnext = value;\n" +
+				"\t\t\t\t}\n",
+			to: "\t\t\t\t} catch (error) {\n\t\t\t\t\tthrow error;\n\t\t\t\t}\n",
+			expect: "站外交接出问题也必须让地址照常写进去",
+		},
 	],
 });
