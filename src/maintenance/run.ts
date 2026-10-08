@@ -27,8 +27,9 @@ import type { EvictionOutcome, EvictionPlan } from "./eviction";
 import { keysInText, planLinkRewrites } from "./references";
 import type { RewriteRule } from "./references";
 import { selectUploadCandidates } from "./batch";
-import type { VaultFileLike } from "./batch";
+import type { ExternalSelection, VaultFileLike } from "./batch";
 import type { IngestRequest, IngestResult } from "../core/ingest";
+import type { ExternalCacheOutcome } from "../core/external-cache";
 import { describeError } from "../error-text";
 
 /** 一次清理的结果，供汇报。 */
@@ -50,6 +51,14 @@ export interface MaintenanceDeps {
 	persistIndex: () => Promise<void>;
 	/** 上传编排（复用粘贴那条链，避免两套行为）。 */
 	ingest: (request: IngestRequest) => Promise<IngestResult>;
+	/**
+	 * 站外图的"下载 → 上传 → 改写链接"（复用「缓存站外图片」那条链）。
+	 *
+	 * 与 `ingest` 同理：只有一处实现，于是同意复核、失败分类、
+	 * "URL 在笔记里总是字面出现"那几条纪律不会因为入口不同而分叉。
+	 * 未提供时批量上传只处理库内文件。
+	 */
+	cacheExternal?: (url: string, notePath: string | undefined) => Promise<ExternalCacheOutcome>;
 	notify: (message: string) => void;
 	t: (key: string, params?: Record<string, unknown>) => string;
 }
@@ -297,8 +306,30 @@ export interface BatchResult {
 	skipped: { reason: string; count: number }[];
 }
 
+export interface BatchOptions {
+	/**
+	 * 站外图候选 —— **必须只放已经拿到授权的那些**（授权发生在命令的确认框里）。
+	 *
+	 * ⚠️ 这一层**不自己判断授权**：`cacheExternal` 那条链在路上只复核"功能还开着吗 /
+	 * 是不是本存储 / 主机被拦了吗"，它**不知道用户答没答过** —— 按需缓存那条路是
+	 * "先问、问到了才调它"。所以调用方漏了授权，这里就会替用户答应下来。
+	 */
+	external?: ExternalSelection;
+}
+
 /**
- * 批量上传附件目录里的图片，并把笔记里的本地链接换成远端链接。
+ * 批量上传：库内的老附件（+ 笔记里的外链图），并把笔记里的链接换成远端链接。
+ *
+ * ## 两趟，各管一类候选
+ *
+ * 1. **站外图**（候选已获授权）→ 走 `deps.cacheExternal`，也就是「缓存站外图片」
+ *    那条链（下载 → 上传 → 落本地副本 → 改写链接）。它自带同意复核，
+ *    所以这里只负责按候选逐个跑、并把结果并进同一份统计。
+ * 2. **库内文件** → 读字节 → `ingest`（带 `existingPath`，见下）→ 收集改写规则 →
+ *    最后统一扫一遍笔记改链接。
+ *
+ * ⚠️ 站外那趟排在前面，是为了让第二趟的 `planLinkRewrites` 读到**最新**正文
+ *（它要重新读每一篇笔记；顺序反过来的话，读到的是外链那趟改写之前的版本）。
  *
  * ## ⚠️ 一个刻意的保守选择：**不删原文件**
  *
@@ -316,7 +347,7 @@ export interface BatchResult {
  * 那是"凭空多出来的文件"，搬移失败时还会永久残留。所以这里必须把
  * `existingPath` 指出来，让编排层知道**字节已经在库里**（见 `IngestRequest`）。
  */
-export async function runBatchUpload(deps: MaintenanceDeps): Promise<BatchResult> {
+export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOptions = {}): Promise<BatchResult> {
 	const settings = deps.settings();
 	const result: BatchResult = {
 		uploaded: 0,
@@ -327,6 +358,45 @@ export async function runBatchUpload(deps: MaintenanceDeps): Promise<BatchResult
 		skipped: [],
 	};
 
+	/**
+	 * 被这次命令改过链接的笔记（**去重**）。
+	 *
+	 * ⚠️ 两条路径都可能改同一篇笔记（一篇笔记里既有本地老图、又有外链图），
+	 * 各数各的会把"改了 3 篇"报成"改了 5 篇" —— 用户没法用它核对。
+	 */
+	const changedNotes = new Set<string>();
+
+	// ── 1. 站外图（候选已获授权；只处理，不再判断该不该问）──
+	//
+	// ⚠️ 放在库内文件之前：改写过的笔记随后会被本地那一趟重新读一遍，
+	// 于是 `planLinkRewrites` 拿到的一定是最新正文（顺序反过来就先改后读，读到旧的）。
+	if (options.external && options.external.candidates.length > 0 && deps.cacheExternal) {
+		for (const candidate of options.external.candidates) {
+			let outcome: ExternalCacheOutcome;
+			try {
+				outcome = await deps.cacheExternal(candidate.url, candidate.notePath);
+			} catch {
+				// 这条链是 fire-and-forget 友好的，但还是兜一层：
+				// 一张图出事不该让整条命令停在这里
+				result.failed += 1;
+				continue;
+			}
+
+			if (outcome.status === "cached") {
+				result.uploaded += 1;
+				result.linksRewritten += 1;
+				changedNotes.add(candidate.notePath);
+			} else if (outcome.status === "cached-no-rewrite") {
+				// 图进了存储，但笔记里的链接没改成 —— **算未完成**：
+				// 命令的承诺是"上传并改写"，只做了一半就报成功，用户会以为搬完了，
+				// 而笔记里那串地址还指着别人的服务器。（重跑一次会补上。）
+				result.failed += 1;
+			} else {
+				result.failed += 1;
+			}
+		}
+	}
+
 	// 只取判定需要的字段，转成结构化对象 —— 免得在 TFile 上做类型谓词（那会与宿主类型耦合）
 	const files: VaultFileLike[] = deps.app.vault.getFiles().map((file) => ({
 		path: file.path,
@@ -335,7 +405,8 @@ export async function runBatchUpload(deps: MaintenanceDeps): Promise<BatchResult
 	}));
 
 	const selection = selectUploadCandidates(files, { settings, index: deps.index() });
-	result.skipped = selection.skipped;
+	// 两条路径的"为什么跳过"汇总到一起（形状相同，都是给人看的诊断）
+	result.skipped = [...selection.skipped, ...(options.external?.skipped ?? [])];
 
 	// 路径 → 远端 URL，用于随后改写笔记
 	const rules: RewriteRule[] = [];
@@ -383,7 +454,11 @@ export async function runBatchUpload(deps: MaintenanceDeps): Promise<BatchResult
 		rules.push({ from: path, to: ingestResult.remoteUrl });
 	}
 
-	if (rules.length === 0) return result;
+	// 没有库内候选时**也要**走完赋值：站外那一趟可能已经改过笔记了
+	if (rules.length === 0) {
+		result.notesChanged = changedNotes.size;
+		return result;
+	}
 
 	// ── 改写笔记里指向这些文件的链接 ──
 	for (const note of deps.app.vault.getMarkdownFiles()) {
@@ -402,13 +477,14 @@ export async function runBatchUpload(deps: MaintenanceDeps): Promise<BatchResult
 
 		try {
 			await deps.app.vault.modify(note, rewritten.text);
-			result.notesChanged += 1;
+			changedNotes.add(note.path);
 			result.linksRewritten += rewritten.count;
 		} catch {
 			result.failed += 1;
 		}
 	}
 
+	result.notesChanged = changedNotes.size;
 	return result;
 }
 

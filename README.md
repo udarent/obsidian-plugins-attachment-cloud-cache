@@ -86,8 +86,10 @@ In **Settings → Attachment Cloud Cache**:
 - **One optional feature reaches other sites — only if you turn it on.** "Cache images from other
   sites" is **off by default**; once on, opening a note with an externally hosted image asks you
   **once per site**, and only on "cache this site" does the plugin request that image **directly from
-  that site**, upload it to your storage and rewrite the link. Sites you answered "don't ask" for are
-  never requested, and the request carries nothing beyond the image's own address.
+  that site**, upload it to your storage and rewrite the link. The "upload existing attachments"
+  command follows the same rule: it **names the sites it would visit**, and only your confirmation
+  makes it fetch from them. Sites you answered "don't ask" for are never requested, and the request
+  carries nothing beyond the image's own address.
 - **The secret access key lives in the OS keychain**, never in `data.json`. The **access key ID is
   written to `data.json`**: it is an identifier, not a secret — it is part of the signed request and
   appears in server logs — and Obsidian's keychain accepts only lowercase IDs while access key IDs

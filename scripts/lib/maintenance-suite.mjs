@@ -313,4 +313,127 @@ export function runMaintenanceSuite(mod) {
 	});
 	assert.deepEqual(noStat.paths, ["attachments/no-stat.png"], "拿不到 size 时不该误判成空文件");
 
+	// ============================================================
+	// ⭐ 外链候选：批量上传命令也要看到"还没进你自己存储"的图
+	//
+	// 那些图在**别人的服务器**上，但用户跑这条命令的意图就是"把还没搬走的搬走"。
+	// 判定刻意复用按需缓存那一条（`decideExternalCache`），所以下面这些性质
+	// 与"看笔记时问不问"永远一致 —— 不另立一套标准。
+	// ============================================================
+	const { externalImageUrlsIn, selectExternalUploadCandidates } = mod;
+	const { SiteDecisions } = mod;
+
+	// ── 1. 只认**图片**写法 ──
+	assert.deepEqual(externalImageUrlsIn("![a](https://x.test/a.png)"), ["https://x.test/a.png"], "Markdown 图片要认");
+	assert.deepEqual(
+		externalImageUrlsIn("[a](https://x.test/page)"),
+		[],
+		"★ 普通链接指向的是网页、不是外链图片 —— 送去下载只会换来一串「不是图片」的失败"
+	);
+	assert.deepEqual(externalImageUrlsIn('<img src="https://x.test/b.jpg">'), ["https://x.test/b.jpg"], "行内 HTML 的 img 也要认");
+	assert.deepEqual(externalImageUrlsIn("![a](<https://x.test/c d.png>)"), ["https://x.test/c d.png"], "尖括号包住的地址要认得出来");
+	assert.deepEqual(externalImageUrlsIn('![a](https://x.test/d.png "标题")'), ["https://x.test/d.png"], "标题不该混进地址");
+	assert.deepEqual(externalImageUrlsIn("![](attachments/x.png)"), [], "库内相对路径不是外链");
+	assert.deepEqual(externalImageUrlsIn("![[photo.png]]"), [], "wikilink 指的是库内路径，不可能是外链");
+	assert.deepEqual(
+		externalImageUrlsIn("![](https://x.test/a.png)\n![](https://x.test/a.png)"),
+		["https://x.test/a.png"],
+		"同一篇笔记里写两遍只算一次（改写时那两处会被一起换掉）"
+	);
+	assert.deepEqual(externalImageUrlsIn(""), [], "空文本安全返回空");
+
+	// ── 2. 挑选：站点记忆、自己的存储、授权标记 ──
+	{
+		const externalSettings = { ...settings, externalImageCache: true };
+		const notes = [
+			{
+				path: "notes/one.md",
+				// ⚠️ 第三行是**同一张图写第二遍**：它必须只算一个候选（改写时两处一起换）
+				text: "![x](https://offsite.test/a.png)\n![](https://offsite.test/b.png)\n![dup](https://offsite.test/a.png)",
+			},
+			{ path: "notes/two.md", text: "![](https://allowed.test/c.png)\n![](https://denied.test/d.png)" },
+			{ path: "notes/three.md", text: "![](https://img.example.com/cached.png)" },
+		];
+		const decisions = new SiteDecisions([
+			{ host: "allowed.test", decision: "allow" },
+			{ host: "denied.test", decision: "deny" },
+		]);
+		const options = { settings: externalSettings, decisions, configured: true };
+
+		const picked = selectExternalUploadCandidates(notes, options);
+		assert.deepEqual(
+			picked.candidates.map((c) => `${c.notePath} ${c.url}`),
+			[
+				"notes/one.md https://offsite.test/a.png",
+				"notes/one.md https://offsite.test/b.png",
+				"notes/two.md https://allowed.test/c.png",
+			],
+			"★ 候选要带上「它出现在哪篇笔记里」—— 改写链接时必须指名道姓，且同一篇里写两遍只算一次"
+		);
+		assert.deepEqual(
+			picked.sites.map((s) => `${s.host}:${s.count}:${s.needsConsent}`),
+			["allowed.test:1:false", "offsite.test:2:true"],
+			"站点汇总要按主机名排序，并标出哪些还没答过（确认框据此说明授权范围）"
+		);
+		assert.equal(picked.needsConsent, true, "有站点没答过 → 需要本次授权");
+		assert.equal(
+			picked.candidates.some((c) => c.url.includes("img.example.com")),
+			false,
+			"★ 自己存储的地址不该被当外链处理（判定层认得出，命令不另立标准）"
+		);
+		// ⭐ 「不再询问」的站点确实被跳过了（行为要求），而且**原因如实来自判定层**
+		assert.equal(
+			picked.skipped.some((s) => s.reason.includes("不再询问")),
+			true,
+			"★ 用户标过「不再询问」的站点必须被跳过，且原因如实记录（诊断用）"
+		);
+
+		// 站点排序固定：输出稳定，展示与断言都不会因为扫库顺序而变
+		const again = selectExternalUploadCandidates([...notes].reverse(), options);
+		assert.deepEqual(
+			again.sites.map((s) => s.host),
+			picked.sites.map((s) => s.host),
+			"站点顺序与笔记的读取顺序无关"
+		);
+
+		// ── 3. 「缓存站外图片」关着时，命令**不得**越过这个开关 ──
+		const off = selectExternalUploadCandidates(notes, {
+			...options,
+			settings: { ...externalSettings, externalImageCache: false },
+		});
+		assert.deepEqual(off.candidates, [], "★ 功能关着时命令不得去碰任何站外图（那是用户对外的隐私立场）");
+		assert.equal(
+			off.skipped.some((s) => s.reason.includes("不再询问")),
+			false,
+			"功能关着时不该报「被你的不再询问列表跳过」—— 真正挡住它的是那个开关（原因必须如实）"
+		);
+
+		// ── 4. 存储没就绪：不会**问**（与按需缓存一致）──
+		//
+		// ⚠️ 已经授权过的站点仍会算候选 —— 那不是"漏判"：判定层对 `allow` 的答复是
+		// "该缓存它"，能不能上传由执行层自己看客户端（没有就报 `unavailable`）。
+		// 而这条命令在更早的地方就拦掉了未配置的情形，所以实际跑不到这里。
+		const unconfigured = selectExternalUploadCandidates(notes, { ...options, configured: false });
+		assert.equal(
+			unconfigured.candidates.some((c) => c.host === "offsite.test"),
+			false,
+			"★ 存储没就绪时不该把「还没答过」的站点列成候选 —— 那时问了也白问"
+		);
+		assert.equal(unconfigured.needsConsent, false, "没就绪时不会产生「需要授权」—— 那些站点根本不会被处理");
+
+		// ── 5. 回环 / 链路本地地址：无条件不碰（连用户标过的 allow 也不能越过）──
+		const loopback = selectExternalUploadCandidates(
+			[{ path: "notes/x.md", text: "![](http://127.0.0.1/secret.png)\n![](http://169.254.169.254/meta.png)" }],
+			{ ...options, decisions: new SiteDecisions([{ host: "127.0.0.1", decision: "allow" }]) }
+		);
+		assert.deepEqual(loopback.candidates, [], "★ 回环与链路本地地址永远不是候选（安全先于站点记忆）");
+
+		// ── 6. 坏输入不该让整批失败 ──
+		assert.deepEqual(
+			selectExternalUploadCandidates([{ path: "", text: "![](https://x.test/a.png)" }, { path: "n.md" }], options)
+				.candidates,
+			[],
+			"没有路径的笔记、没有正文的笔记都应安全跳过"
+		);
+	}
 }

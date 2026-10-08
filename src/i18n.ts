@@ -150,6 +150,10 @@ export const I18N: Record<string, Locale> = {
 		maintainBatchKeepsOriginals:
 			"Your original files are left in place on purpose — nothing is deleted, so nothing can be lost.",
 		maintainBatchCta: "Upload and rewrite links",
+		maintainBatchExternal:
+			"Also {count} image(s) hosted elsewhere, on {sites} site(s): {hosts}",
+		maintainBatchExternalConsent:
+			"Confirming also allows downloading from those sites, and remembers them as sites to cache.",
 		maintainBatchDone:
 			"Uploaded {uploaded}, already there {reused}, failed {failed}. Rewrote {links} link(s) across {notes} note(s).",
 
@@ -304,6 +308,8 @@ export const I18N: Record<string, Locale> = {
 		// 提示是宿主的 Notice，两者都**按纯文本**渲染 —— 星号会原样显示给用户。
 		maintainBatchKeepsOriginals: "原文件会保留在原处 —— 不删任何东西，所以不会丢。",
 		maintainBatchCta: "上传并改写链接",
+		maintainBatchExternal: "另有 {count} 张图片托管在站外，来自 {sites} 个站点：{hosts}",
+		maintainBatchExternalConsent: "点确认即表示允许从这些站点下载，它们会被记住为「缓存」站点。",
 		maintainBatchDone:
 			"上传 {uploaded} 个、已存在 {reused} 个、失败 {failed} 个。在 {notes} 篇笔记里改写了 {links} 处链接。",
 

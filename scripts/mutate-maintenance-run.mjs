@@ -41,6 +41,14 @@ await runMutations({
 			expect: "缓存清理必须用 Vault.delete",
 		},
 		{
+			// 后果：外链那一趟根本不跑 ⇒ 命令只搬库内文件，笔记里的外链图原样留着
+			//（用户以为"都搬走了"，而图还在别人的服务器上 —— 而确认框刚刚承诺过会处理它们）。
+			name: "★ 批量上传不处理外链候选（笔记里的外链图原样留着）",
+			from: "\tif (options.external && options.external.candidates.length > 0 && deps.cacheExternal) {",
+			to: "\tif (false) {",
+			expect: "外链图被下载、上传，笔记里的链接被改写",
+		},
+		{
 			// 后果：同上，但发生在**后台**（没人在旁边看的那条路径）——
 			// 用户只会发现"缓存一直不见小、磁盘也没变"。
 			name: "★ 后台淘汰绕过删除原语，改走回收站（自动路径上空间不释放）",

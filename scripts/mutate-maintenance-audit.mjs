@@ -18,6 +18,9 @@ await runMutations({
 		"src/cache-path",
 		"src/settings",
 		"src/types",
+		// 套件里有外链候选那一段（它要造站点记忆），所以要一起进 bundle ——
+		// 少了它，基线会以 `SiteDecisions is not a constructor` 失败。
+		"src/render/site-decisions",
 	],
 	suite: runMaintenanceSuite,
 	mutations: [

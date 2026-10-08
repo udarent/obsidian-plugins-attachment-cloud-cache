@@ -16,6 +16,7 @@ await withLoadedTs(
 		"src/cache-path",
 		"src/settings",
 		"src/types",
+		"src/render/site-decisions",
 	],
 	(mod) => {
 		runMaintenanceSuite(mod);
@@ -23,7 +24,10 @@ await withLoadedTs(
 			"Maintenance planners passed (four audit classes with attachment-folder files never treated as orphans; " +
 				"preview truncated but execution list full; link spans for wikilink/alias/subpath/title/angle forms; " +
 				"rewrites preserve aliases and never touch unrelated links; reference scan only counts our own storage; " +
-				"batch candidates skip non-enabled, empty and already-indexed files)."
+				"batch candidates skip non-enabled, empty and already-indexed files; off-site candidates are images only " +
+				"(never plain links or wikilinks), skip the sites you marked do-not-ask with their real reason recorded, " +
+				"and are never produced when the feature is off, the host is loopback, or an unanswered site's storage " +
+				"is not ready)."
 		);
 	}
 );

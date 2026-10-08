@@ -887,7 +887,113 @@ export async function runLoadAcceptance(options = {}) {
 		}
 
 		// ============================================================
-		// 8b2. ⭐⭐「清除站点记忆」必须让**当前打开着的**笔记重新被问一次
+		// 8b2. ⭐⭐ 批量上传命令也要看到**笔记里的外链图**
+		//
+		// 这条命令的意图是"把还没进你自己存储的图搬进去"，而指向别处的图同样没进存储
+		//（只是它们在别人的服务器上）。用户明确要求：**除了被他标成「不再询问」的站点**，
+		// 外链图也要一起处理。
+		//
+		// ⚠️ 授权红线在这里落地：判定层只会给出"这个站点用户还没答过"，
+		// 而**真正的授权发生在命令的确认框里** —— 所以确认框必须把站点列出来。
+		// 下面三段分别钉住：确认即授权（且记住）、取消 = 什么都没发生、不再询问 = 一个请求都不发。
+		//
+		// ⚠️ 位置必须在 8b **之后**：它会断言"同站第一次遇到要问一次"，
+		// 而这一段会把同一个站点记成「缓存」，排在前面就会把它那条断言弄红。
+		// ============================================================
+		{
+			const externalUrl = EXTERNAL_IMAGE_URL;
+			const externalNote = "notes/外链待迁移.md";
+			plugin.settings.externalImageCache = true;
+			// 先回到"用户还没答过这个站点"的状态（8b 已经把它记成 allow 了）
+			plugin.siteDecisionsSnapshot().clear();
+			await writeFile(join(root, externalNote), `# 外链\n\n![x](${externalUrl})\n`, "utf8");
+			await harness.refreshPathCache();
+
+			const externalConfirms = [];
+			plugin.confirmMaintenance = async (options) => {
+				externalConfirms.push(options);
+				return true; // 用户点了确认
+			};
+			externalHostRequests.length = 0;
+			mockObsidian.Notice.instances.length = 0;
+			runCommand("upload-attachments");
+
+			await waitFor(
+				async () => !(await readFile(join(root, externalNote), "utf8")).includes(externalUrl),
+				"外链图被下载、上传，笔记里的链接被改写",
+				10000,
+				diagnose
+			);
+
+			assert.equal(externalHostRequests.length, 1, "★ 命令下载这张外链图只该一次");
+			const rewrittenExternal = await readFile(join(root, externalNote), "utf8");
+			assert.ok(
+				rewrittenExternal.includes(`${PUBLIC_BASE}/`),
+				`★ 外链应被改写成自己存储的地址：${rewrittenExternal}`
+			);
+			assert.ok(rewrittenExternal.includes("# 外链"), "★ 笔记的其它内容必须原样保留");
+
+			// ⭐ 确认框必须**列出即将访问的站点** —— 它就是这次下载的授权凭据。
+			// 只说"还有 1 张站外图"等于让用户盲签一份许可。
+			const externalLines = (externalConfirms.at(-1)?.lines ?? []).join(" ｜ ");
+			assert.ok(
+				externalLines.includes(EXTERNAL_HOST),
+				`★ 确认框必须列出即将访问的站点（那是授权凭据）：${externalLines}`
+			);
+			// ⭐ 确认即授权：站点要记成「缓存」，以后看笔记不再问
+			assert.equal(
+				plugin.siteDecisionsSnapshot().get(EXTERNAL_HOST),
+				"allow",
+				"★ 确认即授权 —— 站点必须被记成「缓存」（否则下次看笔记还会为它再问一遍）"
+			);
+
+			// ── 取消 = 什么都没发生（既没下载，也没把站点记下来）──
+			const cancelNote = "notes/外链取消.md";
+			plugin.siteDecisionsSnapshot().clear();
+			await writeFile(join(root, cancelNote), `![y](${externalUrl})\n`, "utf8");
+			await harness.refreshPathCache();
+			externalHostRequests.length = 0;
+			plugin.confirmMaintenance = async () => false; // 用户点了取消
+			runCommand("upload-attachments");
+			await new Promise((resolve) => setTimeout(resolve, 300));
+
+			assert.equal(externalHostRequests.length, 0, "★ 取消之后**不得**下载任何站外图");
+			assert.equal(
+				plugin.siteDecisionsSnapshot().get(EXTERNAL_HOST),
+				undefined,
+				"★ 取消不得把站点记成「缓存」—— 用户没有同意过（这条等于替他签了名）"
+			);
+			assert.ok(
+				(await readFile(join(root, cancelNote), "utf8")).includes(externalUrl),
+				"取消之后笔记必须一个字都没动"
+			);
+
+			// ── 「不再询问」的站点：一个请求都不发（用户明确划的线）──
+			const deniedNote = "notes/外链不再询问.md";
+			plugin.siteDecisionsSnapshot().set(EXTERNAL_HOST, "deny");
+			await writeFile(join(root, deniedNote), `![z](${externalUrl})\n`, "utf8");
+			await harness.refreshPathCache();
+			externalHostRequests.length = 0;
+			plugin.confirmMaintenance = async () => true;
+			runCommand("upload-attachments");
+			await new Promise((resolve) => setTimeout(resolve, 300));
+
+			assert.equal(
+				externalHostRequests.length,
+				0,
+				"★ 被标成「不再询问」的站点，命令也不得发起任何请求（那是用户明确拒绝过的）"
+			);
+			assert.ok(
+				(await readFile(join(root, deniedNote), "utf8")).includes(externalUrl),
+				"被拒绝的站点：笔记原样不动"
+			);
+
+			plugin.siteDecisionsSnapshot().clear();
+			plugin.settings.externalImageCache = false;
+		}
+
+		// ============================================================
+		// 8b3. ⭐⭐「清除站点记忆」必须让**当前打开着的**笔记重新被问一次
 		//
 		// 这条是**实测踩到**的用户缺陷：清完记忆，站外图再也不问了，唯一办法是重启
 		// Obsidian。两层原因，缺一不可：

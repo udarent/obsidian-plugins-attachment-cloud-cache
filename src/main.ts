@@ -38,7 +38,8 @@ import { auditForCleanup, collectCacheFiles, runBatchUpload, runCleanup, runEvic
 import type { MaintenanceDeps } from "./maintenance/run";
 import { createCacheRotator } from "./maintenance/rotation";
 import type { CacheRotator } from "./maintenance/rotation";
-import { selectUploadCandidates } from "./maintenance/batch";
+import { selectExternalUploadCandidates, selectUploadCandidates } from "./maintenance/batch";
+import type { NoteTextLike } from "./maintenance/batch";
 import { ingestAttachment } from "./core/ingest";
 import { confirmWithModal } from "./ui/confirm-modal";
 import type { ConfirmOptions } from "./ui/confirm-modal";
@@ -345,9 +346,31 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 					request
 				);
 			},
+			// ⚠️ 复用「缓存站外图片」那条链，而不是另写一套下载+上传：
+			// 于是同意复核、失败分类、"URL 在笔记里总是字面出现"那几条纪律只有一份实现。
+			cacheExternal: (url, notePath) => this.cacheExternalImage(url, notePath),
 			notify: (message) => new Notice(message),
 			t: (key, params) => this.t(key, params),
 		};
+	}
+
+	/**
+	 * 站外图的"下载 → 上传 → 改写链接"（批量上传复用同一条链）。
+	 *
+	 * ⚠️ 这里**刻意不给 `notify`**：那条链默认每张图弹一条通知 —— 按需缓存时是对的
+	 * （用户正看着那张图），批量命令里就是刷屏（50 张图 = 50 条）。
+	 * 逐张的说明留给"打开那篇笔记"那条路：失败的外链仍然留在笔记里，
+	 * 再看它一次就会重新问、也会重新报。命令这边只报总数。
+	 */
+	private cacheExternalImage(url: string, notePath: string | undefined) {
+		return createExternalCacher({
+			app: this.app,
+			settings: () => this.settings,
+			// 每次现造：用户可能刚在设置页改完密钥（与 `ensureLocalCopy` 同一条纪律）
+			client: () => this.buildClient(),
+			index: () => this.currentIndex(),
+			persistIndex: () => this.hostContext().persistIndex(),
+		})(url, notePath);
 	}
 
 	/** 本存储 URL → key（判定层的推导，维护功能复用同一套）。 */
@@ -448,23 +471,48 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			.filter((file) => typeof file?.path === "string");
 		const selection = selectUploadCandidates(files, { settings: this.settings, index: this.currentIndex() });
 
-		if (selection.paths.length === 0) {
+		// ⭐ 笔记里的**外链图**也算候选：这条命令补的是"把还没进你自己存储的图搬进去"，
+		// 而指向别处的图同样没进存储 —— 只是它们在别人的服务器上。
+		// 判定用的是**按需缓存那一条**（`decideExternalCache`），所以"功能关掉 /
+		// 自己的存储 / 回环地址 / 用户标过「不再询问」"全都自动一致，不另立一套标准。
+		const external = selectExternalUploadCandidates(await this.readAllNoteTexts(), {
+			settings: this.settings,
+			decisions: this.siteDecisionsSnapshot(),
+			configured: connectionReadiness(this.app.secretStorage, this.settings).ready,
+		});
+
+		if (selection.paths.length === 0 && external.candidates.length === 0) {
 			new Notice(this.t("maintainBatchNothing"));
 			return;
 		}
 
+		const lines = [
+			this.t("maintainBatchSummary", { count: selection.paths.length }),
+			...selection.paths.slice(0, 10),
+			...(selection.paths.length > 10
+				? [this.t("maintainCleanMore", { count: selection.paths.length - 10 })]
+				: []),
+			// ⚠️ 必须说清"原文件不会删" —— 否则用户会以为磁盘会腾出来，
+			// 结果发现文件还在，以为命令没生效。
+			this.t("maintainBatchKeepsOriginals"),
+		];
+
+		if (external.candidates.length > 0) {
+			// ⚠️ 必须把**站点**列出来：**这个确认框就是那份授权**（未获明确同意前，
+			// 站外图永不下载）。只说"还有 3 张站外图"等于让用户盲签一份许可。
+			lines.push(
+				this.t("maintainBatchExternal", {
+					count: external.candidates.length,
+					sites: external.sites.length,
+					hosts: external.sites.map((site) => site.host).join(", "),
+				})
+			);
+			if (external.needsConsent) lines.push(this.t("maintainBatchExternalConsent"));
+		}
+
 		const confirmed = await this.confirmMaintenance({
 			title: this.t("maintainBatchTitle"),
-			lines: [
-				this.t("maintainBatchSummary", { count: selection.paths.length }),
-				...selection.paths.slice(0, 10),
-				...(selection.paths.length > 10
-					? [this.t("maintainCleanMore", { count: selection.paths.length - 10 })]
-					: []),
-				// ⚠️ 必须说清"原文件不会删" —— 否则用户会以为磁盘会腾出来，
-				// 结果发现文件还在，以为命令没生效。
-				this.t("maintainBatchKeepsOriginals"),
-			],
+			lines,
 			cta: this.t("maintainBatchCta"),
 		});
 		if (!confirmed) {
@@ -472,7 +520,19 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			return;
 		}
 
-		const result = await runBatchUpload(deps);
+		// 点确认 = 对这些站点授权。**必须记在跑之前**：那条链在路上只看记忆，
+		// 它并不知道用户答没答过（按需缓存那条路是"先问、问到了才调它"）。
+		// 记下来之后，以后看笔记也不会为同一个站点再打扰他。
+		if (external.needsConsent) {
+			for (const site of external.sites) {
+				if (site.needsConsent) this.siteDecisionsSnapshot().set(site.host, "allow");
+			}
+			void this.persistSiteDecisions().catch((error) =>
+				console.error("[attachment-cloud-cache] 站点决定记忆写入失败", error)
+			);
+		}
+
+		const result = await runBatchUpload(deps, { external });
 		new Notice(
 			this.t("maintainBatchDone", {
 				uploaded: result.uploaded,
@@ -482,6 +542,24 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				links: result.linksRewritten,
 			})
 		);
+	}
+
+	/**
+	 * 读一遍全库笔记的正文（外链扫描要用）。
+	 *
+	 * 单篇读不到就跳过：这条命令要处理的是**其它**东西，
+	 * 不该因为一篇笔记读不了而整条失败（用户只会看到"什么都没发生"）。
+	 */
+	private async readAllNoteTexts(): Promise<NoteTextLike[]> {
+		const notes: NoteTextLike[] = [];
+		for (const note of this.app.vault.getMarkdownFiles()) {
+			try {
+				notes.push({ path: note.path, text: await this.app.vault.read(note) });
+			} catch {
+				// 跳过这一篇
+			}
+		}
+		return notes;
 	}
 
 	/** 抽成方法是为了让测试能替换掉它（真弹窗点不了）。 */

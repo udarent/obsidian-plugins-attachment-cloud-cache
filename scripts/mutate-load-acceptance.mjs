@@ -136,6 +136,29 @@ await runMutations({
 			expect: "无法撤销",
 		},
 		{
+			// 后果：算出了外链候选却不交给执行层 ⇒ 命令只搬库内文件、外链图原样留着，
+			// 而确认框刚刚向用户承诺过会处理它们（用户以为搬完了）。
+			name: "★ 算出了外链候选却不交给执行层（确认框承诺了却没做）",
+			from: "runBatchUpload(deps, { external });",
+			to: "runBatchUpload(deps);",
+			expect: "外链图被下载、上传，笔记里的链接被改写",
+		},
+		{
+			// 后果：确认框不再列出即将访问的站点 ⇒ 用户是在**盲签**一份下载许可。
+			// 这条命令会真的去访问那些站点，而他看不到是谁。
+			name: "★ 确认框不列出即将访问的站点（用户盲签下载许可）",
+			from: '\t\t\t\t\thosts: external.sites.map((site) => site.host).join(", "),',
+			to: '\t\t\t\t\thosts: "",',
+			expect: "确认框必须列出即将访问的站点",
+		},
+		{
+			// 后果：确认了却不记授权 ⇒ 以后每看一次那篇笔记，都会为同一个站点再问一遍。
+			name: "★ 确认之后不记住授权（同一个站点每次看笔记都再问一遍）",
+			from: '\t\t\t\tif (site.needsConsent) this.siteDecisionsSnapshot().set(site.host, "allow");',
+			to: "\t\t\t\t// 变异：不记住授权",
+			expect: "确认即授权",
+		},
+		{
 			// 后果：记忆清空了，但**已经渲染出来的图不会自己重跑判定** ⇒
 			// 用户点完「清除站点记忆」什么都看不到，只会以为按钮坏了。
 			//（另一半原因在编排层：那张"问过就永久记住"的表，见 `mutate-external-hook.mjs`。）
