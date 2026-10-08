@@ -47,10 +47,13 @@ Requires Obsidian **1.13.0** or newer (desktop and mobile). The floor is set by 
 settings API, which makes the settings searchable in Obsidian's global search. The cost is real:
 anyone who has not updated Obsidian in the last few months cannot install this.
 
-1. Build or download `main.js`, `manifest.json`, and `styles.css`
-2. Copy them to `<vault>/.obsidian/plugins/attachment-cloud-cache/`
-   ⚠️ The folder name must match the plugin id exactly — `attachment-cloud-cache`
-3. Enable it in **Settings → Community plugins → Installed plugins**
+**From inside Obsidian (recommended):** **Settings → Community plugins → Browse**, search for
+`Attachment Cloud Cache`, then install and enable it.
+
+**Manually:** download `main.js`, `manifest.json`, and `styles.css` from the
+[latest release](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases/latest),
+copy them to `<vault>/.obsidian/plugins/attachment-cloud-cache/` (⚠️ the folder name must match the
+plugin id exactly), then enable it in **Settings → Community plugins → Installed plugins**.
 
 ## Setup
 

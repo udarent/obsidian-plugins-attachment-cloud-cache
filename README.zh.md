@@ -36,10 +36,11 @@
 需要 Obsidian **1.13.0** 或更新（桌面端与移动端）。下限由声明式设置 API 决定 —— 它让设置项能被
 Obsidian 的全局搜索搜到。代价是最近几个月没更新过 Obsidian 的用户装不了。
 
-1. 构建或下载 `main.js`、`manifest.json`、`styles.css`
-2. 放进 `<vault>/.obsidian/plugins/attachment-cloud-cache/`
-   ⚠️ 目录名必须与插件 id 完全一致 —— `attachment-cloud-cache`
-3. 在 **设置 → 第三方插件 → 已安装插件** 里启用
+**在 Obsidian 里装（推荐）**：**设置 → 第三方插件 → 浏览**，搜 `Attachment Cloud Cache`，安装并启用。
+
+**手动安装**：从[最新 release](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases/latest)
+下载 `main.js`、`manifest.json`、`styles.css`，放进 `<vault>/.obsidian/plugins/attachment-cloud-cache/`
+（⚠️ 目录名必须与插件 id 完全一致），再在 **设置 → 第三方插件 → 已安装插件** 里启用。
 
 ## 配置
 
