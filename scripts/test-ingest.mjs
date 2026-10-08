@@ -29,8 +29,10 @@ await withLoadedTs(
 				"byte-identical upload and cache copy, exactly 1 PUT and 0 GETs, the local file is " +
 				"moved (not copied) into the cache, a repeat paste of the same image costs zero " +
 				"requests, upload failure keeps the bytes in the attachment folder and registers " +
-				"nothing, same-name files are never overwritten, nested keys create folders, and a " +
-				"corrupt index degrades to empty instead of throwing)."
+				"nothing, same-name files are never overwritten, an attachment-folder override " +
+				"beats the host's own setting, migrating an attachment that already lives in the " +
+				"vault never leaves a stray copy behind and never touches the original, nested keys " +
+				"create folders, and a corrupt index degrades to empty instead of throwing)."
 		);
 	}
 );

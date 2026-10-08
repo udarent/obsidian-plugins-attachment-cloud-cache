@@ -16,8 +16,11 @@
  * 那个 API 好用，但它**不保证返回值未被占用**（官方文档明说可能已存在），
  * 而且不同版本/移动端上行为有差异。我们已经必须自己判唯一性（因为缓存路径
  * 完全是我们自己算的），那就两条路都用同一套判据，别一半靠宿主一半靠自己。
- * 附件目录的**位置**仍然优先问宿主（`getAvailablePathForAttachment` 给的目录），
- * 只有"文件名唯一化"这一步自己来。
+ *
+ * ⚠️ 附件目录的**位置**也不再问那个 API 了：真机实测它返回 Promise，
+ * 而且目标目录已存在时会抛 `Folder already exists.` —— 详见 `core/ingest.ts` 的
+ * `hostAttachmentFolder`（现在读的是宿主自己的 `attachmentFolderPath` 配置）。
+ * 这里只负责"文件名唯一化"这一步。
  */
 
 import { normalizePath } from "obsidian";

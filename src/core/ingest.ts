@@ -43,6 +43,7 @@ import type { LocalCopyAction, PluginSettings } from "../types";
 import { describeError } from "../error-text";
 import {
 	fallbackFileName,
+	normalizeVaultPath,
 	parentFolderOf,
 	resolveContentType,
 	resolveExtension,
@@ -114,6 +115,20 @@ export interface IngestRequest {
 	 * （Obsidian 支持"与笔记同目录"这类设置）。
 	 */
 	sourcePath?: string;
+	/**
+	 * 字节**已经在 vault 的这个路径上**（迁移已有附件时由调用方指出）。
+	 *
+	 * 给了它就进入**迁移模式**，与粘贴路径有三处不同：
+	 * 1. **不再落盘** —— 字节已经在库里，"先落盘"这一步天然满足；
+	 *    照搬会在附件目录里凭空多出一个 `xxx 1.png`（原文件占着名字 ⇒ 另取序号）。
+	 * 2. **不搬、不删那个文件** —— 它是用户的资产，不是我们落的临时副本。
+	 *    需要缓存副本时**另写一份**到缓存目录（见 `writeCacheCopy`）。
+	 * 3. 因此 `localCopy: "trash"` 在这个模式下**降级为原地保留** ——
+	 *    用户要的是"别为我留副本"，而那个文件不是我们的副本，删它超出授权范围。
+	 *
+	 * 空串 / 缺省 = 普通粘贴路径（字节在内存里，必须先落盘）。
+	 */
+	existingPath?: string;
 }
 
 export interface IngestDeps {
@@ -172,35 +187,82 @@ async function ensureFolder(app: App, folder: string): Promise<void> {
 }
 
 /**
- * 问宿主"这个附件该放哪"，拿不到就按设置兜底。
+ * 归一一个目录设置：统一分隔符、去掉首尾斜杠。空串 = **没填**（而不是"根目录"）。
  *
- * 优先问宿主是因为它知道用户的附件目录设置（含"与当前笔记同目录"这类模式），
- * 而这个信息插件读不到。`getAvailablePathForAttachment` 在部分版本/移动端可能缺失，
- * 所以必须**可选调用 + 兜底**，而不是假定它存在。
+ * ⚠️ 非字符串一律当"没填"：`data.json` 是被逐字段校验过的，但这条函数也会被
+ * 别处复用，而 `String(某个对象)` 会得到 `[object Object]` ——
+ * 那会变成一个真实存在（却毫无意义）的目录名，且**不报错**。
  */
-function suggestAttachmentPath(deps: IngestDeps, fileName: string, sourcePath?: string): string {
-	const manager = deps.app.fileManager as unknown as {
-		getAvailablePathForAttachment?: (name: string, sourcePath?: string) => string;
-	};
-
-	if (typeof manager.getAvailablePathForAttachment === "function") {
-		try {
-			// ⚠️ 这个 API **不保证返回值未被占用**（官方文档明说），
-			// 所以下面仍然要过 uniqueVaultPath，不能直接拿来用。
-			const suggested = manager.getAvailablePathForAttachment(fileName, sourcePath);
-			if (typeof suggested === "string" && suggested.trim() !== "") {
-				return suggested.replace(/\\/g, "/").replace(/^\/+/, "");
-			}
-		} catch {
-			// 版本差异 / 参数不符 → 落到兜底
-		}
-	}
-
-	const folder = String(deps.settings.attachmentFolder ?? "")
+function cleanFolderPath(value: unknown): string {
+	if (typeof value !== "string") return "";
+	return value
 		.trim()
 		.replace(/\\/g, "/")
 		.replace(/^\/+|\/+$/g, "");
-	return folder ? `${folder}/${fileName}` : fileName;
+}
+
+/**
+ * 决定这次落盘的路径：**用户的覆盖值 → 宿主自己的附件位置 → vault 根目录**。
+ *
+ * ## ⚠️ 这里换过一次实现，理由必须留着
+ *
+ * 早先问的是 `fileManager.getAvailablePathForAttachment`，而且是**按同步调用**的
+ * （`typeof 返回值 === "string"` 才采用）。在真机上实测，那两件事都是错的：
+ *
+ * 1. 它返回的是 **Promise**（实测 `[object Promise]` / `thenable=true`）
+ *    ⇒ 那个类型检查**永远为假**，宿主给的值从来没被采用过；
+ * 2. 就算 `await` 它，只要目标目录已经存在，它就抛 `Folder already exists.`
+ *    （真机复现，带不带 `sourcePath` 都一样）。
+ *
+ * 于是这条路上「跟随 Obsidian 的附件设置」**从未生效** —— 中转文件一直落在
+ * vault 根目录。而用户看到的现象正是"上传图片时根目录不停冒出新的图片文件"。
+ * 这个缺陷之所以能活这么久，是因为它**不报错、不丢数据**，只是落点与预期不符。
+ *
+ * 现在改成读宿主自己的配置（`attachmentFolderPath`，真机实测可用），
+ * 并自己解释它的几种形态（见 `hostAttachmentFolder`）。
+ */
+function suggestAttachmentPath(deps: IngestDeps, fileName: string, sourcePath?: string): string {
+	// 用户显式填了覆盖目录 → 用它。"覆盖"这个词的直白含义就是"别再问别人"。
+	const override = cleanFolderPath(deps.settings.attachmentFolder);
+	if (override) return `${override}/${fileName}`;
+
+	const hostFolder = hostAttachmentFolder(deps.app, sourcePath);
+	return hostFolder ? `${hostFolder}/${fileName}` : fileName;
+}
+
+/**
+ * 读宿主自己的「新附件的默认位置」，返回 vault 相对目录（无法确定时返回空串 = 根目录）。
+ *
+ * ⚠️ `Vault.getConfig` **不在钉住的公开类型里**（`obsidian.d.ts` 搜不到它），
+ * 但真机实测它存在且可用：`getConfig("attachmentFolderPath")` 返回的就是
+ * Obsidian 设置界面里那一栏的值。所以这里走鸭子类型 + 可选调用；
+ * 拿不到就如实退回根目录 —— 文件照样上传，只是落点普通，绝不因此让粘贴失败。
+ *
+ * 三种形态（Obsidian 自己就是这么存的）：
+ * - 空串 / `"/"` → vault 根目录（两个值表示同一件事）；
+ * - `"./"` → **与当前笔记同目录**：这是个相对写法，得用触发这次的笔记路径反推；
+ * - 其余 → 相对 vault 的目录（不存在时，落盘前那一步的 `ensureFolder` 会建出来）。
+ */
+function hostAttachmentFolder(app: App, sourcePath?: string): string {
+	const vault = app.vault as unknown as { getConfig?: (key: string) => unknown };
+	if (typeof vault.getConfig !== "function") return "";
+
+	let configured: unknown;
+	try {
+		configured = vault.getConfig("attachmentFolderPath");
+	} catch {
+		// 读配置失败不该让粘贴失败：退回根目录，字节照样留下
+		return "";
+	}
+	if (typeof configured !== "string") return "";
+
+	// ⚠️ `"./"` 经 cleanFolderPath 会变成 `"."`（它剥掉尾部斜杠），所以判这个就够
+	const cleaned = cleanFolderPath(configured);
+	if (cleaned === ".") {
+		// "与笔记同目录"：拿不到笔记路径时退回根目录 —— 那正是"没有笔记"时的合理落点
+		return parentFolderOf(normalizeVaultPath(sourcePath));
+	}
+	return cleaned;
 }
 
 /**
@@ -291,15 +353,27 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 		}
 	}
 
-	// ── 3. 先落盘（此刻起字节已安全）──
+	// ── 3. 字节的来源：先落盘（粘贴）还是指向已有文件（迁移）──
+	//
+	// 两条路的差别不只是"省一次 I/O"：迁移模式下那个文件是**用户的资产**，
+	// 我们不能像对待自己落的临时副本那样把它搬进缓存或丢进回收站。
 	const fileName = request.name ?? fallbackFileName(ext, now);
+	const existingPath = normalizeVaultPath(request.existingPath);
+	const isMigration = existingPath !== "";
+
 	let stagedPath: string;
-	try {
-		stagedPath = await stageLocally(deps, { ...request, bytes }, fileName);
-	} catch (error) {
-		// 连本地都没能落成。调用方必须**大声报错** —— 此时用户粘贴的内容确实没留下，
-		// 而这正是"绝不丢图"要避免的极端情况。
-		return { status: "fallback", key, remoteUrl: "", localPath: "", etag: "", error: asError(error) };
+	if (isMigration) {
+		// 字节已经在用户的 vault 里躺着 ⇒ 不做任何落盘动作。
+		// （这不是"跳过了安全步骤"：安全的是**字节还留着**这件事，而它本来就在。）
+		stagedPath = existingPath;
+	} else {
+		try {
+			stagedPath = await stageLocally(deps, { ...request, bytes }, fileName);
+		} catch (error) {
+			// 连本地都没能落成。调用方必须**大声报错** —— 此时用户粘贴的内容确实没留下，
+			// 而这正是"绝不丢图"要避免的极端情况。
+			return { status: "fallback", key, remoteUrl: "", localPath: "", etag: "", error: asError(error) };
+		}
 	}
 
 	// ── 4. 上传 ──
@@ -318,7 +392,19 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 	const plan = planLocalCopy(settings.localCopy, Boolean(cachePath));
 	let localPath = stagedPath;
 
-	if (plan === "trash") {
+	if (isMigration) {
+		// ⚠️ 这里的"本地副本"是**用户自己的文件**，不是我们落的临时副本：
+		// `move-to-cache` 与 `trash` 都意味着"把它搬走 / 删掉" ——
+		// 那是动用户的资产，与「上传已有附件不删原文件」这条承诺直接冲突。
+		// 所以迁移模式只做一件事：需要缓存副本时**另写一份**到缓存目录，原文件一律不动。
+		// （`trash` 因此在这里降级为原地保留：用户要的是"别为我留副本"，
+		//  而那个文件不是我们的副本，删它超出他的授权范围。）
+		if (plan === "move-to-cache" && cachePath) {
+			const copied = await writeCacheCopy(deps, cachePath, bytes);
+			// 写不出缓存副本就**保持原路径**：上传已经成功，没必要让整件事变成失败。
+			if (copied) localPath = copied;
+		}
+	} else if (plan === "trash") {
 		localPath = "";
 		await trashPath(deps.app, stagedPath);
 	} else if (plan === "move-to-cache" && cachePath) {
@@ -410,6 +496,31 @@ async function moveIntoCache(deps: IngestDeps, stagedPath: string, cachePath: st
 	} catch (error) {
 		deps.notify?.(`缓存副本搬移失败：${describeError(error)}`);
 		return stagedPath;
+	}
+}
+
+/**
+ * 在缓存目录里**另写一份**字节（迁移模式专用）。
+ *
+ * 与 `moveIntoCache` 只差一件事，但那件事是本质的：它**不动源文件**。
+ * 迁移模式的源文件是用户的资产（可能还有笔记在引用它、或有别的插件在读它），
+ * 所以只能"复制"，绝不能"移动"。为这个差别单独一个函数，而不是给
+ * `moveIntoCache` 加一个 `shouldDeleteSource` 开关 —— 开关意味着两条语义相反的路径
+ * 共用一段代码，而在这里搞反的后果是**删掉用户的原件**。
+ *
+ * 写失败时返回 `null`（调用方保留原路径继续）：上传已经成功，
+ * 没有必要因为一份缓存副本写不进去而让整个操作失败。
+ */
+async function writeCacheCopy(deps: IngestDeps, cachePath: string, bytes: Uint8Array): Promise<string | null> {
+	const app = deps.app;
+	try {
+		await ensureFolder(app, parentFolderOf(cachePath));
+		const target = await uniqueVaultPath(cachePath, makeExists(app));
+		await app.vault.createBinary(target, bytesToArrayBuffer(bytes));
+		return target;
+	} catch (error) {
+		deps.notify?.(`缓存副本写入失败：${describeError(error)}`);
+		return null;
 	}
 }
 

@@ -86,7 +86,8 @@ export const I18N: Record<string, Locale> = {
 		// ── 高级 ──
 		attachmentFolder: "Attachments folder override",
 		attachmentFolderPlaceholder: "Follow Obsidian",
-		attachmentFolderDesc: "Leave empty to follow Obsidian's own attachment setting.",
+		attachmentFolderDesc:
+			"Leave empty to follow Obsidian's own attachment setting; a value here overrides it.",
 		objectKeyTemplate: "Object key template",
 		objectKeyTemplateDesc:
 			"Available: {hash}, {ext}, {filename}, {date}. Changing this affects new uploads only; existing links keep working.",
@@ -250,7 +251,7 @@ export const I18N: Record<string, Locale> = {
 
 		attachmentFolder: "附件目录覆盖",
 		attachmentFolderPlaceholder: "跟随 Obsidian",
-		attachmentFolderDesc: "留空表示跟随 Obsidian 自己的附件设置。",
+		attachmentFolderDesc: "留空表示跟随 Obsidian 自己的附件设置；填写后将覆盖它。",
 		objectKeyTemplate: "对象 key 模板",
 		objectKeyTemplateDesc:
 			"可用占位符：{hash}、{ext}、{filename}、{date}。改动只影响之后的上传，已有链接不受影响。",

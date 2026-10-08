@@ -131,5 +131,50 @@ await runMutations({
 			to: "\t// 变异：不建目录",
 			expect: "默认布局是 mirror",
 		},
+
+		// ── ⭐ 设置里的「附件目录覆盖」必须真的覆盖 ──
+		// 这一条守的是一个**曾经存在的真实缺陷**：顺序写成"先问宿主、问不到才读设置值"，
+		// 而桌面版那个 API 一直存在 ⇒ 用户填的覆盖目录永远轮不到。
+		// 它不丢数据、不报错，只是"填了等于没填"，因而极难被发现。
+		{
+			name: "「附件目录覆盖」被宿主的设置盖过去（填了等于没填）",
+			from: "\tconst override = cleanFolderPath(deps.settings.attachmentFolder);\n\tif (override) return `${override}/${fileName}`;\n",
+			to: "\t// 变异：无视用户的覆盖设置，直接去问宿主\n",
+			expect: "⭐ 填了覆盖就应落在覆盖目录里",
+		},
+		{
+			// 这条守的是"跟随 Obsidian 的附件设置"这条承诺 —— 它曾经**从未生效**：
+			// 早先问的是 `getAvailablePathForAttachment`，而真机实测那个 API 返回 Promise，
+			// 于是那句 `typeof === "string"` 的检查永远为假，宿主给的值从来没被采用过。
+			name: "宿主自己的附件位置被忽略（用户在 Obsidian 里设的那一栏白设了）",
+			from: "\tconst hostFolder = hostAttachmentFolder(deps.app, sourcePath);\n\treturn hostFolder ? `${hostFolder}/${fileName}` : fileName;",
+			to: "\treturn fileName;",
+			expect: "留空时应继续跟随宿主的附件设置",
+		},
+		{
+			name: "宿主的「与笔记同目录」被当成字面目录名（文件落进一个叫 `.` 的目录）",
+			from: '\tif (cleaned === ".") {',
+			to: '\tif (cleaned === "___never___") {',
+			expect: "宿主设成「与笔记同目录」时应落在笔记旁边",
+		},
+
+		// ── ⭐ 迁移已有附件：字节已在库里，别动那个文件 ──
+		{
+			name: "迁移已有附件时仍然先落盘（附件目录里凭空多出一个中转副本）",
+			from: '\tconst isMigration = existingPath !== "";',
+			to: "\tconst isMigration = false;",
+			// 期望落在"不得在附件目录里写/留中转副本"这一族断言上（套件里共两条，
+			// 分别守"写盘动作"与"最终残留"）；两条都以这几个字开头。
+			expect: "不得在附件目录里",
+		},
+		{
+			// ⚠️ 这条变异把**用户的附件**当成我们自己的临时副本去搬 ——
+			// 那是不可逆的：原件被移走之后，任何我们没认出来的引用（引号包起来的路径、
+			// 别的插件生成的写法）都会指向一个不存在的文件。
+			name: "迁移模式把用户的原件搬进缓存（等于删掉他的附件）",
+			from: "\t\t\tconst copied = await writeCacheCopy(deps, cachePath, bytes);",
+			to: "\t\t\tconst copied = await moveIntoCache(deps, stagedPath, cachePath);",
+			expect: "⭐ 用户的原件必须原封不动",
+		},
 	],
 });

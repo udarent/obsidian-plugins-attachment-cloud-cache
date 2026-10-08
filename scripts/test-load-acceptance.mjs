@@ -16,6 +16,6 @@ console.log(
 		"issued 0 PUT; rendering rewrote the src to the local copy with **zero** requests in both reading view and " +
 		"live preview, while a third-party image was left alone; clean-cache deleted only the orphan through " +
 		"Vault.delete (never the trash), said so in the confirmation text, left the referenced copy alone, and " +
-		"cancelling touched nothing; batch upload rewrote both link forms and " +
-		"kept the originals; an unconfigured paste is left to Obsidian; with the feature switched on, an image from another site was asked about once, downloaded, uploaded and its link rewritten; and with a cache limit set, the background rotation deleted the least recently used copies outright (freeing the space now) and removed their index entries, without ever going near the trash, and with the note itself untouched))."
+		"cancelling touched nothing; batch upload rewrote both link forms, kept the originals and left " +
+		"no stray copy behind; an unconfigured paste is left to Obsidian; with the feature switched on, an image from another site was asked about once, downloaded, uploaded and its link rewritten; and with a cache limit set, the background rotation deleted the least recently used copies outright (freeing the space now) and removed their index entries, without ever going near the trash, and with the note itself untouched))."
 );

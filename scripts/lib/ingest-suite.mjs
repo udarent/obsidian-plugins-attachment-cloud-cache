@@ -50,6 +50,9 @@ async function makeHarness(mod, options = {}) {
 	// 真正要交给被测代码的是 `.app`。传错这一层会让 `app.fileManager` 变成 undefined，
 	// 而报错是一句莫名的 "Cannot read properties of undefined"。
 	const harness = createAppMock(root);
+	// 宿主侧的附件设置（模拟 Obsidian 自己的「新附件的默认位置」）。
+	// 留空 = vault 根目录，正是全新 vault 的默认状态。
+	harness.setAttachmentFolder(options.hostAttachmentFolder ?? "");
 	const app = harness.app;
 
 	const server = createMockS3({
@@ -696,7 +699,196 @@ export async function runIngestSuite(mod) {
 	);
 	assert.equal(mod.indexFilePath(""), ".cache-index.json", "目录为空时应退化到相对路径而不是抛错");
 
-	return { scenarios: 16 };
+	// ============================================================
+	// 17. ⭐⭐ 设置里的「附件目录覆盖」必须**真的覆盖**宿主
+	//
+	// 曾经的顺序是"先问宿主 `getAvailablePathForAttachment`，问不到才用设置值"，
+	// 而桌面版那个 API 一直存在 ⇒ 用户填的覆盖目录**永远轮不到**。
+	// 症状是最难查的一类：界面能填、能保存、点了「测试连接」也通过，唯有行为不对
+	// （文件还是落进 Obsidian 自己的附件目录）。
+	// ============================================================
+	await withHarness(
+		mod,
+		{ settings: { attachmentFolder: "myattach", localCopy: "keep" }, hostAttachmentFolder: "host-attach" },
+		async (h) => {
+			const result = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "shot.png", mime: "image/png" });
+
+			assert.equal(result.status, "uploaded");
+			assert.equal(
+				result.localPath,
+				"myattach/shot.png",
+				"⭐ 填了覆盖就应落在覆盖目录里，而不是宿主的附件目录"
+			);
+			assert.equal(await h.exists("myattach/shot.png"), true, "覆盖目录里的文件应真的落盘");
+			assert.equal(await h.exists("host-attach/shot.png"), false, "不得落进宿主的附件目录");
+		}
+	);
+
+	// 反向守护：留空时**仍须跟随宿主** —— 否则这个改动会把"跟随"那条默认路径弄坏
+	await withHarness(
+		mod,
+		{ settings: { attachmentFolder: "", localCopy: "keep" }, hostAttachmentFolder: "host-attach" },
+		async (h) => {
+			const result = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "shot.png", mime: "image/png" });
+			assert.equal(result.localPath, "host-attach/shot.png", "留空时应继续跟随宿主的附件设置");
+		}
+	);
+
+	// 17c. 宿主设置是 `"./"` —— Obsidian 用它表示「与当前笔记同目录」，是个**相对**写法，
+	// 所以要按触发这次粘贴的笔记路径反推，而不是当成一个叫 `.` 的目录。
+	await withHarness(
+		mod,
+		{ settings: { attachmentFolder: "", localCopy: "keep" }, hostAttachmentFolder: "./" },
+		async (h) => {
+			const result = await ingestAttachment(h.deps, {
+				bytes: HOSTILE_BYTES,
+				name: "shot.png",
+				mime: "image/png",
+				sourcePath: "notes/我的笔记.md",
+			});
+			assert.equal(result.localPath, "notes/shot.png", "宿主设成「与笔记同目录」时应落在笔记旁边");
+		}
+	);
+
+	// 17d. 宿主设置是 `"/"` —— Obsidian 用它与空串表示同一件事（vault 根目录）。
+	// ⚠️ 这一条与使用者直接相关：插件设置里也允许填 `/`，它同样必须被理解成"没指定目录"，
+	// 而不是一个叫 `/` 的目录。
+	await withHarness(
+		mod,
+		{ settings: { attachmentFolder: "", localCopy: "keep" }, hostAttachmentFolder: "/" },
+		async (h) => {
+			const result = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "shot.png", mime: "image/png" });
+			assert.equal(result.localPath, "shot.png", "宿主设成根目录时应落在 vault 根目录");
+		}
+	);
+
+	// ============================================================
+	// 18. ⭐⭐ 迁移已有附件（`existingPath`）：字节已在库里 → 不再落中转副本
+	//
+	// 批量上传时调用方直接把"库里那个文件"指出来。此时若仍走"先落盘再上传"，
+	// 附件目录里就会凭空多出一个 `existing 1.png`（原文件占着名字 ⇒ 另取序号）。
+	// 更关键的是：**那个原文件不能搬**——它是用户的资产，搬走等于删掉它，
+	// 与「上传已有附件不删原文件」这条承诺直接冲突。所以迁移模式只做一件事：
+	// 需要缓存副本时**另写一份**到缓存目录，原文件一律不动。
+	// ============================================================
+	await withHarness(mod, {}, async (h) => {
+		await h.write("existing.png", Buffer.from(HOSTILE_BYTES));
+
+		const result = await ingestAttachment(h.deps, {
+			bytes: HOSTILE_BYTES,
+			name: "existing.png",
+			sourcePath: "existing.png",
+			existingPath: "existing.png",
+		});
+
+		assert.equal(result.status, "uploaded");
+		// ⚠️ 这条存在性断言**必须排在字节比对之前**：原件被搬走时 `h.read` 返回 null，
+		// 而 `Buffer.compare(null, …)` 抛的是一个与规则无关的 TypeError ——
+		// 变异验证会因此判成"原因不符"（红得对，但看不出为什么红）。
+		assert.equal(
+			await h.exists("existing.png"),
+			true,
+			"⭐ 用户的原件必须原封不动（既不能被搬走、也不能被删）"
+		);
+		// ⚠️ 光看"最后有没有残留"不够：默认设置下那份中转副本会被搬进缓存，
+		// 于是"凭空多一个文件"在最终状态里看不出来 —— 但它真的发生过
+		// （一次多余的整块写入、一次 create 事件、一次同步噪音，而用户看到的
+		//  正是"上传时附件目录不停冒出新文件"）。所以要直接查**写盘动作**。
+		assert.equal(
+			h.appCalls.writes.includes("existing 1.png"),
+			false,
+			"⭐ 迁移模式不得在附件目录里写中转副本（哪怕只是短暂写一次）"
+		);
+		assert.equal(
+			Buffer.compare(await h.read("existing.png"), Buffer.from(HOSTILE_BYTES)),
+			0,
+			"原件的内容不得被改动"
+		);
+		assert.equal(await h.exists("existing 1.png"), false, "⭐ 不得在附件目录里凭空多出一份中转副本");
+		assert.ok(
+			result.localPath.startsWith("_attachment-cache/"),
+			`缓存副本仍应落在缓存目录里，实际 ${result.localPath}`
+		);
+		assert.equal(
+			Buffer.compare(await h.read(result.localPath), Buffer.from(HOSTILE_BYTES)),
+			0,
+			"缓存副本的字节应与原件一致"
+		);
+		assert.equal(h.index.get(result.key)?.cachePath, result.localPath, "索引应指向缓存目录里那份副本");
+	});
+
+	// 18b. 迁移 + 「原地保留」→ 原文件本身就是本地副本，不该再写第二份
+	await withHarness(mod, { settings: { localCopy: "keep" } }, async (h) => {
+		await h.write("keep.png", Buffer.from(HOSTILE_BYTES));
+
+		const result = await ingestAttachment(h.deps, {
+			bytes: HOSTILE_BYTES,
+			name: "keep.png",
+			existingPath: "keep.png",
+		});
+
+		assert.equal(result.status, "uploaded");
+		assert.equal(result.localPath, "keep.png", "原地保留时本地副本就是原文件本身");
+		assert.equal(await h.exists("keep 1.png"), false, "⭐ 不得凭空多写一份副本");
+		assert.equal(h.index.get(result.key)?.cachePath, "keep.png", "索引应指向那份真实存在的文件");
+	});
+
+	// 18c. ⭐ 迁移 + 「不留本地副本」→ 绝不删用户的原件
+	//
+	// `trash` 在这里被**降级为原地保留**：用户要求的是"别为我留副本"，
+	// 而那个文件不是我们的副本，是他的资产 —— 删它超出了他的授权范围。
+	// 索引仍登记它（那是一条**真实存在**的路径），审计会把它归入 `outsideCache`
+	// 那一类（既不删文件、也不摘记录），所以不会与清理类命令冲突。
+	await withHarness(mod, { settings: { localCopy: "trash" } }, async (h) => {
+		await h.write("mine.png", Buffer.from(HOSTILE_BYTES));
+
+		const result = await ingestAttachment(h.deps, {
+			bytes: HOSTILE_BYTES,
+			name: "mine.png",
+			existingPath: "mine.png",
+		});
+
+		assert.equal(result.status, "uploaded");
+		assert.equal(
+			await h.exists("mine.png"),
+			true,
+			"⭐ 用户的原件绝不能被回收站处置 —— trash 在迁移模式下降级为原地保留"
+		);
+		assert.equal(result.localPath, "mine.png", "本地路径指向那个仍然存在的文件");
+		assert.equal(await h.exists("_attachment-cache"), false, "不留副本就不该建出缓存目录");
+	});
+
+	// 18d. 迁移 + 上传失败 → 原文件在，且**一个中转垃圾都不留**
+	await withHarness(mod, { s3: { intercept: () => ({ status: 403, code: "AccessDenied" }) } }, async (h) => {
+		await h.write("fail.png", Buffer.from(HOSTILE_BYTES));
+
+		const result = await ingestAttachment(h.deps, {
+			bytes: HOSTILE_BYTES,
+			name: "fail.png",
+			existingPath: "fail.png",
+		});
+
+		assert.equal(result.status, "fallback");
+		assert.equal(result.localPath, "fail.png", "失败时本地路径应是那个**原本就存在**的文件");
+		assert.equal(await h.exists("fail.png"), true, "原文件当然还在");
+		assert.equal(await h.exists("fail 1.png"), false, "⭐ 失败时更不该留下中转文件");
+		assert.equal(h.index.get(result.key), undefined, "上传失败不得登记索引");
+	});
+
+	// 18e. 迁移重复一次 → 命中索引复用（护栏：新路径不该把幂等性弄坏）
+	await withHarness(mod, {}, async (h) => {
+		await h.write("dup.png", Buffer.from(HOSTILE_BYTES));
+		const request = { bytes: HOSTILE_BYTES, name: "dup.png", existingPath: "dup.png" };
+
+		const first = await ingestAttachment(h.deps, request);
+		const second = await ingestAttachment(h.deps, request);
+
+		assert.equal(second.status, "reused", "同一份内容第二次应复用");
+		assert.equal(second.localPath, first.localPath);
+		assert.equal(h.server.countByMethod("PUT"), 1, "复用时不得再上传");
+	});
+
+	return { scenarios: 18 };
 }
 
 /** 造一个"总是失败"的客户端，用来构造降级路径。 */

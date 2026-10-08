@@ -545,6 +545,16 @@ export function createAppMock(rootDir, opts = {}) {
 		adapter,
 		configDir: ".obsidian",
 		getName: () => "mock-vault",
+		/**
+		 * 读宿主自己的配置（真机上 `Vault.getConfig` 确实存在 —— 实测
+		 * `getConfig("attachmentFolderPath")` 返回的就是 Obsidian 设置界面里那一栏的值）。
+		 *
+		 * ⚠️ 只实现产品代码**真正会问**的那一个键，其余返回 `undefined`。
+		 * 让替身比产品代码"更懂"宿主，会把没人调用的路径伪装成已支持。
+		 */
+		getConfig(key) {
+			return key === "attachmentFolderPath" ? attachmentDir : undefined;
+		},
 		getBasePath: () => adapter.getBasePath(),
 
 		/**
@@ -711,28 +721,25 @@ export function createAppMock(rootDir, opts = {}) {
 				// 同上：不建父目录。宿主自己也只做 rename，目录得由调用方先建好。
 				await rename(toAbs(rootDir, file.path), toAbs(rootDir, newPath));
 			},
-			/**
-			 * 按附件目录给出可用路径。
-			 *
-			 * ⚠️ 真实 API **不保证唯一**（返回值可能已被占用），
-			 * 所以 mock 也**刻意不做去重** —— 唯一性必须由被测代码自己保证。
-			 * 若 mock 帮忙去重，就会掩盖"没做去重导致 createBinary 抛错"这个真实缺陷。
-			 */
-			getAvailablePathForAttachment(name, sourcePath) {
-				const dir = attachmentFolder();
-				return normalizePath(dir ? `${dir}/${name}` : name);
-			},
 			generateMarkdownLink(file, sourcePath, subpath, alias) {
 				return alias ? `[[${file.path}|${alias}]]` : `[[${file.path}]]`;
 			},
 		},
 	};
 
-	/** 附件目录：由测试通过 setAttachmentFolder 指定，模拟 Obsidian 的设置。 */
+	/**
+	 * 宿主自己的「新附件的默认位置」，由测试通过 `setAttachmentFolder` 指定。
+	 *
+	 * 产品代码读它的唯一途径是 `vault.getConfig("attachmentFolderPath")` ——
+	 * 这正是真机上的读法（实测该调用返回 Obsidian 设置界面里那一栏的值）。
+	 *
+	 * ⚠️ 这里曾经还实现过 `fileManager.getAvailablePathForAttachment`。真机实测那个 API
+	 * **是异步的**（返回 Promise），而且在目标目录已存在时会抛 `Folder already exists.`；
+	 * 产品代码因此不再调用它，mock 也就不该留一个"看起来能用"的实现 ——
+	 * 替身比被测代码更懂宿主，会把没人走的路径伪装成已支持。
+	 * 现在它彻底缺席：产品代码若再调它，会因 `typeof !== "function"` 走兜底。
+	 */
 	let attachmentDir = "";
-	function attachmentFolder() {
-		return attachmentDir;
-	}
 
 	const helpers = {
 		app,

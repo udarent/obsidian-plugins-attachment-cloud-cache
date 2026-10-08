@@ -309,6 +309,12 @@ export interface BatchResult {
  *
  * 所以这条命令做完之后，磁盘上会有两份（原文件 + 缓存副本）。
  * 提示里会如实说明这一点。
+ *
+ * ⚠️ 另一条与"不删原文件"配套的性质：**不得在原处留下中转副本**。
+ * 文件本来就在库里，若把 ingest 的"先落盘再上传"照搬过来，每个文件都会先被写成
+ * 一个 `xxx 1.png`（原文件占着名字 ⇒ 另取序号）再搬进缓存 ——
+ * 那是"凭空多出来的文件"，搬移失败时还会永久残留。所以这里必须把
+ * `existingPath` 指出来，让编排层知道**字节已经在库里**（见 `IngestRequest`）。
  */
 export async function runBatchUpload(deps: MaintenanceDeps): Promise<BatchResult> {
 	const settings = deps.settings();
@@ -355,6 +361,12 @@ export async function runBatchUpload(deps: MaintenanceDeps): Promise<BatchResult
 				bytes: new Uint8Array(bytes),
 				name: file.name,
 				sourcePath: path,
+				// ⭐ 明确指出"字节已经在这个文件里"。没有它，编排层会走"先落盘"那条路，
+				// 于是附件目录里会凭空多出一个 `xxx 1.png`（原文件占着名字 ⇒ 另取序号），
+				// 上传后再把它搬进缓存 —— 而原文件仍在。结果是：用户传了 N 张老图，
+				// 附件目录里就多出 N 个中转文件（搬移失败时永久残留），
+				// 而他要的只是"把这些图传上去"。
+				existingPath: path,
 			});
 		} catch {
 			result.failed += 1;
