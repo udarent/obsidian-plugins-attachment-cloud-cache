@@ -120,11 +120,19 @@ async function main() {
 		if (!loaded) throw new Error("插件没有加载成功 —— 看下面的控制台输出");
 
 		// 命令是否注册（接线在册的最直接证据）
+		//
+		// ⚠️ 这一行**必须是条件打印**。它曾经硬写着 ✓，于是"vault 里还是旧构建（4 条命令）"
+		// 这件事在输出里完全看不见 —— 总判定 ✗ 而明细行全是 ✓，谁也不知道该看哪里。
+		// 现在把期望值写进提示里，并且这个条件会出现在末尾的逐项清单中。
 		const commands = await evaluate(
 			client,
 			`Object.keys(app.commands.commands).filter((id) => id.startsWith(${JSON.stringify(`${PLUGIN_ID}:`)}))`
 		);
-		log(`  ✓ 已注册命令：${JSON.stringify(commands)}`);
+		const EXPECTED_COMMANDS = 5;
+		const commandsOk = commands.length >= EXPECTED_COMMANDS;
+		log(
+			`  ${commandsOk ? "✓" : "✗"} 已注册命令 ${commands.length} 条（期望 ≥ ${EXPECTED_COMMANDS}）：${JSON.stringify(commands)}`
+		);
 
 		// ⭐ 原型拦截是否真的装上了、且 setter 没有把普通赋值搞坏
 		const patch = await evaluate(
@@ -397,39 +405,61 @@ async function main() {
 				`（${liveDelivered} 次；收到过的来源：${JSON.stringify(livePreview.delivered)}）`
 		);
 		// ⚠️ 改完设置之后必须**重看当前打开的笔记**，否则用户把默认值改成「直接缓存」后毫无反馈。
-		// 端到端套件（含变异）覆盖了这条接线，但**真机上没复现**：这一条实测是 0 次，
-		// 而原因还没查明（`saveSettings` 那边确实调了 `reprocessOpenNotes`，而
-		// `reprocessOpenNotes` 在上一版里是**工作过的** —— 那时它由「清除站点记忆」触发）。
-		// ⇒ 所以这里**如实打印、不参与通过判定**：把它涂成 ✓ 是撒谎，涂成 ✗ 又会让整条
-		// 真机验证长期红着、失去信号。留着它 + 这句话，下次动这块的人第一眼就能看到。
+		//
+		// 这一条曾经实测是 **0 次**，而当时的原因被写成"未查明"。真实原因很简单、也很值得记：
+		// **测试 vault 里挂的还是旧构建** —— 那个 `main.js` 早于 `saveSettings()` 里加上
+		// `reprocessOpenNotes()` 的那次提交。换成新构建之后立刻是 3 次。
+		// ⭐ 同一个原因还让**总判定**整片红着（旧构建只注册 4 条命令，而「命令数 ≥ 5」
+		// 那个条件当时不打印）—— 于是出现了"总判定 ✗、明细行全 ✓"这种没法定位的局面。
+		// ⇒ 两条教训都进了判据本身：**每个条件都要能被单独看见**（见下面的逐项清单），
+		// 以及**真机验证前先确认 vault 里是哪一版构建**。
 		const reprocessCount = livePreview.deliveredAfterChange;
 		log(
-			`  ${reprocessCount >= 1 ? "✓" : "?"} 改完设置后重看当前打开的笔记（本次 ${reprocessCount} 次候选；` +
-				`⚠️ 0 次时原因未查明，见本行上方的说明）`
+			`  ${reprocessCount >= 1 ? "✓" : "✗"} 改完设置后重看当前打开的笔记（本次 ${reprocessCount} 次候选）`
 		);
 
-		const ok =
-			loaded &&
-			commands.length >= 5 &&
-			patch.hasSetter &&
-			patch.untouched &&
-			patch.idempotent &&
-			apis.getResourcePath &&
-			apis.secretStorage &&
-			settings.ok &&
-			removal.vaultDelete &&
-			removal.trashFile &&
-			!removal.hasDeleteModeSetting &&
-			!removal.deleteModeControl &&
-			accessKeyIsPlainText &&
-			pairOk &&
-			liveOk &&
-			// 注意：上面那条「改完设置后重看」不参与通过判定（真机上没复现，原因未查明）
-			!credsProbe.hasSecretValue &&
-			relevantErrors.length === 0;
+		// ⭐⭐ 判据**逐项列出再汇总**。
+		//
+		// 为什么非这样不可：在这之前，总判定是十几个条件的 `&&` 串，而其中
+		// **「命令数 ≥ 5」从来不打印**（那一行的 ✓ 是硬编码的）。于是出现过一个
+		// 完全无法定位的局面：**总判定 ✗，而打印出来的每一行都是 ✓**。
+		// 追下去发现是测试 vault 里还挂着旧构建（只有 4 条命令）。
+		// ⇒ 判据必须**各自可见**；一个只在末尾汇总成一个布尔值的条件，
+		// 失败时等于没有信号。与本项目那条复用判据同源：
+		// **能用"效果"判的别用阈值判** —— 但至少要让每个阈值都露出来。
+		const verdict = [
+			["插件已加载（_loaded）", loaded],
+			[`注册命令数 ${commands.length} ≥ ${EXPECTED_COMMANDS}`, commandsOk],
+			["HTMLImageElement.prototype.src 有 setter", patch.hasSetter],
+			["站外地址原样通过（没动别人的图）", patch.untouched],
+			["本地地址原样通过（幂等）", patch.idempotent],
+			["Vault.getResourcePath 存在", apis.getResourcePath],
+			["app.secretStorage 存在", apis.secretStorage],
+			["plugin.sampleObjectKey 存在", apis.sampleObjectKey],
+			["设置页可渲染（getSettingDefinitions 返回数组）", settings.ok],
+			["Vault.delete 存在", removal.vaultDelete],
+			["FileManager.trashFile 存在", removal.trashFile],
+			["「缓存删除方式」备选确已移除", !removal.hasDeleteModeSetting && !removal.deleteModeControl],
+			["访问密钥 ID 是普通文本框", accessKeyIsPlainText],
+			["秘密访问密钥紧跟其后且为自定义渲染", pairOk],
+			["编辑态站外图被交给编排层", liveOk],
+			["改完设置后重看当前打开的笔记", reprocessCount >= 1],
+			["秘密的值不在插件设置里", !credsProbe.hasSecretValue],
+			["控制台无本插件相关报错", relevantErrors.length === 0],
+		];
+		const failed = verdict.filter(([, itemOk]) => !itemOk);
 
 		log();
-		log(ok ? "✓ 真机烟雾验证通过" : "✗ 真机烟雾验证未通过");
+		log("── 判据逐项 ──");
+		for (const [name, itemOk] of verdict) log(`  ${itemOk ? "✓" : "✗"} ${name}`);
+
+		const ok = failed.length === 0;
+		log();
+		log(
+			ok
+				? "✓ 真机烟雾验证通过"
+				: `✗ 真机烟雾验证未通过 —— 未通过 ${failed.length} 项：${failed.map(([name]) => name).join(" ／ ")}`
+		);
 		process.exitCode = ok ? 0 : 1;
 	} finally {
 		try {
