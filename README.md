@@ -74,6 +74,10 @@ In **Settings → Attachment Cloud Cache**:
 - **"Do not keep a local copy" means no images offline.** The default, "move into the cache folder",
   is the one that works offline.
 - **The cache folder can be deleted at any time** — images are rebuilt on demand.
+- **Moving to another device? Copy the plugin folder, but delete `.cache-index.json` first.** That file
+  records where *this* device keeps its cached copies; `data.json` is what carries your settings. ⚠️ The
+  secret access key is **not** in the folder — it lives in Obsidian's own keychain — so you re-enter
+  that one field on the new device.
 
 ## Privacy & security
 
