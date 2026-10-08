@@ -101,12 +101,16 @@ Open **Settings → Attachment Cloud Cache**, then:
 - **Real host**: the real build is loaded in real Obsidian — the plugin loads, all four commands
   register, the settings tab renders, and the live-preview image swap works without touching
   third-party images.
-- **Real provider**: so far only the connection test (one signed `HEAD`) has passed against a real
-  MinIO instance — that is to say the endpoint, the credentials, the signature and the bucket name
-  are genuinely proven. **Upload and download are not.**
+- **Real provider**: proven in both directions against a real MinIO instance. Pasting an image uploads
+  it — the object key is recomputed independently from the bytes (`node:crypto`) and matches the one
+  written into the note; the link opens **anonymously** (no credentials, i.e. what other people see);
+  the bytes read back are identical to the local copy; and the rendered `<img>` points at that local
+  copy rather than the remote URL. The download path is covered by earlier runs on the same instance.
+  Reproduce with `npm run verify:real-storage` (it uploads one object to your bucket).
 - **Not verified**: iOS has never been run (it cannot be, on this machine), and Android has not been
   run on a real device. The code avoids APIs known to be missing there and falls back when optional
-  APIs are absent — but that is reasoning, not evidence.
+  APIs are absent — but that is reasoning, not evidence. Object keys containing non-ASCII characters
+  have also not been exercised against a real provider; the encoding itself is covered by tests.
 
 ## License
 

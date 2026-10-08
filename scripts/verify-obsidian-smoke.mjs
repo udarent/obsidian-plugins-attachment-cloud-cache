@@ -38,10 +38,9 @@
  * 环境变量：OBSIDIAN_EXE / OBSIDIAN_VAULT / OBSIDIAN_DEBUG_PORT / OBSIDIAN_DEBUG_WAIT
  */
 
-import { execFile, spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+// 宿主启动 / 调试端口 / 挑主窗 / 等就绪 / vault 回读 —— 与真实存储回环脚本共用同一份。
+// 那些坑（GPU 崩溃、连错窗口、静默退回别的 vault）只写一遍，避免两边逐渐分叉。
+import { evaluate, launchAndAttach } from "./lib/obsidian-host.mjs";
 
 const PORT = Number(
 	process.argv.includes("--port")
@@ -68,28 +67,6 @@ const OBSIDIAN = process.env.OBSIDIAN_EXE ?? "C:/Program Files/Obsidian/Obsidian
 const VAULT = process.env.OBSIDIAN_VAULT ?? "TestVault";
 
 /**
- * 本机 Obsidian 认得哪些 vault —— **只用于报错时提示**。
- *
- * 理由：默认名是中性的 `TestVault`，而大多数人的 vault 另叫别的名字。名字不对的症状是
- * "停在 vault 选择界面"，看起来像 Obsidian 坏了；把可用名字列出来，改一行环境变量就好。
- *
- * 读不到就返回空数组 —— 这只是提示，不该因为它让验证失败。
- */
-function knownVaultNames() {
-	if (!process.env.APPDATA) return [];
-	const configPath = join(process.env.APPDATA, "obsidian", "obsidian.json");
-	if (!existsSync(configPath)) return [];
-	try {
-		const config = JSON.parse(readFileSync(configPath, "utf8"));
-		const names = Object.values(config.vaults ?? {})
-			.map((entry) => (typeof entry?.path === "string" ? entry.path.split(/[\\/]/).filter(Boolean).pop() : null))
-			.filter(Boolean);
-		return [...new Set(names)].sort();
-	} catch {
-		return [];
-	}
-}
-/**
  * 等调试端口的秒数。
  *
  * 可覆盖是为了**能验证"端口没起来"那条失败路径**（否则测一次要干等 60 秒），
@@ -100,263 +77,25 @@ const PLUGIN_ID = "attachment-cloud-cache";
 
 const log = (line = "") => console.log(line);
 
-/**
- * 数一下系统里有多少个 Obsidian 进程（数不出来时返回 `null`）。
- *
- * ⚠️ 用**不带过滤**的 `tasklist` 再自己数：带 `/FI "IMAGENAME eq X.exe"` 在中文
- * Windows 上会返回一句本地化的提示（"没有运行的任务匹配指定标准"），`/NH` 也匹配不到，
- * 于是**计数恒为 0** —— 那会让人得出"没有别的实例在跑"的相反结论。
- */
-function countObsidianProcesses() {
-	return new Promise((resolve) => {
-		execFile("tasklist", [], { windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
-			if (error || typeof stdout !== "string") {
-				resolve(null); // 数不出来不该让验证失败，只是少一条诊断线索
-				return;
-			}
-			resolve((stdout.match(/Obsidian\.exe/gi) ?? []).length);
-		});
-	});
-}
-
-/**
- * 极简 CDP 客户端（Node 18+ 自带 WebSocket，零依赖）。
- *
- * ⚠️ **必须挑对窗口**：用 `obsidian://open?vault=…` 起窗时，CDP 会同时列出多个
- * `type: "page"` 的目标（vault 选择窗 / 主窗）。**`list.find(...)` 拿到的"第一个"
- * 往往是那个空窗口** —— 于是 `app` 这类全局照样能用（对，所以前面的探针都过了），
- * 但**任何 DOM 级检查都会失败**：设置弹窗开在主窗里，而你去空窗的 document 里找它。
- *
- * 实测症状：`modalCount: 0, itemCount: 0, inputCount: 1` —— 报"找不到元素"，
- * 看起来像实现坏了，其实是**连错了窗口**。
- *
- * 所以这里逐个试：谁的主界面在（有 `.workspace`），就连谁。
- */
-async function connect(port) {
-	const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-	const candidates = list.filter((target) => target.type === "page");
-	if (candidates.length === 0) throw new Error("没找到可调试的页面目标");
-
-	const pickMainWindow = async (target) => {
-		const socket = new WebSocket(target.webSocketDebuggerUrl);
-		try {
-			await new Promise((resolve, reject) => {
-				socket.addEventListener("open", resolve, { once: true });
-				socket.addEventListener("error", reject, { once: true });
-			});
-			const answer = await new Promise((resolve) => {
-				socket.addEventListener(
-					"message",
-					(event) => resolve(JSON.parse(event.data)),
-					{ once: true }
-				);
-				socket.send(
-					JSON.stringify({
-						id: 1,
-						method: "Runtime.evaluate",
-						params: {
-							expression: 'Boolean(document.querySelector(".workspace"))',
-							returnByValue: true,
-						},
-					})
-				);
-			});
-			const isMain = answer?.result?.result?.value === true;
-			if (!isMain) socket.close();
-			return isMain ? socket : null;
-		} catch {
-			try {
-				socket.close();
-			} catch {
-				// 尽力而为
-			}
-			return null;
-		}
-	};
-
-	let ws = null;
-	for (const target of candidates) {
-		ws = await pickMainWindow(target);
-		if (ws) break;
-	}
-	// 一个都不像主窗（老版本没有 `.workspace`？）就退回原行为，别把验证卡死
-	if (!ws) {
-		const fallback = new WebSocket(candidates[0].webSocketDebuggerUrl);
-		await new Promise((resolve, reject) => {
-			fallback.addEventListener("open", resolve, { once: true });
-			fallback.addEventListener("error", reject, { once: true });
-		});
-		ws = fallback;
-	}
-
-	let id = 0;
-	const pending = new Map();
-	const consoleErrors = [];
-	ws.addEventListener("message", (event) => {
-		const msg = JSON.parse(event.data);
-		if (msg.id && pending.has(msg.id)) {
-			pending.get(msg.id)(msg);
-			pending.delete(msg.id);
-			return;
-		}
-		// 收集控制台报错 —— 原型补丁若在真实 WebView 里出问题，这里会看到
-		if (msg.method === "Runtime.exceptionThrown") {
-			consoleErrors.push(msg.params?.exceptionDetails?.exception?.description ?? "(无描述)");
-		}
-		if (msg.method === "Runtime.consoleAPICalled" && msg.params?.type === "error") {
-			consoleErrors.push((msg.params.args ?? []).map((a) => a.description ?? a.value).join(" "));
-		}
-	});
-
-	const send = (method, params = {}) =>
-		new Promise((resolve) => {
-			const messageId = ++id;
-			pending.set(messageId, resolve);
-			ws.send(JSON.stringify({ id: messageId, method, params }));
-		});
-
-	await send("Runtime.enable");
-	return { send, consoleErrors, close: () => ws.close() };
-}
-
-/** 在页面里求值，返回结构化结果（`returnByValue` 让对象能直接拿回来）。 */
-async function evaluate(client, expression) {
-	const response = await client.send("Runtime.evaluate", {
-		expression,
-		awaitPromise: true,
-		returnByValue: true,
-	});
-	if (response.result?.exceptionDetails) {
-		throw new Error(response.result.exceptionDetails.exception?.description ?? "页面求值失败");
-	}
-	return response.result?.result?.value;
-}
+// 宿主启动 / 调试端口 / 挑主窗 / 等就绪 / **vault 回读** / 页面求值 —— 全部搬到了
+// `lib/obsidian-host.mjs`（与 `verify-real-storage.mjs` 共用）。那里集中了四个实测过的坑：
+// 启动参数缺一不可、必须挑对窗口、连接要重试、以及"请求不存在的 vault 会静默退回别的 vault"。
 
 async function main() {
-	if (!existsSync(OBSIDIAN)) throw new Error(`找不到 Obsidian：${OBSIDIAN}`);
-
 	log("═".repeat(72));
 	log("真机烟雾验证：插件能否在真实 Obsidian 里加载并接线");
 	log("═".repeat(72));
 	log(`  打开的 vault：${VAULT}（可用 OBSIDIAN_VAULT 覆盖）`);
 
-	// ⚠️ 参数缺一不可：只给 remote-debugging-port 会因 GPU 进程崩溃而退出。
-	// 末尾那个 URI 用来**显式打开目标 vault** —— 不指定就可能停在 vault 选择界面
-	//（原因见文件头第四个环境要点）。
-	const child = spawn(
-		OBSIDIAN,
-		[
-			`--remote-debugging-port=${PORT}`,
-			"--disable-gpu",
-			"--no-sandbox",
-			`obsidian://open?vault=${encodeURIComponent(VAULT)}`,
-		],
-		{
-			stdio: "ignore",
-			detached: false,
-		}
-	);
-	child.on("exit", (code) => log(`  （Obsidian 退出，code=${code}）`));
+	const { client, child } = await launchAndAttach({
+		exe: OBSIDIAN,
+		port: PORT,
+		vault: VAULT,
+		waitSeconds: WAIT_SECONDS,
+		log,
+	});
 
-	let client = null;
 	try {
-		// 等 CDP 起来（Node 的 fetch 不走 HTTP_PROXY，正好能直连 localhost）
-		let portReady = false;
-		for (let i = 0; i < WAIT_SECONDS; i += 1) {
-			try {
-				const version = await (await fetch(`http://127.0.0.1:${PORT}/json/version`)).json();
-				log(`  ✓ 调试端口已就绪：${version.Browser}`);
-				portReady = true;
-				break;
-			} catch {
-				await delay(1000);
-			}
-		}
-
-		// ⭐ 端口没起来时，先**分清是哪一种失败**再说别的。
-		// 这两种原因的处置完全不同，而症状一模一样（都是"等满 60 秒"）：
-		//   ① 已经有 Obsidian 在跑 → 单实例锁把参数吃掉了 → 去关掉它；
-		//   ② 没有别的实例 → 是我们的实例自己的问题（GPU 崩溃等）。
-		if (!portReady) {
-			const others = await countObsidianProcesses();
-			if (others !== null && others > 0) {
-				throw new Error(
-					`调试端口 ${PORT} 在 ${WAIT_SECONDS} 秒内没有就绪，而系统里有 ${others} 个 Obsidian 进程在跑。\n` +
-						"  Obsidian 是单实例的：新实例会把命令行参数（含调试端口）交给已在运行的那个，然后自己退出\n" +
-						"  （退出码 0 —— 上面若有一行「Obsidian 退出，code=0」，就是它）。而那个实例不会因为\n" +
-						"  别人要求就开调试端口，所以这个组合下**永远**等不到端口。\n" +
-						"  处理：关掉所有 Obsidian 窗口后重跑（若那个实例是用户正在用的，先问一句再结束它）。"
-				);
-			}
-			throw new Error(
-				`调试端口 ${PORT} 在 ${WAIT_SECONDS} 秒内没有就绪，且没有别的 Obsidian 实例在跑。\n` +
-					`  这更像是我们启动的实例自己没能起来：确认 ${OBSIDIAN} 能正常打开，\n` +
-					"  并检查启动参数里是否有 --disable-gpu --no-sandbox（GPU 进程崩溃会让它立刻退出）。"
-			);
-		}
-
-		client = await connect(PORT);
-
-		// ⚠️ 必须先等宿主自己就绪：调试端口响应得比渲染进程初始化早得多，
-		// 这时求值会得到 `ReferenceError: app is not defined` ——
-		// 看起来像"插件没加载"，其实是问得太早。
-		const hostReady = await evaluate(
-			client,
-			`(async () => {
-				for (let i = 0; i < 120; i += 1) {
-					if (typeof app !== "undefined" && app?.plugins?.plugins) return true;
-					await new Promise((r) => setTimeout(r, 500));
-				}
-				return false;
-			})()`
-		);
-		if (!hostReady) {
-			// ⚠️ 这个现象有两个**完全不同**的原因，而它们的处置也不同 —— 所以先把当前的
-			// 实际状态取回来再报，别只丢一句"没就绪"（那会让人去查 Obsidian 是不是坏了）：
-			//   ① 没有打开任何 vault（停在 vault 选择界面）⇒ `app` 在、`app.plugins` 不在；
-			//   ② vault 打开了但插件加载卡住/报错 ⇒ 那就是真的插件问题。
-			const state = await evaluate(
-				client,
-				`({
-					hasAppGlobals: typeof app !== "undefined",
-					hasPlugins: Boolean(app?.plugins?.plugins),
-					vault: app?.vault?.getName?.() ?? null,
-				})`
-			).catch(() => null);
-			const known = knownVaultNames();
-			const hint =
-				state && !state.vault
-					? `看起来**没有打开任何 vault**（停在 vault 选择界面）—— 本脚本请求打开的是「${VAULT}」，` +
-						`请确认这个名字与 Obsidian 里显示的完全一致（大小写敏感）。` +
-						(known.length > 0
-							? `本机 Obsidian 认得这些 vault：${known.map((name) => `「${name}」`).join("、")} —— ` +
-								`用 OBSIDIAN_VAULT=<名字> 指定其中之一。`
-							: `也可以用 OBSIDIAN_VAULT 指定别的名字。`)
-					: "vault 已经打开了，所以更像是插件本身没加载起来 —— 看上面的控制台输出。";
-			throw new Error(
-				`宿主在 60 秒内没有就绪（app.plugins 一直不可用）。\n  实际状态：${JSON.stringify(state)}\n  ${hint}`
-			);
-		}
-		log("  ✓ 宿主已就绪（app.plugins 可用）");
-
-		// ⭐ 实际打开的是不是我们**请求**的那个 vault？
-		//
-		// ⚠️ 实测踩到：请求一个**不存在**的 vault 名时，Obsidian 不报错，而是**退回上次打开的
-		// vault**。于是整轮探针跑在另一个 vault 上、全部通过，而人以为"验证过了"。
-		// 这比失败危险得多 —— 失败会让人去查，静默地验证错对象只会让人相信。
-		const actualVault = await evaluate(client, `app?.vault?.getName?.() ?? null`);
-		if (actualVault !== VAULT) {
-			const available = knownVaultNames();
-			const availableHint =
-				available.length > 0 ? `本机 Obsidian 认得这些 vault：${available.join("、")}。` : "";
-			throw new Error(
-				`请求打开的 vault 是「${VAULT}」，实际打开的是「${actualVault}」。\n` +
-					`  ⚠️ Obsidian 在名字对不上时**不会报错**，它会退回上次打开的 vault —— 于是这一轮\n` +
-					`  探针验证的是另一个 vault。${availableHint}用 OBSIDIAN_VAULT=<正确的名字> 重跑。`
-			);
-		}
-		log(`  ✓ 打开的确实是指定的 vault：「${actualVault}」`);
-
 		// 等插件加载完（Obsidian 会异步加载社区插件）
 		const loaded = await evaluate(
 			client,

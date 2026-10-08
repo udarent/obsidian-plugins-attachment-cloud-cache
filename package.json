@@ -20,7 +20,8 @@
 		"check:injected": "node scripts/check-injected-snippets.mjs",
 		"check:dev-docs": "node scripts/check-no-dev-doc-refs.mjs",
 		"check:readme-pair": "node scripts/check-readme-pair.mjs",
-		"check:i18n-keys": "node scripts/check-i18n-keys.mjs"
+		"check:i18n-keys": "node scripts/check-i18n-keys.mjs",
+		"verify:real-storage": "node scripts/verify-real-storage.mjs"
 	},
 	"keywords": [
 		"s3",
