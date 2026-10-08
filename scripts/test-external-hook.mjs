@@ -12,7 +12,9 @@ await withLoadedTs(["src/render/external-hook", "src/render/site-decisions"], as
 	console.log(
 		"External-hook tests passed (one question per site and one fetch per URL even when the same image renders " +
 			"repeatedly, the decision is stored before it is executed so the next render does not ask again, " +
-			"inflight is released on failure so a retry still works, a throwing image never stops the next one, " +
-			"and no note path means no caching even when the site was allowed)."
+			"clearing the site memory really does make the next render ask again — the only thing that suppresses " +
+			"a repeat question is the memory itself, which the user can clear — inflight is released on failure so " +
+			"a retry still works, a throwing image never stops the next one, and no note path means no caching even " +
+			"when the site was allowed)."
 	);
 });

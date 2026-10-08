@@ -364,8 +364,19 @@ async function main() {
 					const imgs = [...view.containerEl.querySelectorAll(".cm-editor img")].map((i) =>
 						i.getAttribute("src")
 					);
+
+					// ⭐ 第二条：清除站点记忆必须让**当前打开着的**笔记重新被看一遍。
+					// 缺了它，用户点完「清除站点记忆」什么都看不到（已经渲染出来的图
+					// 不会自己重跑判定），只会以为按钮坏了 —— 实测踩到过。
+					// 这里刻意**不回答**任何询问（接缝永不答复）⇒ 不写站点记忆、不下载，
+					// 于是这条检查在别人的 vault 上跑也不留任何痕迹。
+					const deliveredBeforeClear = delivered.length;
+					plugin.clearSiteDecisions();
+					await new Promise((r) => setTimeout(r, 1500));
+					const deliveredAfterClear = delivered.length - deliveredBeforeClear;
+
 					leaf.detach();
-					return { delivered, askedHosts, imgs, tempPath: TEMP };
+					return { delivered, askedHosts, imgs, tempPath: TEMP, deliveredAfterClear };
 				} finally {
 					for (const step of undo.reverse()) {
 						try {
@@ -387,6 +398,11 @@ async function main() {
 			`  ${livePreview.askedHosts.length > 0 ? "✓" : "-"} 询问到的站点：${JSON.stringify(livePreview.askedHosts)}` +
 				(livePreview.askedHosts.length === 0 ? "（存储未就绪时不问，属正常）" : "")
 		);
+		// ⭐ 清除站点记忆之后必须**重看当前打开的笔记**，否则用户点完按钮毫无反馈
+		const reAskOk = livePreview.deliveredAfterClear >= 1;
+		log(
+			`  ${reAskOk ? "✓" : "✗"} 清除站点记忆后重看当前打开的笔记（又送来 ${livePreview.deliveredAfterClear} 次候选）`
+		);
 
 		const ok =
 			loaded &&
@@ -404,6 +420,7 @@ async function main() {
 			accessKeyIsPlainText &&
 			pairOk &&
 			liveOk &&
+			reAskOk &&
 			!credsProbe.hasSecretValue &&
 			relevantErrors.length === 0;
 

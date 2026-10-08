@@ -276,4 +276,48 @@ export async function runExternalHookSuite(mod) {
 		const r = h.hook.process(root, ctx(NOTE));
 		assert.equal(r.found, 0, `${label}：应安全返回空结果`);
 	}
+
+	// ============================================================
+	// 13. ⭐⭐ 清空站点记忆之后必须**重新询问**
+	//
+	// 「清除站点记忆」这个按钮的语义就是"忘掉我的回答"。可编排层自己还有一张
+	// 「已经问过」的表 —— 它若在答复之后**仍然留着**那个站点，清空记忆就**不生效**：
+	// 用户清完记忆发现站外图再也不问了，唯一的办法是重启 Obsidian。
+	// （**实测踩到**：用户报"清除站点记忆以后，也没有再次询问图片是否上传"。）
+	//
+	// 抑制重复询问的依据只有两处，且都不是"永久记住"：
+	//   · 答复之前 → `asking` 里那个还没落地的 Promise（同站只弹一个）；
+	//   · 答复之后 → **记忆本身**（deny → ignore、allow → cache），
+	//     而记忆是用户可以清空的。
+	// 多存一份"问过就永久记住"的表，就多了一个清不掉的真相来源。
+	// ============================================================
+	{
+		const h = makeHarness();
+		h.hook.process(container([A]), ctx(NOTE));
+		assert.equal(h.asked.length, 1, "第一次应当询问");
+		h.resolvers[0].resolve("never");
+		await flush();
+		assert.equal(h.decisions.get("a.example.net"), "deny", "答复之后记忆里应当有 deny");
+
+		// 此时再渲染：记忆说 deny ⇒ 既不问也不处理
+		const remembered = h.hook.process(container([A]), ctx(NOTE));
+		assert.equal(remembered.asked, 0, "记过 deny 之后不该再问");
+
+		// 用户点了设置页里的「清除」（清的就是这份记忆）
+		h.decisions.clear();
+
+		const afterClear = h.hook.process(container([A]), ctx(NOTE));
+		assert.equal(afterClear.asked, 1, "★ 清空记忆之后必须重新询问（否则用户只能靠重启 Obsidian 才能再被问一次）");
+		assert.equal(h.asked.length, 2, "★ 应当真的弹了第二个询问");
+	}
+
+	// ⭐ 反向：**正在问**的那段窗口里仍然只弹一个
+	//（上面那条修法把"永久记住"去掉了，这条确认没有顺手把"不重复打扰"也去掉）
+	{
+		const h = makeHarness();
+		h.hook.process(container([A]), ctx(NOTE));
+		const twice = h.hook.process(container([A, A]), ctx(NOTE));
+		assert.equal(twice.asked, 0, "★ 还在等待答复时，同站再次渲染不得重复弹窗");
+		assert.equal(h.asked.length, 1, "只该有一个询问在飞");
+	}
 }

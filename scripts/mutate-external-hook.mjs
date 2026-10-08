@@ -5,8 +5,10 @@ import { runExternalHookSuite } from "./lib/external-hook-suite.mjs";
  * 变异验证：站外缓存编排（`src/render/external-hook.ts`）。
  *
  * 这一层跑在**每次重新渲染**上（滚动、切视图、编辑都会触发），
- * 所以它坏掉的两类症状都不报错：要么"同一个站点被反复问"（烦到不能用），
- * 要么"缓存了但笔记没改"（彻底的半成品，而站点记忆已经记成 allow，不会再问）。
+ * 所以它坏掉的三类症状都不报错：要么"同一个站点被反复问"（烦到不能用），
+ * 要么"缓存了但笔记没改"（彻底的半成品，而站点记忆已经记成 allow，不会再问），
+ * 要么反过来 —— **"问过就永久记住"**，于是用户在设置页点「清除站点记忆」
+ * 之后再也不问了，唯一的办法是重启 Obsidian（用户实测报过这一条）。
  */
 await runMutations({
 	source: "src/render/external-hook.ts",
@@ -17,9 +19,18 @@ await runMutations({
 			// 后果：同一篇文章里同站的每张图都弹一个通知；切一下视图就再来一轮。
 			// 渲染会反复跑，所以这是"一开笔记就被通知刷屏"。
 			name: "★ 不再按站点去重（同站每张图、每次重新渲染都弹一次）",
-			from: "\t\t\t\t\tif (asked.has(decision.host) || asking.has(decision.host)) {\n\t\t\t\t\t\tresult.skipped += 1;\n\t\t\t\t\t\tcontinue;\n\t\t\t\t\t}\n",
+			from: "\t\t\t\t\tif (asking.has(decision.host)) {\n\t\t\t\t\t\tresult.skipped += 1;\n\t\t\t\t\t\tcontinue;\n\t\t\t\t\t}\n",
 			to: "\t\t\t\t\t// 变异：不去重\n",
 			expect: "只该问一次",
+		},
+		{
+			// 后果：`asking` 变成"问过就永久记住" ⇒ 用户在设置页点「清除站点记忆」
+			// **不会重新询问**，唯一的办法是重启 Obsidian。
+			// ⚠️ 这正是用户实测报上来的那条（"清除站点记忆以后，也没有再次询问"）。
+			name: "★ 答复后不摘除「正在问」（等于问过就永久记住，清除记忆不生效）",
+			from: "\t\t\t.finally(() => asking.delete(host));\n",
+			to: "\t\t\t;\n",
+			expect: "清空记忆之后必须重新询问",
 		},
 		{
 			// 后果：用户答了却什么都没记下 ⇒ 下次渲染又问一遍，答案永远不生效。

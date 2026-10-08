@@ -887,6 +887,57 @@ export async function runLoadAcceptance(options = {}) {
 		}
 
 		// ============================================================
+		// 8b2. ⭐⭐「清除站点记忆」必须让**当前打开着的**笔记重新被问一次
+		//
+		// 这条是**实测踩到**的用户缺陷：清完记忆，站外图再也不问了，唯一办法是重启
+		// Obsidian。两层原因，缺一不可：
+		//   ① 编排层曾经还有一张"问过就永久记住"的表 ⇒ 记忆清了也压着不问；
+		//   ② 记忆虽然空了，但**已经渲染出来的图不会自己重跑判定** ⇒ 用户点完按钮
+		//      什么都看不到，只会以为按钮坏了。
+		// 所以这里从设置页那个按钮的入口（`clearSiteDecisions`）一路验到底。
+		// ============================================================
+		{
+			plugin.settings.externalImageCache = true;
+			const externalUrl = EXTERNAL_IMAGE_URL;
+			// 造一个"打开着的笔记视图"：容器里挂着一张站外图。
+			// ⚠️ `contains` 不能少 —— 归属解析判的是"这个元素在不在这个视图的容器里"
+			//（真实的 `containerEl` 是 DOM 节点，天然有它）。少了它，那条图会被判成
+			// "不在任何笔记里"而跳过 —— 这条断言第一次就是因此超时的。
+			const displayed = makeFakeImage(externalUrl);
+			const fakeLeaf = {
+				view: {
+					file: { path: "notes/站外.md" },
+					containerEl: {
+						querySelectorAll: (selector) => (selector === "img" ? [displayed] : []),
+						contains: (node) => node === displayed,
+					},
+				},
+			};
+			app.workspace.leaves.push(fakeLeaf);
+			try {
+				// 等价于"用户上次选过「不再询问」"
+				plugin.siteDecisionsSnapshot().set(EXTERNAL_HOST, "deny");
+				askCalls.length = 0;
+				askDecision = "never"; // 这次别真的去下载
+
+				const cleared = plugin.clearSiteDecisions();
+				assert.equal(cleared, 1, `清除记忆应返回清掉的条数（实际 ${cleared}）`);
+
+				// 等的只是 live 队列那一个微任务 + 询问，不用长超时
+				await waitFor(
+					() => askCalls.length > 0,
+					"清除站点记忆之后重新询问当前显示的站外图",
+					3000,
+					diagnose
+				);
+				assert.equal(askCalls[0].host, EXTERNAL_HOST, `询问要带上那个站点（实际 ${JSON.stringify(askCalls[0])}）`);
+			} finally {
+				app.workspace.leaves.pop();
+				plugin.settings.externalImageCache = false;
+			}
+		}
+
+		// ============================================================
 		// 8c. 缓存上限：超过后自动淘汰「最久没用过」的副本
 		//
 		// 这一轮验的是**入口有没有把这条链路接上**：设了上限之后，

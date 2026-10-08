@@ -7,14 +7,25 @@
  * 编辑后重渲染、打开同一篇笔记……）。于是"问用户一次"这件事如果放在这里不加记忆，
  * 用户会被同一个站点反复打扰，而且每次都是同一个问题。
  *
- * 所以这里挂**三张表**，去重范围 = 一个插件实例（与 `createLocalCopyEnsurer`
+ * 所以这里挂**两张表**，去重范围 = 一个插件实例（与 `createLocalCopyEnsurer`
  * 的 `inflight` 同一条纪律）：
  *
  * | 表 | 防的是什么 |
  * |---|---|
- * | `asking` | 同一站点**正在问**时再次渲染 → 复用同一个 Promise，不再弹 |
- * | `asked` | 问过但还没答复期间再次渲染 → 直接跳过（**同站多张图只弹一个**） |
+ * | `asking` | 同一站点**正在问**（还没答复）时再次渲染 → 直接跳过（**同站多张图只弹一个**） |
  * | `inflight` | 同一 URL 正在下载/上传时再次渲染 → 不重复发起（失败也摘除） |
+ *
+ * ## ⚠️ 这里曾经还有第三张表 `asked`（"问过就记住"）—— 它多余而且有害
+ *
+ * - **多余**：答复之后抑制重复询问的依据是**记忆本身**
+ *   （deny → `ignore`、allow → `cache`），而"还没答复"那段窗口由 `asking` 挡着。
+ *   那张表能覆盖的两段，都已经被覆盖了。
+ * - **有害**：它是**永久**的。于是用户在设置页点「清除站点记忆」之后**不会重新询问**
+ *   —— 被清掉的记忆不再是唯一的真相来源，用户唯一的办法是重启 Obsidian。
+ *   实测踩到：用户报"清除站点记忆以后，也没有再次询问图片是否上传"。
+ *
+ * ⇒ 可复用判据：**能被用户清掉的状态，必须是唯一的**。
+ * 多存一份清不掉的副本，就等于让那个"清除"按钮只在重启后才生效。
  *
  * ## 为什么没有笔记路径就什么都不做
  *
@@ -89,10 +100,14 @@ export interface ExternalHook {
 }
 
 export function createExternalHook(deps: ExternalHookDeps): ExternalHook {
-	/** 正在问的站点 → Promise（再次渲染时复用它，而不是再弹一个）。 */
+	/**
+	 * 正在问的站点 → 那个还没落地的 Promise。
+	 *
+	 * ⚠️ 它只覆盖"**还没答复**"这段窗口，答复一落地就摘除。
+	 * 答复之后的抑制全靠记忆（用户可以清空它）—— 见模块头注释里
+	 * 关于那张被删掉的 `asked` 表的说明。
+	 */
 	const asking = new Map<string, Promise<ExternalAskChoice>>();
-	/** 已经问过（还没答复）的站点 —— 同站多张图只弹一个。 */
-	const asked = new Set<string>();
 	/** 正在下载/上传的 URL。 */
 	const inflight = new Set<string>();
 
@@ -116,7 +131,6 @@ export function createExternalHook(deps: ExternalHookDeps): ExternalHook {
 	};
 
 	const startAsking = (host: string, url: string, notePath: string): void => {
-		asked.add(host);
 		const pending = deps
 			.ask({ host, url })
 			.then((choice): ExternalAskChoice => choice)
@@ -126,6 +140,8 @@ export function createExternalHook(deps: ExternalHookDeps): ExternalHook {
 				return "never";
 			});
 
+		// ⚠️ 同步入表（在返回之前）：`process` 同一次调用里的**后续图片**就靠它跳过。
+		// 这一步不能挪到 then 里 —— 那会在同一次渲染里对同一站点弹出多个询问。
 		asking.set(host, pending);
 		void pending
 			.then((choice) => {
@@ -135,6 +151,7 @@ export function createExternalHook(deps: ExternalHookDeps): ExternalHook {
 				if (choice === "cache") enqueue(url, notePath);
 			})
 			.catch(report)
+			// ⚠️ 必须摘除：留着它就等于"问过就永久记住"，清空记忆也不会再问（见模块头注释）
 			.finally(() => asking.delete(host));
 	};
 
@@ -183,8 +200,8 @@ export function createExternalHook(deps: ExternalHookDeps): ExternalHook {
 						continue;
 					}
 
-					// ask：同站只问一次（正在问的也复用，不再弹第二个）
-					if (asked.has(decision.host) || asking.has(decision.host)) {
+					// ask：同站只问一次（**正在问**的才算，答复之后由记忆决定不再问）
+					if (asking.has(decision.host)) {
 						result.skipped += 1;
 						continue;
 					}

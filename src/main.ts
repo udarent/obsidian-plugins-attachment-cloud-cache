@@ -49,7 +49,7 @@ import { connectionReadiness } from "./s3/credentials";
 import { createLocalCopyEnsurer } from "./core/download";
 import type { LocalCopyOutcome } from "./core/download";
 import { installImageSrcPatch, processImages } from "./render/render-hook";
-import type { RenderHookDeps } from "./render/render-hook";
+import type { ImageElementLike, RenderHookDeps } from "./render/render-hook";
 import { createSiteStore } from "./host/site-store";
 import { SiteDecisions } from "./render/site-decisions";
 import { createExternalHook } from "./render/external-hook";
@@ -521,7 +521,35 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 
 	/** 清掉全部已记住的站点；返回清掉的条数（设置页据此汇报）。 */
 	clearSiteDecisions(): number {
-		return this.siteDecisionsSnapshot().clear();
+		const cleared = this.siteDecisionsSnapshot().clear();
+		// ⚠️ 清完还要让**当前打开着的笔记重新走一遍判定**：记忆虽然空了，
+		// 但已经渲染出来的那些图不会自己重跑 —— 用户点完「清除」什么都看不到，
+		// 只会以为按钮坏了（实测踩到过：清完记忆，站外图再也不问了）。
+		this.reprocessOpenNotes();
+		return cleared;
+	}
+
+	/**
+	 * 让当前打开着的笔记重新走一遍站外图判定。
+	 *
+	 * 复用 `externalLive` 那条路（它自带攒批、以及"等元素进 DOM 之后再解析归属"），
+	 * 而不是另写一套扫描：于是"哪张图属于哪篇笔记"、去重表、错误隔离都只有一份实现。
+	 *
+	 * 属于本存储的图会被判定层直接忽略（`app://` 不是 http(s)），所以多走一遍是安全的 ——
+	 * 真正会被处理的只有站外图，而它们本来就该在记忆变化之后重新判定一次。
+	 */
+	private reprocessOpenNotes(): void {
+		this.app.workspace.iterateAllLeaves((leaf) => {
+			const view = leaf.view as unknown as {
+				containerEl?: { querySelectorAll?: (selector: string) => ArrayLike<ImageElementLike> } | null;
+			};
+			const images = view?.containerEl?.querySelectorAll?.("img");
+			if (!images) return;
+			for (let i = 0; i < images.length; i += 1) {
+				const image = images[i];
+				if (image) this.externalLive?.see(image);
+			}
+		});
 	}
 
 	/** 把记忆落盘（串行化，避免两次写入互相插队）。 */
