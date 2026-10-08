@@ -22,7 +22,11 @@ console.log(
 		"while cancelling downloads nothing; with the feature on and the default set to \"cache straight away\" such " +
 		"an image is downloaded, uploaded and its link rewritten, whereas the default \"leave it alone\" sends no " +
 		"request and leaves the note byte-for-byte identical; changing that setting makes the plugin look at the notes " +
-		"that are open right now; and with a cache limit set, the background rotation deleted the least recently used " +
+		"that are open right now; the \"pick which to cache\" command was driven end to end (its dialog standing in for " +
+		"\"see the list, select all, confirm\") — a fresh image leaves a file in the cache folder *and* a row in the " +
+		"index file, an image whose bytes are already cached reuses that copy instead of adding anything, and a " +
+		"CDN-style URL whose last path segment carries a token after the dot still produces a cache file ending in the " +
+		"real type; and with a cache limit set, the background rotation deleted the least recently used " +
 		"copies outright (freeing the space now) and removed their index entries, without ever going near the trash, " +
 		"and with the note itself untouched))."
 );

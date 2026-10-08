@@ -91,18 +91,51 @@ export function contentTypeForExtension(ext: unknown): string {
 }
 
 /**
+ * "长得像扩展名"的判据：纯字母数字、最多 8 个字符。
+ *
+ * 上限 8 是为了容纳真实的长扩展名（`.canvas` 6、`.heic`/`.tiff`/`.webp` 4、
+ * `.flac`/`.docx`/`.pptx` 4），同时把"点后面那一串令牌"挡在外面。
+ */
+const PLAUSIBLE_EXTENSION = /^[a-z0-9]{1,8}$/;
+
+/**
  * 取文件名的扩展名（小写、不含点）。
  *
  * ⚠️ 前导点是"隐藏文件"而不是扩展名：`.gitignore` 的扩展名是**空**，
  * 不是 `gitignore`。否则一个隐藏文件会被当成 `gitignore` 类型，
  * 拼出的 key 与缓存文件名都会莫名其妙。
+ *
+ * ## ⭐⭐ "最后一个点之后的东西"**不一定是扩展名**
+ *
+ * 这条是实测报出来的：外站图片的 URL 经常是这种形状（Bing 的图片 CDN 就是）——
+ *
+ * ```
+ * .../th/id/OIP-C.sPb8lvTxu-zlEqgEmUgCTwAAAA?w=208&h=169
+ * ```
+ *
+ * 最后一段**自己带一个点**，点后面是一串 23 个字符的令牌，**不是类型**。
+ * 按"取最后一个点之后的部分"算出来的"扩展名"于是变成
+ * `spb8lvtxu-zleqgemugctwaaaa`，后果一路传下去：
+ *
+ * - 上传到对象存储的名字成了 `<哈希>.spb8lvtxu-zleqgemugctwaaaa`；
+ * - 缓存目录里的本地副本也是这个名字 —— 而 **Obsidian 默认不显示它不认识的扩展名**，
+ *   于是用户在缓存目录里**看不到**这张图被缓存了（他会以为功能没生效）；
+ * - 由文件名推 Content-Type 时也永远推不出 `image/png`。
+ *
+ * 所以这里加一道形状检查：**不像扩展名就当"取不到"**，返回空串，
+ * 让 {@link resolveExtension} 退到 MIME —— 对图片来说那才是唯一可靠的类型来源。
+ *
+ * 刻意**不用"必须是我们认识的扩展名"**那种更严的判据：用户可以在设置里加任意扩展名，
+ * 拿一张我们内置的表去否决他，会让合法的自定义类型静默变成 `bin`。
+ * 形状检查只否决"明显不是扩展名"的东西，不否决"我们没见过"的东西。
  */
 export function extensionOfName(name: unknown): string {
 	if (typeof name !== "string") return "";
 	const base = name.trim().split(/[\\/]/).pop() ?? "";
 	const dot = base.lastIndexOf(".");
 	if (dot <= 0) return "";
-	return base.slice(dot + 1).toLowerCase();
+	const candidate = base.slice(dot + 1).toLowerCase();
+	return PLAUSIBLE_EXTENSION.test(candidate) ? candidate : "";
 }
 
 /** 由 MIME 推扩展名；推不出返回空串（由调用方决定兜底）。 */

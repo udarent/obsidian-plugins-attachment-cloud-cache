@@ -33,8 +33,8 @@
 
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { readdirSync, readFileSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -144,9 +144,34 @@ const EXTERNAL_IMAGE_URL = `https://${EXTERNAL_HOST}/a.png`;
  */
 const STARTUP_WINDOW_MS = 3500;
 
-/** 站点决定记忆的落盘位置（与 `createSiteStore` 的推导一致）。 */
-const SITE_MEMORY_PATH = ".obsidian/plugins/attachment-cloud-cache/.site-decisions.json";
+/**
+ * 缓存索引的落盘位置（与 `createIndexStore` 的推导一致）。
+ *
+ * ⚠️ 读的是**磁盘上的那个文件**，不是内存里的索引对象 —— 判据要落在"用户能看到的东西"上。
+ * （内存里对而磁盘上没写下来，用户下次启动就会发现缓存"不被认识"。）
+ */
+const CACHE_INDEX_PATH = ".obsidian/plugins/attachment-cloud-cache/.cache-index.json";
 const EXTERNAL_IMAGE_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff]);
+/**
+ * 弹窗那一段（8b4）专用的字节序列。
+ *
+ * ⚠️ 必须与 {@link EXTERNAL_IMAGE_BYTES} **不同**，否则会踩到内容寻址：
+ * 相同的字节就是相同的 key，于是它会命中前面几段已经缓存过的那份副本，
+ * "缓存目录里多出一个新文件"根本不会发生 —— 那个断言会以一个**误导人**的理由失败
+ *（我第一版就是这么写的，现场是"哪儿都没有新文件"）。
+ */
+const PICKER_IMAGE_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x11, 0x22]);
+/** 8b4 用的一对地址：**路径不同、字节相同** —— 用来制造"这张图其实已经在缓存里了"。 */
+const PICKER_FRESH_URL = `https://images.example.test/pick-a.png`;
+const PICKER_REUSE_URL = `https://images.example.test/pick-b.png`;
+/**
+ * 8b4 用的第三个地址：**Bing 图片 CDN 那种形状** ——
+ * 最后一段自己带一个点，点后面是令牌而不是类型，并且带查询串。
+ *
+ * ⚠️ 这个形状的字节序列必须与上面两个都不同，否则会命中已缓存的副本，看不到"新文件"。
+ */
+const TOKEN_IMAGE_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x33, 0x44]);
+const TOKEN_SHAPED_URL = `https://images.example.test/th/id/OIP-C.sPb8lvTxu-zlEqgEmUgCTwAAAA?w=208&h=169`;
 
 /** 记下"站外图床"被请求过几次 —— 用来断言"只下载一次"。 */
 const externalHostRequests = [];
@@ -156,6 +181,16 @@ function externalImageResponse(url) {
 	externalHostRequests.push(String(url));
 	if (String(url).includes("/a.png")) {
 		return { status: 200, headers: { "content-type": "image/png" }, arrayBuffer: EXTERNAL_IMAGE_BYTES.buffer };
+	}
+	// ⭐ 8b4 用的一对地址：**路径不同、字节相同**。
+	// 内容寻址的必然结果 —— 两个不同的外站 URL 会命中同一个 key，
+	// 于是第二个地址走的是"复用已有副本"。这条路径要从两端都钉住（见 8b4）。
+	if (String(url).includes("/pick-a.png") || String(url).includes("/pick-b.png")) {
+		return { status: 200, headers: { "content-type": "image/png" }, arrayBuffer: PICKER_IMAGE_BYTES.buffer };
+	}
+	// ⭐ 8b4 的"令牌形状"地址：类型只能靠响应头给（URL 里根本没有真扩展名）
+	if (String(url).includes("/th/id/OIP-C.")) {
+		return { status: 200, headers: { "content-type": "image/png" }, arrayBuffer: TOKEN_IMAGE_BYTES.buffer };
 	}
 	if (String(url).includes("/blocked.png")) {
 		return { status: 403, headers: { "content-type": "text/html" }, arrayBuffer: new ArrayBuffer(0) };
@@ -1029,6 +1064,220 @@ export async function runLoadAcceptance(options = {}) {
 				app.workspace.leaves.pop();
 				plugin.settings.externalImageCache = false;
 			}
+		}
+
+		// ============================================================
+		// 8b4. ⭐⭐ 弹窗勾选那条路：「缓存站外图片（可挑选）」
+		//
+		// 为什么单独一段：这条路**从来没有端到端跑过**。宿主的 `Modal` 在 Node 里点不了，
+		// 于是单元套件只覆盖了纯逻辑（勾选单位、去重、全选），而"命令入口 → 取候选 →
+		// 弹窗 → 逐个执行 → 汇总"这条接线一次都没被驱动过 —— 用户的实测走的正是这条路。
+		//
+		// 这里把弹窗那一环换成"全选并确认"的替身（它做的正是真弹窗做的事：
+		// 调 loader 取候选，再把候选交回去），其余全部是真东西：
+		// 真构建产物、真磁盘、真 HTTP、真索引文件。
+		//
+		// ⚠️ 判据的重点**不是**"笔记被改写了"，而是"**缓存目录里真的多了一个文件、
+		// 索引文件里真的多了一条记录**"。用户报的现象恰恰是"说缓存了，但缓存目录没有新文件"，
+		// 而只断言笔记被改写的话，那种"传上去了、本地副本却没落下来"的坏法会**全绿地漏过去**
+		//（它正是"离线可用"这个主承诺的反面）。
+		// ============================================================
+		{
+			const cacheFolder = plugin.settings.cacheFolder;
+			const readIndex = async () => {
+				try {
+					return JSON.parse(await readFile(join(root, CACHE_INDEX_PATH), "utf8"));
+				} catch {
+					return { entries: [] };
+				}
+			};
+			const cacheFiles = async () => {
+				try {
+					return await readdir(join(root, cacheFolder));
+				} catch {
+					return [];
+				}
+			};
+			/** vault 的完整文件清单（诊断用：文件"不见了"时要能看出它落到哪里去了）。
+			 *  ⚠️ 必须**同步**：`waitFor` 是在拼错误消息时**同步**调 `diagnose()` 的。 */
+			const treeOf = () => {
+				const out = [];
+				const walk = (dir, prefix) => {
+					let list = [];
+					try {
+						list = readdirSync(join(root, dir), { withFileTypes: true });
+					} catch {
+						return;
+					}
+					for (const entry of list) {
+						const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+						out.push(entry.isDirectory() ? `${path}/` : path);
+						if (entry.isDirectory()) walk(path, path);
+					}
+				};
+				walk(".", "");
+				return out.join(", ");
+			};
+			// 造"当前笔记"。⚠️ 替身里 `getActiveFile()` 是硬编码返回 null 的，
+			// 而弹窗的**默认范围**就是「当前笔记」（`readActiveNoteText` 读它）——
+			// 不把它接上，这一段测的就不是用户实际走的那条路。
+			const originalActiveFile = app.workspace.getActiveFile;
+			const activate = (vaultPath) => {
+				app.workspace.getActiveFile = () => app.vault.getAbstractFileByPath(vaultPath);
+			};
+			const originalPick = plugin.pickExternalImages;
+			/** 弹窗替身 = "用户在默认范围里看到清单、全选、点确认"。 */
+			const pickAllFromNote = () => {
+				plugin.pickExternalImages = async (load) => load("note");
+			};
+
+			plugin.settings.externalImageCache = true;
+			plugin.settings.externalImageDefault = "skip"; // 只让弹窗那条路动手
+
+			// ── 甲：一张**全新**的外站图，缓存目录与索引都该长出东西来 ──
+			const externalUrl = PICKER_FRESH_URL;
+			const notePath = "notes/勾选.md";
+			await mkdir(join(root, "notes"), { recursive: true });
+			await writeFile(join(root, notePath), `# 勾选\n\n![x](${externalUrl})\n`, "utf8");
+			await harness.refreshPathCache();
+			activate(notePath);
+			pickAllFromNote();
+
+			const filesBefore = await cacheFiles();
+			const entriesBefore = (await readIndex()).entries.length;
+			externalHostRequests.length = 0;
+
+			runCommand("pick-external-images");
+
+			await waitFor(
+				async () => !(await readFile(join(root, notePath), "utf8")).includes(externalUrl),
+				"弹窗那条路把外链改写成自己存储的地址",
+				10000,
+				diagnose
+			);
+			await waitFor(
+				async () => (await cacheFiles()).length > filesBefore.length,
+				"缓存目录里真的多了一个文件",
+				5000,
+				() => `vault 里的文件：${treeOf()}`
+			);
+
+			assert.equal(externalHostRequests.length, 1, "★ 这张图只该下载一次");
+
+			const afterFiles = await cacheFiles();
+			const newFiles = afterFiles.filter((name) => !filesBefore.includes(name));
+			assert.equal(newFiles.length, 1, `★ 缓存目录应恰好多 1 个文件（实际 ${JSON.stringify(afterFiles)}）`);
+
+			// 索引文件也要真的落盘 —— 只在内存里对，用户下次启动就会发现缓存"不被认识"
+			const afterIndex = await readIndex();
+			assert.equal(
+				afterIndex.entries.length,
+				entriesBefore + 1,
+				`★ 索引文件应恰好多 1 条记录（${entriesBefore} → ${afterIndex.entries.length}）`
+			);
+			const added = afterIndex.entries.find((entry) => entry.cachePath.endsWith(newFiles[0]));
+			assert.ok(
+				added,
+				`★ 新文件必须在索引里有对应记录（索引里的 cachePath：${JSON.stringify(afterIndex.entries.map((e) => e.cachePath))}）`
+			);
+			assert.equal(added.remoteUrl.startsWith(PUBLIC_BASE), true, "★ 记录里的远端地址应当指向自己的存储");
+			// 记录指向的那个文件**真的存在** —— 这正是用户报的那件事
+			assert.equal(await existsOnDisk(root, added.cachePath), true, "★ 索引指向的本地副本必须真的在磁盘上");
+
+			const pickedNote = await readFile(join(root, notePath), "utf8");
+			assert.equal(pickedNote.includes(externalUrl), false, "★ 笔记里的外链必须被改写");
+			assert.equal(pickedNote.includes("# 勾选"), true, "★ 笔记的其它内容必须原样保留");
+
+			// ── 乙：同一份字节、另一个地址（= 这张图其实**已经在缓存里**了）──
+			//
+			// 内容寻址的必然结果：两个不同的外站 URL 只要字节相同就是**同一个 key**，
+			// 于是"缓存目录没有新文件"是**正确**行为 —— 本地副本早就在里面了。
+			// 这一条必须钉住，因为用户看到的正是这一幕：它得是**可解释**的
+			//（"复用已有副本"），而不是看起来像什么都没做。
+			const sameBytesUrl = PICKER_REUSE_URL;
+			const reuseNote = "notes/勾选复用.md";
+			await writeFile(join(root, reuseNote), `![y](${sameBytesUrl})\n`, "utf8");
+			await harness.refreshPathCache();
+			activate(reuseNote);
+			pickAllFromNote();
+
+			const filesBeforeReuse = await cacheFiles();
+			const entriesBeforeReuse = (await readIndex()).entries.length;
+			externalHostRequests.length = 0;
+
+			runCommand("pick-external-images");
+			await waitFor(
+				async () => !(await readFile(join(root, reuseNote), "utf8")).includes(sameBytesUrl),
+				"已缓存过的图，勾选后也要把链接改写成自己的存储地址",
+				10000,
+				diagnose
+			);
+			// 给它足够的时间"如果它会写文件的话早就写了"
+			await new Promise((resolve) => setTimeout(resolve, 300));
+
+			assert.equal(externalHostRequests.length, 1, "（字节要重新取一次才知道是不是同一份内容）");
+			assert.deepEqual(
+				await cacheFiles(),
+				filesBeforeReuse,
+				"★ 已缓存过的图不该在缓存目录里多出文件（复用同一份副本，不是坏了）"
+			);
+			assert.equal(
+				(await readIndex()).entries.length,
+				entriesBeforeReuse,
+				"★ 也不该多出索引记录（同一条记录仍然有效）"
+			);
+			// ⭐ 最要紧的一条：它改写成的地址应当**就是甲那条记录里的地址** ——
+			// 这才叫"复用了同一份副本"，而不是"碰巧也没写文件"。
+			// ⚠️ 用户看到的正是这一幕：说"已缓存"，而缓存目录没有新文件。
+			// 那是**正确**行为（内容寻址：字节相同就是同一份），但它必须可解释 ——
+			// 所以这里把"指向的是同一份副本"钉死，好让将来改文案/加提示时有依据。
+			const reuseText = await readFile(join(root, reuseNote), "utf8");
+			assert.equal(reuseText.includes(added.remoteUrl), true, "★ 复用的应当是甲那份副本的地址（不是又传了一份）");
+
+			// ── 丙：URL 是**令牌形状**（点后面不是类型）—— 缓存下来的副本必须仍叫 `…png` ──
+			//
+			// 这是用户实测报的那一件事的根子：Bing 图片 CDN 的 URL 最后一段形如
+			// `OIP-C.sPb8lvTxu-zlEqgEmUgCTwAAAA`，按"最后一个点之后"取出来的"扩展名"
+			// 是 23 个字符的令牌 ⇒ 缓存副本成了 `<哈希>.spb8lvtxu-zleqgemugctwaaaa`。
+			// 而 **Obsidian 默认不显示它认不出的扩展名**，用户在缓存目录里等于"看不到新文件"。
+			// ⇒ 判据落在**文件名**上：它必须以 `.png` 结尾，且不能含那串令牌。
+			const tokenNote = "notes/勾选令牌.md";
+			await writeFile(join(root, tokenNote), `![z](${TOKEN_SHAPED_URL})\n`, "utf8");
+			await harness.refreshPathCache();
+			activate(tokenNote);
+			pickAllFromNote();
+
+			const filesBeforeToken = await cacheFiles();
+			runCommand("pick-external-images");
+			await waitFor(
+				async () => !(await readFile(join(root, tokenNote), "utf8")).includes(TOKEN_SHAPED_URL),
+				"令牌形状的 URL 也要被改写成自己存储的地址",
+				10000,
+				diagnose
+			);
+			await waitFor(
+				async () => (await cacheFiles()).length > filesBeforeToken.length,
+				"令牌形状的 URL 也要在缓存目录里落一份副本",
+				5000,
+				() => `vault 里的文件：${treeOf()}`
+			);
+
+			const tokenFiles = (await cacheFiles()).filter((name) => !filesBeforeToken.includes(name));
+			assert.equal(tokenFiles.length, 1, `★ 应恰好多 1 个文件（实际 ${JSON.stringify(tokenFiles)}）`);
+			assert.equal(
+				tokenFiles[0].endsWith(".png"),
+				true,
+				`★ 缓存副本必须以真实类型结尾（实际 ${JSON.stringify(tokenFiles[0])}）—— 否则 Obsidian 不显示它，用户就以为"没缓存"`
+			);
+			assert.equal(
+				/spb8lvtxu|sbp8lvtxu/i.test(tokenFiles[0]),
+				false,
+				`★ 那串令牌不该出现在文件名里（实际 ${JSON.stringify(tokenFiles[0])}）`
+			);
+
+			plugin.pickExternalImages = originalPick;
+			app.workspace.getActiveFile = originalActiveFile;
+			plugin.settings.externalImageCache = false;
 		}
 
 		// ============================================================

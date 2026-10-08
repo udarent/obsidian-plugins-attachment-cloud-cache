@@ -16,7 +16,10 @@ await withLoadedTs("src/vault-files", async (mod) => {
 	console.log(
 		`Vault-file tests passed (${stats.extensionCases} extension/type cases: extension from name ` +
 			"first and MIME second so both screenshot pastes and downloader drags work, a leading dot " +
-			"is not an extension, Content-Type derived and defaulted; parentFolderOf normalises " +
+			"is not an extension, and an extension has to *look* like one — the token a CDN leaves " +
+			"after the last dot in a URL is not a type, so it falls back to the MIME (otherwise the " +
+			"cached copy is named after the token and Obsidian does not even show unknown extensions); " +
+			"Content-Type derived and defaulted; parentFolderOf normalises " +
 			"separators; uniqueVaultPath never overwrites — it consults both the host index and the " +
 			"real disk, is capped, and fails loudly rather than looping or clobbering)."
 	);

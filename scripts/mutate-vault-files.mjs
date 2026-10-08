@@ -31,9 +31,12 @@ await runMutations({
 			expect: "前导点是隐藏文件而不是扩展名",
 		},
 		{
+			// 后果：`.PNG` 与 `.png` 会被当成两种类型 —— 同一个文件粘贴两次会得到两个 key；
+			// 加上形状检查只认小写，这个变异的**实际表现**是"大小写混写时取不到扩展名"，
+			// 于是 `resolveExtension` 退到 MIME（或让调用方兜底成 `bin`）。
 			name: "扩展名不再统一小写（.PNG 与 .png 会被当成两种类型）",
-			from: "return base.slice(dot + 1).toLowerCase();",
-			to: "return base.slice(dot + 1);",
+			from: "const candidate = base.slice(dot + 1).toLowerCase();",
+			to: "const candidate = base.slice(dot + 1);",
 			expect: "统一小写",
 		},
 		{
@@ -71,6 +74,22 @@ await runMutations({
 			from: "const candidate = `${prefix}${stem} ${n}${ext}`;",
 			to: "const candidate = `${prefix}${stem}${ext} ${n}`;",
 			expect: "序号应加在最后一段扩展名之前",
+		},
+		{
+			// 后果：Bing 那类 URL 的最后一段（`OIP-C.sPb8lvTxu-zlEqgEmUgCTwAAAA`）
+			// 会把点后的 23 字符令牌当成扩展名 ⇒ 缓存副本叫 `<哈希>.spb8lvtxu-zleqgemugctwaaaa`，
+			// 而 Obsidian 默认不显示它认不出的扩展名 —— 用户在缓存目录里"看不到这张图被缓存了"。
+			name: "★ 扩展名的形状检查被去掉（令牌被当成扩展名，缓存副本的名字没人认得出来）",
+			from: 'return PLAUSIBLE_EXTENSION.test(candidate) ? candidate : "";',
+			to: "return candidate;",
+			expect: "长令牌",
+		},
+		{
+			// 后果：长度上限名存实亡 ⇒ 那串令牌照样通过。
+			name: "★ 扩展名的长度上限被放大到没意义（超长令牌照样当扩展名）",
+			from: "const PLAUSIBLE_EXTENSION = /^[a-z0-9]{1,8}$/;",
+			to: "const PLAUSIBLE_EXTENSION = /^[a-z0-9]{1,99}$/;",
+			expect: "32 个字符的十六进制串",
 		},
 		{
 			name: "唯一化丢掉目录部分（同名文件会被写到 vault 根目录）",

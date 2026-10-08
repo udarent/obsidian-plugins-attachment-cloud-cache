@@ -46,6 +46,48 @@ export async function runVaultFilesSuite(mod) {
 	assert.equal(extensionOfName(null), "", "非字符串不应抛错");
 	assert.equal(extensionOfName(42), "", "非字符串不应抛错");
 
+	// ⭐⭐ "最后一个点之后的东西"不一定是扩展名。
+	//
+	// 外站图片的 URL 经常长这样（Bing 的图片 CDN 就是）：最后一段自己带一个点，
+	// 点后面是一串**令牌**而不是类型。按"取最后一个点之后的部分"算出来的"扩展名"
+	// 会是 23~32 个字符的乱码，于是：
+	//   ① 上传对象的名字变成 `<哈希>.spb8lvtxu-zleqgemugctwaaaa`；
+	//   ② 缓存目录里的本地副本也是这个名字 —— 而 **Obsidian 默认不显示它不认识的扩展名**，
+	//      用户在缓存目录里就"看不到这张图被缓存了"（实测报过这一条）。
+	// ⇒ 判据：扩展名必须**长得像扩展名**（字母数字、够短），否则一律当"取不到"，
+	//   让 `resolveExtension` 退到 MIME —— 那才是这一类图片唯一可靠的类型来源。
+	const TOKEN_AFTER_DOT = "OIP-C.sPb8lvTxu-zlEqgEmUgCTwAAAA";
+	assert.equal(
+		extensionOfName(TOKEN_AFTER_DOT),
+		"",
+		"★ 点后面是长令牌（含连字符、23 字符）时，不算扩展名 —— 否则拼出的文件名没人认得出来"
+	);
+	assert.equal(
+		extensionOfName("R-C.fee004adf34307a501723fa65fed9d64"),
+		"",
+		"★ 同上：32 个字符的十六进制串也不是扩展名"
+	);
+	assert.equal(
+		extensionOfName("photo." + "a".repeat(40)),
+		"",
+		"★ 超长一律不算（真实扩展名没有这么长的）"
+	);
+	assert.equal(
+		extensionOfName("x.7z"),
+		"7z",
+		"（数字开头的**真实**扩展名要保住：它是短且纯字母数字的）"
+	);
+	assert.equal(extensionOfName("board.canvas"), "canvas", "（最长的真实扩展名之一：canvas）");
+	assert.equal(extensionOfName("a.jpeg"), "jpeg");
+	// ⭐ 这一条是**给"前导点"那条变异用的**：`.gitignore` 的尾巴有 9 个字符，
+	// 会被上面的长度检查顺手挡掉 —— 于是那个变异看起来"测试无牙"。
+	// 用一个短名字（`env`，3 个字符，能通过形状检查）才真的测得着。
+	assert.equal(
+		extensionOfName(".env"),
+		"",
+		"⭐ 前导点是隐藏文件而不是扩展名（短名字也要挡住 —— 长名字会被长度检查顺手挡掉，测不出这一条）"
+	);
+
 	// ============================================================
 	// 2. 从 MIME 推扩展名
 	// ============================================================
@@ -74,6 +116,28 @@ export async function runVaultFilesSuite(mod) {
 	assert.equal(resolveExtension(undefined, "image/webp"), "webp", "文件名缺失（不仅仅是空串）");
 	assert.equal(resolveExtension("noext", ""), "", "两边都推不出就返回空串");
 	assert.equal(resolveExtension("noext", "application/pdf"), "", "推不出的 MIME 不算数");
+
+	// ⭐⭐ 最终判定的**后果**：外站 URL 的点后令牌（不是扩展名）必须被忽略，改用 MIME。
+	// 这就是用户实测报的那件事 —— 缓存下来的副本应当叫 `…hash….png`，
+	// 而不是 `…hash….spb8lvtxu-zleqgemugctwaaaa`（后者 Obsidian 默认不显示，
+	// 于是用户在缓存目录里"看不到这张图被缓存了"）。
+	// ⚠️ 这几条**必须放在既有断言之后**：套件是"第一条失败的断言决定报错"，
+	// 插到前面会把上面两条变异（只看 MIME / 只看文件名）的报错换成这里的，
+	// 它们的 `expect` 就对不上了（我第一版就是这么插的，预检立刻抓出来）。
+	assert.equal(
+		resolveExtension(TOKEN_AFTER_DOT, "image/png"),
+		"png",
+		"★ 外站 URL 的点后令牌要被忽略，改用 MIME 推扩展名（否则缓存副本的名字没人认得出来）"
+	);
+	assert.equal(
+		resolveExtension("R-C.fee004adf34307a501723fa65fed9d64", "image/jpeg"),
+		"jpg",
+		"★ 同上（jpg 来自 MIME 映射表）"
+	);
+	// 但没有 MIME 可退时不要凭空造一个：交给调用方的兜底（`resolveKeyExtension` → bin）
+	assert.equal(resolveExtension(TOKEN_AFTER_DOT, ""), "", "取不到就老实返回空串，让调用方兜底");
+	// 真实扩展名仍然优先于 MIME（原有纪律，不能因为这次的改动被推翻）
+	assert.equal(resolveExtension("x.png", "image/jpeg"), "png", "（文件名优先于 MIME —— 原有纪律）");
 
 	// ============================================================
 	// 4. Content-Type
