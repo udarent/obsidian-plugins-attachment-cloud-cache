@@ -102,7 +102,30 @@ export function countObsidianProcesses() {
  * 逐个试候选目标，挑出**主窗**（有 `.workspace` 的那个）；一个都不像就退回第一个，
  * 别把验证卡死。`tries` 次轮询是为了等主窗渲染出来（见文件头第 3 点）。
  */
-export async function connect(port, { tries = 25, gapMs = 1200 } = {}) {
+export async function connect(port, options = {}) {
+	return connectTo(port, options);
+}
+
+/**
+ * 连到**任意**一个页面目标：`probeExpression` 在候选页面里求值为 `true` 的那个就是要找的。
+ *
+ * ## 为什么需要它（2026-10-09 实测）
+ *
+ * Obsidian 1.14 的**设置界面是一个独立的窗口**（`body.mod-windows`，CDP 目标标题形如
+ * 「设置 - ObsidianVault - …」），`app.setting.modalEl.ownerDocument` **不是**主窗的 document。
+ * 于是：
+ *  - 在主窗页面里 `Input.dispatchMouseEvent` 打那个按钮的坐标，命中的是编辑器
+ *    （实测 `elementFromPoint` 返回 `div.cm-scroller`）⇒ 一次点击都到不了按钮，
+ *    判据全是**假阴性**；
+ *  - `Page.setInterceptFileChooserDialog` / `Page.fileChooserOpened` 也必须开在
+ *    **那个窗口**的会话上。
+ *
+ * ⇒ 要测"用户的真实点击"，就必须连到那个窗口。默认仍然挑主窗（`connect` 的行为不变）。
+ */
+export async function connectTo(
+	port,
+	{ tries = 25, gapMs = 1200, probeExpression = 'Boolean(document.querySelector(".workspace"))' } = {}
+) {
 	const pickMainWindow = async (target) => {
 		const socket = new WebSocket(target.webSocketDebuggerUrl);
 		try {
@@ -116,7 +139,7 @@ export async function connect(port, { tries = 25, gapMs = 1200 } = {}) {
 					JSON.stringify({
 						id: 1,
 						method: "Runtime.evaluate",
-						params: { expression: 'Boolean(document.querySelector(".workspace"))', returnByValue: true },
+						params: { expression: probeExpression, returnByValue: true },
 					})
 				);
 			});

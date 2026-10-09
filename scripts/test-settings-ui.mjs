@@ -151,50 +151,77 @@ assert.ok(
 }
 
 // ============================================================
-// 静态守卫：凭据导入那一行**结构上只有一个控件**
+// 静态守卫：凭据导入那一行**结构上只有一个控件**，而且那个控件**在文档里**
 // ============================================================
 //
-// 用户报过：那一行并排出现了**两个**"选择文件"按钮（实测：那一行里可见控件数 = 2）。
+// 用户先后报过两件事，它们其实是同一个问题的两面：
 //
-// **根因**：`<input type="file">` 是一个**会渲染的控件**，浏览器会给它画一个自己的
-// 「选择文件 / 未选择任何文件」。把它 `createEl` 进 `setting.controlEl`，那一行就多出
-// 一个可见控件；我们再加一个 Obsidian 风格的按钮 ⇒ 两个。
+//  ① 「凭据选择按钮有两个，多出来了一个」—— `<input type="file">` **自己会渲染**
+//     （"选择文件 / 未选择任何文件"），跟我们的按钮并排站着；
+//  ② 「点击选择文件按钮没有响应」—— 第二版为了消掉那个多出来的控件，把它做成了
+//     **游离节点**（`document.createElement`、从不 append）。⚠️⚠️ 但 Chromium 只对
+//     **在文档里的**文件控件打开选择器：真机上点击到达了按钮、`input.click()` 也调了，
+//     `Page.fileChooserOpened` 却一次都不来。⇒「不在文档里」正是它失灵的原因，不是解法。
 //
-// ⚠️ 所以**不能**靠"挂进去再隐藏"来修：那只是把症状盖住，成因（控件区里多了一个会渲染
-// 的元素）还在，换个主题/样式表没加载/有人动了那条规则，症状就回来。它必须是**游离节点**
-// （`document.createElement`、从不 append）—— 于是那一行结构上就只有一个按钮。
+// 现在的结构：控件区里只有一个包裹层，里面是「皮肤按钮 + 铺满它的 file input」。
+// 控件只有一个（由结构决定），input 在文档里（所以真的能开），而且**没有**
+// `input.click()` 这条中继（点击直接落在 input 上）。
 //
-// ⚠️ 这条没有行为断言能看见：两个按钮**都能用**，所有测试照样绿 —— 只有用户看得出来。
+// ⚠️ 这两条都没有行为断言能看见：两个控件**都能用**；游离的 input 也照样能被
+// `DOM.setFileInputFiles` 喂进文件（于是"导入成功"的断言全是绿的）—— 只有真机上
+// 真的去点，才看得出区别。判据只能落在源码与样式表上。
+//
+// ⚠️ 判据要落在**代码**上：这段实现里的注释正好在解释「不能用全局 document」、
+// 「不能游离」，直接对整段文本做 includes 会被自己的注释判红（本项目踩过两次 ⇒ 先剥注释）。
 {
 	const start = tab.indexOf("private renderCredentialImport(");
 	const end = start >= 0 ? tab.indexOf("\n\t}", start) : -1;
 	const body = end > start ? tab.slice(start, end) : "";
 	assert.ok(body.length > 0, "★ 找不到 renderCredentialImport 的实现（守卫自己失效了，别让它静默通过）");
 
-	// ⚠️ 判据必须落在**代码**上：这段实现里的注释正好在解释"不能写成 setting.controlEl.createEl"，
-	// 直接对整段文本做 `includes("controlEl")` 会被自己的注释判红（"匹配调用、不匹配字面量"的另一面：
-	// 先剥掉注释再判）。本项目在 `test-remove.mjs` 的 `adapter.remove` 守卫上踩过同一类坑。
 	const code = body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+	const css = read("styles.css");
 
 	assert.ok(
-		code.includes('document.createElement("input")'),
-		"★ 那个 file input 必须用 document.createElement 造 —— 它不能进渲染树"
+		code.includes('ownerDocument.createElement("input")'),
+		"★★ input 要用**这一行自己的文档**造 —— 设置界面在独立窗口里，模块作用域的 document 是主窗的"
 	);
 	assert.ok(
-		!code.includes("controlEl"),
-		"★★ 它绝不能挂进 setting.controlEl —— 那正是「原生文件控件 + 我们的按钮」并排出现两个按钮的成因"
+		!/(^|[^A-Za-z.])document\.createElement\(/.test(code),
+		"★★ 不能用全局 document 造 —— 那样它属于主窗文档，而按钮在设置窗口里"
+	);
+	assert.ok(
+		code.includes("wrap.appendChild(input)"),
+		"★★ input 必须**挂进文档** —— 游离的文件控件开不了选择器（真机上的症状就是「点了没反应」）"
+	);
+	assert.ok(
+		!code.includes("input.click()"),
+		"★ 不该再有 input.click() 中继 —— 点击直接落在 input 上，少一条会静默失效的路"
+	);
+	assert.ok(
+		!code.includes("controlEl.createEl"),
+		"★ 别把 input 直接建在控件区（那正是「并排两个控件」的成因）—— 控件区只放一个包裹层"
 	);
 	assert.equal(
-		(code.match(/setting\.addButton\(/g) ?? []).length,
+		(code.match(/controlEl\.createDiv\(/g) ?? []).length,
 		1,
-		"★ 导入入口只该有**一个**按钮"
+		"★ 控件区里只该有**一个**子元素（我们那个包裹层）"
+	);
+	assert.equal(
+		(code.match(/new ButtonComponent\(/g) ?? []).length,
+		1,
+		"★ 皮肤按钮恰好一个"
 	);
 	assert.ok(
-		code.includes("this.credentialFileInput = input"),
-		"★ 要留下引用 —— 真机探针靠这个字段拿到那个游离 input 把真实文件喂进去"
+		code.includes("aria-hidden") && code.includes("tabIndex"),
+		"★ 皮肤按钮要退出交互（aria-hidden + tabindex=-1）—— 读屏与键盘只该看到一个控件"
 	);
 	assert.ok(
-		!read("styles.css").includes("credentials-file-input"),
-		"★ 样式表里不该再有遮掩它的规则 —— 不要用隐藏去修一个结构问题"
+		code.includes("acc-credentials-file-input"),
+		"★ input 要留类名钩子 —— 真机探针靠它找到那个控件"
+	);
+	assert.ok(
+		css.includes(".acc-credentials-import .acc-credentials-file-input"),
+		"★ 样式表要给出包裹层与 input 的配合（input 铺满按钮、当命中面）"
 	);
 }

@@ -303,6 +303,77 @@ export class SecretComponent {
 	}
 }
 
+/**
+ * 按钮组件替身（`ButtonComponent`）—— 设置页「从凭据文件导入」那行用它当**皮肤**。
+ *
+ * ⚠️ 这里的语义**取自真机取证**，不是照类型定义推的（本项目明确要求：给宿主 API 写替身
+ * 必须先量真机）。实测到的事实（`dev-notes/_archive/.probe-file-chooser-truth.mjs` 与
+ * `.probe-import-credentials.mjs` 的原始输出）：
+ *
+ * - `new ButtonComponent(容器)` 会往容器里挂一个 `<button>`（标签名就是 `button`，
+ *   **类名为空** —— 宿主那些按钮样式是按元素名生效的）；`buttonEl` 就是它；
+ * - `setButtonText(text)` 把按钮文字设成 `text`（探针读到的 `textContent` 正是 i18n 那条）；
+ * - `onClick(cb)` 之后**真实点击**那个按钮会调到 `cb`（旧实现靠它 `input.click()`，
+ *   真机探针数到过调用次数 +1）。
+ *
+ * 其余链式方法只保证"返回自身"—— 它们没有真机取证，所以不假装有效果。
+ */
+export class ButtonComponent {
+	constructor(containerEl) {
+		const attributes = {};
+		this.buttonEl = {
+			tagName: "BUTTON",
+			textContent: "",
+			className: "",
+			tabIndex: 0,
+			disabled: false,
+			onclick: null,
+			setAttribute(name, value) {
+				attributes[name] = String(value);
+			},
+			getAttribute(name) {
+				return Object.prototype.hasOwnProperty.call(attributes, name) ? attributes[name] : null;
+			},
+			addClass: () => {},
+			addEventListener: () => {},
+		};
+		this.containerEl = containerEl;
+		// 真机上构造即挂进容器（这正是"皮肤按钮出现在那一行里"的原因）
+		containerEl?.appendChild?.(this.buttonEl);
+	}
+	setButtonText(text) {
+		this.buttonEl.textContent = String(text);
+		return this;
+	}
+	setDisabled(disabled) {
+		this.buttonEl.disabled = Boolean(disabled);
+		return this;
+	}
+	onClick(cb) {
+		this.buttonEl.onclick = cb;
+		return this;
+	}
+	// 以下只保证链式（无真机取证，故不假装有副作用）
+	setIcon() {
+		return this;
+	}
+	setTooltip() {
+		return this;
+	}
+	setCta() {
+		return this;
+	}
+	setClass() {
+		return this;
+	}
+	setWarning() {
+		return this;
+	}
+	setDestructive() {
+		return this;
+	}
+}
+
 /** 宿主语言。默认英文；测试可调 `setLanguage` 验证中英切换。 */
 let hostLanguage = "en";
 export function getLanguage() {

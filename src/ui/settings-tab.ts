@@ -29,7 +29,7 @@
  * 而绑定错了的症状是设置**静默存不进**。理由详见那个模块的头注释。
  */
 
-import { Notice, PluginSettingTab } from "obsidian";
+import { ButtonComponent, Notice, PluginSettingTab } from "obsidian";
 import type { App, Setting, SettingDefinitionItem, SettingGroupItem } from "obsidian";
 
 import type AttachmentCloudCachePlugin from "../main";
@@ -191,48 +191,69 @@ export class SettingsTab extends PluginSettingTab {
 	/**
 	 * 「导入凭据文件」—— MinIO 控制台建完密钥后点「下载凭据」给的就是那个 json。
 	 *
-	 * ## 为什么是 `<input type="file">`，以及为什么它**不挂进 DOM**
+	 * ## 为什么是 `<input type="file">`
 	 *
 	 * 宿主**没有公开的**"让用户选一个文件"API —— `obsidian@1.13.0` 的公开面里查过，
-	 * 一个都没有（它内部那个 Electron `showOpenDialog` 既没进类型面，移动端也没有）。
+	 * 一个都没有（它内部那个 Electron `showOpenDialog` 既没进类型面、移动端也没有）。
 	 * 所以只能用 `<input type="file">`：桌面端弹系统文件对话框，移动端弹文件选择器，
 	 * 而且我们**只读它的内容、不碰路径**（移动端本来也拿不到路径）。
 	 *
-	 * ⚠️⚠️ 但 `<input type="file">` 是一个**会渲染的控件** —— 浏览器会给它画一个自己的
-	 * "选择文件 / 未选择任何文件"。先前那版把它 `createEl` 进 `setting.controlEl`，
-	 * 于是那一行**并排出现两个按钮**（实测：可见控件数为 2），然后又用 CSS 把它藏起来。
-	 * **那是在遮症状**：结构的成因（控件区里多了一个会渲染的元素）还在，只靠一层样式挡着；
-	 * 换个主题、样式表没加载、或者有人改动那条规则，症状就回来。
+	 * ## 结构：控件区里只有**一个**子元素（一个包裹层）
 	 *
-	 * 现在它是**游离节点**：`document.createElement` 造出来、**从不 append**。
-	 * 于是那一行里**结构上**只有一个按钮，没有"需要被隐藏的控件"这回事。
-	 * 它照样能做两件事：① 点我们的按钮时由它打开系统对话框；② 真机探针按下面这个字段
-	 * 拿到它、把真实文件喂进去。
+	 * ```
+	 * controlEl
+	 *   └── div.acc-credentials-import   ← 唯一的子元素
+	 *         ├── button                 ← 皮肤：宿主自己的 ButtonComponent（只有外观）
+	 *         └── input[type=file]       ← **真控件**：铺满同一小块区域，点击落在它身上
+	 * ```
 	 *
-	 * ## ⭐ 它是**公开**的，因为游离之后它没有别的入口了
+	 * `input[type=file]` **自己会渲染**（"选择文件 / 未选择任何文件"），而我们要的是与设置页
+	 * 一致的按钮外观 ⇒ 直接放进控件区就会**并排出现两个控件**（用户最初报的就是这件事）。
+	 * 这个元素又不能不要（宿主没有别的选文件 API），于是只有两条出路，而两条我都试过、都不对：
 	 *
-	 * 元素不在 DOM 里 ⇒ 探针**没法**用类名去 `querySelector`（早先那个
-	 * `.acc-credentials-file-input` 钩子因此消失）。所以这个字段就是那个钩子：
-	 * 真机探针靠它拿到 input、喂真实文件、并断言它 `isConnected === false`。
-	 * （`noUnusedLocals` 也会盯着它：只写不读的私有字段编译不过 —— 而它确实是被读的，
-	 * 只是读者在测试侧。）
+	 *  ① 放进控件区再用 CSS 藏起来 —— 成因（控件区里多了一个会渲染的元素）还在，只靠一层
+	 *     样式挡着，换个主题/样式表没加载症状就回来；
+	 *  ② 造一个**游离**的 input（`document.createElement`、从不 append），靠按钮的
+	 *     `onClick` 调 `input.click()` —— ⚠️⚠️ **实测这条路不通，真机上就是"点了没反应"**：
+	 *     Chromium 只对**在文档里的**文件控件打开选择器。取证：真实鼠标点击那个按钮，
+	 *     点击确实到达了按钮、`input.click()` 也确实调了，但 `Page.fileChooserOpened`
+	 *     **一次都不来**；把同一个 input 挂进文档，同一条中继路径立刻正常
+	 *     （`dev-notes/_archive/.probe-file-chooser-truth.mjs` 的 A/B 对照）。
+	 *
+	 * ⇒ 现在它**在文档里**，而且就是被点的那个东西：**没有 `input.click()` 这条会静默失效的中继**。
+	 *
+	 * ## ⚠️ 要用**这一行自己的文档**去造
+	 *
+	 * 设置界面是**独立窗口**（`body.mod-windows`）。插件模块作用域里的 `document` 属于主窗，
+	 * 而按钮在设置窗口里 —— 用主窗的 `document` 造出来的 input 跨了文档，同样不可靠。
+	 * 所以取 `setting.controlEl.ownerDocument`。
+	 *
+	 * ## 可访问性：读屏与键盘只该看到一个控件
+	 *
+	 * 皮肤按钮只作外观，挂 `aria-hidden` 与 `tabindex=-1`；控件是那个 input
+	 * （名字由 `aria-label` 给，文案走 i18n）。真机探针靠 `.acc-credentials-file-input` 找它。
 	 */
-	public credentialFileInput: HTMLInputElement | null = null;
-
 	private renderCredentialImport(setting: Setting): void {
-		// ⚠️ 必须是 `document.createElement`，**不能**写成 `setting.controlEl.createEl` ——
-		// 后者会把它挂进控件区，于是它会被渲染出来（见上面那段：那正是"两个按钮"的成因）。
-		const input = document.createElement("input");
+		// 控件区里只放这一个包裹层 —— "只有一个控件"由**结构**决定，不靠样式
+		const wrap = setting.controlEl.createDiv({ cls: "acc-credentials-import" });
+
+		// 皮肤：宿主自己的按钮组件（外观与设置页其余按钮一致），**不参与交互**
+		const skin = new ButtonComponent(wrap);
+		skin.setButtonText(this.t("s3ImportButton"));
+		skin.buttonEl.setAttribute("aria-hidden", "true");
+		skin.buttonEl.tabIndex = -1;
+
+		// ⚠️ 用**这一行所在文档**造：设置界面在独立窗口里，模块作用域的 document 是主窗的
+		const input = setting.controlEl.ownerDocument.createElement("input");
 		input.type = "file";
+		input.classList.add("acc-credentials-file-input");
 		// ⚠️ 只作提示、不作强制：用户完全可能把文件存成别的名字或后缀。
 		// 挡在对话框里只会让人以为"我的文件不对"，而真正该判的是内容。
 		input.accept = ".json,application/json";
+		input.setAttribute("aria-label", this.t("s3ImportButton"));
 		input.addEventListener("change", () => void this.handleCredentialFile(input));
-		this.credentialFileInput = input;
-
-		setting.addButton((button) =>
-			button.setButtonText(this.t("s3ImportButton")).onClick(() => input.click())
-		);
+		// ⭐ 挂进包裹层（= 挂进文档）。游离的文件控件**开不了**选择器，见上面那段取证。
+		wrap.appendChild(input);
 	}
 
 	/** 读到文件内容 → 交给插件导入 → **如实**报告改了什么、以及为什么没成。 */

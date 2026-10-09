@@ -46,3 +46,44 @@
 .acc-test-error {
 	color: var(--text-error);
 }
+
+/* ─────────────────────────────────────────────
+   设置页「从凭据文件导入」
+
+   结构（控件区里只有这一个子元素）：
+     .acc-credentials-import
+       ├── button                   ← 皮肤：宿主自己的 ButtonComponent
+       └── input[type=file]         ← 真控件：铺满同一小块区域
+
+   input 铺满按钮、点击直接落在它身上 —— 于是**没有** `input.click()` 这条中继。
+   这点很重要：文件选择器只有原生 input 能打开，而且它**必须在文档里**
+   （游离节点上浏览器不会打开，真机上表现为"点了没反应"，已实测取证）。
+   ⚠️ 所以它不能被改成游离节点，也不能从文档里摘出去。
+
+   原生控件自己的外观（"选择文件 / 未选择任何文件"）在这里是多余的（外观由上面那个
+   按钮负责），所以把这一层做成透明的 —— 这与"把多出来的控件藏起来"不是一件事：
+   它现在就是那个控件本身，而且是唯一被点的东西。
+   ───────────────────────────────────────────── */
+.acc-credentials-import {
+	position: relative;
+	display: inline-flex;
+}
+
+.acc-credentials-import .acc-credentials-file-input {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	opacity: 0;
+	cursor: pointer;
+}
+
+/* 命中面是那个 input，所以按钮自己收不到 `:hover` —— 把宿主的 hover 样式原样补回来。
+   选择器与声明都取自宿主自己的样式表：
+   `button:hover { background-color: var(--background-modifier-hover); color: var(--text-normal) }`
+   ⚠️ 不写死颜色：用同一个主题变量，用户换主题时跟着变。 */
+.acc-credentials-import:hover > button {
+	background-color: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
