@@ -117,7 +117,30 @@ async function main() {
 			})()`
 		);
 		log(`  ${loaded ? "✓" : "✗"} 插件已加载（_loaded = true）`);
-		if (!loaded) throw new Error("插件没有加载成功 —— 看下面的控制台输出");
+		if (!loaded) {
+			// ⚠️ 现场**必须先打再抛**。
+			//
+			// 原来的写法只写了一句"看下面的控制台输出"，而那段打印在 `throw` 之后 ——
+			// 于是插件加载失败时**一条线索都没有**（2026-10-09 实测踩到）。
+			const state = await evaluate(
+				client,
+				`(() => {
+					const p = app?.plugins ?? {};
+					return {
+						pluginKeys: Object.keys(p),
+						manifestCount: Object.keys(p.manifests ?? {}).length,
+						hasManifest: Boolean(p.manifests?.[${JSON.stringify(PLUGIN_ID)}]),
+						enabled: [...(p.enabledPlugins ?? [])],
+						loadedIds: Object.keys(p.plugins ?? {}),
+						instance: Boolean(p.plugins?.[${JSON.stringify(PLUGIN_ID)}]),
+					};
+				})()`
+			).catch((error) => ({ probeFailed: String(error.message) }));
+			log(`  插件加载现场：${JSON.stringify(state)}`);
+			log(`  控制台报错 ${client.consoleErrors.length} 条：`);
+			for (const line of client.consoleErrors.slice(0, 8)) log(`    - ${String(line).slice(0, 300)}`);
+			throw new Error("插件没有加载成功 —— 上面就是现场");
+		}
 
 		// 命令是否注册（接线在册的最直接证据）
 		//
@@ -170,31 +193,69 @@ async function main() {
 		// 改个名字不会有任何编译错误（设置页是运行时才调它的），所以在这里钉一下
 		log(`  ${apis.sampleObjectKey ? "✓" : "✗"} plugin.sampleObjectKey 存在（公开链接检查取样用）`);
 
-		// 真实设置页能否产出定义（声明式 API 在真机上的形状）。
+		// ⭐⭐ 设置页：判**宿主渲染出来的东西**，而不是"我们的方法能被调用"。
 		//
-		// ⚠️ 这里用的是**内部结构** `app.setting.*` —— 它不在公开类型里，
-		// 所以插件代码里绝不能用（那条纪律由 lint 兜着）。
-		// 但**调试探针不是随插件发布的代码**：它跑在 DevTools 控制台里，
-		// 用内部结构正是它存在的意义。两者不能混为一谈 ——
-		// 一开始我用的是替身里的记账字段（`plugin.settingTabs`），
-		// 那只存在于测试替身里，真机上自然找不到。
+		// 这条判据曾经是**恒真**的：它调的是 `tab.getSettingDefinitions?.()` ——
+		// 那是**我们自己**实现的方法（`src/ui/settings-tab.ts`），不是宿主 API。
+		// 于是它证明的只是"我们的方法能被调用"，**不是"宿主会调用它"**：
+		// 在任何宿主版本上都成立，包括根本不支持声明式设置的那些。
+		// 而本插件**只**实现了声明式（没有经典 `display()` 兜底）⇒ 那种情况下
+		// 用户看到的是**一片空白的设置页**，这条判据却照样打 ✓。
+		//
+		// 现在改成：用 `app.setting.openTabById()` 把本插件的设置页打开，
+		// 再核**我们声明的每一项名字**是否都出现在**宿主渲染出来的那棵 DOM** 里。
+		// 两边文案同源（都取自插件自己的 i18n）⇒ 与界面语言无关。
+		//
+		// ⚠️ 两个实测过的坑（写在这里免得下次再踩）：
+		// ① 渲染结果**不在主窗口的 `document` 里**（`.modal-container` 恒为 0）——
+		//    设置页在一个独立窗口里，但 `app.setting.modalEl` 从主上下文可达；
+		// ② **不要数"宿主调了几次我们的方法"**：宿主在注册时就锁定了函数引用，
+		//    事后包装它数不到（实测包装后计数为 0，而页面明明已经渲染出来了）。
 		const settings = await evaluate(
 			client,
-			`(() => {
+			`(async () => {
 				const internals = app.setting ?? {};
 				const tabs = [...(internals.pluginTabs ?? []), ...(internals.settingTabs ?? [])];
 				const tab = tabs.find((t) => t?.plugin?.manifest?.id === ${JSON.stringify(PLUGIN_ID)});
 				if (!tab) return { ok: false, reason: "内部设置页列表里找不到本插件（共 " + tabs.length + " 个）" };
-				const definitions = tab.getSettingDefinitions?.();
-				if (!Array.isArray(definitions)) return { ok: false, reason: "getSettingDefinitions 没返回数组" };
-				const items = definitions.reduce((sum, g) => sum + (g.items?.length ?? 0), 0);
-				return { ok: true, groups: definitions.length, items };
+				let definitions = [];
+				try {
+					definitions = tab.getSettingDefinitions?.() ?? [];
+				} catch (error) {
+					return { ok: false, reason: "getSettingDefinitions 抛错：" + String(error.message) };
+				}
+				if (!Array.isArray(definitions) || definitions.length === 0) {
+					return { ok: false, reason: "没有产出任何设置分组" };
+				}
+				const declared = definitions
+					.flatMap((group) => group.items ?? [])
+					.map((item) => String(item?.name ?? ""))
+					.filter(Boolean);
+				try {
+					await internals.openTabById?.(${JSON.stringify(PLUGIN_ID)});
+				} catch (error) {
+					return { ok: false, reason: "openTabById 失败：" + String(error.message), declared: declared.length };
+				}
+				await new Promise((r) => setTimeout(r, 1200));
+				const modal = internals.modalEl ?? null;
+				const text = modal ? String(modal.textContent ?? "") : "";
+				const rendered = modal ? modal.querySelectorAll(".setting-item").length : 0;
+				const missing = declared.filter((name) => !text.includes(name));
+				return {
+					ok: Boolean(modal) && rendered > 0 && declared.length > 0 && missing.length === 0,
+					groups: definitions.length,
+					declared: declared.length,
+					rendered,
+					missing: missing.slice(0, 5),
+					reason: modal ? "" : "读不到 app.setting.modalEl",
+				};
 			})()`
 		);
 		log(
-			`  ${settings.ok ? "✓" : "✗"} 设置页可渲染：${settings.groups ?? "-"} 组 / ${settings.items ?? "-"} 项${
-				settings.reason ? `（${settings.reason}）` : ""
-			}`
+			`  ${settings.ok ? "✓" : "✗"} 宿主**真的**渲染了本插件的设置页：声明 ${settings.declared ?? "-"} 项 / ` +
+				`渲染出 ${settings.rendered ?? "-"} 个 setting-item / ${settings.groups ?? "-"} 组` +
+				(settings.missing?.length ? `（${settings.missing.length} 项没渲染出来：${JSON.stringify(settings.missing)}）` : "") +
+				(settings.reason ? `（${settings.reason}）` : "")
 		);
 
 		const relevantErrors = client.consoleErrors.filter((line) => /attachment-cloud-cache|cloud-cache/i.test(line));
@@ -436,7 +497,7 @@ async function main() {
 			["Vault.getResourcePath 存在", apis.getResourcePath],
 			["app.secretStorage 存在", apis.secretStorage],
 			["plugin.sampleObjectKey 存在", apis.sampleObjectKey],
-			["设置页可渲染（getSettingDefinitions 返回数组）", settings.ok],
+			["宿主真的渲染出本插件的设置页（不是只调我们自己的方法）", settings.ok],
 			["Vault.delete 存在", removal.vaultDelete],
 			["FileManager.trashFile 存在", removal.trashFile],
 			["「缓存删除方式」备选确已移除", !removal.hasDeleteModeSetting && !removal.deleteModeControl],

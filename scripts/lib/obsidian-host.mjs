@@ -30,6 +30,31 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 /**
+ * 探调试端口时单次请求的上限（毫秒）。
+ *
+ * ⚠️ **为什么必须给超时**：Obsidian（Electron）在启动的那几秒里会把 DevTools 的
+ * 监听套接字**先建好、但不应答** —— 实测 `curl` 能连上、然后一直收不到任何字节。
+ * 而 `fetch` 默认**没有超时**，于是"等端口就绪"那个循环会**卡在第一次 await 上**，
+ * 永远走不到 `waitSeconds` 那一步：症状是脚本既不出结果也不报错，静默挂住
+ * （2026-10-09 实测：挂了 4 分多钟，日志里宿主停在 `Loaded updated app … asar`）。
+ * 有了超时之后，这种"半开"状态会被当成"还没就绪"继续重试，最终按期报错。
+ */
+const PORT_PROBE_TIMEOUT_MS = 2000;
+
+/** 一条 CDP 命令的上限。给得宽松：页面里那段"等插件加载"的循环本身就要跑 30 秒。 */
+const CDP_COMMAND_TIMEOUT_MS = 90_000;
+
+/**
+ * 带超时的 `fetch` + JSON 解析。
+ *
+ * 返回值/异常与直接写 `(await fetch(url)).json()` 一致，只是**不会永久挂住**。
+ */
+async function fetchJson(url, { timeoutMs = PORT_PROBE_TIMEOUT_MS } = {}) {
+	const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+	return response.json();
+}
+
+/**
  * 本机 Obsidian 认得哪些 vault —— **只用于报错时提示**。
  *
  * 默认 vault 名是中性值，而大多数人的库另叫别的名字。名字不对的症状是
@@ -111,7 +136,14 @@ export async function connect(port, { tries = 25, gapMs = 1200 } = {}) {
 	let candidates = [];
 	let ws = null;
 	for (let attempt = 0; attempt < tries && !ws; attempt += 1) {
-		const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+		let list;
+		try {
+			list = await fetchJson(`http://127.0.0.1:${port}/json/list`);
+		} catch {
+			// 连不上 / 超时 / 应答不是 JSON —— 都当成"还没就绪"，等下一次
+			await delay(gapMs);
+			continue;
+		}
 		candidates = list.filter((target) => target.type === "page");
 		for (const target of candidates) {
 			ws = await pickMainWindow(target);
@@ -150,9 +182,19 @@ export async function connect(port, { tries = 25, gapMs = 1200 } = {}) {
 	});
 
 	const send = (method, params = {}) =>
-		new Promise((resolve) => {
+		new Promise((resolve, reject) => {
 			const messageId = ++id;
-			pending.set(messageId, resolve);
+			// ⚠️ 命令也要有上限：页面若因为某种原因彻底卡死（例如宿主正在自更新重启），
+			// 不设上限的话 `evaluate` 会永久挂住 —— 而"探针自己挂住"比"探针报错"
+			// 难处理得多（没有任何信号说明它在等什么）。
+			const timer = setTimeout(() => {
+				pending.delete(messageId);
+				reject(new Error(`CDP 命令 ${method} 超过 ${CDP_COMMAND_TIMEOUT_MS} ms 没有应答`));
+			}, CDP_COMMAND_TIMEOUT_MS);
+			pending.set(messageId, (message) => {
+				clearTimeout(timer);
+				resolve(message);
+			});
 			ws.send(JSON.stringify({ id: messageId, method, params }));
 		});
 
@@ -197,10 +239,14 @@ export async function launchAndAttach({ exe, port, vault, waitSeconds, log = () 
 	child.on("exit", (code) => log(`  （Obsidian 退出，code=${code}）`));
 
 	// 等 CDP 起来（Node 的 fetch 不走 HTTP_PROXY，正好能直连 localhost）
+	//
+	// ⚠️ 用**截止时刻**而不是"轮数 × 1 秒"：每次探测自己有 2 秒上限，
+	// 按轮数算会让总等待变成 waitSeconds 的好几倍（那正是上一版静默挂住的形态之一）。
 	let portReady = false;
-	for (let i = 0; i < waitSeconds; i += 1) {
+	const portDeadline = Date.now() + waitSeconds * 1000;
+	while (Date.now() < portDeadline) {
 		try {
-			const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
+			const version = await fetchJson(`http://127.0.0.1:${port}/json/version`);
 			log(`  ✓ 调试端口已就绪：${version.Browser}`);
 			portReady = true;
 			break;
