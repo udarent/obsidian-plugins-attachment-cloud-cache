@@ -21,6 +21,10 @@ Requires Obsidian **1.13.0+** (desktop and mobile) — see [Requirements](#requi
 > MinIO instance. **Not proven yet:** iOS has never been run, and Android has not been run on a real
 > device.
 
+![Paste an image into a note — the plugin uploads it to your own storage, and the note keeps a link](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
+
+*Recorded from the plugin actually running in Obsidian: paste an image → it is uploaded to your own storage → the note keeps a link. The local copy stays behind so the image still renders offline.*
+
 ## Why use it
 
 The problem is normally split between two plugins, and each one leaves a gap you cannot work around:
@@ -174,6 +178,10 @@ with any other plugin.
 
 > **下面写的都可用** —— 完整的上传/下载回环已在真实 MinIO 上被证实。
 > **还没验证的：** iOS 从未运行过；Android 也没在真机上跑过。
+
+![演示：往笔记里粘贴一张图 —— 插件把它上传到你的存储，笔记里留下链接](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
+
+*动图取自**真实运行**中的 Obsidian：粘贴一张图 → 上传到**你自己的**存储 → 笔记里留下链接，同时本地留一份副本，断网也能看。*
 
 ## 为什么用它
 
