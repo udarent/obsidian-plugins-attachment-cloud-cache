@@ -50,6 +50,10 @@ images are both **yours** and **always visible**, with zero remote requests when
 - **Two optional features, both off by default**: caching images from other sites (nothing happens
   until you say so, and you can pick individual images), and a cache size limit that cleans up
   least-recently-used copies in the background
+- **Import a credentials file** instead of typing the keys. MinIO's “Download credentials” JSON is
+  the shape it expects; the endpoint, access key and addressing mode are read from it, and the secret
+  goes into your keychain. **The file is read where it sits** — nothing is copied into your vault, and
+  no copy of it is kept anywhere
 - **Five commands** — cache usage, index repair, cleanup, uploading what you already have, and picking
   off-site images one by one. See [Commands](#commands)
 
@@ -86,7 +90,11 @@ In **Settings → Attachment Cloud Cache**:
    (the field shows what empty would produce)
 3. **Access key ID** (a plain text field; capitals are normal), then the **Secret access key** right
    below it
-4. **Test connection** — one signed request to your bucket, then one **credential-free** request to
+4. **Import from a credentials file** — optional, and usually faster than typing. MinIO's console
+   hands you a small JSON file when you create an access key ("Download credentials"); choose it here
+   and the endpoint, access key and addressing mode are filled in for you. The secret key goes straight
+   into your OS keychain and no copy of the file is kept
+5. **Test connection** — one signed request to your bucket, then one **credential-free** request to
    the exact URL your links would use, so you learn whether other people can open them
 
 ## Commands
@@ -133,6 +141,9 @@ Five commands, all reachable from the command palette:
   written to `data.json`**: it is an identifier, not a secret — it is part of the signed request and
   appears in server logs — and Obsidian's keychain accepts only lowercase IDs while access key IDs
   routinely contain capitals.
+- **Importing a credentials file reads that file and nothing else.** It is read where it already is
+  (nothing is copied into your vault), and only the fields above are taken from it. Anything else in
+  the file is reported back and ignored.
 
 ## How far it is verified
 
@@ -203,6 +214,8 @@ vault 小），渲染用本地副本 —— 于是图片既是**你自己的**�
   `a 1.png`，绝不替换
 - **两个可选功能，默认都关**：缓存站外图片（默认什么都不做，可逐张挑选），以及缓存上限（超限时在后台按
   最近最少使用清理）
+- **从凭据文件导入**，不必手输密钥。它认的就是 MinIO「下载凭据」那份 JSON：服务地址、访问密钥与
+  寻址方式从文件里读，秘密进系统钥匙串。**文件就在原地读** —— 不会拷进 vault，插件也不留副本
 - **五条命令** —— 查看缓存占用、修复索引、清理、上传已有附件、逐张挑选站外图片。见[命令](#命令)
 
 桌面端与移动端都支持。
@@ -234,7 +247,10 @@ vault 小），渲染用本地副本 —— 于是图片既是**你自己的**�
 2. **公开访问前缀** —— 可以留空。留空就用对象地址（`服务地址/存储桶/键`），那要求存储桶允许
    匿名读取；图片走 CDN 或自定义域名时把前缀填在这里（输入框里会显示「留空会用什么地址」）
 3. **访问密钥 ID**（普通输入框，含大写是正常的），再在它下面那一格填 **秘密访问密钥**
-4. **测试连接** —— 先向你的桶发一次签名请求，再**不带任何凭据**请求一次「你笔记里会写的那条
+4. **从凭据文件导入** —— 可选，但一般比手输快。MinIO 控制台在新建访问密钥时会给你一份 JSON
+   （「下载凭据」），在这里选中它，服务地址、访问密钥与寻址方式就自动填好了。
+   秘密访问密钥直接进系统钥匙串，插件不留这份文件的副本
+5. **测试连接** —— 先向你的桶发一次签名请求，再**不带任何凭据**请求一次「你笔记里会写的那条
    链接」，于是你能知道别人打不打得开
 
 ## 命令
@@ -273,6 +289,8 @@ vault 小），渲染用本地副本 —— 于是图片既是**你自己的**�
 - **秘密访问密钥存在操作系统钥匙串里**，绝不写进 `data.json`。**访问密钥 ID 会写进 `data.json`**：
   它是标识符而不是秘密 —— 它本身就是被签名请求的一部分，也会出现在服务端日志里 ——
   而且 Obsidian 的钥匙串只接受小写 ID，访问密钥 ID 常规就带大写。
+- **导入凭据文件只读那一份文件**。它就在原位置被读取（不会拷进 vault），也只取用上面那几项；
+  文件里其余的键会如实回报并忽略。
 
 ## 已验证到什么程度
 
