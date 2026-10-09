@@ -126,6 +126,35 @@ export const I18N: Record<string, Locale> = {
 		fallbackIndexPersistFailed: "The copy was saved, but the local-copy index could not be written: {error}",
 
 		// ── 维护命令 ──
+		// ── 云端空间清理（F15）──
+		cmdCleanupCloud: "Clean up unused objects in the cloud…",
+		cloudCleanupTitle: "Clean up the cloud",
+		cloudCleanupSummary:
+			"{count} object(s), about {mb} MB, are not referenced by any note in this vault:",
+		cloudCleanupCta: "Delete these objects",
+		cloudCleanupDeviceBlindSpot:
+			"Only this device's references can be seen. Other devices (or another vault sharing this storage) may still be using some of these files — deleting cannot be undone.",
+		cloudCleanupCannotUndo: "The objects are deleted from your storage; local copies are kept.",
+		cloudCleanupTruncatedWarning:
+			"The listing stopped early (too many objects), so this list may be incomplete.",
+		cloudCleanupNothing: "Nothing to clean up: every object in your storage is still referenced.",
+		cloudCleanupTruncatedNothing:
+			"Nothing to clean up in the part that was listed, and the listing stopped early — try again later.",
+		cloudCleanupDone: "Deleted {deleted} object(s); {failed} failed. {unindexed} index record(s) removed.",
+		cloudCleanupListFailed: "Could not list the objects in your storage: {error}",
+		cloudCleanupPersistFailed: "Could not save the cache index: {error}",
+		cloudCleanupUnreadableNote: "Could not read {path}, so the cleanup was cancelled.",
+		cloudDeleteTitle: "Also delete the copy in your storage?",
+		cloudDeleteBody: "{name} was uploaded to your storage. Delete that copy as well?",
+		cloudDeleteWarning:
+			"The object may be shared (the same content is stored once) and deleting it cannot be undone. Other devices would lose it until it is uploaded again.",
+		cloudDeleteKeepLocal: 'Choosing "local only" just confirms the deletion you already made.',
+		cloudDeleteStillReferenced: "Still linked from another note, so the cloud copy cannot be deleted.",
+		cloudDeleteLocalOnly: "Local only (keep the cloud copy)",
+		cloudDeleteBoth: "Delete in the cloud too",
+		cloudDeleteCancel: "Cancel",
+		cloudDeleteDone: "Deleted the object from your storage.",
+		cloudDeleteFailed: "Could not delete the object: {error}",
 		cmdAuditCache: "Show cache usage",
 		cmdRepairIndex: "Repair the local-copy index",
 		cmdCleanCache: "Clean up unused cache files",
@@ -308,6 +337,32 @@ export const I18N: Record<string, Locale> = {
 		fallbackWriteFailed: "副本已取回，但写入 vault 失败：{error}",
 		fallbackIndexPersistFailed: "副本已保存，但本地副本索引写入失败：{error}",
 
+		// ── 云端空间清理（F15）──
+		cmdCleanupCloud: "清理云端未使用对象…",
+		cloudCleanupTitle: "清理云端空间",
+		cloudCleanupSummary: "有 {count} 个对象没有被本库任何笔记引用，约占 {mb} MB：",
+		cloudCleanupCta: "删除这些对象",
+		cloudCleanupDeviceBlindSpot:
+			"只能看到**本设备**的引用情况。其他设备（或共用这个存储的另一个库）可能还在用其中一些文件 —— 删除后无法恢复。",
+		cloudCleanupCannotUndo: "删除的是云端对象；本地副本会保留。",
+		cloudCleanupTruncatedWarning: "列举提前结束了（对象太多），所以这份清单可能不全。",
+		cloudCleanupNothing: "没有需要清理的：你存储里的对象都还被引用着。",
+		cloudCleanupTruncatedNothing: "已列出的部分没有可清理的对象，而列举提前结束了 —— 可以稍后再试。",
+		cloudCleanupDone: "已删除 {deleted} 个对象，失败 {failed} 个，摘掉 {unindexed} 条索引记录。",
+		cloudCleanupListFailed: "无法列出你存储里的对象：{error}",
+		cloudCleanupPersistFailed: "缓存索引保存失败：{error}",
+		cloudCleanupUnreadableNote: "读不到 {path}，因此取消了这次清理。",
+		cloudDeleteTitle: "要不要连云端那份一起删？",
+		cloudDeleteBody: "{name} 已经上传到你的存储。要不要把云端那份也删掉？",
+		cloudDeleteWarning:
+			"这个对象可能被别处共用（相同内容只存一份），而且删除**无法撤销** —— 其他设备在重新上传之前会看不到它。",
+		cloudDeleteKeepLocal: "选「仅删本地」就是确认你刚才那次删除，云端不动。",
+		cloudDeleteStillReferenced: "它仍被别的笔记引用，所以不能删云端那一份。",
+		cloudDeleteLocalOnly: "仅删本地（保留云端）",
+		cloudDeleteBoth: "连同云端一起删",
+		cloudDeleteCancel: "取消",
+		cloudDeleteDone: "已从你的存储里删掉那个对象。",
+		cloudDeleteFailed: "删除对象失败：{error}",
 		cmdAuditCache: "查看缓存占用",
 		cmdRepairIndex: "自检并修复本地副本索引",
 		cmdCleanCache: "清理未使用的缓存文件",

@@ -60,6 +60,24 @@ export interface CacheEntry {
 	size: number;
 	/** 上传时声明的 Content-Type。 */
 	contentType: string;
+	/**
+	 * 这份对象**从哪来**。只区分一件事：它是不是「站外缓存」搬进来的。
+	 *
+	 * ## 为什么需要它（云端清理的安全线）
+	 *
+	 * F15 的批量清理要回答"哪些云端对象没人用了"。判据是"笔记/画布里的远端 URL
+	 * 集合"，而**站外缓存有一个破绽**：链接改写失败时（`cached-no-rewrite`），
+	 * 笔记里留着的是**原来的站外地址**，不是我们存储的地址 —— 于是那个对象看起来
+	 * "没人引用"，而用户其实是**明确要求缓存它**的。
+	 *
+	 * 所以清理时把它们整体排除。缺省（`undefined`）= 我们自己上传的附件：
+	 * 那种情况笔记里写的就是我们的 URL，引用判据本来就是准的。
+	 *
+	 * ⚠️ 升级提示（如实写在维护手册里）：1.1.0 之前缓存的站外对象没有这个标记，
+	 * 所以它们**可能**被列进候选。补救办法：重新缓存一次（会补上标记），
+	 * 或者清理时把清单看一遍再确认（命令本来就是"清单确认"式的）。
+	 */
+	origin?: "external";
 	/** 对象存储返回的 ETag（已去掉引号）。空串表示服务端没给。 */
 	etag: string;
 	/** 上传完成时间（ISO 字符串）。 */
@@ -132,6 +150,10 @@ export function normalizeEntry(raw: unknown): CacheEntry | null {
 		// 坏值/缺失一律 0（= 不确知）。轮换把 0 当"最旧"处理 —— 见 eviction.ts 的说明。
 		lastUsedAt: pickNonNegativeNumber(raw.lastUsedAt),
 		sourceName: pickString(raw.sourceName),
+		// ⚠️ 只认**恰好**是 "external" 的值：这个字段是"排除在清理候选之外"的凭据，
+		// 脏值（`"External"`、`true`、随便一个字符串）绝不能因为"非空就算"而生效 ——
+		// 那样它就从"多留一个对象"变成了"少留一个对象"，方向反了。
+		...(raw.origin === "external" ? { origin: "external" as const } : {}),
 	};
 }
 

@@ -703,5 +703,88 @@ export async function runS3ClientSuite(mod) {
 		assert.equal(probe.status, null, "★ 网络失败必须收敛成 status:null，而不是抛错");
 	}
 
-	return { scenarios: 12 };
+	// ============================================================
+	// 13. ⭐ 列举对象（ListObjectsV2）—— 云端清理（F15）的输入
+	//
+	// 这一节必须跑**真服务**：签名里多了查询串（`list-type=2&prefix=…`），
+	// 而 canonical query 的编码规则（`uriEncode` → 空格 `%20`）与
+	// `URLSearchParams`（空格 `+`）不同 —— 两处不一致的症状只是
+	// `SignatureDoesNotMatch`，光看报错完全看不出是编码差异。
+	// 替身会独立重算签名，所以它能抓住这件事。
+	// ============================================================
+	await withServer({}, async (server, endpoint) => {
+		const client = makeClient(mod, endpoint);
+
+		// 13a. 空桶：回的是"没有对象"，而**不是**抛错
+		const empty = await client.listObjects();
+		assert.deepEqual(empty.objects, [], "空桶应回空列表");
+		assert.equal(empty.nextToken, null, "没有下一页时 token 必须是 null（不是空串）");
+		assert.equal(server.requests.at(-1).signatureOk, true, "★ 带查询串的请求也要能验过签名");
+
+		// 13b. 逐个上传之后列举：key 与大小都要对得上
+		await client.putObject("a.png", new Uint8Array([1, 2, 3]), "image/png");
+		await client.putObject("b.png", new Uint8Array([4, 5]), "image/png");
+		const listed = await client.listObjects();
+		assert.deepEqual(
+			listed.objects.map((object) => object.key),
+			["a.png", "b.png"],
+			"应按 key 排序列出全部对象"
+		);
+		assert.deepEqual(
+			listed.objects.map((object) => object.size),
+			[3, 2],
+			"大小要如实回来（确认框要显示「能腾出多少」）"
+		);
+		assert.ok(listed.objects[0].etag, "ETag 也要带回来（去掉引号）");
+
+		// 13c. ⭐ 分页：一页只给一个，下一页拿剩下的，最后一页必须**明确说没有下一页**
+		const first = await client.listObjects({ maxKeys: 1 });
+		assert.equal(first.objects.length, 1, "max-keys 要生效");
+		assert.equal(first.objects[0].key, "a.png", "第一页是最小的 key");
+		assert.equal(typeof first.nextToken, "string", "被截断时必须给出续传 token");
+		const second = await client.listObjects({ maxKeys: 1, continuationToken: first.nextToken });
+		assert.equal(second.objects[0].key, "b.png", "第二页接着上一页往后");
+		assert.equal(second.nextToken, null, "★ 到底了就必须说没有下一页（否则调用方会无限翻页）");
+
+		// 13d. 前缀过滤 + 非 ASCII key（XML 转义与百分号编码都要对）
+		await client.putObject("中文 名字.png", new Uint8Array([7]), "image/png");
+		// ⚠️ 前缀里**刻意带一个空格**：SigV4 的查询串要求空格编成 `%20`，
+		// 而 `URLSearchParams` 会编成 `+` —— 两者不一致的症状只是
+		// `SignatureDoesNotMatch`（看不出是编码差异）。有了这个空格，
+		// "签名与请求各自编码"这类缺陷才会在这里显形。
+		const prefixed = await client.listObjects({ prefix: "中文 名" });
+		assert.deepEqual(
+			prefixed.objects.map((object) => object.key),
+			["中文 名字.png"],
+			"★ 前缀过滤要生效，且非 ASCII 与空格一路回来必须逐字一致（XML 转义 + 查询串编码）"
+		);
+	});
+
+	// 13e. 响应解析不出来时**必须报错**，绝不假装"桶是空的"
+	//
+	// 这是这一层最危险的失败方式：把"没读到清单"当成"没有对象"，
+	// 清理命令会显得"一切正常、没有可清理的"，而真相是我们根本没读到。
+	{
+		const sent = [];
+		const client = makeClient(mod, "http://127.0.0.1:1", {}, {
+			maxAttempts: 1,
+			transport: async (request) => {
+				sent.push(request);
+				return { status: 200, headers: {}, body: new TextEncoder().encode("这不是 XML") };
+			},
+		});
+		await assert.rejects(
+			() => client.listObjects(),
+			(error) => {
+				assert.ok(
+					error.message.includes("XML") || error.message.includes("列举"),
+					`解析失败必须点明原因，实际：${error.message}`
+				);
+				return true;
+			}
+		);
+		assert.equal(sent.length, 1, "解析失败不该重试（重试拿到的还是同一段坏响应）");
+	}
+
+	return { scenarios: 13 };
 }

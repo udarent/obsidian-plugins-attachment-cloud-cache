@@ -496,6 +496,8 @@ export function createExternalCacher(deps: ExternalCacherDeps): ExternalCacher {
 				notify: deps.notify,
 				hashBytes: deps.hashBytes,
 				now: deps.now,
+				// ⭐ 标记来源：云端清理据此把站外缓存整体排除（见 CacheEntry.origin）
+				origin: "external",
 			},
 			{
 				bytes: fetched.bytes,

@@ -160,6 +160,13 @@ export interface IngestDeps {
 	persistIndex: () => Promise<void>;
 	/** 用户可见的提示（失败/警告）。 */
 	notify?: (message: string) => void;
+	/**
+	 * 这份对象**从哪来**（只区分"站外缓存"这一种，见 `CacheEntry.origin`）。
+	 *
+	 * 云端清理靠它把"用户明确要求缓存、但链接没改写成功"的对象排除在候选之外 ——
+	 * 少了这一条，那种对象会因为"笔记里写的是原站外地址"而被误判成没人用。
+	 */
+	origin?: CacheEntry["origin"];
 	/** 内容哈希。注入是为了让测试可确定，也为将来换算法留口子。 */
 	hashBytes?: (bytes: Uint8Array) => Promise<string>;
 	now?: () => Date;
@@ -454,6 +461,7 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 		// 这也让它在缓存轮换的宽限期内不会被立刻淘汰（见 maintenance/eviction.ts）。
 		lastUsedAt: now.getTime(),
 		sourceName: fileName,
+		...(deps.origin === "external" ? { origin: "external" as const } : {}),
 	};
 	// `trash` 处置时本地没有副本：仍登记，但 cachePath 记空串会被 normalizeEntry 丢弃 → 
 	// 改为不登记。理由：索引的用途是"按 URL 找本地副本"，没有副本就没有可记的事实

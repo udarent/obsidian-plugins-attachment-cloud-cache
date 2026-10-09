@@ -35,7 +35,9 @@ import { createIndexStore, makeSerializer } from "./host/runtime";
 import type { HostContext } from "./host/runtime";
 import { createEditorHandlers } from "./host/editor-bridge";
 import { auditForCleanup, collectCacheFiles, runBatchUpload, runCleanup, runEviction, scanReferences } from "./maintenance/run";
-import { canvasTextTargets } from "./maintenance/references";
+import { canvasTextTargets, keysInText } from "./maintenance/references";
+import { isUnderCacheFolder } from "./cache-path";
+import { describeError } from "./error-text";
 import type { MaintenanceDeps } from "./maintenance/run";
 import { createCacheRotator } from "./maintenance/rotation";
 import type { CacheRotator } from "./maintenance/rotation";
@@ -45,6 +47,9 @@ import {
 	selectExternalUploadCandidates,
 	selectUploadCandidates,
 } from "./maintenance/batch";
+import { listAllObjects, runCloudCleanup, selectCleanupCandidates } from "./maintenance/cloud-cleanup";
+import { externalKeysOf, referencedKeysFromUrls } from "./maintenance/cloud-cleanup";
+import { askCloudDelete } from "./ui/cloud-delete-modal";
 
 import type { ExternalCandidate, NoteTextLike } from "./maintenance/batch";
 import { ingestAttachment } from "./core/ingest";
@@ -327,6 +332,17 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		// "卸载不干净"，而且症状出现在**别的插件**身上，极难归因。
 		this.register(() => uninstallSrcPatch());
 
+		// ── 云端空间清理（F15 / 需求 R17）──
+		//
+		// 入口 A：用户删掉一个"本库上传过"的附件时，**删完之后**问他要不要
+		// 连云端那一份一起删（`vault.on("delete")` 是通知型，删之前拦不住，
+		// 所以问题只能问在删之后 —— 需求 R17 的措辞也正是"删除时给选择"）。
+		this.registerEvent(
+			this.app.vault.on("delete", (file) => {
+				void this.askAboutCloudDelete(file.path);
+			})
+		);
+
 		this.registerMaintenanceCommands();
 	}
 
@@ -341,6 +357,12 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			id: "audit-cache",
 			name: this.t("cmdAuditCache"),
 			callback: () => void this.reportCacheUsage(),
+		});
+
+		this.addCommand({
+			id: "cleanup-cloud",
+			name: this.t("cmdCleanupCloud"),
+			callback: () => void this.cleanupCloudObjects(),
 		});
 
 		this.addCommand({
@@ -374,6 +396,203 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	}
 
 	/** 维护命令共用的依赖装配。 */
+	/**
+	 * **入口 A**：用户删掉一个本库上传过的附件之后，问要不要连云端一起删。
+	 *
+	 * ## 命中判定（三条，缺一不可）
+	 *
+	 * 1. 这个路径在索引里（说明它确实上传过）；
+	 * 2. 它不是**缓存目录**里的文件 —— 那是 `clean-cache`/上限轮换的地盘，
+	 *    在这里再问一次会和"副本丢了自动补回"打架（用户删副本的意思本来就是"重新下"）；
+	 * 3. 存储配置就绪（否则连客户端都没有，问了也做不成）。
+	 *
+	 * ## ⚠️ 两个必须如实说的事
+	 *
+	 * - **同一个对象可能被别处共用**（内容寻址 + 多设备）；
+	 * - **云端删除不可恢复**。
+	 *
+	 * 两条都写进了弹窗正文（原则⑥：做不到的事必须讲清楚，不许静默删）。
+	 *
+	 * ⚠️ 本库**还有引用**时云端那一档**禁用**：删了会让那些引用变成死链，
+	 * 而用户此刻删的是另一个文件（需求 R17 的硬要求）。
+	 */
+	private async askAboutCloudDelete(path: string): Promise<void> {
+		const entry = this.currentIndex().findByCachePath(path);
+		if (!entry) return;
+		// 缓存目录里的副本：那是缓存管理的地盘（见上面第 2 条）
+		if (isUnderCacheFolder(path, this.settings.cacheFolder)) return;
+
+		const client = this.buildClient();
+		if (!client) return;
+
+		// 还剩多少引用 —— 用与批量命令同一份判据（含画布），免得两处口径不一致
+		let stillReferenced = false;
+		try {
+			stillReferenced = (await this.referencedVaultPaths()).has(path);
+		} catch {
+			// 读不到引用集合时按"还有引用"处理：那是**保守**的一侧
+			stillReferenced = true;
+		}
+
+		const choice = await askCloudDelete(this.app, {
+			title: this.t("cloudDeleteTitle"),
+			lines: [
+				this.t("cloudDeleteBody", { name: entry.sourceName || path }),
+				this.t("cloudDeleteWarning"),
+				this.t("cloudDeleteKeepLocal"),
+			],
+			cloudAllowed: !stillReferenced,
+			cloudDisabledReason: stillReferenced ? this.t("cloudDeleteStillReferenced") : undefined,
+			localCta: this.t("cloudDeleteLocalOnly"),
+			cloudCta: this.t("cloudDeleteBoth"),
+			cancelCta: this.t("cloudDeleteCancel"),
+		});
+
+		if (choice !== "cloud") return;
+
+		try {
+			await client.deleteObject(entry.key);
+		} catch (error) {
+			new Notice(this.t("cloudDeleteFailed", { error: describeError(error) }));
+			return;
+		}
+		if (this.currentIndex().remove(entry.key)) {
+			try {
+				await this.hostContext().persistIndex();
+			} catch (error) {
+				new Notice(this.t("cloudCleanupPersistFailed", { error: describeError(error) }));
+			}
+		}
+		new Notice(this.t("cloudDeleteDone"));
+	}
+
+	/**
+	 * **入口 B**：「清理云端未使用对象…」。
+	 *
+	 * 候选公式（见 `cloud-cleanup.ts`）：桶内对象 − 本库引用着的 key − 站外缓存的 key。
+	 * 用户看到的是**清单 + 总体积 + 共享风险**，确认之后才真的删。
+	 *
+	 * ⚠️ 列举有页数上限；中途停下时**如实说**"清单可能不全"
+	 * （假装完整会让用户以为"剩下那些都还有人用"）。
+	 */
+	private async cleanupCloudObjects(): Promise<void> {
+		const client = this.buildClient();
+		if (!client) {
+			new Notice(this.t("maintainNotConfigured"));
+			return;
+		}
+
+		let listed;
+		try {
+			listed = await listAllObjects(client);
+		} catch (error) {
+			new Notice(this.t("cloudCleanupListFailed", { error: describeError(error) }));
+			return;
+		}
+
+		const referenced = await this.cloudReferencedKeys();
+		const selection = selectCleanupCandidates({
+			objects: listed.objects,
+			referencedKeys: referenced,
+			externalKeys: externalKeysOf(this.currentIndex()),
+		});
+
+		if (selection.candidates.length === 0) {
+			new Notice(
+				listed.truncated
+					? this.t("cloudCleanupTruncatedNothing")
+					: this.t("cloudCleanupNothing")
+			);
+			return;
+		}
+
+		const lines = [
+			this.t("cloudCleanupSummary", {
+				count: selection.candidates.length,
+				mb: Math.max(1, Math.round(selection.bytes / (1024 * 1024))),
+			}),
+			...selection.candidates.slice(0, 10).map((object) => object.key),
+			...(selection.candidates.length > 10
+				? [this.t("maintainCleanMore", { count: selection.candidates.length - 10 })]
+				: []),
+			// ⚠️ 显著位置：这两句是"多设备盲区"与"不可恢复"的如实告知
+			this.t("cloudCleanupDeviceBlindSpot"),
+			this.t("cloudCleanupCannotUndo"),
+			...(listed.truncated ? [this.t("cloudCleanupTruncatedWarning")] : []),
+		];
+
+		const confirmed = await this.confirmMaintenance({
+			title: this.t("cloudCleanupTitle"),
+			lines,
+			cta: this.t("cloudCleanupCta"),
+			destructive: true,
+		});
+		if (!confirmed) {
+			new Notice(this.t("maintainCancelled"));
+			return;
+		}
+
+		const result = await runCloudCleanup(
+			{
+				client,
+				index: () => this.currentIndex(),
+				persistIndex: () => this.hostContext().persistIndex(),
+				notify: (message) => new Notice(message),
+				// ⚠️ 必须用箭头函数包一层：直接写 `t: this.t` 会把方法从实例上"摘下来"，
+				// 调用时 `this` 就不再是插件实例（lint 的 unbound-method 正是在拦这个）。
+				t: (key, params) => this.t(key, params),
+			},
+			selection.candidates.map((object) => object.key)
+		);
+
+		new Notice(
+			this.t("cloudCleanupDone", {
+				deleted: result.deleted,
+				failed: result.failed,
+				unindexed: result.unindexed,
+			})
+		);
+	}
+
+	/**
+	 * 笔记与画布里**属于本存储**的对象 key 集合（云端清理的"仍被引用"判据）。
+	 *
+	 * 两处来源都扫：Markdown 笔记的正文，加上**画布的原始文本**（画布里的链接
+	 * 也是文本内容，宿主的索引不保证覆盖 —— 与 `referencedVaultPaths` 同一条理由）。
+	 * 换算用的是注入的 `keyFromUrl`，也就是**渲染判定用的同一个**回算函数：
+	 * 于是"哪些对象算被引用"与"渲染时认不认这个 URL"永远一致。
+	 */
+	private async cloudReferencedKeys(): Promise<Set<string>> {
+		const urls: string[] = [];
+		const collect = (text: string): void => {
+			for (const key of keysInText(text, (url) => keyFromUrl(url, this.settings.s3))) {
+				urls.push(key);
+			}
+		};
+
+		for (const note of this.app.vault.getMarkdownFiles()) {
+			try {
+				collect(await this.app.vault.read(note));
+			} catch {
+				// 读不到就当它没有引用 —— 但这一侧是**危险**的方向，
+				// 所以下面补一层：拿不到正文时**整体放弃**这次清理（见 return 前的判断）。
+				throw new Error(this.t("cloudCleanupUnreadableNote", { path: note.path }));
+			}
+		}
+		for (const file of this.app.vault.getFiles()) {
+			if (file.extension !== "canvas") continue;
+			try {
+				collect(await this.app.vault.read(file));
+			} catch {
+				throw new Error(this.t("cloudCleanupUnreadableNote", { path: file.path }));
+			}
+		}
+
+		// ⚠️ 这里收到的其实是 key（`keysInText` 已经把 URL 换算过了），
+		// 所以只是去重成一个集合 —— 再换算一次是多余的，也会引入第二套规则。
+		return referencedKeysFromUrls(urls, (value) => value);
+	}
+
 	private maintenanceDeps(): MaintenanceDeps {
 		return {
 			app: this.app,

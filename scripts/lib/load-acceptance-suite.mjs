@@ -706,8 +706,15 @@ export async function runLoadAcceptance(options = {}) {
 	const commandIds = plugin.commands.map((command) => command.id).sort();
 	assert.deepEqual(
 		commandIds,
-		["audit-cache", "clean-cache", "pick-external-images", "repair-index", "upload-attachments"],
-		"★ 五条维护命令都要注册（少一条就是「功能写了但用户找不到」）"
+		[
+			"audit-cache",
+			"clean-cache",
+			"cleanup-cloud",
+			"pick-external-images",
+			"repair-index",
+			"upload-attachments",
+		],
+		"★ 六条维护命令都要注册（少一条就是「功能写了但用户找不到」）；cleanup-cloud 是 1.1.0 新增的云端清理"
 	);
 
 		const runCommand = (id) => {

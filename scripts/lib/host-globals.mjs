@@ -28,5 +28,88 @@ export function installHostGlobals() {
 		// 足以让"宿主上存在的 API 在这里也存在"这一条成立。
 		globalThis.window = globalThis;
 	}
+	installDomHelpers(globalThis);
 	return globalThis.window;
+}
+
+/**
+ * 补齐宿主提供的**元素创建助手**（`createDiv` / `createEl` / `createSpan`）。
+ *
+ * ## 为什么只补到"够用"就停
+ *
+ * 宿主（Obsidian 的 WebView）确实有这几个全局函数，所以补它们符合上面那条原则。
+ * 但这里返回的**不是 DOM**：它只有"能挂子节点、能取第一个子节点"这点能力，
+ * 供"重建附件节点"那条路（`Main.ts` 的 `renderEmbed`）在测试进程里跑通。
+ *
+ * ⚠️ 这是一个**有意的浅替身**：任何依赖真实 DOM 行为（样式、事件冒泡、
+ * `querySelector` 的完整选择器语法…）的断言都**不该**用它 —— 那属于
+ * "替身比被测代码更懂宿主"，会掩盖缺陷。套件里真正需要元素形状的地方
+ * （如 `embed-rebuild-suite`）自己造元素，比这里更可控。
+ */
+function installDomHelpers(target) {
+	if (typeof target.createElement !== "function") return;
+
+	const makeElement = (tag) => {
+		const children = [];
+		return {
+			tagName: String(tag).toUpperCase(),
+			children,
+			childNodes: children,
+			style: {},
+			dataset: {},
+			classList: { add() {}, remove() {}, contains: () => false },
+			setText() {},
+			empty() {
+				children.length = 0;
+			},
+			appendChild(node) {
+				children.push(node);
+				return node;
+			},
+			createEl: (childTag, options) => {
+				const node = makeElement(childTag);
+				if (options && typeof options === "object" && typeof options.text === "string") node.textContent = options.text;
+				children.push(node);
+				return node;
+			},
+			createDiv: (options) => {
+				const node = makeElement("div");
+				if (options && typeof options === "object" && typeof options.text === "string") node.textContent = options.text;
+				children.push(node);
+				return node;
+			},
+			createSpan: (options) => {
+				const node = makeElement("span");
+				if (options && typeof options === "object" && typeof options.text === "string") node.textContent = options.text;
+				children.push(node);
+				return node;
+			},
+			addEventListener() {},
+			remove() {},
+			get firstElementChild() {
+				return children.length > 0 ? children[0] : null;
+			},
+		};
+	};
+
+	// 三个助手都只做一件事：造一个元素（可选带文本）。写成显式的三条，
+	// 而不是一个"按名字分支"的循环 —— 后者的 `createEl` 需要额外处理 tag 参数，
+	// 混在一起只会让读的人多绕一圈。
+	if (typeof target.createDiv !== "function") {
+		target.createDiv = (options) => withText(makeElement("div"), options);
+	}
+	if (typeof target.createSpan !== "function") {
+		target.createSpan = (options) => withText(makeElement("span"), options);
+	}
+	if (typeof target.createEl !== "function") {
+		target.createEl = (tag, options) => withText(makeElement(tag ?? "div"), options);
+	}
+}
+
+/** 给元素挂上 `options.text`（宿主那几个助手的共同约定）。 */
+function withText(element, options) {
+	if (options && typeof options === "object" && typeof options.text === "string") {
+		element.textContent = options.text;
+	}
+	return element;
 }

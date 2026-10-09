@@ -401,6 +401,83 @@ export interface HeadResult {
 	etag: string;
 }
 
+/** 列举参数（`maxKeys` 会被夹到 S3 允许的上限）。 */
+export interface ListObjectsOptions {
+	prefix?: string;
+	continuationToken?: string;
+	maxKeys?: number;
+}
+
+/** 列举结果。`nextToken` 为空表示已经到底。 */
+export interface ListObjectsResult {
+	objects: { key: string; size: number; etag: string }[];
+	nextToken: string | null;
+}
+
+/**
+ * 按 SigV4 的规则拼查询串（**与签名用的是同一套编码**）。
+ *
+ * ⚠️ 不用 `URLSearchParams`：它把空格编成 `+`，而 canonical query 要求 `%20` ——
+ * 两处不一致的后果是 `SignatureDoesNotMatch`，而报错完全不提编码差异。
+ * 这里与 `canonicalQueryString` 共用 `uriEncode`，所以"发出去的"与"签的"必然同源。
+ */
+function queryStringFor(query: Record<string, string>): string {
+	return Object.keys(query)
+		.sort()
+		.map((name) => `${uriEncode(name)}=${uriEncode(query[name] ?? "")}`)
+		.join("&");
+}
+
+/**
+ * 解析 ListObjectsV2 的响应（**纯函数**，不依赖 XML 解析器）。
+ *
+ * 只取我们真正要用的三项：`Key`、`Size`、`ETag`（外加 `IsTruncated` 与
+ * `NextContinuationToken`）。用正则而不是完整 XML 解析器：这段响应形状是
+ * AWS 定死的、且我们只要平坦的一层 —— 引一个 XML 依赖进一个零依赖的插件不值得。
+ *
+ * ⚠️ 解析不出来**返回 `null`**（而不是空列表）：调用方据此报错。
+ * "把解析失败当成桶是空的"是这里最危险的失败方式 —— 清理命令会显得
+ * "一切正常、没有可清理的"，而真相是我们根本没读到清单。
+ */
+export function parseListObjects(xml: unknown): ListObjectsResult | null {
+	if (typeof xml !== "string" || xml === "") return null;
+	if (!/<ListBucketResult[\s>]/i.test(xml)) return null;
+
+	const objects: { key: string; size: number; etag: string }[] = [];
+	for (const match of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/gi)) {
+		const body = match[1];
+		const key = xmlTextOf(body, "Key");
+		if (key === null || key === "") continue;
+		objects.push({
+			key,
+			size: Number(xmlTextOf(body, "Size") ?? "0") || 0,
+			etag: (xmlTextOf(body, "ETag") ?? "").replace(/^"|"$/g, ""),
+		});
+	}
+
+	const truncated = /<IsTruncated>\s*true\s*<\/IsTruncated>/i.test(xml);
+	const token = xmlTextOf(xml, "NextContinuationToken");
+	return { objects, nextToken: truncated && token ? token : null };
+}
+
+/** 取一个 XML 标签的文本内容，并做最基本的实体解码；标签不存在时返回 `null`。 */
+function xmlTextOf(xml: string, tag: string): string | null {
+	const match = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(xml);
+	if (!match) return null;
+	return decodeXmlEntities(match[1]);
+}
+
+/** 解码 S3 会在 key 里用到的实体（`&amp;` 这类 —— 不解码会把 key 弄错）。 */
+function decodeXmlEntities(value: string): string {
+	return value
+		.replace(/&lt;/g, "<")
+		.replace(/&gt;/g, ">")
+		.replace(/&quot;/g, '"')
+		.replace(/&apos;/g, "'")
+		.replace(/&#39;/g, "'")
+		.replace(/&amp;/g, "&");
+}
+
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_BASE_DELAY_MS = 250;
 const DEFAULT_MAX_DELAY_MS = 2_000;
@@ -576,6 +653,86 @@ export class S3Client {
 		});
 	}
 
+	/**
+	 * 列举桶里的对象（ListObjectsV2，分页）。
+	 *
+	 * ## 为什么现在才需要它
+	 *
+	 * 云端清理（F15）要回答"桶里有哪些对象"，而在此之前插件**从不需要**列举：
+	 * 一切都是内容寻址，上传前用 `key` 直接 PUT/HEAD 就够了。
+	 *
+	 * ## 签名里的查询串必须与服务端看到的**逐字一致**
+	 *
+	 * 这是这一层唯一容易出错的地方：SigV4 的 canonical query 用 `uriEncode`
+	 * （空格 → `%20`），而 `URLSearchParams` 会编成 `+` —— 两者对不上就是
+	 * `SignatureDoesNotMatch`，而报错信息**不会**告诉你是编码差异。
+	 * 所以这里自己用 `uriEncode` 拼查询串，并把**同一个对象**交给签名：
+	 * "发出去的那一串"与"签的那一串"来自同一个来源。
+	 *
+	 * ⚠️ `nextToken` 为空串/`null` 都表示"没有下一页"（S3 只在被截断时才给
+	 * `NextContinuationToken`）。
+	 */
+	async listObjects(options: ListObjectsOptions = {}): Promise<ListObjectsResult> {
+		const query: Record<string, string> = { "list-type": "2" };
+		if (typeof options.prefix === "string" && options.prefix !== "") query.prefix = options.prefix;
+		if (typeof options.continuationToken === "string" && options.continuationToken !== "") {
+			query["continuation-token"] = options.continuationToken;
+		}
+		if (typeof options.maxKeys === "number" && options.maxKeys > 0) {
+			// S3 的上限是 1000；超出会被拒，所以在这里夹紧而不是让服务端报错
+			query["max-keys"] = String(Math.min(1000, Math.trunc(options.maxKeys)));
+		}
+
+		// ⚠️ 列举是**桶级**请求（路径里没有 key），所以不能走 `requestTargetFor`：
+		// 那个函数会（正确地）拒绝空 key —— 它的语义是"给某个对象定位"。
+		const target = this.bucketRoot();
+		const url = `${target.url}?${queryStringFor(query)}`;
+		const payloadHash = await payloadHashOf("");
+
+		return this.withRetry("listObjects", target.path, async (attempt) => {
+			const { headers } = await this.sign(target, "GET", payloadHash, undefined, query);
+			const response = await this.send({ url, method: "GET", headers }, {
+				operation: "GET",
+				key: target.path,
+				attempt,
+			});
+			if (!isSuccess(response.status)) {
+				throw this.fail(response, { operation: "GET", key: target.path, attempt });
+			}
+			const parsed = parseListObjects(decodeBody(response.body));
+			if (parsed === null) {
+				// 解析不出来**不能**当成"桶是空的" —— 那会让清理命令以为没有东西可删
+				// （看起来"什么都没发生"），或者更糟：以为清单是全的。
+				throw configError("列举对象失败：服务端返回的 XML 无法解析");
+			}
+			return parsed;
+		});
+	}
+
+	/**
+	 * 桶级请求的地址与**签名路径**（列举对象用）。
+	 *
+	 * 两种寻址各有一条路径形状，而**签名路径必须与实际请求路径逐字一致**
+	 * （`requestTargetFor` 里那道自检就是为此）：
+	 * - path-style：`/{桶}`；
+	 * - virtual-host：`/`（桶在主机名里）。
+	 */
+	private bucketRoot(): { url: string; path: string } {
+		this.assertConfig();
+		const endpoint = normalizeEndpoint(this.config.endpoint);
+		const bucket = this.config.bucket;
+		if (!endpoint || !bucket) throw configError("存储地址或桶名未配置，无法列举对象");
+
+		if (this.config.forcePathStyle === false) {
+			const parsed = new URL(endpoint);
+			parsed.hostname = `${bucket}.${parsed.hostname}`;
+			parsed.pathname = "/";
+			return { url: parsed.toString().replace(/\/+$/, ""), path: "/" };
+		}
+		const encodedBucket = uriEncode(bucket);
+		return { url: `${endpoint}/${encodedBucket}`, path: `/${encodedBucket}` };
+	}
+
 	/** 对象在桶里的实际地址（与笔记里写的地址可能不同，见 `publicUrlFor`）。 */
 	objectUrl(key: string): string {
 		return requestTargetFor(this.config, key).url;
@@ -599,7 +756,8 @@ export class S3Client {
 		target: RequestTarget,
 		method: string,
 		payloadHash: string,
-		contentType?: string
+		contentType?: string,
+		query?: Record<string, string>
 	): Promise<{ headers: Record<string, string> }> {
 		this.assertConfig();
 		const { amzDate } = formatAmzDate(this.now());
@@ -616,6 +774,7 @@ export class S3Client {
 		const { authorization } = await signRequest({
 			method,
 			path: target.path,
+			query,
 			headers: toSign,
 			payloadHash,
 			accessKeyId: this.config.accessKeyId,

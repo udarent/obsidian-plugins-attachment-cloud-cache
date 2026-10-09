@@ -78,6 +78,36 @@ export class Notice {
 Notice.instances = [];
 
 /** 设置项组件替身：所有链式方法返回自身。 */
+/**
+ * 替身：`MarkdownRenderer`。
+ *
+ * 我们只用它做一件事 —— 把**库内链接**渲染成节点（非图片附件的"节点重建"）。
+ *
+ * ## ⚠️ 这里刻意**不**模仿宿主的真实 DOM
+ *
+ * 真实宿主会把 `![[doc.pdf]]` 渲染成 `<div class="internal-embed">` 之类的结构，
+ * 而那套结构**不是公开契约**（官方类型面里没有）。替身若照着写，
+ * 就变成"替身比被测代码更懂宿主" —— 一旦宿主改版，测试照样全绿。
+ * 所以这里只保证两件我们真正依赖的事：
+ * 1. 调用它会在容器里放**一个**子节点（调用方取 `firstElementChild`）；
+ * 2. 它是异步的（`Promise`）。
+ *
+ * 任何"重建出来的节点长什么样"的断言都不该落在这里 —— 那是宿主的事。
+ */
+export class MarkdownRenderer {
+	static async render(app, markdown, el, sourcePath, component) {
+		void app;
+		void component;
+		const node = {
+			tagName: "DIV",
+			textContent: String(markdown ?? ""),
+			dataset: { mockEmbedMarkdown: String(markdown ?? ""), mockEmbedSource: String(sourcePath ?? "") },
+		};
+		if (el && Array.isArray(el.children)) el.children.push(node);
+		return undefined;
+	}
+}
+
 export function fakeComponent() {
 	const component = {};
 	const chain = () => component;

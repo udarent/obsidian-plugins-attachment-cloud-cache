@@ -168,6 +168,31 @@ export function verifySignature({ request, credentials, bodyBuffer }) {
 	return { ok: true, detail: { canonicalRequest, stringToSign, signature: expected } };
 }
 
+/**
+ * 解析查询串（百分号解码；`+` 也当空格 —— 真实服务两者都收）。
+ *
+ * 只给替身自己用：被测代码发出去的查询串是 canonical 形式（`%20`），
+ * 而"能收下 `+`"让替身更贴近真实服务（有别的客户端会那么发）。
+ */
+function parseQueryString(rawQuery) {
+	const out = {};
+	for (const piece of String(rawQuery ?? "").split("&")) {
+		if (!piece) continue;
+		const eq = piece.indexOf("=");
+		const rawName = eq === -1 ? piece : piece.slice(0, eq);
+		const rawValue = eq === -1 ? "" : piece.slice(eq + 1);
+		const decode = (value) => {
+			try {
+				return decodeURIComponent(value.replace(/\+/g, " "));
+			} catch {
+				return value;
+			}
+		};
+		out[decode(rawName)] = decode(rawValue);
+	}
+	return out;
+}
+
 function splitRequestTarget(rawUrl) {
 	const index = rawUrl.indexOf("?");
 	if (index === -1) return [rawUrl, ""];
@@ -353,9 +378,52 @@ export function createMockS3(options) {
 				return;
 			}
 			if (method === "GET") {
-				// 列出对象（ListObjectsV2）。本项目尚未用到，但回一个空列表比回 405
-				// 更贴近真实服务，免得将来真要用时被一个不真实的替身误导。
-				const listing = `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>${bucket}</Name><KeyCount>0</KeyCount><IsTruncated>false</IsTruncated></ListBucketResult>`;
+				// 列出对象（ListObjectsV2）—— 云端清理（F15）靠它拿到桶里的清单。
+				//
+				// ⚠️ 这里**真的分页**（按 key 排序 + 前缀过滤 + continuation-token），
+				// 而不是回一个空列表：替身"看着能用"最坑的一种形态就是
+				// "回一个空清单" —— 被测代码会以为桶是空的，于是所有清理逻辑
+				// 都表现成"什么都没发生"，而测试照样全绿。
+				const params = parseQueryString(rawQuery);
+				if (params["list-type"] !== "2") {
+					// 明确拒绝而不是假装成功：协议用错时要立刻显形
+					const xml = errorXml("InvalidArgument", `只支持 ListObjectsV2（收到 list-type=${params["list-type"] ?? "(无)"}）`);
+					record.respondedStatus = 400;
+					res.writeHead(400, {
+						"content-type": "application/xml",
+						"content-length": Buffer.byteLength(xml),
+						"x-amz-request-id": "mock-request-id",
+					});
+					res.end(xml);
+					return;
+				}
+
+				const prefix = params.prefix ?? "";
+				const requested = Number(params["max-keys"] ?? "1000");
+				const maxKeys = Number.isFinite(requested) && requested > 0 ? Math.min(1000, Math.trunc(requested)) : 1000;
+				// token 约定为"上一页最后一个 key"（真实 S3 给的是不透明串，
+				// 但**对客户端唯一的要求**是原样回传，所以用一个确定性实现就够了）
+				const startAfter = params["continuation-token"] ?? "";
+				const allKeys = [...objects.keys()].filter((name) => name.startsWith(prefix)).sort();
+				// 下一页从"第一个**大于** token 的 key"开始；找不到就是已经到底
+				const nextIndex = startAfter ? allKeys.findIndex((name) => name > startAfter) : 0;
+				const from = nextIndex === -1 ? allKeys.length : nextIndex;
+				const pageKeys = allKeys.slice(from, from + maxKeys);
+				const truncated = from + pageKeys.length < allKeys.length;
+				const nextToken = truncated && pageKeys.length > 0 ? pageKeys[pageKeys.length - 1] : "";
+
+				const contents = pageKeys
+					.map((name) => {
+						const stored = objects.get(name);
+						return `<Contents><Key>${xmlEscape(name)}</Key><Size>${stored.body.length}</Size><ETag>${etagOf(stored.body)}</ETag></Contents>`;
+					})
+					.join("");
+				const listing =
+					`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>${bucket}</Name>` +
+					`<Prefix>${xmlEscape(prefix)}</Prefix><KeyCount>${pageKeys.length}</KeyCount>` +
+					`<MaxKeys>${maxKeys}</MaxKeys><IsTruncated>${truncated}</IsTruncated>` +
+					(nextToken ? `<NextContinuationToken>${xmlEscape(nextToken)}</NextContinuationToken>` : "") +
+					`${contents}</ListBucketResult>`;
 				record.respondedStatus = 200;
 				res.writeHead(200, {
 					"content-type": "application/xml",

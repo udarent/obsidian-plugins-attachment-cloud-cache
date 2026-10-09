@@ -58,7 +58,8 @@ images are both **yours** and **always visible**, with zero remote requests when
   goes into your keychain. **The file is read where it sits** — nothing is copied into your vault, and
   no copy of it is kept anywhere
 - **Five commands** — cache usage, index repair, cleanup, uploading what you already have, and picking
-  off-site files one by one. See [Commands](#commands)
+  off-site files one by one. Plus **cloud space cleanup**, which asks before deleting anything from
+  your storage. See [Commands](#commands)
 
 Works on desktop and mobile.
 
@@ -111,6 +112,7 @@ Five commands, all reachable from the command palette:
 | **Clean up unused cache files** | Deletes cache files no note points at any more. Deletion cannot be undone and the space is freed immediately. |
 | **Upload existing attachments** | Uploads the attachments your notes link to and rewrites those links. Each file is then moved into the cache folder (renamed); files no note links to are left alone. |
 | **Cache files from other sites…** | Lets you tick individual off-site files to fetch and upload. Needs the off-site feature turned on first. |
+| **Clean up unused objects in the cloud…** | Lists objects in your storage that no note here refers to, then deletes the ones you confirm. Off-site caches and anything still referenced stay. |
 
 ## Things to know
 
@@ -126,6 +128,10 @@ Five commands, all reachable from the command palette:
   cache folder", is the one that works offline.
 - **If an upload fails, the file stays local and the note gets a local link** plus a notice saying
   why — nothing is ever dropped, and no remote link is invented for a file that was not uploaded.
+- **Deleting an uploaded file asks whether the copy in your storage should go too**, and the default
+  is "local only". The same content is stored once, so one object may be shared across notes and
+  devices — and a cloud deletion cannot be undone. The cleanup command can only see *this* device's
+  references, which is stated right in its confirmation.
 - **The cache folder can be deleted at any time** — images are rebuilt on demand.
 - **Moving to another device? Copy the plugin folder, but delete `.cache-index.json` first.** That file
   records where *this* device keeps its cached copies; `data.json` is what carries your settings. ⚠️ The
@@ -226,7 +232,8 @@ vault 小），渲染用本地副本 —— 于是图片既是**你自己的**�
   最近最少使用清理）
 - **从凭据文件导入**，不必手输密钥。它认的就是 MinIO「下载凭据」那份 JSON：服务地址、访问密钥与
   寻址方式从文件里读，秘密进系统钥匙串。**文件就在原地读** —— 不会拷进 vault，插件也不留副本
-- **五条命令** —— 查看缓存占用、修复索引、清理、上传已有附件、逐张挑选站外文件。见[命令](#命令)
+- **五条命令** —— 查看缓存占用、修复索引、清理、上传已有附件、逐张挑选站外文件。另有**云端空间清理**：
+  从你的存储里删任何东西之前都会先问。见[命令](#命令)
 
 桌面端与移动端都支持。
 
@@ -274,6 +281,7 @@ vault 小），渲染用本地副本 —— 于是图片既是**你自己的**�
 | **清理未使用的缓存文件** | 删掉已经没有笔记指向的缓存文件。删除无法撤销，空间立刻释放。 |
 | **上传已存在的附件** | 把笔记里引用着的附件上传，并改写那些链接。上传成功后每个文件会被移入缓存目录（改名）；没有任何笔记引用的文件不会被碰。 |
 | **缓存站外文件（可挑选）…** | 勾选具体的站外文件去下载并上传。需要先打开站外文件功能。 |
+| **清理云端未使用对象…** | 列出你存储里"本库没有笔记引用"的对象，确认后删除。站外缓存与仍被引用的一律不动。 |
 
 ## 需要注意的
 
@@ -287,6 +295,9 @@ vault 小），渲染用本地副本 —— 于是图片既是**你自己的**�
 - **「不留本地副本」这一档断网时什么都看不到。** 默认档是「移入缓存目录」，那一档才离线可用。
 - **上传失败时，文件留在本地、笔记里插一条本地链接**，并提示失败原因 —— 绝不丢文件，
   也绝不为没上传成功的文件编一条远端链接。
+- **删掉一个已上传的文件时，会问你要不要连云端那份一起删**，默认是「仅删本地」。
+  相同内容只存一份，所以同一个对象可能被多篇笔记、多台设备共用 —— 而云端删除无法撤销。
+  清理命令只能看到**本设备**的引用情况，这一点直接写在它的确认框里。
 - **缓存目录可以随时整体删除** —— 再看那张图时按需重建。
 - **换设备？把插件目录整体复制过去，但先删掉 `.cache-index.json`。** 那个文件记的是**这台设备**的
   缓存副本在哪，而 `data.json` 才装着你的设置。⚠️ **秘密访问密钥不在目录里** —— 它存在 Obsidian

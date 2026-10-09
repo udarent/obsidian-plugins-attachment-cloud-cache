@@ -209,5 +209,22 @@ await runMutations({
 			to: "\t\treturn { status: 0 };",
 			expect: "网络失败必须收敛成 status:null",
 		},
+		{
+			// 后果：查询串用 `URLSearchParams` 编码（空格 → `+`），而签名用 `%20` ⇒
+			// `SignatureDoesNotMatch`，而那条报错**完全不提**编码差异 ——
+			// 排查的人只会怀疑密钥或区域。列举对象（云端清理）就是靠这条请求。
+			name: "★ 列举请求的查询串编码与签名不一致（只报签名错误，看不出是编码差异）",
+			from: "const url = `${target.url}?${queryStringFor(query)}`;",
+			to: "const url = `${target.url}?${new URLSearchParams(query).toString()}`;",
+			expect: "SignatureDoesNotMatch",
+		},
+		{
+			// 后果：分页时不把 token 带给服务端 ⇒ 每次都拿回**第一页**，
+			// 调用方会以为"只有这些对象"，而清理清单因此永远不完整。
+			name: "★ 分页不带续传 token（永远只看得到第一页）",
+			from: '\t\tif (typeof options.continuationToken === "string" && options.continuationToken !== "") {\n\t\t\tquery["continuation-token"] = options.continuationToken;\n\t\t}',
+			to: '\t\tvoid options.continuationToken;',
+			expect: "第二页接着上一页往后",
+		},
 	],
 });
