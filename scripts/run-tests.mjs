@@ -32,6 +32,7 @@
  *   node scripts/run-tests.mjs              # 全部
  *   node scripts/run-tests.mjs settings     # 只跑文件名含 "settings" 的
  *   node scripts/run-tests.mjs --exclude=ingest,transfer,download   # 排除几个（`check:fast` 用）
+ *   node scripts/run-tests.mjs --only=test-a.mjs,test-b.mjs         # 只跑列出的几个（`check:affected` 用）
  *
  * ⭐ `--exclude` 是为 `npm run check:fast` 加的：那三个真盘真网套件占了全套件耗时的大半
  * （ingest 30s / transfer 11s / download 9s ≈ 三分之二），日常迭代时跳过它们，
@@ -54,11 +55,19 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 
 // 参数：位置参数 = "文件名含这个片段才选中"；`--exclude=a,b,c` = 排除含这些片段的。
 // 两者都按**子串**匹配（与原来一致），所以 `--exclude=ingest` 只命中 test-ingest.mjs。
+// `--only=a,b,c` = 只选中含其中任一片段的（多个精确文件名，`check:affected` 按圈定结果调用）。
 let includeFilter = null;
 const excludeFilters = [];
+const onlyFilters = [];
 for (const arg of process.argv.slice(2)) {
 	if (arg.startsWith("--exclude=")) excludeFilters.push(...arg.slice("--exclude=".length).split(",").filter(Boolean));
+	else if (arg.startsWith("--only=")) onlyFilters.push(...arg.slice("--only=".length).split(",").filter(Boolean));
 	else includeFilter = arg;
+}
+
+if (includeFilter && onlyFilters.length > 0) {
+	console.error("✗ 位置过滤与 --only 只能用一个");
+	process.exit(1);
 }
 
 const entries = await readdir(HERE);
@@ -71,11 +80,12 @@ if (files.length === 0) {
 
 let selected = files;
 if (includeFilter) selected = selected.filter((f) => f.includes(includeFilter));
+if (onlyFilters.length > 0) selected = selected.filter((f) => onlyFilters.some((o) => f.includes(o)));
 if (excludeFilters.length > 0) selected = selected.filter((f) => !excludeFilters.some((e) => f.includes(e)));
 
 if (selected.length === 0) {
 	console.error(
-		`✗ 没有匹配的测试文件（include=${includeFilter ?? "全部"}、exclude=${excludeFilters.join(",") || "无"}）。可用：${files.join(", ")}`
+		`✗ 没有匹配的测试文件（include=${includeFilter ?? "全部"}、only=${onlyFilters.join(",") || "无"}、exclude=${excludeFilters.join(",") || "无"}）。可用：${files.join(", ")}`
 	);
 	process.exit(1);
 }

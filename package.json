@@ -17,6 +17,7 @@
 		"check": "npm run build && npm run lint && npm run manifest && npm run check:api-floor && npm run check:lockfile && npm run check:credentials && npm run check:mutate-files && npm run check:injected && npm run check:dev-docs && npm run check:readme && npm run check:i18n-keys && npm run test:unit",
 		"version": "node version-bump.mjs && git add manifest.json versions.json",
 		"check:fast": "npm run build && npm run lint && npm run manifest && npm run check:api-floor && npm run check:lockfile && npm run check:credentials && npm run check:mutate-files && npm run check:injected && npm run check:dev-docs && npm run check:readme && npm run check:i18n-keys && node scripts/run-tests.mjs --exclude=ingest,transfer,download",
+		"check:affected": "node scripts/affected.mjs",
 		"verify:real": "node scripts/verify-obsidian-smoke.mjs",
 		"check:injected": "node scripts/check-injected-snippets.mjs",
 		"check:dev-docs": "node scripts/check-no-dev-doc-refs.mjs",
