@@ -149,3 +149,52 @@ assert.ok(
 		"★★ 秘密绝不能被写进 settings —— data.json 是明文，且会随 vault 同步、备份、分享"
 	);
 }
+
+// ============================================================
+// 静态守卫：凭据导入那一行**结构上只有一个控件**
+// ============================================================
+//
+// 用户报过：那一行并排出现了**两个**"选择文件"按钮（实测：那一行里可见控件数 = 2）。
+//
+// **根因**：`<input type="file">` 是一个**会渲染的控件**，浏览器会给它画一个自己的
+// 「选择文件 / 未选择任何文件」。把它 `createEl` 进 `setting.controlEl`，那一行就多出
+// 一个可见控件；我们再加一个 Obsidian 风格的按钮 ⇒ 两个。
+//
+// ⚠️ 所以**不能**靠"挂进去再隐藏"来修：那只是把症状盖住，成因（控件区里多了一个会渲染
+// 的元素）还在，换个主题/样式表没加载/有人动了那条规则，症状就回来。它必须是**游离节点**
+// （`document.createElement`、从不 append）—— 于是那一行结构上就只有一个按钮。
+//
+// ⚠️ 这条没有行为断言能看见：两个按钮**都能用**，所有测试照样绿 —— 只有用户看得出来。
+{
+	const start = tab.indexOf("private renderCredentialImport(");
+	const end = start >= 0 ? tab.indexOf("\n\t}", start) : -1;
+	const body = end > start ? tab.slice(start, end) : "";
+	assert.ok(body.length > 0, "★ 找不到 renderCredentialImport 的实现（守卫自己失效了，别让它静默通过）");
+
+	// ⚠️ 判据必须落在**代码**上：这段实现里的注释正好在解释"不能写成 setting.controlEl.createEl"，
+	// 直接对整段文本做 `includes("controlEl")` 会被自己的注释判红（"匹配调用、不匹配字面量"的另一面：
+	// 先剥掉注释再判）。本项目在 `test-remove.mjs` 的 `adapter.remove` 守卫上踩过同一类坑。
+	const code = body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+	assert.ok(
+		code.includes('document.createElement("input")'),
+		"★ 那个 file input 必须用 document.createElement 造 —— 它不能进渲染树"
+	);
+	assert.ok(
+		!code.includes("controlEl"),
+		"★★ 它绝不能挂进 setting.controlEl —— 那正是「原生文件控件 + 我们的按钮」并排出现两个按钮的成因"
+	);
+	assert.equal(
+		(code.match(/setting\.addButton\(/g) ?? []).length,
+		1,
+		"★ 导入入口只该有**一个**按钮"
+	);
+	assert.ok(
+		code.includes("this.credentialFileInput = input"),
+		"★ 要留下引用 —— 真机探针靠这个字段拿到那个游离 input 把真实文件喂进去"
+	);
+	assert.ok(
+		!read("styles.css").includes("credentials-file-input"),
+		"★ 样式表里不该再有遮掩它的规则 —— 不要用隐藏去修一个结构问题"
+	);
+}

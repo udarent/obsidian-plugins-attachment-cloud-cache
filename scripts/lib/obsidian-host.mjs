@@ -165,6 +165,8 @@ export async function connect(port, { tries = 25, gapMs = 1200 } = {}) {
 	let id = 0;
 	const pending = new Map();
 	const consoleErrors = [];
+	/** 事件订阅：`方法名 → 回调集合`（见下面 `on` 的说明）。 */
+	const listeners = new Map();
 	ws.addEventListener("message", (event) => {
 		const msg = JSON.parse(event.data);
 		if (msg.id && pending.has(msg.id)) {
@@ -172,14 +174,25 @@ export async function connect(port, { tries = 25, gapMs = 1200 } = {}) {
 			pending.delete(msg.id);
 			return;
 		}
-		// 收集控制台报错 —— 原型补丁若在真实 WebView 里出问题，这里会看到
-		if (msg.method === "Runtime.exceptionThrown") {
-			consoleErrors.push(msg.params?.exceptionDetails?.exception?.description ?? "(无描述)");
+	// 收集控制台报错 —— 原型补丁若在真实 WebView 里出问题，这里会看到
+	if (msg.method === "Runtime.exceptionThrown") {
+		consoleErrors.push(msg.params?.exceptionDetails?.exception?.description ?? "(无描述)");
+	}
+	if (msg.method === "Runtime.consoleAPICalled" && msg.params?.type === "error") {
+		consoleErrors.push((msg.params.args ?? []).map((a) => a.description ?? a.value).join(" "));
+	}
+
+	// 事件订阅：有些 CDP 能力**只有事件、没有查询接口**（例如
+	// `Page.fileChooserOpened` —— 它回答"那次 click 到底有没有弹出文件选择器"）。
+	// 没有这条路就只能靠猜，而"猜"在本项目是不被接受的。
+	for (const handler of listeners.get(msg.method) ?? []) {
+		try {
+			handler(msg.params);
+		} catch {
+			/* 订阅者自己出错不该影响 CDP 循环 */
 		}
-		if (msg.method === "Runtime.consoleAPICalled" && msg.params?.type === "error") {
-			consoleErrors.push((msg.params.args ?? []).map((a) => a.description ?? a.value).join(" "));
-		}
-	});
+	}
+});
 
 	const send = (method, params = {}) =>
 		new Promise((resolve, reject) => {
@@ -198,8 +211,22 @@ export async function connect(port, { tries = 25, gapMs = 1200 } = {}) {
 			ws.send(JSON.stringify({ id: messageId, method, params }));
 		});
 
+	/**
+	 * 订阅一个 CDP 事件（有些能力**只有事件、没有查询接口**）。
+	 *
+	 * 目前唯一的使用场景是 `Page.fileChooserOpened`：它回答
+	 * "刚才那次 click **到底有没有**弹出文件选择器" —— 这正是
+	 * "把 `<input type="file">` 改成游离节点之后还弹不弹"的唯一判据。
+	 * 没有它就只能猜，而"猜"在本项目是不被接受的。
+	 */
+	const on = (method, handler) => {
+		if (!listeners.has(method)) listeners.set(method, new Set());
+		listeners.get(method).add(handler);
+		return () => listeners.get(method)?.delete(handler);
+	};
+
 	await send("Runtime.enable");
-	return { send, consoleErrors, close: () => ws.close() };
+	return { send, on, consoleErrors, close: () => ws.close() };
 }
 
 /** 在页面里求值，返回结构化结果（`returnByValue` 让对象能直接拿回来）。 */

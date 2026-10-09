@@ -191,27 +191,44 @@ export class SettingsTab extends PluginSettingTab {
 	/**
 	 * 「导入凭据文件」—— MinIO 控制台建完密钥后点「下载凭据」给的就是那个 json。
 	 *
-	 * ## 为什么是隐藏的 `<input type="file">` 而不是别的
+	 * ## 为什么是 `<input type="file">`，以及为什么它**不挂进 DOM**
 	 *
-	 * Obsidian 没有公开的"让用户选一个文件"的 API，而 `<input type="file">` 恰好是
-	 * 两端都有的原生能力：桌面端弹系统文件对话框，移动端弹文件选择器。而且我们
-	 * **只读它的内容、不碰路径** —— 移动端本来也拿不到路径，所以这条路天然两端通用。
+	 * 宿主**没有公开的**"让用户选一个文件"API —— `obsidian@1.13.0` 的公开面里查过，
+	 * 一个都没有（它内部那个 Electron `showOpenDialog` 既没进类型面，移动端也没有）。
+	 * 所以只能用 `<input type="file">`：桌面端弹系统文件对话框，移动端弹文件选择器，
+	 * 而且我们**只读它的内容、不碰路径**（移动端本来也拿不到路径）。
 	 *
-	 * ## 为什么不是拖拽进来
+	 * ⚠️⚠️ 但 `<input type="file">` 是一个**会渲染的控件** —— 浏览器会给它画一个自己的
+	 * "选择文件 / 未选择任何文件"。先前那版把它 `createEl` 进 `setting.controlEl`，
+	 * 于是那一行**并排出现两个按钮**（实测：可见控件数为 2），然后又用 CSS 把它藏起来。
+	 * **那是在遮症状**：结构的成因（控件区里多了一个会渲染的元素）还在，只靠一层样式挡着；
+	 * 换个主题、样式表没加载、或者有人改动那条规则，症状就回来。
 	 *
-	 * 拖进门打开的是宿主自己的编辑器（拖进来的文件会被存进 vault）——
-	 * 那正是本插件**要接管**的事件，用它来当导入入口会把自己绕进去。
+	 * 现在它是**游离节点**：`document.createElement` 造出来、**从不 append**。
+	 * 于是那一行里**结构上**只有一个按钮，没有"需要被隐藏的控件"这回事。
+	 * 它照样能做两件事：① 点我们的按钮时由它打开系统对话框；② 真机探针按下面这个字段
+	 * 拿到它、把真实文件喂进去。
 	 *
-	 * ⚠️ 读完**立刻清空** `input.value`：不清的话那份内容会一直挂在 DOM 上，
-	 * 而它里面有明文秘密 —— 没有理由让它多留一秒。
+	 * ## ⭐ 它是**公开**的，因为游离之后它没有别的入口了
+	 *
+	 * 元素不在 DOM 里 ⇒ 探针**没法**用类名去 `querySelector`（早先那个
+	 * `.acc-credentials-file-input` 钩子因此消失）。所以这个字段就是那个钩子：
+	 * 真机探针靠它拿到 input、喂真实文件、并断言它 `isConnected === false`。
+	 * （`noUnusedLocals` 也会盯着它：只写不读的私有字段编译不过 —— 而它确实是被读的，
+	 * 只是读者在测试侧。）
 	 */
+	public credentialFileInput: HTMLInputElement | null = null;
+
 	private renderCredentialImport(setting: Setting): void {
-		const input = setting.controlEl.createEl("input", { cls: "acc-credentials-file-input" });
+		// ⚠️ 必须是 `document.createElement`，**不能**写成 `setting.controlEl.createEl` ——
+		// 后者会把它挂进控件区，于是它会被渲染出来（见上面那段：那正是"两个按钮"的成因）。
+		const input = document.createElement("input");
 		input.type = "file";
 		// ⚠️ 只作提示、不作强制：用户完全可能把文件存成别的名字或后缀。
 		// 挡在对话框里只会让人以为"我的文件不对"，而真正该判的是内容。
 		input.accept = ".json,application/json";
 		input.addEventListener("change", () => void this.handleCredentialFile(input));
+		this.credentialFileInput = input;
 
 		setting.addButton((button) =>
 			button.setButtonText(this.t("s3ImportButton")).onClick(() => input.click())
