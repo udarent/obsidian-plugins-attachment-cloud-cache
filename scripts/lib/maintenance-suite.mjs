@@ -334,6 +334,15 @@ export function runMaintenanceSuite(mod) {
 	};
 	const index = new CacheIndex([entry("cached.png", "attachments/cached.png")]);
 
+	// ⭐ 命令跑完会把原文件**移进**缓存目录，所以候选只收**被笔记引用着**的那些
+	//（收集放这里一份，下面几条用例共用；集合外的文件一律不碰）
+	const referencedInUse = new Set([
+		"attachments/a.png",
+		"attachments/b.jpg",
+		"attachments/empty.png",
+		"attachments/cached.png",
+	]);
+
 	const selection = selectUploadCandidates(
 		[
 			{ path: "attachments/a.png", extension: "png", stat: { size: 100 } },
@@ -343,7 +352,7 @@ export function runMaintenanceSuite(mod) {
 			{ path: "attachments/cached.png", extension: "png", stat: { size: 50 } },
 			{ path: "", extension: "png", stat: { size: 5 } },
 		],
-		{ settings, index }
+		{ settings, index, referencedPaths: referencedInUse }
 	);
 
 	assert.deepEqual(selection.paths, ["attachments/a.png", "attachments/b.jpg"], "只挑启用清单里的、非空、未处理过的");
@@ -353,12 +362,58 @@ export function runMaintenanceSuite(mod) {
 	assert.equal(reasons["已经在缓存索引里"], 1, "已处理过的应被跳过");
 	assert.equal(reasons["路径为空"], 1, "坏输入应被跳过而不是让整批失败");
 
+	// ⭐ 只处理**被笔记引用着**的文件：命令成功后会把它移进缓存目录，
+	// 而没有任何引用的文件搬走之后没有任何东西会把用户引到它的新位置。
+	const unreferenced = selectUploadCandidates(
+		[
+			{ path: "attachments/used.png", extension: "png", stat: { size: 10 } },
+			{ path: "attachments/orphan.png", extension: "png", stat: { size: 10 } },
+		],
+		{ settings, index, referencedPaths: new Set(["attachments/used.png"]) }
+	);
+	assert.deepEqual(unreferenced.paths, ["attachments/used.png"], "★ 只有被笔记引用的才处理");
+	const unrefReasons = Object.fromEntries(unreferenced.skipped.map((s) => [s.reason, s.count]));
+	assert.equal(
+		unrefReasons["没有被任何笔记引用"],
+		1,
+		"★ 没有被引用的文件要跳过**并如实计数**（否则用户看到的只是「传得少」）"
+	);
+	// ⭐ 结构化字段：确认框按它说「另有 N 个不会被处理」—— 不让界面去认那串中文文案
+	assert.equal(unreferenced.unreferenced, 1, "★ 未引用的个数要单独给出来（供确认框如实交代）");
+	assert.equal(selection.unreferenced, 0, "这一批每个都有人引用 ⇒ 未引用数应为 0");
+
 	// 没有 stat 的文件（宿主可能不给）不该被当成空文件
 	const noStat = selectUploadCandidates([{ path: "attachments/no-stat.png", extension: "png" }], {
 		settings,
 		index,
+		referencedPaths: new Set(["attachments/no-stat.png"]),
 	});
 	assert.deepEqual(noStat.paths, ["attachments/no-stat.png"], "拿不到 size 时不该误判成空文件");
+
+	// ⭐ 「被引用」这个集合的取法：把宿主的链接索引换算成"目标路径"集合。
+	// 形状与"画布也会进索引"这两条都来自真机取证
+	//（`dev-notes/_archive/.probe-referenced-links.mjs`）。
+	const { referencedPathsFrom } = mod;
+	const linked = referencedPathsFrom({
+		"notes/a.md": { "attachments/used.png": 2, "notes/b.md": 1 },
+		// ⚠️ 真机上画布**会**进索引 —— 必须在这里把它排除，否则画布引用的附件会被搬走、
+		// 而画布里的那条引用我们不改写 ⇒ 死链
+		"_acc.canvas": { "attachments/in-canvas.png": 1 },
+		"notes/broken.md": null,
+	});
+	// ⚠️ 顺序有讲究：**先把"画布不算来源"这条具体的判据点出来**，再给整体集合的说法 ——
+	// 反过来的话，"来源筛错了"这类变异会先撞上那条更宽的断言，报错原因就不再指向画布
+	//（本项目说的"变异的原因要对得上"）。
+	assert.ok(!linked.has("attachments/in-canvas.png"), "★★ 画布里的引用不算：我们的改写器不改画布，搬走等于制造死链");
+	assert.deepEqual(
+		[...linked].sort(),
+		["attachments/used.png", "notes/b.md"],
+		"只收目标路径（笔记互链也会进来 —— 它由扩展名那一关过滤）；画布不算来源"
+	);
+	assert.equal(referencedPathsFrom(null).size, 0, "拿不到索引时为空 ⇒ 这轮**不处理**任何文件（保守方向）");
+	assert.equal(referencedPathsFrom("不是对象").size, 0, "形状不对时当成没有引用，而不是抛错或全收");
+	assert.equal(referencedPathsFrom(["notes/a.md"]).size, 0, "数组不是链接索引的形状");
+	assert.ok(referencedPathsFrom({ "NOTE.MD": { "a.png": 1 } }).has("a.png"), "来源后缀大小写不敏感");
 
 	// ============================================================
 	// ⭐ 外链候选：批量上传命令也要看到"还没进你自己存储"的图

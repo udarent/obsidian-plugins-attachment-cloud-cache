@@ -23,6 +23,10 @@
  * 上传本身不碰笔记；但要让老图真正"搬到图床"，笔记里的本地链接必须换成远端
  * 链接 —— 那一步会重写用户的 `.md` 文件。所以选候选时**宁少不多**：
  *
+ * - ⭐ **只挑「确实被笔记引用着」的**（`referencedPaths`）：命令跑完会把原文件
+ *   **移进**缓存目录（见 `localCopy`），引用的改写正是"搬走之后不会留下死链"的前提。
+ *   用户放在附件目录里、**没有任何笔记引用**的文件一概不碰（既不传也不动）——
+ *   那种文件多半是废弃的旧图，动了只会让人以为丢东西。
  * - 只挑**扩展名在启用清单里**的（用户已经声明过"这些才是要处理的图"）；
  * - 跳过**已经在索引里**的（同一个 key = 同一份内容，重复上传没有意义，
  *   而且会让"哪些是新的"变得难以解释）；
@@ -47,6 +51,59 @@ export interface CandidateOptions {
 	/** 已在索引里的 key 也算"处理过" —— 但候选文件的 key 要上传后才知道， */
 	/** 所以这里按**路径**排除：索引记着某个副本的路径就是它。 */
 	index: CacheIndex;
+	/**
+	 * **被笔记引用着**的文件路径集合（宿主解析出来的链接目标）。
+	 *
+	 * 只有在这个集合里的文件才会被选上 —— 因为这条命令跑完会把原文件**移进**缓存目录，
+	 * 而"引用的改写"正是它的前提（见文件头）。集合外的文件一概不碰。
+	 *
+	 * 取值的来源是宿主的链接索引（`metadataCache.resolvedLinks`），而不是我们自己扫正文：
+	 * 宿主认识所有链接形态（`![[图.png]]`、`![](attachments/图.png)`、别名、子路径……），
+	 * 我们重写一遍只会得到一个更窄的近似 —— 而这里的判据是"能不能安全地把它搬走"，
+	 * **漏判的代价是死链**，必须用宿主自己的解析结果。
+	 */
+	referencedPaths: ReadonlySet<string>;
+}
+
+/**
+ * 从宿主的链接索引（`metadataCache.resolvedLinks`）里取出**被笔记引用着**的文件路径集合。
+ *
+ * ## 形状与来源（真机取证，2026-10-09）
+ *
+ * 实测（`dev-notes/_archive/.probe-referenced-links.mjs`）：它是
+ * `{ 来源文件路径: { 目标文件路径: 引用次数(number) } }`；**刚起来时是空的**，
+ * 约 2 秒内建好（21 个文件 / 5 个来源 / 1 个目标）；⚠️ 而且它**连画布里的引用也算**
+ * （写一个指向附件的 `.canvas`，两秒后那条引用出现在索引里）。
+ *
+ * ## ⚠️ 为什么要按来源筛成「笔记」
+ *
+ * 这条命令会把**被引用**的文件移进缓存目录，而"移走"要成立，前提是那些引用会被
+ * 同一条命令改写成远端地址。我们的改写器只认 Markdown 笔记里的链接
+ * （`planLinkRewrites`）——**画布（`.canvas`）里的引用它不改**。
+ * 所以画布引用**必须排除**：否则一个只被画布引用的附件会被搬走，
+ * 而画布里的那条引用原地不动 ⇒ **死链**（画布上的图直接没了）。
+ * 排除之后那种文件"不被处理"，是这里唯一安全的方向。
+ *
+ * ⚠️ 认不出的输入（`null`、数组、字段类型不对）一律当成"没有引用" —— 宁可这轮不处理，
+ * 也不能把"没查清"当成"没有引用"的反面（那会把文件搬走）。
+ */
+export function referencedPathsFrom(resolvedLinks: unknown): Set<string> {
+	const referenced = new Set<string>();
+	if (!resolvedLinks || typeof resolvedLinks !== "object") return referenced;
+
+	// ⚠️ 这一层的入参是**宿主的对象**（形状已知但类型上不可信），所以先收成
+	// `Record<string, unknown>` 再逐层收窄：不收窄的话 `Object.entries` 会给出 `any`，
+	// 而 eslint 的 `no-unsafe-argument` 会因此判红（本项目 lint 是门禁的一部分）。
+	const table = resolvedLinks as Record<string, unknown>;
+	for (const [sourcePath, targets] of Object.entries(table)) {
+		// ⭐ 只认**笔记**（Markdown）作为来源 —— 见上面那段"为什么"
+		if (!/\.md$/i.test(sourcePath)) continue;
+		if (!targets || typeof targets !== "object") continue;
+		for (const targetPath of Object.keys(targets)) {
+			if (targetPath) referenced.add(targetPath);
+		}
+	}
+	return referenced;
 }
 
 export interface CandidateSelection {
@@ -54,12 +111,21 @@ export interface CandidateSelection {
 	paths: string[];
 	/** 被跳过的原因统计（让用户看得见"为什么只传了 N 个"）。 */
 	skipped: { reason: string; count: number }[];
+	/**
+	 * 其中"**没有被任何笔记引用**"的那一类，单独给出一个**结构化**的数字。
+	 *
+	 * ⚠️ 不让调用方去 `skipped` 里认那串中文文案：文案改了调用方就会静默失效，
+	 * 而这条提示正是"为什么我的老图没被处理"的唯一解释（用户跑这条命令的预期
+	 * 往往是"把没搬的全搬"，而它只动被引用着的那些）。
+	 */
+	unreferenced: number;
 }
 
 /** 挑出要批量上传的文件。 */
 export function selectUploadCandidates(files: readonly VaultFileLike[], options: CandidateOptions): CandidateSelection {
 	const paths: string[] = [];
 	const reasons = new Map<string, number>();
+	let unreferenced = 0;
 	const bump = (reason: string) => reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
 
 	for (const file of files) {
@@ -71,6 +137,14 @@ export function selectUploadCandidates(files: readonly VaultFileLike[], options:
 		const extension = String(file.extension ?? "").replace(/^\./, "");
 		if (!isExtensionEnabled(extension, options.settings)) {
 			bump("扩展名不在启用清单里");
+			continue;
+		}
+
+		// ⭐ 只处理**被笔记引用着**的文件：命令成功后会把它移进缓存目录，
+		// 而没有引用的文件搬走只会让人以为丢东西（见 `referencedPaths`）。
+		if (!options.referencedPaths.has(file.path)) {
+			bump("没有被任何笔记引用");
+			unreferenced += 1;
 			continue;
 		}
 
@@ -93,6 +167,7 @@ export function selectUploadCandidates(files: readonly VaultFileLike[], options:
 	return {
 		paths,
 		skipped: [...reasons].map(([reason, count]) => ({ reason, count })),
+		unreferenced,
 	};
 }
 

@@ -131,8 +131,10 @@ await runMutations({
 			// 后果：算出了外链候选却不交给执行层 ⇒ 命令只搬库内文件、外链图原样留着，
 			// 而确认框刚刚向用户承诺过会处理它们（用户以为搬完了）。
 			name: "★ 算出了外链候选却不交给执行层（确认框承诺了却没做）",
-			from: "runBatchUpload(deps, { external });",
-			to: "runBatchUpload(deps);",
+			// ⚠️ 只摘掉 `external` —— 把整份 options 都去掉会让它变成"少传参数"的报错，
+			// 那样测到的就不是"外链那趟被跳过"了（这是本项目说的"变异的原因要对得上"）。
+			from: "runBatchUpload(deps, { external, referencedPaths });",
+			to: "runBatchUpload(deps, { referencedPaths });",
 			expect: "外链图被下载、上传，笔记里的链接被改写",
 		},
 		{

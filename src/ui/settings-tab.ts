@@ -243,17 +243,22 @@ export class SettingsTab extends PluginSettingTab {
 		skin.buttonEl.setAttribute("aria-hidden", "true");
 		skin.buttonEl.tabIndex = -1;
 
-		// ⚠️ 用**这一行所在文档**造：设置界面在独立窗口里，模块作用域的 document 是主窗的
-		const input = setting.controlEl.ownerDocument.createElement("input");
+		// ⚠️ 用**这一行自己的元素**去 `createEl`：宿主的 `createEl` 契约是"**建好并挂到这个节点里**"，
+		// 所以在一个属于设置窗口的元素上调用它，同时满足两件事：
+		//   ① 创建在**这一行所在的窗口**里（设置界面是独立窗口，模块作用域的 `document` 是主窗的）；
+		//   ② 直接挂进包裹层 —— 游离的文件控件**开不了**选择器（见上面那段）。
+		// ⚠️ 不要写成 `ownerDocument.createEl(...)`：那等于在**文档**上调用它，宿主会试图把元素
+		// 挂到 `document` 上 ⇒ `HierarchyRequestError: Only one element on document allowed`
+		// —— 真机实测：设置页整行渲染失败（那一行直接看不见）。
+		const input = wrap.createEl("input", { cls: "acc-credentials-file-input" });
 		input.type = "file";
-		input.classList.add("acc-credentials-file-input");
 		// ⚠️ 只作提示、不作强制：用户完全可能把文件存成别的名字或后缀。
 		// 挡在对话框里只会让人以为"我的文件不对"，而真正该判的是内容。
 		input.accept = ".json,application/json";
 		input.setAttribute("aria-label", this.t("s3ImportButton"));
 		input.addEventListener("change", () => void this.handleCredentialFile(input));
-		// ⭐ 挂进包裹层（= 挂进文档）。游离的文件控件**开不了**选择器，见上面那段取证。
-		wrap.appendChild(input);
+		// ⭐ 不用再 append：上面的 `createEl` 已经把它挂进包裹层（= 挂进文档）了。
+		// 游离的文件控件**开不了**选择器 —— 那正是上一版的错，见上面那段取证。
 	}
 
 	/** 读到文件内容 → 交给插件导入 → **如实**报告改了什么、以及为什么没成。 */

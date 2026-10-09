@@ -106,7 +106,7 @@ Five commands, all reachable from the command palette:
 | **Show cache usage** | How much the cache holds, and how much of it could be reclaimed. |
 | **Repair the local-copy index** | Drops index entries whose files are already gone, so the index matches the disk again. |
 | **Clean up unused cache files** | Deletes cache files no note points at any more. Deletion cannot be undone and the space is freed immediately. |
-| **Upload existing attachments** | Uploads attachments already sitting in your vault and rewrites the links. Your original files are kept. |
+| **Upload existing attachments** | Uploads the attachments your notes link to and rewrites those links. Each file is then moved into the cache folder (renamed); files no note links to are left alone. |
 | **Cache images from other sites…** | Lets you tick individual off-site images to fetch and upload. Needs the off-site feature turned on first. |
 
 ## Things to know
@@ -262,7 +262,7 @@ vault 小），渲染用本地副本 —— 于是图片既是**你自己的**�
 | **查看缓存占用** | 缓存里有多少、其中多少可以回收。 |
 | **自检并修复本地副本索引** | 丢掉那些文件已经不在的索引记录，让索引和磁盘重新对上。 |
 | **清理未使用的缓存文件** | 删掉已经没有笔记指向的缓存文件。删除无法撤销，空间立刻释放。 |
-| **上传已存在的附件** | 把 vault 里已经存在的附件上传，并改写笔记里的链接。原文件会保留。 |
+| **上传已存在的附件** | 把笔记里引用着的附件上传，并改写那些链接。上传成功后每个文件会被移入缓存目录（改名）；没有任何笔记引用的文件不会被碰。 |
 | **缓存站外图片（可挑选）…** | 勾选具体的站外图片去下载并上传。需要先打开站外图片功能。 |
 
 ## 需要注意的

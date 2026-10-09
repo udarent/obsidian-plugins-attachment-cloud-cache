@@ -168,13 +168,13 @@ await runMutations({
 			expect: "不得在附件目录里",
 		},
 		{
-			// ⚠️ 这条变异把**用户的附件**当成我们自己的临时副本去搬 ——
-			// 那是不可逆的：原件被移走之后，任何我们没认出来的引用（引号包起来的路径、
-			// 别的插件生成的写法）都会指向一个不存在的文件。
-			name: "迁移模式把用户的原件搬进缓存（等于删掉他的附件）",
-			from: "\t\t\tconst copied = await writeCacheCopy(deps, cachePath, bytes);",
-			to: "\t\t\tconst copied = await moveIntoCache(deps, stagedPath, cachePath);",
-			expect: "⭐ 用户的原件必须原封不动",
+			// ⚠️ 这条守的是「移入缓存目录」这条设置**真的兑现**：
+			// 上传成功了却把原件留在附件目录里（只是另写一份或什么都不做），
+			// 用户按设置项的字面意思无法理解 —— 而这是他对这条命令的**唯一**承诺来源。
+			name: "迁移模式不把原件搬进缓存（「移入」变成「原地留着」）",
+			from: "\t\t\tlocalPath = await moveIntoCache(deps, existingPath, cachePath);",
+			to: "\t\t\tlocalPath = cachePath;",
+			expect: "⭐ 「移入缓存目录」⇒ 附件目录里那份不在了",
 		},
 	],
 });

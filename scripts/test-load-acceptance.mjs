@@ -17,8 +17,9 @@ console.log(
 		"leaves exactly one link — one paste must not show the same picture twice; rendering rewrote the src to the local copy with **zero** requests in both reading view and " +
 		"live preview, while a third-party image was left alone; clean-cache deleted only the orphan through " +
 		"Vault.delete (never the trash), said so in the confirmation text, left the referenced copy alone, and " +
-		"cancelling touched nothing; batch upload rewrote both link forms, kept the originals and left " +
-		"no stray copy behind; an unconfigured paste is left to Obsidian; batch upload also picks up the images notes " +
+		"cancelling touched nothing; batch upload rewrote both link forms, moved the file into the cache " +
+		"folder (a move, not a copy) and left both the attachment no note refers to and any stray copy alone; " +
+		"an unconfigured paste is left to Obsidian; batch upload also picks up the images notes " +
 		"link to elsewhere, and its dialog names the sites it will visit (that confirmation is the authorisation) " +
 		"while cancelling downloads nothing; with the feature on and the default set to \"cache straight away\" such " +
 		"an image is downloaded, uploaded and its link rewritten, whereas the default \"leave it alone\" sends no " +

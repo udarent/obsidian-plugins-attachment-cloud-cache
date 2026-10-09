@@ -46,5 +46,22 @@ await runMutations({
 			to: "\t\t\tif (false) {\n",
 			expect: "候选要带上",
 		},
+		{
+			// 后果：**没有任何笔记引用**的文件也被当成候选 ⇒ 命令会把它们
+			// 上传、移进缓存目录并改名。而它们没有任何链接会把用户引到新位置，
+			// 用户看到的只是"我放在附件目录里的东西被搬走了"。
+			name: "★ 未引用的文件也进候选（把用户放在附件目录里的东西搬走）",
+			from: '\t\tif (!options.referencedPaths.has(file.path)) {\n',
+			to: "\t\tif (false) {\n",
+			expect: "只有被笔记引用的才处理",
+		},
+		{
+			// 后果：连**画布**里的引用也算"被笔记引用" ⇒ 只被画布引用的附件被搬走，
+			// 而画布里的那条引用我们不改写（`planLinkRewrites` 只认 Markdown）⇒ 画布上的图没了。
+			name: "★ 不按来源筛（画布里的引用也算笔记引用，搬走之后画布上的图变死链）",
+			from: "\t\tif (!/\\.md$/i.test(sourcePath)) continue;\n",
+			to: "\t\t// 变异：不筛来源\n",
+			expect: "画布里的引用不算",
+		},
 	],
 });

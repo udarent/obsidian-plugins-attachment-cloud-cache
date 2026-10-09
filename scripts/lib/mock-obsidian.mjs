@@ -778,10 +778,70 @@ export function createAppMock(rootDir, opts = {}) {
 	};
 	const layoutReadyCallbacks = [];
 
+	/**
+	 * 模拟宿主**在改名之后顺手更新其它笔记里的链接**（2026-10-09 真机实测）。
+	 *
+	 * ⚠️ 这一步看着像"多余的模拟"，其实是**必需的**：真机上 `renameFile` 会连带改笔记，
+	 * 而本插件搬完文件之后**还要去改写那些链接**（改成远端地址）—— 两者**抢时间**。
+	 * 宿主先改完，插件按老路径就一处都找不到，笔记里留下的是**本地副本**的链接。
+	 * 替身不模拟它，这类时序缺陷在套件里永远不会出现（第一版就是这样漏掉的）。
+	 *
+	 * 形态按真机来：默认「新链接格式 = 尽可能短」⇒ 只写**文件名**
+	 *（`![[<hash>.png]]`、`![x](<hash>.png)`）。
+	 */
+	async function rewriteLinksAfterRename(oldPath, newPath) {
+		const oldName = String(oldPath).split("/").pop();
+		const newName = String(newPath).split("/").pop();
+		if (!oldName || !newName || oldName === newName) return;
+		const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		const entries = await scan();
+		for (const entry of entries) {
+			if (entry.folder || !entry.path.endsWith(".md")) continue;
+			const abs = toAbs(rootDir, entry.path);
+			let text;
+			try {
+				text = await readFile(abs, "utf8");
+			} catch {
+				continue;
+			}
+			if (!text.includes(oldName)) continue;
+			const updated = text
+				// wikilink：`![[老路径]]` / `![[老路径|别名]]`（别名原样保留）
+				.replace(
+					new RegExp(`(!?\\[\\[)${escape(oldPath)}(\\|[^\\]]*)?(\\]\\])`, "g"),
+					(_m, open, alias, close) => `${open}${newName}${alias ?? ""}${close}`
+				)
+				.replace(
+					new RegExp(`(!?\\[\\[)${escape(oldName)}(\\|[^\\]]*)?(\\]\\])`, "g"),
+					(_m, open, alias, close) => `${open}${newName}${alias ?? ""}${close}`
+				)
+				// Markdown 链接：`![x](老路径)` / `![x](老名字)`
+				.replace(new RegExp(`(\\]\\()${escape(oldPath)}(\\))`, "g"), `$1${newName}$2`)
+				.replace(new RegExp(`(\\]\\()${escape(oldName)}(\\))`, "g"), `$1${newName}$2`);
+			if (updated !== text) await writeFile(abs, updated, "utf8");
+		}
+	}
+
 	const app = {
 		vault,
 		workspace,
 		secretStorage: createSecretStorage(),
+		/**
+		 * 宿主的链接索引。形状取自**真机取证**（`dev-notes/_archive/.probe-referenced-links.mjs`）：
+		 * `{ 来源文件路径: { 目标文件路径: 引用次数(number) } }`。
+		 *
+		 * ⚠️ **内容由测试填**（`helpers.setResolvedLinks(...)`），替身不自己解析笔记 ——
+		 * 解析一遍就等于在测试里再造一个链接解析器，它一旦与宿主不一致，
+		 * "引用"这个判据就会**在测试里成立、在真机上不成立**（本项目反复踩过的一类假绿灯）。
+		 * 真机上这份索引是宿主算出来的，这里就把它当**输入**看待。
+		 *
+		 * ⚠️ 真机上它**刚起来时是空的**、约 2 秒内建好，而且**连画布里的引用也算**
+		 * （实测：写一个指向附件的 `.canvas`，两秒后那条引用就在索引里）。
+		 * 所以想验证"画布引用不算"这类规则时，要显式把 canvas 作为来源填进来。
+		 */
+		metadataCache: {
+			resolvedLinks: {},
+		},
 		fileManager: {
 			async trashFile(file) {
 				calls.trash.push(file.path);
@@ -791,6 +851,16 @@ export function createAppMock(rootDir, opts = {}) {
 				calls.rename.push([file.path, newPath]);
 				// 同上：不建父目录。宿主自己也只做 rename，目录得由调用方先建好。
 				await rename(toAbs(rootDir, file.path), toAbs(rootDir, newPath));
+				// ⚠️⭐ **真机的 `renameFile` 还会顺手改别的笔记里的链接**（2026-10-09 实测）：
+				// 搬完一个文件后，Obsidian 会把指向它的链接更新成新位置/新名字，
+				// 形式取决于用户的「新链接格式」设置 —— 默认「尽可能短」⇒ 只剩文件名
+				//（`![[<hash>.png]]`、`![x](<hash>.png)`）。替身不模拟这一步的话，
+				// "宿主抢在我们改写之前改了笔记"这类时序缺陷在套件里**永远不会出现**。
+				try {
+					await rewriteLinksAfterRename(file.path, newPath);
+				} catch {
+					// 宿主自己的链接更新失败不该让 rename 失败
+				}
 			},
 			generateMarkdownLink(file, sourcePath, subpath, alias) {
 				return alias ? `[[${file.path}|${alias}]]` : `[[${file.path}]]`;
@@ -816,9 +886,18 @@ export function createAppMock(rootDir, opts = {}) {
 		app,
 		calls,
 		rootDir,
-		mobile,
-		setAttachmentFolder(dir) {
+		mobile,		setAttachmentFolder(dir) {
 			attachmentDir = dir;
+		},
+		/**
+		 * 填宿主的链接索引（`metadataCache.resolvedLinks`）。
+		 *
+		 * ⚠️ 没填时它是**空的** —— 于是"上传已存在的附件"这条命令什么都不会处理
+		 * （候选只收被引用着的文件）。所以用到那条命令的用例**必须**显式声明引用，
+		 * 否则会看到命令空转；那时断言会响亮地失败，而不是悄悄放过。
+		 */
+		setResolvedLinks(links) {
+			app.metadataCache.resolvedLinks = links ?? {};
 		},
 		/** 重新扫描磁盘 → 模拟 Obsidian 更新文件索引。 */
 		async refreshPathCache() {

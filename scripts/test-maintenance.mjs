@@ -24,7 +24,9 @@ await withLoadedTs(
 			"Maintenance planners passed (four audit classes with attachment-folder files never treated as orphans; " +
 				"preview truncated but execution list full; link spans for wikilink/alias/subpath/title/angle forms; " +
 				"rewrites preserve aliases and never touch unrelated links; reference scan only counts our own storage; " +
-				"batch candidates skip non-enabled, empty and already-indexed files; off-site candidates are images only " +
+				"batch candidates skip non-enabled, empty, already-indexed files and every file no " +
+				"note refers to (only Markdown sources count, so a canvas-only reference keeps the file " +
+				"untouched); off-site candidates are images only " +
 				"(never plain links or wikilinks), they include the ones the default setting leaves alone — otherwise " +
 				"turning that default off would leave these explicit actions with an empty list — and they are never " +
 				"produced when the feature is off, the host is loopback, or the storage is not ready)."

@@ -38,7 +38,8 @@ import { auditForCleanup, collectCacheFiles, runBatchUpload, runCleanup, runEvic
 import type { MaintenanceDeps } from "./maintenance/run";
 import { createCacheRotator } from "./maintenance/rotation";
 import type { CacheRotator } from "./maintenance/rotation";
-import { selectExternalUploadCandidates, selectUploadCandidates } from "./maintenance/batch";
+import { referencedPathsFrom, selectExternalUploadCandidates, selectUploadCandidates } from "./maintenance/batch";
+
 import type { ExternalCandidate, NoteTextLike } from "./maintenance/batch";
 import { ingestAttachment } from "./core/ingest";
 import { confirmWithModal } from "./ui/confirm-modal";
@@ -506,7 +507,14 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		const files = this.app.vault
 			.getFiles()
 			.filter((file) => typeof file?.path === "string");
-		const selection = selectUploadCandidates(files, { settings: this.settings, index: this.currentIndex() });
+		// ⭐ 引用集合**算一次、用两次**（确认框的清单 + 真正执行的那趟）——
+		// 两份不一致的话，用户会按清单授权、却按另一份执行。
+		const referencedPaths = this.referencedVaultPaths();
+		const selection = selectUploadCandidates(files, {
+			settings: this.settings,
+			index: this.currentIndex(),
+			referencedPaths,
+		});
 
 		// ⭐ 笔记里的**外链图**也算候选：这条命令补的是"把还没进你自己存储的图搬进去"，
 		// 而指向别处的图同样没进存储 —— 只是它们在别人的服务器上。
@@ -530,10 +538,18 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			...(selection.paths.length > 10
 				? [this.t("maintainCleanMore", { count: selection.paths.length - 10 })]
 				: []),
-			// ⚠️ 必须说清"原文件不会删" —— 否则用户会以为磁盘会腾出来，
-			// 结果发现文件还在，以为命令没生效。
-			this.t("maintainBatchKeepsOriginals"),
+			// ⚠️ 必须说清"跑完原文件就不在附件目录里了" —— 用户是照着设置项
+			// 「移入缓存目录」来理解这条命令的，做完发现文件还在会以为没生效；
+			// 反过来，现在就告诉他"会被搬走"，他才能在跑之前决定。
+			this.t("maintainBatchMovesOriginals"),
 		];
+
+		// ⚠️ 也要说清"哪些**不会**被处理" —— 用户跑这条命令的预期往往是"把没搬的全搬"，
+		// 而它只动被笔记引用着的那些（没引用的搬走只会让人以为丢东西）。
+		// 不说的话他会以为漏了，然后反复重跑。
+		if (selection.unreferenced > 0) {
+			lines.push(this.t("maintainBatchSkipsUnreferenced", { count: selection.unreferenced }));
+		}
 
 		if (external.candidates.length > 0) {
 			// ⚠️ 必须把**站点**列出来：这个确认框就是那份授权（没有用户的显式动作，
@@ -557,7 +573,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			return;
 		}
 
-		const result = await runBatchUpload(deps, { external });
+		const result = await runBatchUpload(deps, { external, referencedPaths });
 		new Notice(
 			this.t("maintainBatchDone", {
 				uploaded: result.uploaded,
@@ -667,6 +683,17 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			}
 		}
 		return notes;
+	}
+
+	/**
+	 * **被笔记引用着**的文件路径集合（取自宿主的链接索引）。
+	 *
+	 * 这条命令跑完会把原文件移进缓存目录，所以"搬谁"必须由**引用**决定：
+	 * 引用会被同一条命令改写成远端地址，而没有任何引用的文件我们一概不碰。
+	 * 判据本身在 `referencedPathsFrom` 里（纯函数，含"为什么只认 Markdown 来源"）。
+	 */
+	private referencedVaultPaths(): ReadonlySet<string> {
+		return referencedPathsFrom(this.app.metadataCache?.resolvedLinks);
 	}
 
 	/** 抽成方法是为了让测试能替换掉它（真弹窗点不了）。 */

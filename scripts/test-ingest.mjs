@@ -31,7 +31,8 @@ await withLoadedTs(
 				"requests, upload failure keeps the bytes in the attachment folder and registers " +
 				"nothing, same-name files are never overwritten, an attachment-folder override " +
 				"beats the host's own setting, migrating an attachment that already lives in the " +
-				"vault never leaves a stray copy behind and never touches the original, nested keys " +
+				"vault leaves no stray staging copy behind and moves it into the cache folder " +
+				"(a move, not a second copy), nested keys " +
 				"create folders, and a corrupt index degrades to empty instead of throwing)."
 		);
 	}

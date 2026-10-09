@@ -121,8 +121,12 @@ export interface IngestRequest {
 	 * 给了它就进入**迁移模式**，与粘贴路径有三处不同：
 	 * 1. **不再落盘** —— 字节已经在库里，"先落盘"这一步天然满足；
 	 *    照搬会在附件目录里凭空多出一个 `xxx 1.png`（原文件占着名字 ⇒ 另取序号）。
-	 * 2. **不搬、不删那个文件** —— 它是用户的资产，不是我们落的临时副本。
-	 *    需要缓存副本时**另写一份**到缓存目录（见 `writeCacheCopy`）。
+	 * 2. **上传成功后照样按 `localCopy` 处置那个文件**（`move` 分支同样是
+	 *    **移动**、不是复制）—— 这就是「移入缓存目录」这条设置的兑现方式：
+	 *    命令跑完，附件目录里那份不在了，缓存目录里多一份改过名的。
+	 *    ⚠️ 前提是**调用方只把"确实被笔记引用着的"文件交进来**（见
+	 *    `selectUploadCandidates` 的 `referencedPaths`）：这样"搬走"不会让任何
+	 *    我们没认出来的引用变成死链。
 	 * 3. 因此 `localCopy: "trash"` 在这个模式下**降级为原地保留** ——
 	 *    用户要的是"别为我留副本"，而那个文件不是我们的副本，删它超出授权范围。
 	 *
@@ -393,16 +397,17 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 	let localPath = stagedPath;
 
 	if (isMigration) {
-		// ⚠️ 这里的"本地副本"是**用户自己的文件**，不是我们落的临时副本：
-		// `move-to-cache` 与 `trash` 都意味着"把它搬走 / 删掉" ——
-		// 那是动用户的资产，与「上传已有附件不删原文件」这条承诺直接冲突。
-		// 所以迁移模式只做一件事：需要缓存副本时**另写一份**到缓存目录，原文件一律不动。
-		// （`trash` 因此在这里降级为原地保留：用户要的是"别为我留副本"，
-		//  而那个文件不是我们的副本，删它超出他的授权范围。）
+		// ⭐ 迁移模式**也按 `localCopy` 处置那个文件**，而且同样是"移动"：
+		// 上传成功了，用户要的（「移入缓存目录」）就是"附件目录里别再留一份"。
+		//
+		// ⚠️ 这条能成立，靠的是**调用方只把被笔记引用着的文件交进来**
+		// （`selectUploadCandidates` 的 `referencedPaths`）：那些引用会被同一条命令
+		// 改写成远端地址，所以"搬走"不会留下死链。用户自己放在附件目录、没有任何
+		// 笔记引用的文件根本不会走到这里。
+		// ⚠️ 仍然不使用 `trash`：那种情况下用户要的是"别为我留副本"，而这个文件不是
+		// 我们落的副本，删它超出授权范围 —— 降级为原地保留。
 		if (plan === "move-to-cache" && cachePath) {
-			const copied = await writeCacheCopy(deps, cachePath, bytes);
-			// 写不出缓存副本就**保持原路径**：上传已经成功，没必要让整件事变成失败。
-			if (copied) localPath = copied;
+			localPath = await moveIntoCache(deps, existingPath, cachePath);
 		}
 	} else if (plan === "trash") {
 		localPath = "";
@@ -455,7 +460,11 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 }
 
 /**
- * 把文件搬进缓存目录，返回它**实际**所在的路径。
+ * 把文件从 `fromPath` 搬进缓存目录，返回它**实际**所在的路径。
+ *
+ * 两条入口共用它：粘贴（源是**我们**刚落盘的临时副本）与迁移（源是**用户已有**的附件）。
+ * 语义一样 —— 上传已经成功，这份字节从此归缓存目录管；搬失败时返回源路径，
+ * 调用方照实登记（索引记的永远是**真实**位置，不是推导值）。
  *
  * ⚠️ 目标已占用时**另取序号，绝不覆盖**：
  * 只有当模板含 `{hash}`（内容寻址）时"同路径 = 同内容"才成立。
@@ -463,7 +472,7 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
  * 覆盖就等于静默丢掉旧的那份。另取序号在任何模板下都是安全的，
  * 而多出来的那点路径不确定性由索引兜住（索引记的是真实路径，不是推导值）。
  */
-async function moveIntoCache(deps: IngestDeps, stagedPath: string, cachePath: string): Promise<string> {
+async function moveIntoCache(deps: IngestDeps, fromPath: string, cachePath: string): Promise<string> {
 	const app = deps.app;
 	await ensureFolder(app, parentFolderOf(cachePath));
 
@@ -472,19 +481,19 @@ async function moveIntoCache(deps: IngestDeps, stagedPath: string, cachePath: st
 		target = await uniqueVaultPath(cachePath, makeExists(app));
 	} catch (error) {
 		deps.notify?.(`缓存目录里的目标路径不可用：${describeError(error)}`);
-		return stagedPath;
+		return fromPath;
 	}
 
-	const file = app.vault.getAbstractFileByPath(stagedPath);
+	const file = app.vault.getAbstractFileByPath(fromPath);
 	if (!file) {
 		// 宿主的索引还没看到刚写的文件（异步落盘的常见现象）→ 退回用适配器直接改名，
 		// 这样至少文件位置是对的，只是宿主需要自己重新索引。
 		try {
-			await app.vault.adapter.rename(stagedPath, target);
+			await app.vault.adapter.rename(fromPath, target);
 			return target;
 		} catch (error) {
 			deps.notify?.(`缓存副本搬移失败：${describeError(error)}`);
-			return stagedPath;
+			return fromPath;
 		}
 	}
 
@@ -495,32 +504,7 @@ async function moveIntoCache(deps: IngestDeps, stagedPath: string, cachePath: st
 		return target;
 	} catch (error) {
 		deps.notify?.(`缓存副本搬移失败：${describeError(error)}`);
-		return stagedPath;
-	}
-}
-
-/**
- * 在缓存目录里**另写一份**字节（迁移模式专用）。
- *
- * 与 `moveIntoCache` 只差一件事，但那件事是本质的：它**不动源文件**。
- * 迁移模式的源文件是用户的资产（可能还有笔记在引用它、或有别的插件在读它），
- * 所以只能"复制"，绝不能"移动"。为这个差别单独一个函数，而不是给
- * `moveIntoCache` 加一个 `shouldDeleteSource` 开关 —— 开关意味着两条语义相反的路径
- * 共用一段代码，而在这里搞反的后果是**删掉用户的原件**。
- *
- * 写失败时返回 `null`（调用方保留原路径继续）：上传已经成功，
- * 没有必要因为一份缓存副本写不进去而让整个操作失败。
- */
-async function writeCacheCopy(deps: IngestDeps, cachePath: string, bytes: Uint8Array): Promise<string | null> {
-	const app = deps.app;
-	try {
-		await ensureFolder(app, parentFolderOf(cachePath));
-		const target = await uniqueVaultPath(cachePath, makeExists(app));
-		await app.vault.createBinary(target, bytesToArrayBuffer(bytes));
-		return target;
-	} catch (error) {
-		deps.notify?.(`缓存副本写入失败：${describeError(error)}`);
-		return null;
+		return fromPath;
 	}
 }
 

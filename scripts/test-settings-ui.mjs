@@ -183,16 +183,17 @@ assert.ok(
 	const css = read("styles.css");
 
 	assert.ok(
-		code.includes('ownerDocument.createElement("input")'),
-		"★★ input 要用**这一行自己的文档**造 —— 设置界面在独立窗口里，模块作用域的 document 是主窗的"
+		code.includes('wrap.createEl("input"'),
+		"★★ input 要用**这一行自己的元素**建（`wrap.createEl`）—— 它同时保证：建在这个窗口里 + 挂进文档里"
+	);
+	assert.ok(
+		!/ownerDocument\.createEl/.test(code),
+		"★★ 不能写成 `ownerDocument.createEl` —— 宿主的 createEl 会**把元素挂到接收者里**，" +
+			"在文档上调用 ⇒ `HierarchyRequestError: Only one element on document allowed`（真机实测：设置页那行直接渲染失败）"
 	);
 	assert.ok(
 		!/(^|[^A-Za-z.])document\.createElement\(/.test(code),
 		"★★ 不能用全局 document 造 —— 那样它属于主窗文档，而按钮在设置窗口里"
-	);
-	assert.ok(
-		code.includes("wrap.appendChild(input)"),
-		"★★ input 必须**挂进文档** —— 游离的文件控件开不了选择器（真机上的症状就是「点了没反应」）"
 	);
 	assert.ok(
 		!code.includes("input.click()"),

@@ -156,9 +156,12 @@ export const I18N: Record<string, Locale> = {
 		maintainBatchNothing: "No attachments to upload (all images are already handled).",
 		maintainBatchTitle: "Upload existing attachments",
 		maintainBatchSummary: "Upload {count} file(s) and rewrite note links to point at your storage.",
-		// ⚠️ 必须说清"原文件不删"，否则用户会以为磁盘腾出来了、以为命令没生效。
-		maintainBatchKeepsOriginals:
-			"Your original files are left in place on purpose — nothing is deleted, so nothing can be lost.",
+		// ⚠️ 必须说清"跑完原文件就不在附件目录里了"（设置项承诺的是「移入缓存目录」），
+		// 否则用户做完发现文件还在会以为没生效；也得说清"没被引用的文件不碰"。
+		maintainBatchMovesOriginals:
+			"Once uploaded, these files move into the cache folder and are renamed by content — nothing stays behind in the attachments folder. Files that no note refers to are left alone.",
+		maintainBatchSkipsUnreferenced:
+			"{count} file(s) in your vault are not linked from any note, so they are left alone.",
 		maintainBatchCta: "Upload and rewrite links",
 		maintainBatchExternal:
 			"Also {count} image(s) hosted elsewhere, on {sites} site(s): {hosts}",
@@ -337,7 +340,9 @@ export const I18N: Record<string, Locale> = {
 		maintainBatchSummary: "将上传 {count} 个文件，并把笔记里的链接改成指向你的存储。",
 		// ⚠️ 别在文案里写 markdown（`**加粗**`）：确认弹窗是 `createDiv({ text })`、
 		// 提示是宿主的 Notice，两者都**按纯文本**渲染 —— 星号会原样显示给用户。
-		maintainBatchKeepsOriginals: "原文件会保留在原处 —— 不删任何东西，所以不会丢。",
+		maintainBatchMovesOriginals:
+			"上传成功后，这些文件会被移入缓存目录并按内容改名 —— 附件目录里不再留一份。没有任何笔记引用的文件不会被碰。",
+		maintainBatchSkipsUnreferenced: "另有 {count} 个文件没有被任何笔记引用，不会被处理。",
 		maintainBatchCta: "上传并改写链接",
 		maintainBatchExternal: "另有 {count} 张图片托管在站外，来自 {sites} 个站点：{hosts}",
 		maintainBatchDone:

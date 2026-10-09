@@ -315,10 +315,18 @@ export interface BatchOptions {
 	 * "先问、问到了才调它"。所以调用方漏了授权，这里就会替用户答应下来。
 	 */
 	external?: ExternalSelection;
+	/**
+	 * 被笔记引用着的文件路径集合（见 `selectUploadCandidates` 的 `referencedPaths`）。
+	 *
+	 * ⚠️ 必须与调用方**给确认框用的那一份是同一个** —— 否则"清单里列了 3 个、
+	 * 实际处理了 2 个"这种对不上账的情况就会出现，而用户是按清单授权的。
+	 * 所以它由调用方算一次、传两次（确认框 + 这里）。
+	 */
+	referencedPaths: ReadonlySet<string>;
 }
 
 /**
- * 批量上传：库内的老附件（+ 笔记里的外链图），并把笔记里的链接换成远端链接。
+ * 批量上传：**被笔记引用着**的库内老附件（+ 笔记里的外链图），并把笔记里的链接换成远端链接。
  *
  * ## 两趟，各管一类候选
  *
@@ -331,23 +339,24 @@ export interface BatchOptions {
  * ⚠️ 站外那趟排在前面，是为了让第二趟的 `planLinkRewrites` 读到**最新**正文
  *（它要重新读每一篇笔记；顺序反过来的话，读到的是外链那趟改写之前的版本）。
  *
- * ## ⚠️ 一个刻意的保守选择：**不删原文件**
+ * ## ⭐ 只管被引用的文件；上传成功后**移动**进缓存
  *
- * 上传完之后，附件目录里的原文件仍然在。理由是它**不可逆**：
- * 删掉一个可能没有其它副本的文件，一旦用户的某篇笔记里还有一条我们没认出来的
- * 引用（比如被引号包起来的路径、或别的插件生成的写法），那张图就真没了。
- * 留着它只是占点磁盘，用户可以自己确认后再删 —— 代价小得多。
+ * 命令的语义与设置项「移入缓存目录」（`localCopy: "cache"`）**一致**：
  *
- * 所以这条命令做完之后，磁盘上会有两份（原文件 + 缓存副本）。
- * 提示里会如实说明这一点。
+ * 1. **候选只收被笔记引用着的文件**（`options.referencedPaths`，取自宿主的链接索引）。
+ *    没有任何笔记引用的文件一概不碰 —— 那种文件多半是废弃的旧图，动了只会让人
+ *    以为丢东西，而且"搬走"之后没有任何东西会把用户引到它的新位置。
+ * 2. 上传成功后，`ingest` 按 `localCopy` 处置那个文件：`cache` ⇒ **移入缓存目录并改名**
+ *    （`rename`，不是复制）。**"引用会被同一条命令改写成远端地址"就是这一步的前提**
+ *    —— 被引用 + 会被改写 ⇒ 搬走不会留下死链。
  *
- * ⚠️ 另一条与"不删原文件"配套的性质：**不得在原处留下中转副本**。
+ * ⚠️ 另一条配套性质：**不得在原处留下中转副本**。
  * 文件本来就在库里，若把 ingest 的"先落盘再上传"照搬过来，每个文件都会先被写成
  * 一个 `xxx 1.png`（原文件占着名字 ⇒ 另取序号）再搬进缓存 ——
  * 那是"凭空多出来的文件"，搬移失败时还会永久残留。所以这里必须把
  * `existingPath` 指出来，让编排层知道**字节已经在库里**（见 `IngestRequest`）。
  */
-export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOptions = {}): Promise<BatchResult> {
+export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOptions): Promise<BatchResult> {
 	const settings = deps.settings();
 	const result: BatchResult = {
 		uploaded: 0,
@@ -404,7 +413,11 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 		stat: { size: file.stat?.size ?? 0 },
 	}));
 
-	const selection = selectUploadCandidates(files, { settings, index: deps.index() });
+	const selection = selectUploadCandidates(files, {
+		settings,
+		index: deps.index(),
+		referencedPaths: options.referencedPaths,
+	});
 	// 两条路径的"为什么跳过"汇总到一起（形状相同，都是给人看的诊断）
 	result.skipped = [...selection.skipped, ...(options.external?.skipped ?? [])];
 
@@ -452,6 +465,18 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 		else result.uploaded += 1;
 
 		rules.push({ from: path, to: ingestResult.remoteUrl });
+
+		// ⚠️⚠️ **移动会让宿主自己顺手改笔记**（2026-10-09 真机实测）：
+		// `fileManager.renameFile` 不只是改名，它还会把**别的笔记里指向这个文件的链接**
+		// 一起更新成新位置/新名字 —— 形式取决于用户的「新链接格式」设置，默认是
+		// 「尽可能短」⇒ `![[<hash>.png]]`、`![x](<hash>.png)`。
+		// 于是它跟我们**下面那一趟改写抢时间**：宿主先改完，我们按**老路径**去匹配就
+		// 一处都找不到 ⇒ 笔记里留下的是**本地副本**的链接（本机看着没事，换台设备
+		// 就看不到图，而且笔记不再指向存储 —— 这条命令的承诺没兑现）。
+		// ⇒ 把"搬完之后的新路径"也当成一条改写规则：谁先谁后都会收敛到远端地址。
+		if (ingestResult.localPath && ingestResult.localPath !== path) {
+			rules.push({ from: ingestResult.localPath, to: ingestResult.remoteUrl });
+		}
 	}
 
 	// 没有库内候选时**也要**走完赋值：站外那一趟可能已经改过笔记了

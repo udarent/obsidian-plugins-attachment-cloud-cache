@@ -763,13 +763,16 @@ export async function runIngestSuite(mod) {
 	);
 
 	// ============================================================
-	// 18. ⭐⭐ 迁移已有附件（`existingPath`）：字节已在库里 → 不再落中转副本
+	// 18. ⭐⭐ 迁移已有附件（`existingPath`）：不落中转副本；上传成功后**移入**缓存目录
 	//
 	// 批量上传时调用方直接把"库里那个文件"指出来。此时若仍走"先落盘再上传"，
 	// 附件目录里就会凭空多出一个 `existing 1.png`（原文件占着名字 ⇒ 另取序号）。
-	// 更关键的是：**那个原文件不能搬**——它是用户的资产，搬走等于删掉它，
-	// 与「上传已有附件不删原文件」这条承诺直接冲突。所以迁移模式只做一件事：
-	// 需要缓存副本时**另写一份**到缓存目录，原文件一律不动。
+	//
+	// ⭐ 处置与粘贴路径**一致**（2026-10-09 用户定的）：`localCopy: "cache"` ⇒
+	// 上传成功后把那个文件**移动并重命名**进缓存目录 —— 这就是设置项
+	// 「移入缓存目录」的兑现方式。能这么做的前提在**调用方**：
+	// 它只把"确实被笔记引用着"的文件交进来（`selectUploadCandidates` 的
+	// `referencedPaths`），而那些引用会被同一条命令改写成远端地址 ⇒ 搬走不会留死链。
 	// ============================================================
 	await withHarness(mod, {}, async (h) => {
 		await h.write("existing.png", Buffer.from(HOSTILE_BYTES));
@@ -782,15 +785,7 @@ export async function runIngestSuite(mod) {
 		});
 
 		assert.equal(result.status, "uploaded");
-		// ⚠️ 这条存在性断言**必须排在字节比对之前**：原件被搬走时 `h.read` 返回 null，
-		// 而 `Buffer.compare(null, …)` 抛的是一个与规则无关的 TypeError ——
-		// 变异验证会因此判成"原因不符"（红得对，但看不出为什么红）。
-		assert.equal(
-			await h.exists("existing.png"),
-			true,
-			"⭐ 用户的原件必须原封不动（既不能被搬走、也不能被删）"
-		);
-		// ⚠️ 光看"最后有没有残留"不够：默认设置下那份中转副本会被搬进缓存，
+		// ⚠️ 光看"最后有没有残留"不够：那份中转副本会被搬进缓存，
 		// 于是"凭空多一个文件"在最终状态里看不出来 —— 但它真的发生过
 		// （一次多余的整块写入、一次 create 事件、一次同步噪音，而用户看到的
 		//  正是"上传时附件目录不停冒出新文件"）。所以要直接查**写盘动作**。
@@ -799,22 +794,25 @@ export async function runIngestSuite(mod) {
 			false,
 			"⭐ 迁移模式不得在附件目录里写中转副本（哪怕只是短暂写一次）"
 		);
+		// ⚠️ 这条存在性断言**必须排在字节读取之前**：原件已被搬走时 `h.read` 返回 null，
+		// 而 `Buffer.compare(null, …)` 抛的是一个与规则无关的 TypeError ——
+		// 变异验证会因此判成"原因不符"（红得对，但看不出为什么红）。
 		assert.equal(
-			Buffer.compare(await h.read("existing.png"), Buffer.from(HOSTILE_BYTES)),
-			0,
-			"原件的内容不得被改动"
+			await h.exists("existing.png"),
+			false,
+			"⭐ 「移入缓存目录」⇒ 附件目录里那份不在了（是移动，不是复制一份）"
 		);
 		assert.equal(await h.exists("existing 1.png"), false, "⭐ 不得在附件目录里凭空多出一份中转副本");
 		assert.ok(
 			result.localPath.startsWith("_attachment-cache/"),
-			`缓存副本仍应落在缓存目录里，实际 ${result.localPath}`
+			`缓存副本应落在缓存目录里，实际 ${result.localPath}`
 		);
 		assert.equal(
 			Buffer.compare(await h.read(result.localPath), Buffer.from(HOSTILE_BYTES)),
 			0,
-			"缓存副本的字节应与原件一致"
+			"搬过去的那份字节应与原件一致"
 		);
-		assert.equal(h.index.get(result.key)?.cachePath, result.localPath, "索引应指向缓存目录里那份副本");
+		assert.equal(h.index.get(result.key)?.cachePath, result.localPath, "索引应指向缓存目录里那份（搬完的真实位置）");
 	});
 
 	// 18b. 迁移 + 「原地保留」→ 原文件本身就是本地副本，不该再写第二份

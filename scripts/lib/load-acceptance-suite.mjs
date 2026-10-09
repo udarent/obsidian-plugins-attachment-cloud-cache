@@ -829,6 +829,14 @@ export async function runLoadAcceptance(options = {}) {
 		// 用**另一篇**笔记：上面那篇里的引用是 clean-cache 那条断言的依据，不能覆盖掉
 		const notePath = "notes/待迁移.md";
 		await writeFile(join(root, notePath), `![[pic.png]]\n\n![x](attachments/pic.png)\n`);
+
+		// ⭐ 这条命令**只处理被笔记引用着的附件**（跑完会把它们移进缓存目录），
+		// 所以"谁被引用"必须由宿主的链接索引（`metadataCache.resolvedLinks`）给出。
+		// 真机上那份索引是宿主算出来的，这里把它当**输入**填 —— 见 `setResolvedLinks` 的说明。
+		// ⚠️ 另外造一个**没有任何引用**的附件：它必须**一动不动**（既不传、也不搬）。
+		const orphanPath = "attachments/没人引用.png";
+		await writeFile(join(root, orphanPath), Buffer.from([...BATCH_BYTES, 0x7c]));
+		harness.setResolvedLinks({ [notePath]: { [attachmentPath]: 2 } });
 		await harness.refreshPathCache();
 
 		const putsBefore = server.countByMethod("PUT");
@@ -842,16 +850,39 @@ export async function runLoadAcceptance(options = {}) {
 			diagnose
 		);
 
-		assert.equal(server.countByMethod("PUT"), putsBefore + 1, "★ 批量上传应恰好 PUT 一次");
+		// ⚠️ 失败时把 PUT 的对象路径列出来 —— 只说"PUT 了 2 次"没法判断多出来的是哪一个
+		//（本项目踩过：计数断言被别的东西满足/破坏）。
+		assert.equal(
+			server.countByMethod("PUT"),
+			putsBefore + 1,
+			`★ 批量上传应恰好 PUT 一次（实际这些对象：${JSON.stringify(server.requests.filter((r) => r.method === "PUT").map((r) => r.path))}）`
+		);
 		const noteText = await readFile(join(root, notePath), "utf8");
 		assert.ok(noteText.includes(`${PUBLIC_BASE}/`), `链接应指向配置的存储（公开前缀）：${noteText}`);
 		assert.ok(
 			!noteText.includes("attachments/pic.png"),
 			`★ 两条本地链接都应被改写（短名与完整路径都要认）：${noteText}`
 		);
-		assert.ok(
+		// ⭐ 设置的文案是「移入缓存目录」⇒ 上传成功后那份原文件**不在了**（移动、不是复制）。
+		assert.equal(
 			await existsOnDisk(root, attachmentPath),
-			"★ 原文件必须保留（这条命令刻意不删任何东西）"
+			false,
+			"★ 原文件应已被移入缓存目录（「移入」不是「另存一份」）"
+		);
+		// 搬到哪儿去了：缓存目录里应恰好出现一份**内容相同**的副本。
+		// ⚠️ 按**内容**找，不按"目录里有几个 .png"数 —— 前面几节自己也会往缓存目录写东西，
+		// 计数断言会被别的东西满足/破坏（这个套件已经踩过两次）。
+		const cacheDir = join(root, "_attachment-cache");
+		let movedMatches = 0;
+		for (const name of await readdir(cacheDir)) {
+			if (!name.endsWith(".png")) continue;
+			if (Buffer.compare(await readFile(join(cacheDir, name)), Buffer.from(BATCH_BYTES)) === 0) movedMatches += 1;
+		}
+		assert.equal(movedMatches, 1, `★ 缓存目录里应恰好有一份刚搬过来的副本（实测 ${movedMatches} 份）`);
+		// ⭐ 没有任何笔记引用的附件**一动不动**（既不传、也不搬、也不改名）
+		assert.ok(
+			await existsOnDisk(root, orphanPath),
+			"★ 没有被任何笔记引用的文件必须留在原地（这条命令只动被引用的）"
 		);
 		// ⭐ 附件目录里**不得**多出中转副本（`pic 1.png`）。
 		// 迁移时字节本来就在库里；把"先落盘再上传"照搬到这条路径上，会在附件目录里
