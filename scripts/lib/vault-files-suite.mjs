@@ -19,9 +19,11 @@ export async function runVaultFilesSuite(mod) {
 	const {
 		contentTypeForExtension,
 		DEFAULT_CONTENT_TYPE,
+		embedKindFor,
 		extensionFromMime,
 		extensionOfName,
 		fallbackFileName,
+		isEmbeddable,
 		parentFolderOf,
 		resolveContentType,
 		resolveExtension,
@@ -98,7 +100,15 @@ export async function runVaultFilesSuite(mod) {
 	assert.equal(extensionFromMime("  image/webp  "), "webp", "应容忍首尾空白");
 	assert.equal(extensionFromMime("image/svg+xml"), "svg", "带 +xml 的 MIME 也能推");
 	assert.equal(extensionFromMime("image/heif"), "heic", "heif 归一到 heic（同一个格式的不同写法）");
-	assert.equal(extensionFromMime("application/pdf"), "", "推不出就返回空串，由调用方兜底");
+	// ⭐ 1.1.0 起 MIME 表补齐到**所有常见附件类型**（不再只管图片）：
+	// 站外抓取时常常只有 MIME、没有文件名，推不出扩展名就会存成 `<哈希>.bin`，
+	// 而 Obsidian 不显示它不认识的类型 —— 用户在缓存目录里"看不到这个文件被缓存了"。
+	assert.equal(extensionFromMime("application/pdf"), "pdf", "PDF 要能反推（浏览器可直接预览它）");
+	assert.equal(extensionFromMime("audio/mpeg"), "mp3", "音频要能反推");
+	assert.equal(extensionFromMime("video/mp4"), "mp4", "视频要能反推");
+	assert.equal(extensionFromMime("application/zip"), "zip", "压缩包要能反推");
+	assert.equal(extensionFromMime("text/plain"), "txt", "文本要能反推");
+	assert.equal(extensionFromMime("application/x-unknown-thing"), "", "推不出就返回空串，由调用方兜底");
 	assert.equal(extensionFromMime(""), "");
 	assert.equal(extensionFromMime(null), "");
 	assert.equal(extensionFromMime(undefined), "");
@@ -115,7 +125,7 @@ export async function runVaultFilesSuite(mod) {
 	assert.equal(resolveExtension("", "image/png"), "png", "没有文件名时靠 MIME（截图粘贴）");
 	assert.equal(resolveExtension(undefined, "image/webp"), "webp", "文件名缺失（不仅仅是空串）");
 	assert.equal(resolveExtension("noext", ""), "", "两边都推不出就返回空串");
-	assert.equal(resolveExtension("noext", "application/pdf"), "", "推不出的 MIME 不算数");
+	assert.equal(resolveExtension("noext", "application/pdf"), "pdf", "文件名缺扩展名时，PDF 的 MIME 照样能定类型");
 
 	// ⭐⭐ 最终判定的**后果**：外站 URL 的点后令牌（不是扩展名）必须被忽略，改用 MIME。
 	// 这就是用户实测报的那件事 —— 缓存下来的副本应当叫 `…hash….png`，
@@ -148,6 +158,12 @@ export async function runVaultFilesSuite(mod) {
 	assert.equal(contentTypeForExtension("svg"), "image/svg+xml");
 	assert.equal(contentTypeForExtension("avif"), "image/avif");
 	assert.equal(contentTypeForExtension("heic"), "image/heic");
+	assert.equal(contentTypeForExtension("pdf"), "application/pdf", "PDF 要声明真实类型（否则浏览器只会下载）");
+	assert.equal(contentTypeForExtension("mp3"), "audio/mpeg", "音频同理");
+	assert.equal(contentTypeForExtension("mp4"), "video/mp4", "视频同理");
+	assert.equal(contentTypeForExtension("docx"), "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+	assert.equal(contentTypeForExtension("zip"), "application/zip");
+	assert.equal(contentTypeForExtension("txt"), "text/plain");
 	assert.equal(contentTypeForExtension("exe"), DEFAULT_CONTENT_TYPE, "未知扩展名应兜底");
 	assert.equal(contentTypeForExtension(""), DEFAULT_CONTENT_TYPE, "空扩展名应兜底");
 	assert.equal(contentTypeForExtension(null), DEFAULT_CONTENT_TYPE);
@@ -279,6 +295,39 @@ export async function runVaultFilesSuite(mod) {
 	assert.equal(normalizeVaultPath(null), "", "非字符串给空串（调用方拿它当'无路径'）");
 	assert.equal(normalizeVaultPath(undefined), "", "undefined 同理");
 	assert.equal(normalizeVaultPath("a/b.png"), "a/b.png", "归一必须幂等");
+
+	// ============================================================
+	// ⭐ 可嵌入类型表（1.1.0 新增，需求 R15）
+	//
+	// 这张表决定"生成 `![]()` 还是 `[]()`"，而它的**唯一依据**是宿主能不能渲染：
+	// 表里多写一个 ⇒ 笔记里出现一个坏图；漏写一个 ⇒ 用户要点一下才能看。
+	// 所以这里把**完整内容**逐项钉住（改表一行，这里必红）。
+	//
+	// 证据：Obsidian 1.14.4 的 asar 载荷复核（见 `dev-notes/maintainer-handbook.md`）。
+	// ⚠️ `tiff` / `heic` / `ico` **不可嵌入** —— 它们在 1.1.0 之前被当成图片嵌入，
+	// 现在必须是普通链接：这是对老用户**可见**的行为变化。
+	// ============================================================
+	const embeddable = {
+		image: ["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg", "webp"],
+		audio: ["3gp", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav"],
+		video: ["mkv", "mov", "mp4", "ogv", "webm"],
+		pdf: ["pdf"],
+	};
+	for (const [kind, extensions] of Object.entries(embeddable)) {
+		for (const ext of extensions) {
+			assert.equal(embedKindFor(ext), kind, `${ext} 应当是可嵌入的 ${kind}`);
+			assert.equal(isEmbeddable(ext), true, `isEmbeddable(${ext}) 应为 true`);
+		}
+	}
+	// 归一：大写、前导点、空白都要认（调用方给的值来自文件名/配置，写法不统一）
+	assert.equal(embedKindFor("PDF"), "pdf", "大写要认");
+	assert.equal(embedKindFor(".PNG"), "image", "前导点要认");
+	assert.equal(embedKindFor(" mp4 "), "video", "空白要认");
+	// ⚠️ 不可嵌入 / 未知 / 缺值 ⇒ null（这正是"普通链接"的那一侧）
+	for (const ext of ["tiff", "heic", "ico", "zip", "docx", "exe", "noext", "", null, undefined, 42]) {
+		assert.equal(embedKindFor(ext), null, `${JSON.stringify(ext)} 不可嵌入 ⇒ 必须是普通链接`);
+		assert.equal(isEmbeddable(ext), false, `isEmbeddable(${JSON.stringify(ext)}) 应为 false`);
+	}
 
 	return {
 		extensionCases: 12 + 9 + 6 + 9 + 6,

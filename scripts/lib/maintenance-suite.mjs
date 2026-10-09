@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 
 export function runMaintenanceSuite(mod) {
 	const { auditCache, planCleanup } = mod;
-	const { findLinkSpans, planLinkRewrites, keysInText } = mod;
+	const { findLinkSpans, planLinkRewrites, planCanvasRewrites, keysInText } = mod;
 	const { selectUploadCandidates } = mod;
 
 	const CACHE = "_attachment-cache";
@@ -281,6 +281,27 @@ export function runMaintenanceSuite(mod) {
 	);
 
 	// 空文本/空规则
+	// ⭐ 1.1.0：笔记里写 `[报告](attachments/report)`（**没写扩展名**）也要匹配上
+	// `attachments/report.pdf` 那条规则 —— 否则"支持所有格式"之后，非图片附件的链接
+	// 永远改不到（它一直是本地路径），而命令会报告成功。
+	{
+		const noExt = planLinkRewrites("[报告](attachments/report)", [
+			{ from: "attachments/report.pdf", to: "https://img.example.com/hash.pdf" },
+		]);
+		assert.equal(noExt.count, 1, "★ 目标没写扩展名时也要匹配（归一化剥的是任意像扩展名的后缀）");
+		assert.equal(noExt.text, "[报告](https://img.example.com/hash.pdf)", "改写后是远端链接");
+		// 反向：无关的文件不能被牵连
+		const unrelated = planLinkRewrites("[报告](attachments/other.pdf)", [
+			{ from: "attachments/report.pdf", to: "https://img.example.com/hash.pdf" },
+		]);
+		assert.equal(unrelated.count, 0, "无关目标不该被改");
+		// 目录名里的点**不是**扩展名：`notes.v2/photo` 必须在两边都保持完整
+		const dirDot = planLinkRewrites("![[notes.v2/photo.png]]", [
+			{ from: "notes.v2/photo.png", to: "https://img.example.com/photo.png" },
+		]);
+		assert.equal(dirDot.count, 1, "目录名里的点不该影响匹配（只在最后一段剥扩展名）");
+	}
+
 	assert.deepEqual(planLinkRewrites("", RULES), { text: "", count: 0 });
 	assert.deepEqual(planLinkRewrites("![[photo2.png]]", []), { text: "![[photo2.png]]", count: 0 });
 
@@ -311,12 +332,138 @@ export function runMaintenanceSuite(mod) {
 	);
 
 	// ============================================================
+	// 5b. ⭐ 画布（.canvas）改写 —— 两类节点、两套规则（需求 R16）
+	//
+	// 画布是 JSON，但它与笔记**同等算数**。两处约束决定了这里的形状：
+	// ① `file` 字段只能指向库内文件（宿主按库内路径取文件渲染）⇒ 改指搬移后的缓存路径；
+	// ② `text` 节点里是 Markdown 文本（`![]()` / `![[]]`）⇒ 与笔记**完全同规则**改写。
+	// 又因为画布文件是用户数据、宿主自己也写它，所以只做**文本级精确替换**。
+	// ============================================================
+	const canvasFileRules = [{ from: "attachments/a.png", to: "_attachment-cache/hash.png" }];
+	const canvasLinkRules = [{ from: "attachments/a.png", to: "https://img.example.com/hash.png" }];
+
+	// 5b-1. file 节点 → 新本地路径（**不能**是远端 URL）
+	{
+		const source = [
+			"{",
+			'\t"nodes": [',
+			'\t\t{ "id": "1", "type": "file", "file": "attachments/a.png", "x": 0, "y": 0 },',
+			'\t\t{ "id": "2", "type": "text", "text": "无关的文本", "x": 10, "y": 10 }',
+			"\t],",
+			'\t"edges": []',
+			"}",
+		].join("\n");
+		const plan = planCanvasRewrites(source, { linkRules: [], fileRules: canvasFileRules });
+		assert.equal(plan.count, 1, "只该有一处被改（file 节点）");
+		assert.equal(plan.skipped, 0, "正常 JSON 不该有跳过的值");
+		assert.ok(
+			plan.text.includes('"file": "_attachment-cache/hash.png"'),
+			`file 字段应改指**库内**的新路径（画布不能指向远端 URL）：${plan.text}`
+		);
+		// ⚠️ 只动那一个值：缩进、键顺序、其它节点必须逐字节原样
+		assert.equal(
+			plan.text,
+			source.replace('"attachments/a.png"', '"_attachment-cache/hash.png"'),
+			"★ 只该替换那一个值 —— 重新序列化会顺手改掉缩进与键顺序（用户的数据）"
+		);
+	}
+
+	// 5b-2. text 节点 → 远端 URL（与笔记同一套规则）
+	{
+		const source = '{"nodes":[{"type":"text","text":"看图：![[a.png]] 与 ![x](attachments/a.png)"}]}';
+		const plan = planCanvasRewrites(source, { linkRules: canvasLinkRules, fileRules: [] });
+		assert.equal(plan.count, 1, "text 节点的内容算**一处**改写（里面两条链接一起换）");
+		assert.ok(
+			plan.text.includes("![a.png](https://img.example.com/hash.png)"),
+			`⭐ wikilink 要整条换成 Markdown（URL 装不进 wikilink）：${plan.text}`
+		);
+		assert.ok(
+			plan.text.includes("![x](https://img.example.com/hash.png)"),
+			`⭐ 已有的 Markdown 写法也要换：${plan.text}`
+		);
+		assert.ok(!plan.text.includes("attachments/a.png"), "旧路径不该残留");
+		// JSON 仍可解析（我们改的是**值内部**，引号/转义不能坏）
+		assert.doesNotThrow(() => JSON.parse(plan.text), "改写后必须仍是合法 JSON");
+	}
+
+	// 5b-3. ⭐ 同一个附件被两类节点同时引用 → 两套规则都要生效（不互斥）
+	{
+		const source =
+			'{"nodes":[{"type":"file","file":"attachments/a.png"},{"type":"text","text":"![[a.png]]"}]}';
+		const plan = planCanvasRewrites(source, {
+			linkRules: canvasLinkRules,
+			fileRules: canvasFileRules,
+		});
+		assert.equal(plan.count, 2, "★ file 节点与 text 节点各算一处（两类规则不互斥）");
+		const parsed = JSON.parse(plan.text);
+		assert.equal(parsed.nodes[0].file, "_attachment-cache/hash.png", "file 节点指向新路径");
+		assert.equal(
+			parsed.nodes[1].text,
+			"![a.png](https://img.example.com/hash.png)",
+			"text 节点里的链接指向远端"
+		);
+	}
+
+	// 5b-4. 含转义字符的路径：按 JSON 规则解码/编码，不写坏文件
+	{
+		const source = '{"nodes":[{"type":"text","text":"![[attachments/a.png]]\\n第二行"}]}';
+		const plan = planCanvasRewrites(source, { linkRules: canvasLinkRules, fileRules: [] });
+		assert.ok(plan.text.includes("\\n"), "⭐ 换行必须仍是转义形态（写坏了整个画布就废了）");
+		assert.doesNotThrow(() => JSON.parse(plan.text), "转义处理要正确");
+		assert.equal(
+			JSON.parse(plan.text).nodes[0].text,
+			"![a.png](https://img.example.com/hash.png)\n第二行",
+			"解码后再改写，换行仍然是换行"
+		);
+	}
+
+	// 5b-5. 解不开的转义 → **跳过并报出**，绝不猜（原则④）
+	{
+		// `\q` 不是合法 JSON 转义 ⇒ JSON.parse 会抛
+		const source = '{"nodes":[{"type":"file","file":"attachments/a\\q.png"}]}';
+		const plan = planCanvasRewrites(source, { linkRules: [], fileRules: canvasFileRules });
+		assert.equal(plan.count, 0, "解不开就不能改（宁可不动）");
+		assert.equal(plan.skipped, 1, "★ 跳过要**计数**：调用方据此如实告诉用户'有一处没改'");
+		assert.equal(plan.text, source, "★ 原文本必须逐字节不变");
+	}
+
+	// 5b-6. 无规则 / 无匹配 / 空文本 ⇒ 原样返回
+	{
+		assert.deepEqual(
+			planCanvasRewrites("{}", { linkRules: [], fileRules: [] }),
+			{ text: "{}", count: 0, skipped: 0 },
+			"没有规则时不做任何扫描"
+		);
+		assert.deepEqual(
+			planCanvasRewrites("", { linkRules: canvasLinkRules, fileRules: canvasFileRules }),
+			{ text: "", count: 0, skipped: 0 },
+			"空文本安全返回"
+		);
+		const noMatch = '{"nodes":[{"type":"file","file":"attachments/other.png"}]}';
+		const plan = planCanvasRewrites(noMatch, { linkRules: canvasLinkRules, fileRules: canvasFileRules });
+		assert.equal(plan.count, 0, "没有匹配的引用不该改");
+		assert.equal(plan.text, noMatch, "没有匹配时原文本必须逐字节不变");
+	}
+
+	// 5b-7. 同名歧义 → 宁可不改（与笔记改写同一条纪律）
+	{
+		const source = '{"nodes":[{"type":"file","file":"dup.png"}]}';
+		const plan = planCanvasRewrites(source, {
+			linkRules: [],
+			fileRules: [
+				{ from: "a/dup.png", to: "new/a.png" },
+				{ from: "b/dup.png", to: "new/b.png" },
+			],
+		});
+		assert.equal(plan.count, 0, "★ 同名歧义时按短名匹配会把链接改到**别的文件**上 —— 宁可不改");
+	}
+
+	// ============================================================
 	// 6. 批量上传候选：宁少不多
 	// ============================================================
 	const { CacheIndex } = mod;
 	const settings = {
 		autoUpload: true,
-		enabledExtensions: ["png", "jpg"],
 		attachmentFolder: "",
 		localCopy: "cache",
 		cacheFolder: CACHE,
@@ -355,9 +502,16 @@ export function runMaintenanceSuite(mod) {
 		{ settings, index, referencedPaths: referencedInUse }
 	);
 
-	assert.deepEqual(selection.paths, ["attachments/a.png", "attachments/b.jpg"], "只挑启用清单里的、非空、未处理过的");
+	// ⭐ 1.1.0 起候选是**排除制**（需求 R15）：除了"笔记/画布/数据库"这三种宿主自己的
+	// 文本文件之外，任何类型都可以上传 —— 所以 `notes.md` 仍然被跳过（它不是附件），
+	// 而 PDF / 音频 / 视频 / 压缩包全都该进来。
+	assert.deepEqual(
+		selection.paths,
+		["attachments/a.png", "attachments/b.jpg"],
+		"非空、未处理过、且被引用的附件才进候选"
+	);
 	const reasons = Object.fromEntries(selection.skipped.map((s) => [s.reason, s.count]));
-	assert.equal(reasons["扩展名不在启用清单里"], 1, "非图片应被跳过并计数");
+	assert.equal(reasons["是笔记/画布/数据库文件，不是附件"], 1, "笔记文件不是附件，要跳过并计数");
 	assert.equal(reasons["文件为空（可能是同步中的占位）"], 1, "空文件应被跳过（传上去会得到坏对象）");
 	assert.equal(reasons["已经在缓存索引里"], 1, "已处理过的应被跳过");
 	assert.equal(reasons["路径为空"], 1, "坏输入应被跳过而不是让整批失败");
@@ -396,24 +550,26 @@ export function runMaintenanceSuite(mod) {
 	const { referencedPathsFrom } = mod;
 	const linked = referencedPathsFrom({
 		"notes/a.md": { "attachments/used.png": 2, "notes/b.md": 1 },
-		// ⚠️ 真机上画布**会**进索引 —— 必须在这里把它排除，否则画布引用的附件会被搬走、
-		// 而画布里的那条引用我们不改写 ⇒ 死链
-		"_acc.canvas": { "attachments/in-canvas.png": 1 },
+		// ⭐ 1.1.0（需求 R16）：画布**同等算数** —— 真机上画布本来就进索引，
+		// 而改写器现在也认画布（file 节点改指缓存路径、text 节点按 Markdown 规则改写）。
+		// 所以这里必须**收下**它：不收的话，"只被画布引用的附件"永远进不了候选，
+		// 而用户把图摆在画布里是最常见的用法之一。
+		"board.canvas": { "attachments/in-canvas.png": 1 },
 		"notes/broken.md": null,
 	});
-	// ⚠️ 顺序有讲究：**先把"画布不算来源"这条具体的判据点出来**，再给整体集合的说法 ——
-	// 反过来的话，"来源筛错了"这类变异会先撞上那条更宽的断言，报错原因就不再指向画布
-	//（本项目说的"变异的原因要对得上"）。
-	assert.ok(!linked.has("attachments/in-canvas.png"), "★★ 画布里的引用不算：我们的改写器不改画布，搬走等于制造死链");
+	// ⚠️ 顺序有讲究：**先把"画布也算来源"这条具体的判据点出来**，再给整体集合的说法 ——
+	// 反过来的话，"来源筛错了"这类变异会先撞上那条更宽的断言，报错原因就不再指向画布。
+	assert.ok(linked.has("attachments/in-canvas.png"), "★★ 画布里的引用**算数**（需求 R16：画布也是笔记的一种）");
 	assert.deepEqual(
 		[...linked].sort(),
-		["attachments/used.png", "notes/b.md"],
-		"只收目标路径（笔记互链也会进来 —— 它由扩展名那一关过滤）；画布不算来源"
+		["attachments/in-canvas.png", "attachments/used.png", "notes/b.md"],
+		"收下所有目标路径：来源是笔记还是画布不影响结论（互链的目标也进来，由候选那一关过滤）"
 	);
 	assert.equal(referencedPathsFrom(null).size, 0, "拿不到索引时为空 ⇒ 这轮**不处理**任何文件（保守方向）");
 	assert.equal(referencedPathsFrom("不是对象").size, 0, "形状不对时当成没有引用，而不是抛错或全收");
 	assert.equal(referencedPathsFrom(["notes/a.md"]).size, 0, "数组不是链接索引的形状");
-	assert.ok(referencedPathsFrom({ "NOTE.MD": { "a.png": 1 } }).has("a.png"), "来源后缀大小写不敏感");
+	assert.ok(referencedPathsFrom({ "NOTE.md": { "a.png": 1 } }).has("a.png"), "Markdown 来源照旧要收");
+	assert.ok(referencedPathsFrom({ "BOARD.CANVAS": { "b.png": 1 } }).has("b.png"), "画布来源大小写不敏感");
 
 	// ============================================================
 	// ⭐ 外链候选：批量上传命令也要看到"还没进你自己存储"的图
@@ -422,27 +578,38 @@ export function runMaintenanceSuite(mod) {
 	// 判定刻意复用按需缓存那一条（`decideExternalCache`），所以下面这些性质
 	// 与"看笔记时问不问"永远一致 —— 不另立一套标准。
 	// ============================================================
-	const { externalImageUrlsIn, selectExternalUploadCandidates } = mod;
+	const { externalFileUrlsIn, selectExternalUploadCandidates } = mod;
 	const { SiteDecisions } = mod;
 
 	// ── 1. 只认**图片**写法 ──
-	assert.deepEqual(externalImageUrlsIn("![a](https://x.test/a.png)"), ["https://x.test/a.png"], "Markdown 图片要认");
+	assert.deepEqual(externalFileUrlsIn("![a](https://x.test/a.png)"), ["https://x.test/a.png"], "Markdown 图片要认");
+	// ⭐ 1.1.0（需求 R15）：普通链接**也要收** —— `[报告](https://…/report.pdf)` 是
+	// PDF / 音频 / 压缩包最常见的写法，不收它"支持所有格式"就只覆盖了 `![]` 那一半。
+	// ⚠️ 于是候选里会混进**网页**链接：它们在下载那一步被 `text/html` 判据挡掉，
+	// 用户看到一句如实的"该地址返回的是网页或纯文本"（原则⑥），而不是静默无事发生。
 	assert.deepEqual(
-		externalImageUrlsIn("[a](https://x.test/page)"),
-		[],
-		"★ 普通链接指向的是网页、不是外链图片 —— 送去下载只会换来一串「不是图片」的失败"
+		externalFileUrlsIn("[a](https://x.test/page)"),
+		["https://x.test/page"],
+		"★ 普通链接也要收（它可能是 PDF/音频/压缩包）；网页那一类由下载判定拒收"
 	);
-	assert.deepEqual(externalImageUrlsIn('<img src="https://x.test/b.jpg">'), ["https://x.test/b.jpg"], "行内 HTML 的 img 也要认");
-	assert.deepEqual(externalImageUrlsIn("![a](<https://x.test/c d.png>)"), ["https://x.test/c d.png"], "尖括号包住的地址要认得出来");
-	assert.deepEqual(externalImageUrlsIn('![a](https://x.test/d.png "标题")'), ["https://x.test/d.png"], "标题不该混进地址");
-	assert.deepEqual(externalImageUrlsIn("![](attachments/x.png)"), [], "库内相对路径不是外链");
-	assert.deepEqual(externalImageUrlsIn("![[photo.png]]"), [], "wikilink 指的是库内路径，不可能是外链");
 	assert.deepEqual(
-		externalImageUrlsIn("![](https://x.test/a.png)\n![](https://x.test/a.png)"),
+		externalFileUrlsIn('<a href="https://x.test/doc.pdf">报告</a>'),
+		["https://x.test/doc.pdf"],
+		"行内 HTML 的 <a href> 同样要认"
+	);
+	assert.deepEqual(externalFileUrlsIn('<img src="https://x.test/b.jpg">'), ["https://x.test/b.jpg"], "行内 HTML 的 img 也要认");
+	assert.deepEqual(externalFileUrlsIn("![a](<https://x.test/c d.png>)"), ["https://x.test/c d.png"], "尖括号包住的地址要认得出来");
+	assert.deepEqual(externalFileUrlsIn('![a](https://x.test/d.png "标题")'), ["https://x.test/d.png"], "标题不该混进地址");
+	assert.deepEqual(externalFileUrlsIn("![](attachments/x.png)"), [], "库内相对路径不是外链");
+	assert.deepEqual(externalFileUrlsIn("[笔记](notes/other.md)"), [], "库内互链不是外链（相对路径）");
+	assert.deepEqual(externalFileUrlsIn('<a href="attachments/x.pdf">本地</a>'), [], "库内锚点也不是外链");
+	assert.deepEqual(externalFileUrlsIn("![[photo.png]]"), [], "wikilink 指的是库内路径，不可能是外链");
+	assert.deepEqual(
+		externalFileUrlsIn("![](https://x.test/a.png)\n![](https://x.test/a.png)"),
 		["https://x.test/a.png"],
 		"同一篇笔记里写两遍只算一次（改写时那两处会被一起换掉）"
 	);
-	assert.deepEqual(externalImageUrlsIn(""), [], "空文本安全返回空");
+	assert.deepEqual(externalFileUrlsIn(""), [], "空文本安全返回空");
 
 	// ── 2. 挑选：候选的判据是"能不能搬"，与默认行为无关 ──
 	{

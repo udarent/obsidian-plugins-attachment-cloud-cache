@@ -71,16 +71,26 @@ await runMutations({
 			expect: "原因必须点明是『库内拖动』",
 		},
 		{
-			name: "混合载荷只放行不认识的文件（⭐ 那些文件会被一起吞掉）",
-			from: "\tconst unknown = files.filter((file) => !isHookableFile(file, settings));\n\tif (unknown.length > 0) {",
-			to: "\tconst unknown = files.filter((file) => !isHookableFile(file, settings));\n\tif (false) {",
-			expect: "整批放行",
+			// ⚠️ 这里原本是"混合载荷不再整批接管"。类型闸门移除后那条分支**已经不可达**
+			// （`filesFromTransfer` 只产出对象，而 `isHookableFile` 只挡非对象），
+			// 于是它放不出任何一条会红的断言 —— 变异验证如实报"漏过"，是对的信号：
+			// 一条测不到东西的变异留着只会让人以为那段代码被守住了。
+			// 它守的那个失效模式（"部分接管 ⇒ 剩下的被吞掉"）现在由**结构**消除：
+			// 任何真实文件都接管，所以不存在"剩下那些"。
+			name: "★ 接管时不交出自列表（调用方拿到空列表 ⇒ 什么都没上传）",
+			from: "\treturn { intercept: true, files, reason: okReason };",
+			to: "\treturn { intercept: true, files: [], reason: okReason };",
+			expect: "应给出要处理的文件",
 		},
 		{
-			name: "不认识的扩展名也被当成可处理（顺手把用户的其它工作流也管了）",
-			from: "if (!ext) return false;\n\treturn settings.enabledExtensions.includes(ext);",
-			to: "if (!ext) return true;\n\treturn true;",
-			expect: "pdf 不在默认启用列表里",
+			// ⚠️ 这条原本锚在"扩展名白名单"上（用户勾的类型才处理）。那个闸门在 1.1.0
+			// 被移除（需求 R15），于是它改成守**留下的那半**：`isHookableFile` 仍要
+			// 挡住"不是文件"的东西 —— 否则 `accept()` 会把 null/字符串当成文件接管，
+			// 而它们根本读不出字节，最终表现为"粘了东西但什么都没发生"。
+			name: "不是文件的东西也被当成可处理（⭐ 整批接管之后再也没人为它们负责）",
+			from: '\treturn Boolean(file) && typeof file === "object";',
+			to: "\treturn true;",
+			expect: "null 不是文件",
 		},
 		{
 			name: "去重按对象引用（同一文件出现在两处 → 重复上传 + 插两条链接）",
@@ -114,11 +124,11 @@ await runMutations({
 		},
 		{
 			name: "远端链接里的 % 被再编一次（⭐ 链接能生成但打不开）",
-			from: "return `![${text}](${String(url ?? \"\").trim()})`;",
+			from: "return `${bang}[${text}](${String(url ?? \"\").trim()})`;",
 			// 刻意用"只把 % 换成 %25"这种**针对性**的二次编码，
 			// 而不是 `encodeURIComponent(整个 URL)`：后者会让整串形状都变，
 			// 于是先被"链接形状"那条断言拦住，报错就说不到"二次编码"这件事上。
-			to: "return `![${text}](${String(url ?? \"\").trim().replace(/%/g, \"%25\")})`;",
+			to: "return `${bang}[${text}](${String(url ?? \"\").trim().replace(/%/g, \"%25\")})`;",
 			expect: "百分号编码必须原样保留",
 		},
 		{
@@ -140,10 +150,29 @@ await runMutations({
 			expect: "必须被当成空串",
 		},
 		{
-			name: "alt 取整个文件名而不是主干（链接被时间戳撑长）",
-			from: '\treturn dot > 0 ? raw.slice(0, dot) : raw;',
-			to: "\treturn raw;",
-			expect: "alt 取主干",
+			// ⚠️ 这条原本锚在"alt 只取主干"上（1.1.0 起显示名改为**原文件名**，
+			// 因为 `[report.pdf]` 比 `[report]` 有用得多）。改成守**新加的那条判断**：
+			// 嵌入与否由可嵌入类型表决定，而不是"一律加 `!`"。
+			// 后果：一个 zip/docx 会被写成 `![x.zip](url)` ⇒ 宿主渲染成一个**坏图**，
+			// 用户既看不到图、也点不开文件（原则④要避免的正是这个）。
+			name: "★ 远端链接一律加 `!`（表外类型变成坏图，点都点不开）",
+			from: '\tconst bang = isEmbeddable(ext) ? "!" : "";',
+			to: '\tconst bang = "!";',
+			expect: "表外类型必须是普通链接",
+		},
+		{
+			// 后果：宿主某天（或某个版本）在生成串里带上 `!` 时，我们会产出 `!![[x]]`
+			// —— 在宿主里那是一个**坏链接**，而且看不出是谁的错。
+			name: "已有的 `!` 不被剥掉（产出 `!![[x]]` 这种坏链接）",
+			from: '\treturn generated.trim().replace(/^!/, "");',
+			to: "\treturn generated.trim();",
+			expect: "已有的 `!` 要先剥掉",
+		},
+		{
+			name: "★ 本地链接一律加 `!`（表外类型在库里也变成坏图）",
+			from: 'return isEmbeddable(ext) ? `!${body}` : body;',
+			to: 'return `!${body}`;',
+			expect: "表外类型**不加**",
 		},
 		{
 			name: "库内嵌入不归一化反斜杠（Windows 路径原样进链接）",

@@ -42,20 +42,6 @@ import { isPlainRecord } from "./records";
 // 这里转出去，让"读设置的模块"同时就是"拿守卫的模块"。
 export { isExternalImageDefault, isLocalCopyAction };
 
-/** 默认启用的图片格式。 */
-const DEFAULT_IMAGE_EXTENSIONS = [
-	"avif",
-	"bmp",
-	"gif",
-	"heic",
-	"jpeg",
-	"jpg",
-	"png",
-	"svg",
-	"tiff",
-	"webp",
-];
-
 // ─────────────────────────── 字段表 ───────────────────────────
 //
 // 每个字段 = 「一个把任意输入变成合法值的函数」。约定统一：
@@ -138,26 +124,6 @@ function numberValue(options: { min?: number; max?: number } = {}): FieldReader<
 }
 
 /**
- * 扩展名列表：过滤非字符串与空串，统一小写并按出现顺序去重。
- *
- * 空数组视为"没填"而回退 —— 一个都没勾等于没配置，此时应当用默认清单，
- * 否则用户会得到一个"看起来开了插件但什么都不处理"的状态。
- */
-function textListValue(): FieldReader<string[]> {
-	return (raw, fallback) => {
-		if (!Array.isArray(raw)) return [...fallback];
-		const cleaned: string[] = [];
-		for (const item of raw) {
-			if (typeof item !== "string") continue;
-			const normalized = item.trim().toLowerCase();
-			if (normalized === "") continue;
-			if (!cleaned.includes(normalized)) cleaned.push(normalized);
-		}
-		return cleaned.length === 0 ? [...fallback] : cleaned;
-	};
-}
-
-/**
  * 出厂默认值（**内部**表，名字与导出的 `SETTINGS_DEFAULTS` 区分开）。
  *
  * 与字段阅读器分开，是为了让"字段表只描述**怎么读**"，默认值只有一处定义：
@@ -166,7 +132,6 @@ function textListValue(): FieldReader<string[]> {
  */
 const FACTORY_SETTINGS = {
 	autoUpload: true,
-	enabledExtensions: DEFAULT_IMAGE_EXTENSIONS,
 	attachmentFolder: "",
 	// 默认"移入缓存"：本地副本就是离线可用的前提，且缓存目录可整体清理
 	localCopy: "cache" as LocalCopyAction,
@@ -196,7 +161,6 @@ const SETTINGS_SPEC: {
 	[K in keyof Omit<PluginSettings, "s3">]: FieldReader<Omit<PluginSettings, "s3">[K]>;
 } = {
 	autoUpload: boolValue(),
-	enabledExtensions: textListValue(),
 	attachmentFolder: pathValue(),
 	localCopy: oneOfValue(LOCAL_COPY_ACTIONS),
 	// ⚠️ 用 requiredTextValue 而不是 textValue：缓存目录为空会让缓存**静默失效**
@@ -246,9 +210,8 @@ export const S3_DEFAULTS: S3Config = { ...S3_FALLBACKS };
  */
 export const SETTINGS_DEFAULTS: PluginSettings = {
 	...FACTORY_SETTINGS,
-	// ⚠️ 数组必须**单独复制**：浅展开只会复制引用，`enabledExtensions`
-	// 会与出厂表共用同一个数组，改一处就等于改出厂值。
-	enabledExtensions: [...DEFAULT_IMAGE_EXTENSIONS],
+	// ⚠️ 嵌套对象必须**单独复制**：浅展开只会复制引用，`s3`
+	// 会与出厂表共用同一个对象，改一处就等于改出厂值。
 	s3: { ...S3_FALLBACKS },
 };
 
@@ -282,12 +245,4 @@ export function mergePluginSettings(defaults: PluginSettings, loaded: unknown): 
 		...readFields(SETTINGS_SPEC, raw, rest as Omit<PluginSettings, "s3">),
 		s3: readFields(S3_SPEC, rawS3, defaults.s3),
 	};
-}
-
-/** 该扩展名是否参与处理（大小写不敏感，去点）。 */
-export function isExtensionEnabled(ext: unknown, settings: PluginSettings): boolean {
-	if (typeof ext !== "string") return false;
-	const normalized = ext.trim().toLowerCase().replace(/^\./, "");
-	if (!normalized) return false;
-	return settings.enabledExtensions.includes(normalized);
 }

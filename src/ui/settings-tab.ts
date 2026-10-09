@@ -464,13 +464,6 @@ export class SettingsTab extends PluginSettingTab {
 				aliases: ["paste", "drop", "粘贴", "拖拽"],
 				control: { type: "toggle", key: "autoUpload" },
 			},
-			{
-				name: this.t("extensions"),
-				desc: this.t("extensionsDesc"),
-				aliases: ["png", "jpg", "file types", "扩展名", "文件类型"],
-				// 设置里是数组、控件是文本框 → 转换在 settings-bindings.ts 里
-				control: { type: "textarea", key: "enabledExtensions", rows: 2 },
-			},
 		];
 	}
 

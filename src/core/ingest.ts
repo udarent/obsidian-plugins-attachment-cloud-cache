@@ -92,6 +92,22 @@ export interface IngestResult {
 	status: IngestStatus;
 	/** 对象 key；连 key 都算不出来时为空串。 */
 	key: string;
+	/**
+	 * 归一化后的小写扩展名（**不含点**）；推不出来时是兜底的 `bin`。
+	 *
+	 * 为什么让它跟着结果一起出来：调用方要拿"类型"决定链接**形态**
+	 * （可嵌入类型用 `![]()`，其余用 `[]()`），而它手上只有字节与文件名。
+	 * 让它在链接生成处重新猜一遍，就会与这里（key 用的是同一个值）出现分叉 ——
+	 * 同一份文件可能"存成 .png 却当成普通链接"这种不一致。
+	 */
+	ext: string;
+	/**
+	 * 这次用的**文件名**：调用方给的，或（没给时）我们按 MIME 造的那个可读名。
+	 *
+	 * 链接的显示位用它（`![report.pdf](url)` / `[report.pdf](url)`）——
+	 * 用户在一篇笔记里要靠它认出"这是哪个文件"，而 `<哈希>.png` 认不出来。
+	 */
+	name: string;
 	/** 写进笔记的远端 URL；`fallback` 时为空串。 */
 	remoteUrl: string;
 	/**
@@ -304,6 +320,9 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 
 	// ── 1. 算出 key 与本地缓存路径（纯逻辑，先做完，避免"上传了才发现路径不合法"）──
 	const ext = resolveKeyExtension(request.name, request.mime);
+	// 文件名也是**一次算定**：key 渲染、落盘、显示名、索引都共用它。
+	// 分成两处算会让"没文件名时造的名字"出现两个不同时间戳（截图粘贴的常态）。
+	const fileName = request.name ?? fallbackFileName(ext, now);
 	let key: string;
 	try {
 		key = renderObjectKey(settings.s3.objectKeyTemplate, {
@@ -314,13 +333,15 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 		});
 	} catch (error) {
 		// renderObjectKey 是纯函数、不该抛；真抛了说明模板或哈希出了问题
-		return { status: "fallback", key: "", remoteUrl: "", localPath: "", etag: "", error: asError(error) };
+		return { status: "fallback", key: "", ext, name: fileName, remoteUrl: "", localPath: "", etag: "", error: asError(error) };
 	}
 
 	if (!key) {
 		return {
 			status: "fallback",
 			key: "",
+			ext,
+			name: fileName,
 			remoteUrl: "",
 			localPath: "",
 			etag: "",
@@ -350,6 +371,8 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 			return {
 				status: "reused",
 				key,
+				ext,
+				name: known.sourceName || fileName,
 				remoteUrl: known.remoteUrl,
 				localPath: known.cachePath,
 				etag: known.etag,
@@ -361,7 +384,6 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 	//
 	// 两条路的差别不只是"省一次 I/O"：迁移模式下那个文件是**用户的资产**，
 	// 我们不能像对待自己落的临时副本那样把它搬进缓存或丢进回收站。
-	const fileName = request.name ?? fallbackFileName(ext, now);
 	const existingPath = normalizeVaultPath(request.existingPath);
 	const isMigration = existingPath !== "";
 
@@ -376,7 +398,7 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 		} catch (error) {
 			// 连本地都没能落成。调用方必须**大声报错** —— 此时用户粘贴的内容确实没留下，
 			// 而这正是"绝不丢图"要避免的极端情况。
-			return { status: "fallback", key, remoteUrl: "", localPath: "", etag: "", error: asError(error) };
+			return { status: "fallback", key, ext, name: fileName, remoteUrl: "", localPath: "", etag: "", error: asError(error) };
 		}
 	}
 
@@ -389,7 +411,7 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 		remoteUrl = put.url;
 	} catch (error) {
 		// 上传失败：字节已经留在附件目录里 → 返回本地路径，绝不丢图
-		return { status: "fallback", key, remoteUrl: "", localPath: stagedPath, etag: "", error: asError(error) };
+		return { status: "fallback", key, ext, name: fileName, remoteUrl: "", localPath: stagedPath, etag: "", error: asError(error) };
 	}
 
 	// ── 5. 按设置处置本地副本 ──
@@ -456,7 +478,7 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 		}
 	}
 
-	return { status: "uploaded", key, remoteUrl, localPath, etag };
+	return { status: "uploaded", key, ext, name: fileName, remoteUrl, localPath, etag };
 }
 
 /**

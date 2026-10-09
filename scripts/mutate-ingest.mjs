@@ -50,14 +50,14 @@ await runMutations({
 		// ── ⭐ 绝不丢图 ──
 		{
 			name: "上传失败时不再返回本地路径（用户粘贴的图就此消失）",
-			from: 'return { status: "fallback", key, remoteUrl: "", localPath: stagedPath, etag: "", error: asError(error) };',
+			from: 'return { status: "fallback", key, ext, name: fileName, remoteUrl: "", localPath: stagedPath, etag: "", error: asError(error) };',
 			to: 'return { status: "fallback", key, remoteUrl: "", localPath: "", etag: "", error: asError(error) };',
 			expect: "否则用户粘贴的图就没了",
 		},
 		{
 			name: "上传失败被当成成功（笔记会写进一个根本不存在的 URL）",
-			from: 'return { status: "fallback", key, remoteUrl: "", localPath: stagedPath, etag: "", error: asError(error) };',
-			to: 'return { status: "uploaded", key, remoteUrl: remoteUrlFor, localPath: stagedPath, etag: "", error: asError(error) };',
+			from: 'return { status: "fallback", key, ext, name: fileName, remoteUrl: "", localPath: stagedPath, etag: "", error: asError(error) };',
+			to: 'return { status: "uploaded", key, ext, name: fileName, remoteUrl: remoteUrlFor, localPath: stagedPath, etag: "", error: asError(error) };',
 			expect: "上传失败应走降级",
 		},
 		{

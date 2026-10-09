@@ -26,6 +26,77 @@
 import { normalizePath } from "obsidian";
 
 /**
+ * 宿主**能直接预览（嵌入）**的附件类型分档。
+ *
+ * ## 为什么这张表必须硬编码，而且必须带出处
+ *
+ * 宿主内部有一张 `embedRegistry`（决定 `![[x.ext]]` 渲染成什么元素），
+ * 但它**没有进公开类型面**（`obsidian.d.ts` 里搜不到）⇒ 只能自己维护一张表。
+ * 表一旦与宿主不一致，后果分两类，方向相反：
+ * - 表里多写了宿主不认的类型 ⇒ 我们生成 `![]()`，宿主渲染成一个**坏图**（原则④要避免的）；
+ * - 表里漏写了宿主认的类型 ⇒ 退化成普通链接，用户要点一下才能看（体验打折但不坏）。
+ * 所以这张表**宁可保守**：只列已核实的。
+ *
+ * ## 证据与重推方法（进维护手册）
+ *
+ * 来源：`Obsidian 1.14.4` 的 `app.asar` 载荷复核（2026-10-09，见 `dev-notes/maintainer-handbook.md`
+ * 的"可嵌入类型表"一节）。复核时注意**认载荷**：宿主自更新会把新 asar 放进
+ * `%APPDATA%\obsidian\` 运行时加载，只看 `Program Files` 下那份会得到过期结论。
+ *
+ * ⚠️ `tiff` / `heic` / `ico` **确认不可嵌入**（在 `1.14.4` 上实测）——
+ * 它们在 1.1.0 之前被当成"图片"嵌进笔记，现在必须是**普通链接**：
+ * 这是对老用户**可见**的行为变化，发版说明里写明。
+ */
+export type EmbedKind = "image" | "audio" | "video" | "pdf";
+
+const EMBED_KIND_BY_EXTENSION: Record<string, EmbedKind> = {
+	// 图片
+	avif: "image",
+	bmp: "image",
+	gif: "image",
+	jpeg: "image",
+	jpg: "image",
+	png: "image",
+	svg: "image",
+	webp: "image",
+	// 音频
+	"3gp": "audio",
+	flac: "audio",
+	m4a: "audio",
+	mp3: "audio",
+	oga: "audio",
+	ogg: "audio",
+	opus: "audio",
+	wav: "audio",
+	// 视频
+	mkv: "video",
+	mov: "video",
+	mp4: "video",
+	ogv: "video",
+	webm: "video",
+	// 文档
+	pdf: "pdf",
+};
+
+/**
+ * 这个扩展名能不能被宿主**直接预览**；不能则返回 `null`（调用方走普通链接）。
+ *
+ * 输入容错（去点、小写、去空白）与 `contentTypeForExtension` 一致：
+ * 调用方拿到的扩展名可能来自文件名、MIME 反查或用户配置，写法不统一。
+ * 非字符串 / 空串 / 未知一律 `null` —— **未知类型走普通链接**是原则④的落法。
+ */
+export function embedKindFor(ext: unknown): EmbedKind | null {
+	if (typeof ext !== "string") return null;
+	const key = ext.trim().toLowerCase().replace(/^\./, "");
+	return EMBED_KIND_BY_EXTENSION[key] ?? null;
+}
+
+/** 便利判据：能不能嵌入（供链接生成与渲染层共用，避免各处自己写 `!== null`）。 */
+export function isEmbeddable(ext: unknown): boolean {
+	return embedKindFor(ext) !== null;
+}
+
+/**
  * 把"可能是路径的东西"归一成宿主认得的写法。
  *
  * ## 为什么必须走宿主的 `normalizePath()`
@@ -48,8 +119,21 @@ export function normalizeVaultPath(path: unknown): string {
 	return typeof path === "string" ? normalizePath(path) : "";
 }
 
-/** 扩展名 → 默认 Content-Type。只需覆盖默认启用的图片格式。 */
+/**
+ * 扩展名 → 默认 Content-Type。
+ *
+ * ## 为什么要补齐（原表只有图片）
+ *
+ * 1.1.0 起所有类型都上传。而对象存储把 `Content-Type` 头原样回给浏览器：
+ * 声明成 `application/octet-stream` 时，**浏览器一律下载而不是显示** ——
+ * 用户点开一个 PDF 链接却得到一个下载框，会以为插件坏了。
+ * 补齐后：PDF/音视频/文本在浏览器里**直接可看**，其余类型仍是下载（那是它们的正常行为）。
+ *
+ * ⚠️ 仍然覆盖不到的类型落 {@link DEFAULT_CONTENT_TYPE}（安全默认，不变）：
+ * 与其猜一个类型（猜错可能让浏览器把二进制当文本渲染），不如老实说"这是二进制"。
+ */
 const CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
+	// 图片
 	avif: "image/avif",
 	bmp: "image/bmp",
 	gif: "image/gif",
@@ -61,13 +145,64 @@ const CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
 	svg: "image/svg+xml",
 	tiff: "image/tiff",
 	webp: "image/webp",
+	// 音频
+	"3gp": "audio/3gpp",
+	aac: "audio/aac",
+	flac: "audio/flac",
+	m4a: "audio/mp4",
+	mp3: "audio/mpeg",
+	oga: "audio/ogg",
+	ogg: "audio/ogg",
+	opus: "audio/opus",
+	wav: "audio/wav",
+	// 视频
+	avi: "video/x-msvideo",
+	mkv: "video/x-matroska",
+	mov: "video/quicktime",
+	mp4: "video/mp4",
+	ogv: "video/ogg",
+	webm: "video/webm",
+	// 文档与压缩包
+	doc: "application/msword",
+	docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+	epub: "application/epub+zip",
+	odt: "application/vnd.oasis.opendocument.text",
+	pdf: "application/pdf",
+	ppt: "application/vnd.ms-powerpoint",
+	pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+	xls: "application/vnd.ms-excel",
+	xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+	// 压缩包
+	"7z": "application/x-7z-compressed",
+	gz: "application/gzip",
+	rar: "application/vnd.rar",
+	tar: "application/x-tar",
+	zip: "application/zip",
+	// 文本类（浏览器可直接显示）
+	csv: "text/csv",
+	html: "text/html",
+	json: "application/json",
+	md: "text/markdown",
+	txt: "text/plain",
+	xml: "application/xml",
 };
 
 /** 上传不认识的后缀时的兜底类型（对象存储要求这个头）。 */
 export const DEFAULT_CONTENT_TYPE = "application/octet-stream";
 
-/** MIME → 扩展名。只覆盖图片：本插件的钩子只处理启用的附件类型。 */
+/**
+ * MIME → 扩展名（与上面那张表**成对**维护：站外抓取时只有 MIME、没有文件名）。
+ *
+ * 补齐到与 `CONTENT_TYPE_BY_EXTENSION` 同一批类型 —— 理由是同一条：
+ * 站外抓一个 PDF/音频时，名字是 URL 的最后一段（常常没有可用扩展名），
+ * 只能靠响应头里的 MIME 反推。反推不出来就会存成 `<哈希>.bin`，
+ * 于是缓存目录里那个文件在 Obsidian 里**不显示**（它不认识的类型）。
+ *
+ * 同一 MIME 有多个候选扩展名时取**最常见**的那个（`image/jpeg` → `jpg`），
+ * 因为这个名字会被用户看到。
+ */
 const EXTENSION_BY_MIME: Record<string, string> = {
+	// 图片
 	"image/avif": "avif",
 	"image/bmp": "bmp",
 	"image/gif": "gif",
@@ -81,6 +216,46 @@ const EXTENSION_BY_MIME: Record<string, string> = {
 	"image/webp": "webp",
 	"image/x-icon": "ico",
 	"image/vnd.microsoft.icon": "ico",
+	// 音频
+	"audio/3gpp": "3gp",
+	"audio/aac": "aac",
+	"audio/flac": "flac",
+	"audio/mp4": "m4a",
+	"audio/mpeg": "mp3",
+	"audio/ogg": "ogg",
+	"audio/opus": "opus",
+	"audio/wav": "wav",
+	"audio/x-wav": "wav",
+	// 视频
+	"video/mp4": "mp4",
+	"video/ogg": "ogv",
+	"video/quicktime": "mov",
+	"video/webm": "webm",
+	"video/x-matroska": "mkv",
+	"video/x-msvideo": "avi",
+	// 文档与压缩包
+	"application/epub+zip": "epub",
+	"application/gzip": "gz",
+	"application/json": "json",
+	"application/msword": "doc",
+	"application/pdf": "pdf",
+	"application/vnd.ms-excel": "xls",
+	"application/vnd.ms-powerpoint": "ppt",
+	"application/vnd.oasis.opendocument.text": "odt",
+	"application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+	"application/vnd.rar": "rar",
+	"application/x-7z-compressed": "7z",
+	"application/x-tar": "tar",
+	"application/xml": "xml",
+	"application/zip": "zip",
+	// 文本类
+	"text/csv": "csv",
+	"text/html": "html",
+	"text/markdown": "md",
+	"text/plain": "txt",
+	"text/xml": "xml",
 };
 
 /** 由扩展名给 Content-Type。空扩展名 / 未知扩展名 → 兜底类型。 */
@@ -96,7 +271,7 @@ export function contentTypeForExtension(ext: unknown): string {
  * 上限 8 是为了容纳真实的长扩展名（`.canvas` 6、`.heic`/`.tiff`/`.webp` 4、
  * `.flac`/`.docx`/`.pptx` 4），同时把"点后面那一串令牌"挡在外面。
  */
-const PLAUSIBLE_EXTENSION = /^[a-z0-9]{1,8}$/;
+export const PLAUSIBLE_EXTENSION = /^[a-z0-9]{1,8}$/;
 
 /**
  * 取文件名的扩展名（小写、不含点）。

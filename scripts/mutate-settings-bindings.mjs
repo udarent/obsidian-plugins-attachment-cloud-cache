@@ -26,16 +26,16 @@ await runMutations({
 			expect: "不创建",
 		},
 		{
-			name: "设置值不再转成控件值（数组直接塞进文本框）",
+			name: "设置值不再转成控件值（数字直接塞进文本框）",
 			from: '\tconst convert = typeof key === "string" ? PRESENT[key] : undefined;\n\treturn convert ? convert(stored) : stored;',
 			to: "\tvoid key;\n\treturn stored;",
-			expect: "数组字段要转成文本",
+			expect: "数字要转成文本",
 		},
 		{
 			name: "★ 控件值不再转回设置值（用户改完重启就被静默重置）",
 			from: '\tconst convert = typeof key === "string" ? COERCE[key] : undefined;\n\treturn convert ? convert(raw) : raw;',
 			to: "\tvoid key;\n\treturn raw;",
-			expect: "文本框的字符串必须转回数组",
+			expect: "必须转回数字",
 		},
 		{
 			name: "空值不再被拦（清空缓存目录会让缓存静默失效，且要等重启才发现）",

@@ -28,10 +28,12 @@ await withLoadedTs(
 		console.log(
 			`Transfer tests passed (${stats.pasteCases} paste + ${stats.dropCases} drop decision cases + ` +
 				`${stats.executionCases} execution scenarios: plain text pastes and in-vault drags are ` +
-				"deliberately let through, any unrecognised file makes the whole batch pass through so " +
-				"nothing gets swallowed, files are de-duplicated when they appear in both `files` and " +
-				"`items`, duplicates are never merged when they cannot be identified, and execution " +
-				"inserts remote links (or a local embed on upload failure) at the position captured " +
+				"deliberately let through, every real file type is taken over now that the type gate is " +
+				"gone (a mixed batch goes through together rather than leaving anything behind), files are " +
+				"de-duplicated when they appear in both `files` and `items`, duplicates are never merged " +
+				"when they cannot be identified, and execution " +
+				"inserts `![]()` only for types the host can render and plain links otherwise (on upload " +
+				"failure it falls back to a host-generated local link) at the position captured " +
 				"before the network call, once per distinct image — the clipboard handing the same picture over " +
 				"twice (different wrappers, different timestamps) still leaves one link, while two genuinely " +
 				"different images both stay — with nothing lost)."

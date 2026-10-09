@@ -21,11 +21,10 @@ import assert from "node:assert/strict";
 export function runInterceptSuite(mod) {
 	const { decideInterception, insertPointFrom } = mod;
 
-	// 设置基准：自己拼一份最小设置 —— 这一层只读 `autoUpload` 与 `enabledExtensions`，
+	// 设置基准：自己拼一份最小设置 —— 这一层只读 `autoUpload`，
 	// 其余字段由类型保证存在即可（判定逻辑不碰它们）。
 	const baseSettings = {
 		autoUpload: true,
-		enabledExtensions: ["png", "jpg"],
 		attachmentFolder: "",
 		localCopy: "cache",
 		cacheFolder: "_attachment-cache",
@@ -108,8 +107,10 @@ export function runInterceptSuite(mod) {
 	});
 	assert.equal(noFiles.action, "ignore", "载荷里没有文件应放行");
 
-	// 不认识的文件（txt）→ 整批放行，而不是"只接管认识的那几个"
-	const unknown = decideInterception({
+	// ⭐ 1.1.0（需求 R15）：**任何真实文件都接管**，不再有"认不认识"这一说。
+	// 以前这里是"混了一个 txt 就整批放行"，现在那种载荷会被整批接管 ——
+	// 因为"哪些类型参与"已经不由用户勾选决定，而是"用户粘什么就传什么"。
+	const mixed = decideInterception({
 		alreadyHandled: false,
 		kind: "paste",
 		transfer: pasteOf([png(), txt()]),
@@ -117,11 +118,11 @@ export function runInterceptSuite(mod) {
 		readiness: READY,
 	});
 	assert.equal(
-		unknown.action,
-		"ignore",
-		"★ 只要有一个文件不认识就必须整批放行 —— 只接管一部分会让剩下的文件被宿主跳过，等于吞掉"
+		mixed.action,
+		"handle",
+		"★ 混合载荷也要接管（含 txt/PDF/无扩展名）：类型闸门已经移除，拒绝接管等于把文件留在本地"
 	);
-	assert.match(unknown.reason, /不处理|整批/, "原因应说明是「有不处理的文件」，便于排查");
+	assert.equal(mixed.files.length, 2, "两个文件都要交给上传流程");
 
 	// 剪贴板里同时有文本 → 放行（用户很可能在粘文字）
 	const withText = decideInterception({

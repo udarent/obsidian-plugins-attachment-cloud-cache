@@ -24,7 +24,7 @@ import { auditCache, planCleanup } from "./audit";
 import type { CacheAudit, CleanupPlan, DiskFile } from "./audit";
 import { removeCacheFile } from "./remove";
 import type { EvictionOutcome, EvictionPlan } from "./eviction";
-import { keysInText, planLinkRewrites } from "./references";
+import { keysInText, planCanvasRewrites, planLinkRewrites } from "./references";
 import type { RewriteRule } from "./references";
 import { selectUploadCandidates } from "./batch";
 import type { ExternalSelection, VaultFileLike } from "./batch";
@@ -299,10 +299,17 @@ export interface BatchResult {
 	uploaded: number;
 	reused: number;
 	failed: number;
-	/** 改了链接的笔记数。 */
+	/** 改了链接的笔记数（含画布 —— 它也是笔记的一种）。 */
 	notesChanged: number;
-	/** 改掉的链接处数。 */
+	/** 改掉的链接处数（含画布里的两种节点）。 */
 	linksRewritten: number;
+	/**
+	 * 画布里**解不开 JSON 字符串**、因而按原则④跳过没改的值个数。
+	 *
+	 * 单独给一个数字而不是并进 `failed`：它不是"没做成"，是"没敢动" ——
+	 * 而用户需要知道某张图可能还指着旧位置（否则他会以为全改好了）。
+	 */
+	canvasSkipped: number;
 	skipped: { reason: string; count: number }[];
 }
 
@@ -364,6 +371,7 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 		failed: 0,
 		notesChanged: 0,
 		linksRewritten: 0,
+		canvasSkipped: 0,
 		skipped: [],
 	};
 
@@ -421,8 +429,19 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 	// 两条路径的"为什么跳过"汇总到一起（形状相同，都是给人看的诊断）
 	result.skipped = [...selection.skipped, ...(options.external?.skipped ?? [])];
 
-	// 路径 → 远端 URL，用于随后改写笔记
+	// 路径 → 远端 URL，用于随后改写笔记（`text` 节点与 Markdown 共用）
 	const rules: RewriteRule[] = [];
+
+	/**
+	 * 路径 → **搬移后的缓存路径**：只给画布的 `file` 节点用。
+	 *
+	 * ⚠️ 为什么不能拿上面那份 `rules` 顶上：那份的目标是远端 URL，
+	 * 而画布 `file` 字段**只能指向库内文件** —— 写成 URL 之后画布就找不到文件了
+	 * （宿主按库内路径取文件渲染）。所以 file 节点改的是"旧路径 → 新路径"，
+	 * 新路径＝附件被搬进缓存目录之后的那个位置（本设备直接显示，
+	 * 副本缺失时由回退下载补回，见 `render/render-hook.ts`）。
+	 */
+	const fileRules: RewriteRule[] = [];
 
 	for (const path of selection.paths) {
 		const file = deps.app.vault.getAbstractFileByPath(path);
@@ -477,12 +496,47 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 		if (ingestResult.localPath && ingestResult.localPath !== path) {
 			rules.push({ from: ingestResult.localPath, to: ingestResult.remoteUrl });
 		}
+
+		// 画布 file 节点：旧路径 → 搬移后的真实位置（拿不到真实位置时不登记 ——
+		// 那样画布保持原样，是本设备仍然能显示的那一侧）。
+		if (ingestResult.localPath) {
+			fileRules.push({ from: path, to: ingestResult.localPath });
+		}
 	}
 
 	// 没有库内候选时**也要**走完赋值：站外那一趟可能已经改过笔记了
 	if (rules.length === 0) {
 		result.notesChanged = changedNotes.size;
 		return result;
+	}
+
+	// ── 改写画布里的引用（F13，需求 R16）──
+	//
+	// ⚠️ 画布**不是** `getMarkdownFiles()` 的一部分（它是 `.canvas`），
+	// 所以必须单独扫一遍 —— 漏了这一步，画布引用会被上面那条"被引用"判据
+	// 选进候选、文件被搬走，而画布里的路径原地不动 ⇒ 画布上的图直接没了。
+	for (const canvas of deps.app.vault.getFiles()) {
+		if (canvas.extension !== "canvas") continue;
+		let text: string;
+		try {
+			text = await deps.app.vault.read(canvas);
+		} catch {
+			// 读失败必须跳过（`vault.modify` 是整文件覆盖，用空串写回去会毁掉画布）
+			continue;
+		}
+		if (text === "") continue;
+
+		const rewritten = planCanvasRewrites(text, { linkRules: rules, fileRules });
+		result.canvasSkipped += rewritten.skipped;
+		if (rewritten.count === 0) continue;
+
+		try {
+			await deps.app.vault.modify(canvas, rewritten.text);
+			changedNotes.add(canvas.path);
+			result.linksRewritten += rewritten.count;
+		} catch {
+			result.failed += 1;
+		}
 	}
 
 	// ── 改写笔记里指向这些文件的链接 ──

@@ -87,34 +87,6 @@ export function externalImageDefaultOptions(
 }
 
 /**
- * 解析用户输入的扩展名清单。
- *
- * **逗号、顿号、空格、换行都当分隔符** —— 用户会怎么敲是不确定的：
- * 从别处粘过来常见的是换行或顿号，而手敲通常是逗号。与其在校验里报错
- * 让用户猜格式，不如都收下。
- *
- * 归一化与 `settings.ts` 的 `textListValue` **保持同一套规则**
- * （去空白、去前导点、转小写、按出现顺序去重、丢空串）——
- * 两处不一致会导致"界面显示的和实际生效的不一样"。
- */
-export function parseExtensionList(text: unknown): string[] {
-	if (typeof text !== "string") return [];
-	const out: string[] = [];
-	for (const piece of text.split(/[,，、;；\s]+/)) {
-		const normalized = piece.trim().toLowerCase().replace(/^\./, "");
-		if (normalized === "") continue;
-		if (!out.includes(normalized)) out.push(normalized);
-	}
-	return out;
-}
-
-/** 把清单渲染回输入框的文本（逗号 + 空格分隔，便于阅读与继续编辑）。 */
-export function formatExtensionList(list: unknown): string {
-	if (!Array.isArray(list)) return "";
-	return list.filter((x): x is string => typeof x === "string" && x.trim() !== "").join(", ");
-}
-
-/**
  * 「缓存目录」这一项要不要显示。
  *
  * ⚠️ 这是消除"矛盾配置"的**界面侧**手段：只有选了「移入缓存」，

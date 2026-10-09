@@ -39,6 +39,8 @@
  * 目标是**库内路径**时仍只换路径那一段 —— 形态是用户或宿主选的，我们不替他们改。
  */
 
+import { PLAUSIBLE_EXTENSION } from "../vault-files";
+
 /** 一处待替换的链接：`start`/`end` 是**路径部分**在原文中的下标（左闭右开）。 */
 export interface LinkSpan {
 	start: number;
@@ -175,35 +177,11 @@ export interface RewritePlan {
 export function planLinkRewrites(text: string, rules: readonly RewriteRule[]): RewritePlan {
 	if (rules.length === 0) return { text, count: 0 };
 
-	const byPath = new Map<string, string>();
-	const byName = new Map<string, string>();
-	const ambiguous = new Set<string>();
-
-	for (const rule of rules) {
-		const full = normalizeTarget(rule.from);
-		if (!full) continue;
-		byPath.set(full, rule.to);
-
-		const name = baseNameOf(full);
-		const seen = byName.get(name);
-		if (seen !== undefined && seen !== rule.to) ambiguous.add(name);
-		else byName.set(name, rule.to);
-	}
+	const resolve = buildResolver(rules);
+	if (!resolve) return { text, count: 0 };
 
 	const spans = findLinkSpans(text);
 	if (spans.length === 0) return { text, count: 0 };
-
-	const resolve = (raw: string): string | undefined => {
-		const full = normalizeTarget(raw);
-		if (!full) return undefined;
-
-		const exact = byPath.get(full);
-		if (exact !== undefined) return exact;
-
-		const name = baseNameOf(full);
-		if (ambiguous.has(name)) return undefined; // ⚠️ 同名歧义 → 宁可不改
-		return byName.get(name);
-	};
 
 	let out = "";
 	let cursor = 0;
@@ -229,6 +207,44 @@ export function planLinkRewrites(text: string, rules: readonly RewriteRule[]): R
 
 	if (count === 0) return { text, count: 0 };
 	return { text: out + text.slice(cursor), count };
+}
+
+/**
+ * 造一个"按规则查目标"的解析器（`planLinkRewrites` 与画布改写共用）。
+ *
+ * 抽出来是因为**两条路径必须用同一套匹配语义**：短名、去扩展名、同名歧义
+ * 这三条规则若各写一遍，画布与笔记迟早会分叉（例如画布里认得出、笔记里认不出）。
+ * 规则为空时返回 `null`（调用方据此短路，不做任何扫描）。
+ */
+function buildResolver(rules: readonly RewriteRule[]): ((raw: string) => string | undefined) | null {
+	if (rules.length === 0) return null;
+
+	const byPath = new Map<string, string>();
+	const byName = new Map<string, string>();
+	const ambiguous = new Set<string>();
+
+	for (const rule of rules) {
+		const full = normalizeTarget(rule.from);
+		if (!full) continue;
+		byPath.set(full, rule.to);
+
+		const name = baseNameOf(full);
+		const seen = byName.get(name);
+		if (seen !== undefined && seen !== rule.to) ambiguous.add(name);
+		else byName.set(name, rule.to);
+	}
+
+	return (raw: string): string | undefined => {
+		const full = normalizeTarget(raw);
+		if (!full) return undefined;
+
+		const exact = byPath.get(full);
+		if (exact !== undefined) return exact;
+
+		const name = baseNameOf(full);
+		if (ambiguous.has(name)) return undefined; // ⚠️ 同名歧义 → 宁可不改
+		return byName.get(name);
+	};
 }
 
 /**
@@ -267,14 +283,28 @@ function baseNameOf(path: string): string {
  *
  * ⚠️ 去掉扩展名是**必须的**：wikilink 里 `photo` 与 `photo.png` 指同一个文件，
  * 而用户的笔迹里两种都可能有。不去掉就会漏改一半（表现为"有些图还指向本地"）。
+ *
+ * ⭐ 1.1.0 起剥的是**任意"像扩展名"的后缀**，而不是一份图片后缀白名单：
+ * 当时那份白名单（`png|jpe?g|gif|…`）在"支持所有附件类型"之后必然漏 ——
+ * 笔记里写 `[说明](report)`、而规则给的是 `report.pdf`，两边归一结果不同
+ * ⇒ 匹配不上 ⇒ **这个附件永远不会被改写**（它就一直是本地路径），
+ * 而且不报错。复用的正是 `vault-files.ts` 那条形状判据（纯字母数字、≤8 字符），
+ * 于是 `report.pdf` 与 `report` 等价，而 `a.b/c`（目录里的点！）不会被误剥。
  */
 function normalizeTarget(target: string): string {
-	return String(target ?? "")
+	let value = String(target ?? "")
 		.replace(/\\/g, "/")
 		.replace(/^\.?\//, "")
 		.trim()
-		.replace(/\.(png|jpe?g|gif|webp|svg|avif|bmp|tiff?|heic)$/i, "")
 		.toLowerCase();
+
+	// 只在**最后一段**里剥：目录名里的点（`notes.v2/photo`）不是扩展名。
+	const slash = value.lastIndexOf("/");
+	const dot = value.lastIndexOf(".");
+	if (dot > slash + 1 && PLAUSIBLE_EXTENSION.test(value.slice(dot + 1))) {
+		value = value.slice(0, dot);
+	}
+	return value;
 }
 
 /**
@@ -295,4 +325,155 @@ export function keysInText(text: string, keyFromUrl: (url: string) => string | n
 		if (key) keys.add(key);
 	}
 	return keys;
+}
+
+// ─────────────────────────── 画布（.canvas） ───────────────────────────
+
+/**
+ * 画布改写的结果。
+ *
+ * 比文本改写多一个 `skipped`：画布是 JSON，值被 JSON 字符串规则包着，
+ * 极端情况下（手写坏了的转义）解不开 —— 那时按原则④**跳过并报出**，
+ * 而不是猜。这个计数让调用方能把"没能改"如实说给用户听。
+ */
+export interface CanvasRewritePlan {
+	text: string;
+	/** 实际改写的处数（两类节点合计）。 */
+	count: number;
+	/** 因为**解不开 JSON 字符串**而跳过的值个数（>0 时调用方要如实告知）。 */
+	skipped: number;
+}
+
+export interface CanvasRewriteInput {
+	/**
+	 * **`text` 节点**里的链接规则：与写笔记是同一套（目标是远端 URL）。
+	 *
+	 * 画布文本支持 `![]()` / `![[]]`，所以那一部分与 `.md` **完全同规则**
+	 * （见 `planLinkRewrites`），包括 wikilink 整条换形态那条。
+	 */
+	linkRules: readonly RewriteRule[];
+	/**
+	 * **`file` 节点**的规则：目标是**搬移后的本地路径**。
+	 *
+	 * ⚠️ 与 text 节点的区别不是实现细节，而是宿主的约束：
+	 * 画布 `file` 字段**只能指向库内文件**，写成远端 URL 之后画布就找不到文件了
+	 * （2026-10-09 用户指出的设计错误）。所以这里改的是"旧路径 → 新路径"，
+	 * 新路径就是附件被搬进缓存目录之后的那个位置 —— 本设备直接显示，
+	 * 副本缺失时由回退下载补回。
+	 */
+	fileRules: readonly RewriteRule[];
+}
+
+/**
+ * 改写画布里的附件引用（`file` 节点 → 新本地路径；`text` 节点 → 远端 URL）。
+ *
+ * ## 为什么是"文本级精确替换"而不是 `JSON.parse` → `JSON.stringify`
+ *
+ * 后者会把**用户没让我们碰的一切**重新排版：键的顺序、缩进、空行、
+ * 数字的写法（`1.0` → `1`）……而画布文件是用户的数据，宿主自己也会写它。
+ * 更实际的理由是实测教训：文件恢复快照证明"看着一样"与"逐字节一样"是两回事，
+ * 而我们的承诺是**只动该动的那几个值**。
+ *
+ * ## 匹配哪些位置
+ *
+ * 只认画布里两个键：`"file"`（file 节点）与 `"text"`（text 节点）。
+ * 做法是先把它们的**值范围**找出来（按 JSON 字符串规则，支持转义），
+ * 用 `JSON.parse` 解出真实字符串，改写后再 `JSON.stringify` 编码回去 ——
+ * 所以含 `"` / `\` / 换行的路径也不会写坏。
+ *
+ * ⚠️ 两类规则**都要跑**，而且不互斥：同一个附件完全可能一边被 file 节点摆着、
+ * 一边被 text 节点里的链接引用（两种写法同时存在是常态）。
+ */
+export function planCanvasRewrites(text: string, input: CanvasRewriteInput): CanvasRewritePlan {
+	if (typeof text !== "string" || text === "") return { text, count: 0, skipped: 0 };
+
+	const resolveLink = buildResolver(input.linkRules);
+	const resolveFile = buildResolver(input.fileRules);
+	if (!resolveLink && !resolveFile) return { text, count: 0, skipped: 0 };
+
+	interface Edit {
+		start: number;
+		end: number;
+		next: string;
+	}
+	const edits: Edit[] = [];
+	let skipped = 0;
+
+	const collect = (key: string, rewrite: (value: string) => string | null): void => {
+		for (const span of jsonStringSpans(text, key)) {
+			let decoded: string;
+			try {
+				decoded = JSON.parse(`"${span.escaped}"`) as string;
+			} catch {
+				// 手写坏了的转义：按原则④跳过并报出，绝不猜
+				skipped += 1;
+				continue;
+			}
+			const next = rewrite(decoded);
+			if (next === null || next === decoded) continue;
+			edits.push({ start: span.start, end: span.end, next: encodeJsonString(next) });
+		}
+	};
+
+	if (resolveFile) {
+		collect("file", (value) => {
+			const target = resolveFile(value);
+			return target === undefined ? null : target;
+		});
+	}
+	if (resolveLink) {
+		collect("text", (value) => {
+			const plan = planLinkRewrites(value, input.linkRules);
+			return plan.count > 0 ? plan.text : null;
+		});
+	}
+
+	if (edits.length === 0) return { text, count: 0, skipped };
+
+	// 按位置排序后重建：`collect` 的两次遍历各按出现顺序，合并后要再排一次。
+	edits.sort((a, b) => a.start - b.start);
+
+	let out = "";
+	let cursor = 0;
+	let count = 0;
+	for (const edit of edits) {
+		if (edit.start < cursor) continue; // 防御：重叠时宁可跳过，也不要产出错位文本
+		out += text.slice(cursor, edit.start) + edit.next;
+		cursor = edit.end;
+		count += 1;
+	}
+	return { text: out + text.slice(cursor), count, skipped };
+}
+
+/** JSON 字符串值在原文里的范围（`start`/`end` 指**两个引号之间**的内容）。 */
+interface JsonStringSpan {
+	start: number;
+	end: number;
+	/** 原文里那段**转义后**的内容（还没解码）。 */
+	escaped: string;
+}
+
+/**
+ * 找出 `"key": "…"` 里那段字符串值的范围（按 JSON 规则处理转义）。
+ *
+ * ⚠️ 不能写成 `"[^"]*"`：路径里出现转义引号（`\"`）时会在错误的位置截断，
+ * 于是我们改掉的是半个字符串 —— 一个**语法坏掉的画布**。
+ * 所以字符类必须显式承认转义序列（`\\.`）并跳过它。
+ */
+function jsonStringSpans(text: string, key: string): JsonStringSpan[] {
+	const pattern = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`, "g");
+	const spans: JsonStringSpan[] = [];
+	for (const match of text.matchAll(pattern)) {
+		const at = match.index ?? 0;
+		const colon = match[0].indexOf(":");
+		const quote = match[0].indexOf('"', colon);
+		const start = at + quote + 1;
+		spans.push({ start, end: start + match[1].length, escaped: match[1] });
+	}
+	return spans;
+}
+
+/** 按 JSON 规则编码一个字符串（不含外层引号）。 */
+function encodeJsonString(value: string): string {
+	return JSON.stringify(value).slice(1, -1);
 }

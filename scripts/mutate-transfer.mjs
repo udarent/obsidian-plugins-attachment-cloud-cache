@@ -32,8 +32,8 @@ await runMutations({
 	mutations: [
 		{
 			name: "降级时不插入任何内容（⭐ 图保住了，但笔记里什么都没有）",
-			from: "\t\t\tif (result.localPath) {\n\t\t\t\tpushPart(buildLocalImageEmbed(result.localPath, alt));",
-			to: "\t\t\tif (false) {\n\t\t\t\tpushPart(buildLocalImageEmbed(result.localPath, alt));",
+			from: "\t\t\tif (result.localPath) {\n\t\t\t\t// 降级链接：形态交回宿主（按用户的「新链接格式」设置），`!` 由我们按类型表加。\n\t\t\t\tconst generated = deps.generatedLocalLink ? deps.generatedLocalLink(result.localPath) : null;\n\t\t\t\tpushPart(buildLocalLink(generated, result.localPath, result.ext));",
+			to: "\t\t\tif (false) {\n\t\t\t\tconst generated = deps.generatedLocalLink ? deps.generatedLocalLink(result.localPath) : null;\n\t\t\t\tpushPart(buildLocalLink(generated, result.localPath, result.ext));",
 			expect: "降级也必须插回内容",
 		},
 		{
@@ -67,10 +67,13 @@ await runMutations({
 			expect: "应插入一次文本",
 		},
 		{
-			name: "插入的 alt 用整个文件名而不是主干",
-			from: "\t\tconst alt = altTextForFile(file);",
-			to: "\t\tconst alt = name ?? \"\";",
-			expect: "插入的应是远端图片链接",
+			// ⚠️ 这条原本是"alt 用主干而不是整个文件名"。1.1.0 起显示名**就是**原文件名
+			// （`[report.pdf]` 比 `[report]` 有用），所以改成守"名字从哪来"：
+			// 取文件名的那一步若被换成别的（例如 `file.type`），链接文字会变成乱码。
+			name: "链接的显示名不取文件名（用户认不出这是哪个文件）",
+			from: "\t\tconst displayName = displayNameOf(file);",
+			to: "\t\tconst displayName = String(file.type ?? \"\");",
+			expect: "插入的应是远端嵌入链接",
 		},
 		{
 			name: "没有可插内容时也调用插入（在笔记里留下一个空行）",

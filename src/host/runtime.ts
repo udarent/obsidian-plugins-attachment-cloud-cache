@@ -21,6 +21,7 @@
  * 后面的写入必须照常进行 —— 否则一次偶发失败会永久堵死队列。
  */
 
+import { TFile } from "obsidian";
 import type { App } from "obsidian";
 
 import type { PluginSettings } from "../types";
@@ -245,6 +246,20 @@ export async function runTransfer(host: HostContext, request: TransferRequest): 
 			ingest,
 			notify: host.notify,
 			t: host.t,
+			// 降级链接交给**宿主的生成器**（它按用户的「新链接格式」设置产出
+			// `[[路径]]` 或 `[名](路径)`），嵌不嵌由 `buildLocalLink` 按类型表决定。
+			// 取不到 `TFile`（宿主索引还没看到刚落盘的文件）时返回 null，
+			// 让链接层退回普通 wikilink —— 图能看，只是形态保守。
+			generatedLocalLink: (vaultPath: string): string | null => {
+				const file = host.app.vault.getAbstractFileByPath(vaultPath);
+				if (!(file instanceof TFile)) return null;
+				try {
+					return host.app.fileManager.generateMarkdownLink(file, request.sourcePath ?? "");
+				} catch {
+					// 宿主生成器抛错不该让"图保住了"变成"链接没插" —— 交给兜底形态
+					return null;
+				}
+			},
 			sourcePath: request.sourcePath,
 		},
 		request.editor,

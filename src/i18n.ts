@@ -69,20 +69,17 @@ export const I18N: Record<string, Locale> = {
 			"Reached that address, but the object is not there (404) — the URL base is probably wrong. Checked: {url}",
 		testPublic_unreachable: "Could not reach that address at all — the URL base is probably wrong. Checked: {url}",
 		testPublic_other: "Could not tell whether the link works (HTTP {status}). Checked: {url}",
-		testPublic_noSample: "Nothing uploaded yet, so there is no link to check — paste an image first.",
+		testPublic_noSample: "Nothing uploaded yet, so there is no link to check — upload a file first.",
 
 		// ── 上传 ──
 		autoUpload: "Upload on paste and drop",
 		autoUploadDesc:
-			"When off, pasting and dropping are left to Obsidian, so files are saved locally as usual. Images already cached still render offline.",
-		extensions: "File types",
-		extensionsDesc:
-			"Separated by commas or spaces, without dots. Clearing the field restores the default image list.",
+			"When off, pasting and dropping are left to Obsidian, so files are saved locally as usual. Files already cached still render offline.",
 
 		// ── 离线副本 ──
 		localCopy: "Where the local copy goes",
 		localCopyDesc:
-			"Where the local copy of an uploaded file is kept. Without a local copy, images cannot be shown offline.",
+			"Where the local copy of an uploaded file is kept. Without a local copy, files cannot be shown offline.",
 		localCopy_cache: "Move into the cache folder (offline works)",
 		localCopy_keep: "Leave in the attachments folder (offline works)",
 		localCopy_trash: "Do not keep a local copy (offline unavailable)",
@@ -91,7 +88,7 @@ export const I18N: Record<string, Locale> = {
 			"Relative to the vault root. This folder is disposable: deleting it only costs one re-download.",
 		fallbackDownload: "Download missing copies",
 		fallbackDownloadDesc:
-			"For images from this storage that have no local copy, such as ones synced from another device. Images from other sites are never downloaded.",
+			"For files from this storage that have no local copy, such as ones synced from another device. Files from other sites are never downloaded.",
 
 		// ── 高级 ──
 		attachmentFolder: "Attachments folder override",
@@ -114,7 +111,7 @@ export const I18N: Record<string, Locale> = {
 		hookFixConnection: "Fill in the storage connection settings.",
 		hookFixCredentials: "Pick your access keys in the storage connection settings.",
 		hookLostFiles: "⚠️ {count} file(s) could not be saved anywhere — neither uploaded nor kept locally.",
-		hookUnexpectedFailure: "Image upload failed unexpectedly: {error}",
+		hookUnexpectedFailure: "Upload failed unexpectedly: {error}",
 
 		// ── 缓存索引 ──
 		indexLoadFailed: "Local-copy index could not be read, so offline copies will be rebuilt: {error}",
@@ -145,7 +142,7 @@ export const I18N: Record<string, Locale> = {
 		maintainCleanMore: "…and {count} more",
 		// 这条必须写清楚"不能撤销" —— 它是用户按下确认前唯一的安全信息。
 		maintainCleanSafety:
-			"Deleted files are gone — this cannot be undone, and the disk space is freed right away. The images are downloaded again when you next view them. Copies still referenced by a note are never touched.",
+			"Deleted files are gone — this cannot be undone, and the disk space is freed right away. They are downloaded again when you next view them. Copies still referenced by a note are never touched.",
 		maintainCleanCta: "Delete permanently",
 		maintainCancelled: "Cancelled — nothing was changed.",
 		maintainCleaned: "Cleaned {removed} file(s); repaired {healed} index entries; {skipped} skipped.",
@@ -153,7 +150,7 @@ export const I18N: Record<string, Locale> = {
 		maintainSkipOutsideCache: "Not inside the cache folder",
 		maintainSkipNotIndexed: "Obsidian cannot see this file yet — skipped instead of deleting it directly",
 		maintainNotConfigured: "The storage connection is not set up yet, so nothing was uploaded.",
-		maintainBatchNothing: "No attachments to upload (all images are already handled).",
+		maintainBatchNothing: "No attachments to upload (everything is already handled).",
 		maintainBatchTitle: "Upload existing attachments",
 		maintainBatchSummary: "Upload {count} file(s) and rewrite note links to point at your storage.",
 		// ⚠️ 必须说清"跑完原文件就不在附件目录里了"（设置项承诺的是「移入缓存目录」），
@@ -162,26 +159,28 @@ export const I18N: Record<string, Locale> = {
 			"Once uploaded, these files move into the cache folder and are renamed by content — nothing stays behind in the attachments folder. Files that no note refers to are left alone.",
 		maintainBatchSkipsUnreferenced:
 			"{count} file(s) in your vault are not linked from any note, so they are left alone.",
+		maintainBatchCanvasSkipped:
+			"{count} reference(s) in canvases could not be rewritten (the file is not readable JSON), so they still point to their old location.",
 		maintainBatchCta: "Upload and rewrite links",
 		maintainBatchExternal:
-			"Also {count} image(s) hosted elsewhere, on {sites} site(s): {hosts}",
+			"Also {count} file(s) hosted elsewhere, on {sites} site(s): {hosts}",
 		maintainBatchDone:
 			"Uploaded {uploaded}, already there {reused}, failed {failed}. Rewrote {links} link(s) across {notes} note(s).",
 
 		// ── 站外图片 ──
-		externalImageCache: "Cache images from other sites",
+		externalImageCache: "Cache files from other sites",
 		externalImageCacheDesc:
-			"Whether the plugin may handle images that live on other sites at all. Off by default: while it is off those images are left completely alone.",
-		externalImageDefault: "When a note has an image from another site",
+			"Whether the plugin may handle files that live on other sites at all. Off by default: while it is off those files are left completely alone.",
+		externalImageDefault: "When a note links to a file on another site",
 		externalImageDefaultDesc:
-			"What to do by default. \"Leave it alone\" never touches it; \"Cache straight away\" downloads it, uploads it to your storage and rewrites the link in the note. Either way you can pick individual images with the button below.",
+			"What to do by default. \"Leave it alone\" never touches it; \"Cache straight away\" downloads it, uploads it to your storage and rewrites the link in the note. Either way you can pick individual files with the button below.",
 		externalDefault_skip: "Leave it alone",
 		externalDefault_cache: "Cache straight away",
-		externalPickName: "Pick specific images",
+		externalPickName: "Pick specific files",
 		externalPickDesc:
 			"Choose images from the current note or from the whole vault, and only those are cached. Picking one is the same as agreeing to it — the default above does not apply.",
-		externalPickButton: "Choose images…",
-		externalPickTitle: "Choose images to cache",
+		externalPickButton: "Choose files…",
+		externalPickTitle: "Choose files to cache",
 		externalPickScope: "Where to look",
 		externalPickScopeNote: "Current note",
 		externalPickScopeVault: "Whole vault",
@@ -191,19 +190,19 @@ export const I18N: Record<string, Locale> = {
 		externalPickNone: "Select none",
 		externalPickCta: "Cache the {count} selected",
 		externalPickCancel: "Cancel",
-		externalPickDisabled: "Turn on \"Cache images from other sites\" first.",
-		externalPickNothing: "No images were cached.",
+		externalPickDisabled: "Turn on \"Cache files from other sites\" first.",
+		externalPickNothing: "No files were cached.",
 		externalPickDone:
-			"Cached {cached} image(s); {partial} were uploaded but their link could not be rewritten; {failed} failed.",
-		cmdPickExternal: "Cache images from other sites…",
-		externalCached: "Cached the image from {host} and rewrote the link.",
-		externalCachedNoRewrite: "The image was uploaded, but the link in this note could not be rewritten: {error}",
-		externalNoNote: "Could not read the note this image is in, so nothing was downloaded or changed.",
-		externalFetchForbidden: "Could not download the image from {host}: the site blocks direct downloads (hotlink protection).",
-		externalFetchMissing: "The image is no longer available ({status}).",
-		externalNotImage: "That address is not an image ({contentType}), so it was not uploaded.",
-		externalTooLarge: "The image is larger than the {mb} MB limit, so it was not uploaded.",
-		externalUploadFailed: "Downloaded the image but could not upload it: {error}",
+			"Cached {cached} file(s); {partial} were uploaded but their link could not be rewritten; {failed} failed.",
+		cmdPickExternal: "Cache files from other sites…",
+		externalCached: "Cached the file from {host} and rewrote the link.",
+		externalCachedNoRewrite: "The file was uploaded, but the link in this note could not be rewritten: {error}",
+		externalNoNote: "Could not read the note that links this file, so nothing was downloaded or changed.",
+		externalFetchForbidden: "Could not download the file from {host}: the site blocks direct downloads (hotlink protection).",
+		externalFetchMissing: "That link is no longer available ({status}).",
+		externalNotAttachment: "That address returned a web page or plain text ({contentType}), not a file, so it was not uploaded.",
+		externalTooLarge: "The file is larger than the {mb} MB limit, so it was not uploaded.",
+		externalUploadFailed: "Downloaded the file but could not upload it: {error}",
 
 		// ── 缓存上限与自动轮换 ──
 		cacheLimit: "Cache size limit (MB)",
@@ -268,16 +267,14 @@ export const I18N: Record<string, Locale> = {
 		testPublic_missing: "那个地址能连上，但对象不在（404）—— 多半是前缀写错了。检查的是：{url}",
 		testPublic_unreachable: "连不上那个地址 —— 前缀可能写错了。检查的是：{url}",
 		testPublic_other: "无法判断链接是否可用（HTTP {status}）。检查的是：{url}",
-		testPublic_noSample: "还没上传过任何东西，没有链接可检查 —— 先粘一张图。",
+		testPublic_noSample: "还没上传过任何东西，没有链接可检查 —— 先上传一个文件。",
 
 		autoUpload: "粘贴或拖入时自动上传",
 		autoUploadDesc:
-			"关闭后粘贴与拖拽交回 Obsidian 处理，文件照常存在本地。已经缓存的图片仍然离线可见。",
-		extensions: "参与的文件类型",
-		extensionsDesc: "用逗号或空格分隔，不带点。清空则恢复默认的图片清单。",
+			"关闭后粘贴与拖拽交回 Obsidian 处理，文件照常存在本地。已经缓存的附件仍然离线可见。",
 
 		localCopy: "本地副本的处理",
-		localCopyDesc: "上传后，本地副本放在哪里。不留副本时，断网就看不到图片。",
+		localCopyDesc: "上传后，本地副本放在哪里。不留副本时，断网就看不到附件。",
 		localCopy_cache: "移入缓存目录（离线可用）",
 		localCopy_keep: "留在附件目录（离线可用）",
 		localCopy_trash: "不留本地副本（离线不可用）",
@@ -285,7 +282,7 @@ export const I18N: Record<string, Locale> = {
 		cacheFolderDesc: "相对 vault 根目录。这个目录是可丢弃的：删掉只会导致重新下载一次。",
 		fallbackDownload: "缺本地副本时自动下载",
 		fallbackDownloadDesc:
-			"属于本存储、却没有本地副本的图片（例如从另一台设备同步来的）会自动下载。站外图片永不下载。",
+			"属于本存储、却没有本地副本的附件（例如从另一台设备同步来的）会自动下载。站外文件永不下载。",
 
 		attachmentFolder: "附件目录覆盖",
 		attachmentFolderPlaceholder: "跟随 Obsidian",
@@ -303,7 +300,7 @@ export const I18N: Record<string, Locale> = {
 		hookFixConnection: "请到「存储连接」里补全设置。",
 		hookFixCredentials: "请到「存储连接」里选择访问密钥。",
 		hookLostFiles: "⚠️ 有 {count} 个文件既没能上传、也没能保存到本地。",
-		hookUnexpectedFailure: "图片上传出现未预期的错误：{error}",
+		hookUnexpectedFailure: "上传出现未预期的错误：{error}",
 		indexLoadFailed: "本地副本索引读取失败，离线副本将被重建：{error}",
 		indexSkipped: "本地副本索引里有 {count} 条记录无法使用，已丢弃。",
 		fallbackDownloadFailed: "补齐本地副本失败：{error}",
@@ -327,7 +324,7 @@ export const I18N: Record<string, Locale> = {
 		maintainCleanMore: "……还有 {count} 个",
 		// 这条必须写清楚"不能撤销" —— 它是用户按下确认前唯一的安全信息。
 		maintainCleanSafety:
-			"删除后无法撤销，磁盘空间会立刻释放。图片会在你下次查看时重新下载。仍被笔记引用的副本一律不动。",
+			"删除后无法撤销，磁盘空间会立刻释放。它们会在你下次查看时重新下载。仍被笔记引用的副本一律不动。",
 		maintainCleanCta: "彻底删除",
 		maintainCancelled: "已取消，没有改动任何内容。",
 		maintainCleaned: "已清理 {removed} 个文件；修复索引记录 {healed} 条；跳过 {skipped} 个。",
@@ -335,7 +332,7 @@ export const I18N: Record<string, Locale> = {
 		maintainSkipOutsideCache: "不在缓存目录内",
 		maintainSkipNotIndexed: "Obsidian 还看不到这个文件 —— 已跳过，而不是直接删除",
 		maintainNotConfigured: "存储连接尚未配置，没有上传任何内容。",
-		maintainBatchNothing: "没有需要上传的附件（图片都已经处理过了）。",
+		maintainBatchNothing: "没有需要上传的附件（都已经处理过了）。",
 		maintainBatchTitle: "上传已存在的附件",
 		maintainBatchSummary: "将上传 {count} 个文件，并把笔记里的链接改成指向你的存储。",
 		// ⚠️ 别在文案里写 markdown（`**加粗**`）：确认弹窗是 `createDiv({ text })`、
@@ -343,25 +340,27 @@ export const I18N: Record<string, Locale> = {
 		maintainBatchMovesOriginals:
 			"上传成功后，这些文件会被移入缓存目录并按内容改名 —— 附件目录里不再留一份。没有任何笔记引用的文件不会被碰。",
 		maintainBatchSkipsUnreferenced: "另有 {count} 个文件没有被任何笔记引用，不会被处理。",
+		maintainBatchCanvasSkipped:
+			"画布里有 {count} 处引用没能改写（画布文件不是可读的 JSON），它们仍指向旧位置。",
 		maintainBatchCta: "上传并改写链接",
-		maintainBatchExternal: "另有 {count} 张图片托管在站外，来自 {sites} 个站点：{hosts}",
+		maintainBatchExternal: "另有 {count} 个文件托管在站外，来自 {sites} 个站点：{hosts}",
 		maintainBatchDone:
 			"上传 {uploaded} 个、已存在 {reused} 个、失败 {failed} 个。在 {notes} 篇笔记里改写了 {links} 处链接。",
 
 		// ── 站外图片 ──
-		externalImageCache: "缓存站外图片",
+		externalImageCache: "缓存站外文件",
 		externalImageCacheDesc:
-			"是否允许插件处理别处的图片。默认关闭；关着时这类图片一步都不会被碰。",
-		externalImageDefault: "遇到外链图片时",
+			"是否允许插件处理别处的文件。默认关闭；关着时这类文件一步都不会被碰。",
+		externalImageDefault: "遇到站外文件链接时",
 		externalImageDefaultDesc:
 			"默认怎么做。「什么都不做」绝不碰它；「直接缓存」会下载、上传到你的存储、并改写笔记里的链接。两种情况都能用下面那颗按钮逐张挑。",
 		externalDefault_skip: "什么都不做",
 		externalDefault_cache: "直接缓存",
-		externalPickName: "挑选要缓存的图片",
+		externalPickName: "挑选要缓存的文件",
 		externalPickDesc:
 			"在「当前笔记」或「全库」里勾选图片，只处理你勾中的那些。勾选本身就是同意，与上面的默认设置无关。",
-		externalPickButton: "选择图片…",
-		externalPickTitle: "选择要缓存的图片",
+		externalPickButton: "选择文件…",
+		externalPickTitle: "选择要缓存的文件",
 		externalPickScope: "范围",
 		externalPickScopeNote: "当前笔记",
 		externalPickScopeVault: "全库",
@@ -371,18 +370,18 @@ export const I18N: Record<string, Locale> = {
 		externalPickNone: "全不选",
 		externalPickCta: "缓存选中的 {count} 张",
 		externalPickCancel: "取消",
-		externalPickDisabled: "请先打开「缓存站外图片」。",
-		externalPickNothing: "没有缓存任何图片。",
+		externalPickDisabled: "请先打开「缓存站外文件」。",
+		externalPickNothing: "没有缓存任何文件。",
 		externalPickDone: "已缓存 {cached} 张；{partial} 张已上传但没能改写链接；{failed} 张失败。",
-		cmdPickExternal: "缓存站外图片（可挑选）…",
-		externalCached: "已缓存来自 {host} 的图片并改写链接。",
-		externalCachedNoRewrite: "图片已上传，但没能改写本篇笔记里的链接：{error}",
-		externalNoNote: "读不到这张图所在的笔记，因此没有下载、也没有改动任何内容。",
-		externalFetchForbidden: "无法从 {host} 下载图片：该站点有防盗链保护。",
-		externalFetchMissing: "图片已失效（{status}）。",
-		externalNotImage: "该地址不是图片（{contentType}），未上传。",
-		externalTooLarge: "图片超过 {mb} MB 上限，未上传。",
-		externalUploadFailed: "图片已下载，但上传失败：{error}",
+		cmdPickExternal: "缓存站外文件（可挑选）…",
+		externalCached: "已缓存来自 {host} 的文件并改写链接。",
+		externalCachedNoRewrite: "文件已上传，但没能改写本篇笔记里的链接：{error}",
+		externalNoNote: "读不到链接该文件的笔记，因此没有下载、也没有改动任何内容。",
+		externalFetchForbidden: "无法从 {host} 下载文件：该站点有防盗链保护。",
+		externalFetchMissing: "该链接已失效（{status}）。",
+		externalNotAttachment: "该地址返回的是网页或纯文本（{contentType}），不是文件，未上传。",
+		externalTooLarge: "文件超过 {mb} MB 上限，未上传。",
+		externalUploadFailed: "文件已下载，但上传失败：{error}",
 
 		// ── 缓存上限与自动轮换 ──
 		cacheLimit: "缓存大小上限（MB）",

@@ -74,8 +74,8 @@ export type ExternalFetchStatus =
 	| "network"
 	/** 其它非 2xx（含 3xx：`requestUrl` 是否跟随重定向没有文档保证，一律当失败）。 */
 	| "failed"
-	/** 200 但内容不是图片（防盗链常回一个 HTML 页）。 */
-	| "not-image"
+	/** 200 但内容**不是附件**（防盗链常回一个 HTML 页）—— 见 `isAttachmentResponse`。 */
+	| "not-attachment"
 	/** 超过 {@link MAX_EXTERNAL_BYTES}。 */
 	| "too-large";
 
@@ -100,7 +100,7 @@ export type ExternalCacheStatus =
 	| "fetch-timeout"
 	| "fetch-network"
 	| "fetch-failed"
-	| "not-image"
+	| "not-attachment"
 	| "too-large"
 	/** 下载成功但上传失败（字节已留在本地，绝不丢图）。 */
 	| "upload-failed";
@@ -182,24 +182,32 @@ export function mimeFromContentType(value: unknown): string {
 }
 
 /**
- * 响应内容是不是一张图（**纯函数**）。
+ * 响应内容是不是一个**可以搬走的附件**（**纯函数**）。
  *
- * `content-type` 是主要判据。它为空时才退回按 URL 扩展名判断 ——
- * 那种情况很少，但**不能**直接当成"不是图片"：有些图床确实不给类型头。
- * 退回时要求扩展名在**用户已启用的集合**里（保守：不上传我们不认识的 blob）。
+ * 1.1.0 起不再只服务图片（需求 R15）—— 音频、视频、PDF、压缩包、文档同样可以缓存。
+ * 但有一条底线**没有放宽**，而且必须写死在一处：
+ *
+ * ## ⭐ 绝不把网页当附件搬走
+ *
+ * `text/html` 是防盗链/登录墙的典型回包 —— 一个"图片"地址实际返回的是网页。
+ * 把它当附件上传，用户会得到一个**能下载下来的网页源码**，而笔记里那张图
+ * 依旧不显示。`text/*`（`text/plain` 的 robots.txt、`text/css`…）同理：
+ * 它们是一段文本，不是用户想收藏的那个文件（原则④：宁可不做，也不做一个错的）。
+ *
+ * ## 类型头缺失时退回 URL 扩展名
+ *
+ * 有些图床确实不给 `Content-Type`。那时**不能**当成"不是附件"（会整类漏掉），
+ * 也不能当成"是附件"（会把任何 HTML 页收下来）—— 判据是**URL 最后一段带扩展名**：
+ * `…/photo.png` 收，`…/page.php`、`…/`（目录）不收。
+ * 这是"形状"判据，不依赖我们认不认识那个后缀 —— 认不认识由 MIME 表决定，
+ * 这里的价值只有"它看起来是个文件"。
  */
-export function isImageResponse(input: {
-	contentType: unknown;
-	url: unknown;
-	imageExtensions: readonly string[];
-}): boolean {
+export function isAttachmentResponse(input: { contentType: unknown; url: unknown }): boolean {
 	const type = mimeFromContentType(input.contentType);
-	if (type.startsWith("image/")) return true;
-	// 有类型但不是图片（`text/html` 是防盗链的典型回包）→ 明确拒绝
-	if (type) return false;
-
-	const ext = extensionFromUrl(input.url);
-	return Boolean(ext) && input.imageExtensions.includes(ext);
+	if (!type) return Boolean(extensionFromUrl(input.url));
+	// ⭐ 网页与纯文本一律拒收（见上）
+	if (type === "text/html" || type.startsWith("text/")) return false;
+	return true;
 }
 
 /** 从 URL 的路径部分取扩展名（不含点，小写）。取不到返回空串。 */
@@ -240,8 +248,6 @@ export interface FetchExternalImageDeps {
 	request?: (options: RequestUrlParam) => Promise<RequestUrlResponse>;
 	timeoutMs?: number;
 	maxBytes?: number;
-	/** 判定"是不是图片"时可接受的扩展名（content-type 缺失时的兜底依据）。 */
-	imageExtensions?: readonly string[];
 }
 
 class TimeoutError extends Error {
@@ -299,7 +305,6 @@ export async function fetchExternalImage(
 	const request = deps.request ?? requestUrl;
 	const timeoutMs = deps.timeoutMs ?? DEFAULT_EXTERNAL_TIMEOUT_MS;
 	const maxBytes = deps.maxBytes ?? MAX_EXTERNAL_BYTES;
-	const imageExtensions = deps.imageExtensions ?? [];
 
 	let response: RequestUrlResponse;
 	try {
@@ -326,8 +331,8 @@ export async function fetchExternalImage(
 		return { status: "too-large", detail: String(bytes.byteLength) };
 	}
 
-	if (!isImageResponse({ contentType, url, imageExtensions })) {
-		return { status: "not-image", detail: mimeFromContentType(contentType) || "(没有类型头)" };
+	if (!isAttachmentResponse({ contentType, url })) {
+		return { status: "not-attachment", detail: mimeFromContentType(contentType) || "(没有类型头)" };
 	}
 
 	return { status: "ok", bytes, contentType: mimeFromContentType(contentType) };
@@ -371,8 +376,8 @@ function cacheStatusFor(status: ExternalFetchStatus): ExternalCacheStatus {
 			return "fetch-timeout";
 		case "network":
 			return "fetch-network";
-		case "not-image":
-			return "not-image";
+		case "not-attachment":
+			return "not-attachment";
 		case "too-large":
 			return "too-large";
 		default:
@@ -393,8 +398,8 @@ function messageKeyFor(status: ExternalCacheStatus): string {
 			return "externalFetchForbidden";
 		case "fetch-missing":
 			return "externalFetchMissing";
-		case "not-image":
-			return "externalNotImage";
+		case "not-attachment":
+			return "externalNotAttachment";
 		case "too-large":
 			return "externalTooLarge";
 		case "upload-failed":
@@ -458,7 +463,6 @@ export function createExternalCacher(deps: ExternalCacherDeps): ExternalCacher {
 			request: deps.request,
 			timeoutMs: deps.timeoutMs,
 			maxBytes: deps.maxBytes,
-			imageExtensions: settings.enabledExtensions,
 		});
 
 		if (fetched.status !== "ok") {
@@ -466,7 +470,7 @@ export function createExternalCacher(deps: ExternalCacherDeps): ExternalCacher {
 			const params: Record<string, unknown> =
 				status === "fetch-missing"
 					? { status: fetched.detail }
-					: status === "not-image"
+					: status === "not-attachment"
 						? { contentType: fetched.detail }
 						: status === "too-large"
 							? { mb: Math.round((deps.maxBytes ?? MAX_EXTERNAL_BYTES) / (1024 * 1024)) }

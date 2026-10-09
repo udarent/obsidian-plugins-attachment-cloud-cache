@@ -17,30 +17,35 @@ await runMutations({
 	entries: ["src/ui/settings-logic", "src/ui/settings-bindings", "src/s3/credentials"],
 	suite: runSettingsUiSuite,
 	mutations: [
-		// ── 扩展名解析 ──
+		// ── 扩展名解析（已删除）──
+		//
+		// ⚠️ 这里原本有四条变异，锚在"扩展名列表的解析/格式化"上。那个设置项
+		//（以及它的两个纯函数）在 1.1.0 被删除（需求 R15：任何类型都上传），
+		// 于是换成了**同一类后果**的三条 —— 它们同样是"不报错、只把用户带错路"的缺陷：
+		// 界面上出现假选项、401 被归成别的档、公开链接的文案 key 拼错。
 		{
-			name: "扩展名只认逗号（用户用空格/顿号/换行输入就全废了）",
-			from: "\tfor (const piece of text.split(/[,，、;；\\s]+/)) {",
-			to: '\tfor (const piece of text.split(",")) {',
-			expect: "空格分隔（手敲常见）",
+			// 后果：下拉里多出一个**从不生效**的值（假选项），用户选了它以为行为变了，
+			// 实际什么都没发生 —— 界面上能选的必须与类型清单完全一致。
+			name: "★ 站外默认档的选项里混进一个未实现的值（界面上出现假选项）",
+			from: "\tfor (const value of EXTERNAL_IMAGE_DEFAULTS) options[value] = labelOf(value);",
+			to: '\tfor (const value of [...EXTERNAL_IMAGE_DEFAULTS, "always"]) options[value] = labelOf(value);',
+			expect: "选项集合必须与 EXTERNAL_IMAGE_DEFAULTS 完全一致",
 		},
 		{
-			name: "扩展名不再归一化（大写与前导点照原样存进去）",
-			from: '\t\tconst normalized = piece.trim().toLowerCase().replace(/^\\./, "");',
-			to: "\t\tconst normalized = piece.trim();",
-			expect: "带前导点与大写都要归一",
+			// 后果：401 被归到"其它"⇒ 用户看到一句含糊的"无法判断"，
+			// 而真正该做的是"开公开读或配一个公开前缀"。提示指错方向。
+			name: "★ 401 不再归为「拒绝匿名访问」（提示退化成含糊的「无法判断」）",
+			from: '\tif (status === 401 || status === 403) return "forbidden";',
+			to: '\tif (status === 403) return "forbidden";',
+			expect: "401 同理",
 		},
 		{
-			name: "空段不再丢弃（空串会被当成一个扩展名存进设置）",
-			from: '\t\tif (normalized === "") continue;',
-			to: "\t\t// 变异：不跳过空段",
-			expect: "空串得到空列表",
-		},
-		{
-			name: "格式化不再过滤脏元素（数字与空串混进文本框）",
-			from: '\treturn list.filter((x): x is string => typeof x === "string" && x.trim() !== "").join(", ");',
-			to: '\treturn list.join(", ");',
-			expect: "格式化要过滤脏元素",
+			// 后果：文案 key 拼错 ⇒ 界面上直接显示成 `public_ok` 这样的键名，
+			// 用户既看不懂也不知道该做什么。
+			name: "公开链接的文案 key 前缀被改（界面显示成 key 本身）",
+			from: "\treturn `testPublic_${kind}`;",
+			to: "\treturn `public_${kind}`;",
+			expect: "每类都要有文案 key",
 		},
 
 		// ── 条件显示 ──

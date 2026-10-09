@@ -583,6 +583,11 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				links: result.linksRewritten,
 			})
 		);
+		// ⚠️ 画布里"没敢动"的值要**单独说出来**：它不属于失败，但用户必须知道
+		// 某一处引用可能还指着旧位置（否则他会以为全改好了）。
+		if (result.canvasSkipped > 0) {
+			new Notice(this.t("maintainBatchCanvasSkipped", { count: result.canvasSkipped }));
+		}
 	}
 
 	/**

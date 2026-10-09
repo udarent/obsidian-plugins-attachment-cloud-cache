@@ -137,6 +137,13 @@ async function makeHarness(mod, options = {}) {
 		ingest: (request) => mod.ingestAttachment({ app: appMock.app, settings, client, index, persistIndex: async () => {}, notify: notices.notify, now: () => FIXED_NOW }, request),
 		notify: notices.notify,
 		t: makeT(),
+		// 降级链接的宿主生成器：真机用 `fileManager.generateMarkdownLink`，
+		// 替身里那份**不产出 `!`**（与真机实测一致），嵌入与否由链接层按类型表补。
+		generatedLocalLink: (vaultPath) => {
+			const file = appMock.app.vault.getAbstractFileByPath(vaultPath);
+			if (!file) return null;
+			return appMock.app.fileManager.generateMarkdownLink(file, "notes/note.md");
+		},
 		sourcePath: "notes/note.md",
 	};
 
@@ -178,9 +185,9 @@ export async function runTransferSuite(mod) {
 		filesFromTransfer,
 		isHookableFile,
 		fileIdentity,
-		buildRemoteImageMarkdown,
-		buildLocalImageEmbed,
-		altTextForFile,
+		buildRemoteLink,
+		buildLocalLink,
+		displayNameOf,
 		processTransfer,
 	} = mod;
 
@@ -332,22 +339,23 @@ export async function runTransferSuite(mod) {
 	}
 
 	// ============================================================
-	// 3. isHookableFile
+	// 3. isHookableFile —— ⭐ 1.1.0 起**任何真实文件**都算（需求 R15）
+	//
+	// 判据从"类型在用户勾选的清单里"变成"这是个文件"：
+	// 用户粘一个文件的意思就是"帮我传上去"，而不是"帮我传上去，但前提是我
+	// 二十个字符之前在设置里勾过这个后缀"。所以下面的断言整体**反向**了 ——
+	// 以前"不在清单里 ⇒ false"的那些，现在都必须是 true。
 	// ============================================================
-	assert.equal(isHookableFile(png(), settings), true, "png 在默认启用列表里");
-	assert.equal(isHookableFile(makeFile("x.jpg", "image/jpeg"), settings), true);
-	assert.equal(isHookableFile(makeFile("x.svg", "image/svg+xml"), settings), true);
-	assert.equal(isHookableFile(pdf(), settings), false, "pdf 不在默认启用列表里");
-	assert.equal(isHookableFile(makeFile("noext", ""), settings), false, "推不出类型的一律不处理");
-	assert.equal(isHookableFile(makeFile("x.png", "application/octet-stream"), settings), true, "靠文件名也能判断");
-	assert.equal(isHookableFile(makeFile("", "image/png"), settings), true, "靠 MIME 也能判断（截图粘贴）");
-	assert.equal(isHookableFile(null, settings), false);
-	// 扩展名禁用后应立刻不处理
-	assert.equal(
-		isHookableFile(png(), { ...settings, enabledExtensions: ["webp"] }),
-		false,
-		"扩展名被禁用后不该接管"
-	);
+	assert.equal(isHookableFile(png(), settings), true, "图片当然要处理");
+	assert.equal(isHookableFile(pdf(), settings), true, "⭐ PDF 也要处理（类型闸门已移除）");
+	assert.equal(isHookableFile(makeFile("noext", ""), settings), true, "没有扩展名的文件也要处理");
+	assert.equal(isHookableFile(makeFile("archive.zip", "application/zip"), settings), true, "压缩包同理");
+	assert.equal(isHookableFile(makeFile("x.png", "application/octet-stream"), settings), true, "类型不明也处理");
+	assert.equal(isHookableFile(makeFile("", ""), settings), true, "连名字都没有（截图粘贴）也处理");
+	// 只有"不是文件"的东西才被挡在外面（`accept()` 的整批放行防线守着这条）
+	assert.equal(isHookableFile(null, settings), false, "null 不是文件");
+	assert.equal(isHookableFile(undefined, settings), false, "undefined 不是文件");
+	assert.equal(isHookableFile("a.png", settings), false, "字符串不是文件");
 
 	// ============================================================
 	// 4. ⭐ shouldInterceptPaste
@@ -389,19 +397,15 @@ export async function runTransferSuite(mod) {
 		"文本为空串时应照常接管（空串不表示用户在粘文字）"
 	);
 
-	// ⭐ 混合载荷（图 + 不认识的文件）→ 整批不接管
-	// 若只接管图，PDF 会被 preventDefault 挡掉而没人插回去 → 被吞掉
+	// ⭐ 1.1.0：混合载荷（图 + PDF）→ **照样整批接管**。
+	// 以前这里是"有一个不认识就整批放行"；类型闸门移除之后不再有"不认识"的文件，
+	// 这条断言因此反向 —— 它守的是"用户粘什么就传什么"这个新语义。
 	assert.equal(
 		pastePlan(makeTransfer({ files: [png(), pdf()] })).intercept,
-		false,
-		"⭐ 只要有一个不认识的文件就整批放行，否则那个文件会被吞掉"
+		true,
+		"⭐ 混合载荷要整批接管（含 PDF/压缩包/无扩展名）"
 	);
-	assert.equal(
-		pastePlan(makeTransfer({ files: [pdf()] })).intercept,
-		false,
-		"全是不可处理文件时不该接管"
-	);
-	// 反向守护：全是认识的（多张图）应接管
+	assert.equal(pastePlan(makeTransfer({ files: [pdf()] })).intercept, true, "只粘一个 PDF 也要接管");
 	assert.equal(pastePlan(makeTransfer({ files: [png(), makeFile("b.jpg", "image/jpeg")] })).intercept, true, "全是图片应接管");
 
 	// getData 缺失时按"没有文本"处理（否则功能会静默失效）
@@ -456,63 +460,121 @@ export async function runTransferSuite(mod) {
 		false,
 		"拖入库内链接文本时不该接管"
 	);
-	// 混合与纯不可处理
-	assert.equal(dropPlan(makeTransfer({ files: [png(), pdf()] })).intercept, false, "混合载荷应整批放行");
-	assert.equal(dropPlan(makeTransfer({ files: [pdf()] })).intercept, false, "纯不可处理文件不该接管");
+	// 混合与"以前不可处理"的文件 —— 现在都要接管
+	assert.equal(dropPlan(makeTransfer({ files: [png(), pdf()] })).intercept, true, "混合载荷也要接管");
+	assert.equal(dropPlan(makeTransfer({ files: [pdf()] })).intercept, true, "拖入 PDF 同样要接管");
 
 	// ============================================================
-	// 6. Markdown 构造
+	// 6. 链接构造 —— `!` 与否由**可嵌入类型表**决定（不是"是不是图片"）
 	// ============================================================
+	// 表内类型 ⇒ `![]()`（宿主会渲染成可预览的元素）
 	assert.equal(
-		buildRemoteImageMarkdown("https://img.example.com/a.png", "shot"),
-		"![shot](https://img.example.com/a.png)",
-		"远端图用 Markdown 图片语法（wikilink 只能指向库内文件）"
+		buildRemoteLink("https://img.example.com/a.png", "shot.png", "png"),
+		"![shot.png](https://img.example.com/a.png)",
+		"远端可嵌入文件用 Markdown 图片语法（wikilink 只能指向库内文件）"
 	);
 	assert.equal(
-		buildRemoteImageMarkdown("https://img.example.com/a.png", ""),
-		"![](https://img.example.com/a.png)",
-		"没有 alt 时也应是合法语法"
+		buildRemoteLink("https://img.example.com/a.mp3", "song.mp3", "mp3"),
+		"![song.mp3](https://img.example.com/a.mp3)",
+		"⭐ 音频也是可嵌入类型 ⇒ 照样 `![]()`（宿主的 embedRegistry 认它）"
 	);
 	assert.equal(
-		buildRemoteImageMarkdown("https://img.example.com/a%20b.png", ""),
+		buildRemoteLink("https://img.example.com/a.pdf", "doc.pdf", "pdf"),
+		"![doc.pdf](https://img.example.com/a.pdf)",
+		"⭐ PDF 同理"
+	);
+	// 表外/未知 ⇒ 普通链接（一个点得开的链接，而不是一个坏图）
+	assert.equal(
+		buildRemoteLink("https://img.example.com/a.zip", "pack.zip", "zip"),
+		"[pack.zip](https://img.example.com/a.zip)",
+		"⭐ 表外类型必须是普通链接 —— 加 `!` 只会得到一个坏图（原则④）"
+	);
+	assert.equal(
+		buildRemoteLink("https://img.example.com/a.tiff", "scan.tiff", "tiff"),
+		"[scan.tiff](https://img.example.com/a.tiff)",
+		"⭐ tiff 在宿主里**不可嵌入**（1.14.4 取证）：1.0.x 把它嵌成图，1.1.0 起降级为链接"
+	);
+	assert.equal(
+		buildRemoteLink("https://img.example.com/a.heic", "p.heic", "heic"),
+		"[p.heic](https://img.example.com/a.heic)",
+		"⭐ heic 同理（这是对老用户可见的变化，发版说明里写明）"
+	);
+	assert.equal(
+		buildRemoteLink("https://img.example.com/a.bin", "blob.bin", ""),
+		"[blob.bin](https://img.example.com/a.bin)",
+		"类型推不出来 ⇒ 普通链接（未知类型一律保守）"
+	);
+	assert.equal(
+		buildRemoteLink("https://img.example.com/a", "", "png"),
+		"![](https://img.example.com/a)",
+		"没有显示名时也应是合法语法"
+	);
+	assert.equal(
+		buildRemoteLink("https://img.example.com/a%20b.png", "", "png"),
 		"![](https://img.example.com/a%20b.png)",
 		"⭐ 百分号编码必须原样保留（再编一次会得到 %25，链接就打不开了）"
 	);
-	// alt 里的方括号会破坏语法 → 必须清掉
+	// 显示名里的方括号会破坏语法 → 必须清掉
 	assert.equal(
-		buildRemoteImageMarkdown("https://x/a.png", "a]b[c"),
+		buildRemoteLink("https://x/a.png", "a]b[c", "png"),
 		"![a b c](https://x/a.png)",
-		"alt 里的方括号必须清掉，否则会提前闭合 alt、把后面变成正文"
+		"显示名里的方括号必须清掉，否则会提前闭合 alt、把后面变成正文"
 	);
 	assert.equal(
-		buildRemoteImageMarkdown("https://x/a.png", "line1\nline2"),
+		buildRemoteLink("https://x/a.png", "line1\nline2", "png"),
 		"![line1 line2](https://x/a.png)",
-		"alt 里的换行必须清掉，否则一条链接会被拆成两条"
+		"显示名里的换行必须清掉，否则一条链接会被拆成两条"
 	);
-	// 非字符串 alt 不该渲染成 [object Object]，也不该抛错
+	// 非字符串显示名不该渲染成 [object Object]，也不该抛错
 	let nonStringAlt;
 	try {
-		nonStringAlt = buildRemoteImageMarkdown("https://x/a.png", { name: "x" });
+		nonStringAlt = buildRemoteLink("https://x/a.png", { name: "x" }, "png");
 	} catch (error) {
 		assert.fail(
-			`⭐ 非字符串 alt 必须被当成空串，而不是抛错 —— 抛错会让整次插入失败。实际抛出：${error?.message ?? error}`
+			`⭐ 非字符串显示名必须被当成空串，而不是抛错 —— 抛错会让整次插入失败。实际抛出：${error?.message ?? error}`
 		);
 	}
-	assert.equal(nonStringAlt, "![](https://x/a.png)", "非字符串 alt 应视为空，而不是渲染成 [object Object]");
-	assert.equal(buildRemoteImageMarkdown("  https://x/a.png  ", ""), "![](https://x/a.png)", "URL 应去空白");
+	assert.equal(nonStringAlt, "![](https://x/a.png)", "非字符串显示名应视为空");
+	assert.equal(buildRemoteLink("  https://x/a.png  ", "", "png"), "![](https://x/a.png)", "URL 应去空白");
 
-	// 本地嵌入（降级路径）
-	assert.equal(buildLocalImageEmbed("attachments/a.png", ""), "![[attachments/a.png]]", "库内文件用 wikilink 嵌入");
-	assert.equal(buildLocalImageEmbed("attachments/a.png", "shot"), "![[attachments/a.png|shot]]", "带说明时用竖线");
-	assert.equal(buildLocalImageEmbed("attachments\\a.png", ""), "![[attachments/a.png]]", "反斜杠要归一化");
-	assert.equal(buildLocalImageEmbed("/attachments/a.png", ""), "![[attachments/a.png]]", "前导斜杠要清掉");
+	// ── 本地链接（降级路径）：宿主生成器 + 我们按表补 `!` ──
+	assert.equal(
+		buildLocalLink("[[attachments/a.png]]", "attachments/a.png", "png"),
+		"![[attachments/a.png]]",
+		"⭐ 宿主生成器不产出 `!`（真机实测），嵌入与否由我们按类型表补"
+	);
+	assert.equal(
+		buildLocalLink("[[attachments/a.zip]]", "attachments/a.zip", "zip"),
+		"[[attachments/a.zip]]",
+		"⭐ 表外类型**不加** `!`：它应当是一个可点开的链接"
+	);
+	assert.equal(
+		buildLocalLink("[a](attachments/a.png)", "attachments/a.png", "png"),
+		"![a](attachments/a.png)",
+		"宿主按用户的「新链接格式」给出 Markdown 形态时也应被认（形态交回宿主）"
+	);
+	// ⚠️ 幂等：宿主若某天带上 `!`，我们不能产出 `!![[x]]`（那是坏链接）
+	assert.equal(
+		buildLocalLink("![[attachments/a.png]]", "attachments/a.png", "png"),
+		"![[attachments/a.png]]",
+		"⭐ 已有的 `!` 要先剥掉再按表决定 —— `!![[x]]` 在宿主里是坏链接"
+	);
+	// 拿不到宿主生成器 ⇒ 退回我们自己拼的**普通** wikilink（比什么都不插好）
+	assert.equal(
+		buildLocalLink(null, "attachments/a.png", "png"),
+		"![[attachments/a.png]]",
+		"⭐ 取不到 TFile 时要退回保守形态（内容不能丢）"
+	);
+	assert.equal(buildLocalLink(null, "attachments\\a.zip", "zip"), "[[attachments/a.zip]]", "反斜杠要归一化");
+	assert.equal(buildLocalLink("", "/attachments/a.zip", "zip"), "[[attachments/a.zip]]", "前导斜杠要清掉");
+	assert.equal(buildLocalLink(null, "", "png"), "", "没有路径时不该产出畸形链接");
 
-	// alt 取文件名主干
-	assert.equal(altTextForFile(makeFile("shot.png", "image/png")), "shot", "alt 取主干（更短，也够说明）");
-	assert.equal(altTextForFile(makeFile("dir/shot.png", "image/png")), "shot", "带目录时只取文件名");
-	assert.equal(altTextForFile(makeFile("noext", "")), "noext", "没有扩展名时整体作名字");
-	assert.equal(altTextForFile(makeFile(".gitignore", "")), ".gitignore", "前导点不算扩展名 → 整体作名字");
-	assert.equal(altTextForFile(null), "", "没有文件时给空串");
+	// 显示名 = **原文件名**（含扩展名）：用户要靠它认出"这是哪个文件"
+	assert.equal(displayNameOf(makeFile("shot.png", "image/png")), "shot.png", "含扩展名");
+	assert.equal(displayNameOf(makeFile("dir/shot.png", "image/png")), "shot.png", "带目录时只取文件名");
+	assert.equal(displayNameOf(makeFile("noext", "")), "noext", "没有扩展名时整体作名字");
+	assert.equal(displayNameOf(makeFile(".gitignore", "")), ".gitignore", "隐藏文件整体作名字");
+	assert.equal(displayNameOf(null), "", "没有文件时给空串");
 
 	// ============================================================
 	// 7. ⭐ processTransfer —— 执行部分（真实磁盘 + 真实 HTTP）
@@ -531,8 +593,8 @@ export async function runTransferSuite(mod) {
 		assert.equal(calls.selection.length, 1, "应插入一次文本（一次撤销就能回退）");
 		assert.match(
 			calls.selection[0],
-			/^!\[shot\]\(http:\/\/127\.0\.0\.1:\d+\/test-bucket\/[0-9a-f]{64}\.png\)$/,
-			`插入的应是远端图片链接，实际：${calls.selection[0]}`
+			/^!\[shot\.png\]\(http:\/\/127\.0\.0\.1:\d+\/test-bucket\/[0-9a-f]{64}\.png\)$/,
+			`插入的应是远端嵌入链接（显示名＝原文件名），实际：${calls.selection[0]}`
 		);
 		assert.equal(outcome.text, calls.selection[0], "返回的文本应与插入的一致");
 		// 缓存文件真的落盘
@@ -691,8 +753,8 @@ export async function runTransferSuite(mod) {
 		assert.equal(calls.selection.length, 1, "⭐ 只插入一次 —— 这样在编辑器里只占一步撤销");
 		const lines = calls.selection[0].split("\n");
 		assert.equal(lines.length, 2, "两条链接应各占一行");
-		assert.ok(lines[0].startsWith("![a]("), `第一条应是 a，实际 ${lines[0]}`);
-		assert.ok(lines[1].startsWith("![b]("), `第二条应是 b，实际 ${lines[1]}`);
+		assert.ok(lines[0].startsWith("![a.png]("), `第一条应是 a.png，实际 ${lines[0]}`);
+		assert.ok(lines[1].startsWith("![b.png]("), `第二条应是 b.png，实际 ${lines[1]}`);
 		assert.equal(h.server.countByMethod("PUT"), 2, "两张图应发两次 PUT");
 	});
 

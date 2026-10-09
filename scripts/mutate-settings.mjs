@@ -57,16 +57,23 @@ await runMutations({
 			expect: "非法枚举应回落默认",
 		},
 		{
-			name: "扩展名列表不再过滤非字符串（脏值进列表）",
-			from: '\t\t\tif (typeof item !== "string") continue;',
-			to: "\t\t\t// 变异：不过滤非字符串",
-			expect: "脏元素必须被**过滤掉**",
+			// ⚠️ 这两条原本锚在 `textListValue`（扩展名列表）上。那个设置项在 1.1.0
+			// 被删除（需求 R15：任何类型都上传），于是它们失去了锚点 —— 换成
+			// 同样"不会报错、只会行为不对"的两处：路径归一与必填回落。
+			// 后果：用户从别处粘一个反斜杠分隔或带双斜杠的路径，会被**逐字**拼进
+			// 缓存路径 ⇒ 生成 vault 里根本不存在的层级，而症状只是"缓存目录里没有文件"。
+			name: "vault 路径读进来时不再归一（反斜杠/重复斜杠会被逐字拼进缓存路径）",
+			from: "\t\tconst normalized = normalizePath(raw.trim());",
+			to: "\t\tconst normalized = raw.trim();",
+			expect: "缓存目录要归一",
 		},
 		{
-			name: "扩展名列表接受空数组（一个都没勾 = 什么都不处理）",
-			from: "return cleaned.length === 0 ? [...fallback] : cleaned;",
-			to: "return cleaned;",
-			expect: "空数组等于",
+			// 后果：把缓存目录清成 `/`（归一后为空）时，必填字段**不回落默认** ⇒
+			// 缓存路径推导返回 null ⇒ 缓存静默失效（"设了缓存目录却什么都没缓存"）。
+			name: "必填路径归一后为空时不再回落默认（缓存静默失效）",
+			from: "\t\treturn required ? fallback : \"\";",
+			to: "\t\treturn \"\";",
+			expect: "归一后为空的必填路径要回落默认",
 		},
 
 		// ── ⭐ 字段被真的读进来（"存得进读不出"）──

@@ -17,15 +17,15 @@
  * ## 三个概念要分清
  *
  * - **键（key）**：`s3.endpoint` 这种点号路径，指向设置对象里的位置。
- * - **取（presentation）**：设置值 → 控件显示的值。多数是同值，`enabledExtensions` 要转成文本。
- * - **存（coercion）**：控件给的值 → 设置值。多数是同值，`enabledExtensions` 要解析成数组。
+ * - **取（presentation）**：设置值 → 控件显示的值。多数是同值，数字要转成文本。
+ * - **存（coercion）**：控件给的值 → 设置值。多数是同值，文本要解析回数字。
  *
  * ⚠️ 存进去的必须是**合法类型**：`settings.ts` 的合并逻辑会在下次加载时逐字段校验，
  * 类型不对就回落默认值。所以"控件是文本框、设置是数组"的字段若不在这里转换，
  * 用户的修改会在重启后被**静默重置**（表现为"改了没用"）。
  */
 
-import { formatCacheLimitMb, formatExtensionList, parseCacheLimitMb, parseExtensionList } from "./settings-logic";
+import { formatCacheLimitMb, parseCacheLimitMb } from "./settings-logic";
 import { isExternalImageDefault, isLocalCopyAction } from "../types";
 
 /** 把点号键切成路径段。`""` 与只含空段的键视为非法。 */
@@ -77,8 +77,6 @@ export function writeByKey(root: unknown, key: unknown, value: unknown): boolean
  * 只列**需要转换**的字段；其余原样返回。
  */
 const PRESENT: Record<string, (stored: unknown) => unknown> = {
-	// 设置里是数组，文本框里是一行文本
-	enabledExtensions: (stored) => formatExtensionList(stored),
 	// 设置里是数字，文本框里是字符串
 	cacheLimitMb: (stored) => formatCacheLimitMb(stored),
 };
@@ -90,7 +88,6 @@ const PRESENT: Record<string, (stored: unknown) => unknown> = {
  * 漏掉一个字段的转换 = 那个字段的修改会在重启后被静默重置。
  */
 const COERCE: Record<string, (raw: unknown) => unknown> = {
-	enabledExtensions: (raw) => parseExtensionList(raw),
 	// ⚠️ 解析失败时退回 0（不限制）。正常走不到这里 —— `isWritableValue` 已经把
 	// 看不懂的输入拦在外面了。但万一调用方没检查，退回"不限制"也比把一个**字符串**
 	// 写进数字字段强：后者会在下次加载时被回落成默认值（同样是不限制），

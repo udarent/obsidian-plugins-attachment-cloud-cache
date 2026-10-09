@@ -17,8 +17,6 @@ import assert from "node:assert/strict";
 export function runSettingsUiSuite(mod) {
 	const {
 		// settings-logic
-		parseExtensionList,
-		formatExtensionList,
 		shouldShowCacheFolder,
 		localCopyOptions,
 		deleteModeOptions,
@@ -44,27 +42,12 @@ export function runSettingsUiSuite(mod) {
 	} = mod;
 
 	// ============================================================
-	// 1. 扩展名解析：用户会怎么敲是不确定的
+	// 1.（已删除）扩展名解析
+	//
+	// 「参与的文件类型」这个设置项在 1.1.0 被删除（需求 R15：任何类型都上传），
+	// 于是它的解析/格式化函数也不存在了。这一节随之移除 —— 留着一个测空函数的
+	// 段落比没有测试更糟（它会让人以为那个字段还在）。
 	// ============================================================
-	assert.deepEqual(parseExtensionList("png, jpg"), ["png", "jpg"], "逗号分隔");
-	assert.deepEqual(parseExtensionList("png jpg"), ["png", "jpg"], "空格分隔（手敲常见）");
-	assert.deepEqual(parseExtensionList("png、jpg"), ["png", "jpg"], "顿号分隔（从中文文档粘来常见）");
-	assert.deepEqual(parseExtensionList("png\njpg"), ["png", "jpg"], "换行分隔（从列表粘来常见）");
-	assert.deepEqual(parseExtensionList(".PNG, jpg"), ["png", "jpg"], "带前导点与大写都要归一");
-	assert.deepEqual(parseExtensionList("png,,  ,png"), ["png"], "空段丢弃、重复去重");
-	assert.deepEqual(parseExtensionList(""), [], "空串得到空列表");
-	assert.deepEqual(parseExtensionList(null), [], "非字符串不抛错");
-	assert.deepEqual(parseExtensionList(42), [], "数字不抛错");
-
-	// 往返：解析再格式化再解析，结果必须一致（否则用户编辑一次就会变形）
-	const roundTripList = ["png", "webp", "avif"];
-	assert.deepEqual(
-		parseExtensionList(formatExtensionList(roundTripList)),
-		roundTripList,
-		"解析与格式化必须互为可往返 —— 否则用户改一次设置就会丢项或变形"
-	);
-	assert.equal(formatExtensionList(null), "", "非数组格式化为空串");
-	assert.equal(formatExtensionList(["png", 42, "", "webp"]), "png, webp", "格式化要过滤脏元素");
 
 	// ============================================================
 	// 2. 条件显示：一个看不见的字段不会和别的字段产生矛盾
@@ -179,18 +162,23 @@ export function runSettingsUiSuite(mod) {
 	// 7. 控件值 ↔ 设置值的转换
 	// ============================================================
 	assert.equal(toControlValue("autoUpload", true), true, "普通字段原样");
-	assert.equal(
-		toControlValue("enabledExtensions", ["png", "jpg"]),
-		"png, jpg",
-		"★ 数组字段要转成文本，否则文本框里会显示成 png,jpg 或 [object Object]"
-	);
-	assert.deepEqual(
-		fromControlValue("enabledExtensions", "png, jpg"),
-		["png", "jpg"],
-		"★ 文本框的字符串必须转回数组 —— 否则下次加载时类型不符会被回落成默认值（表现为改了没用）"
-	);
+	// ⭐ 数组型设置（`enabledExtensions`）已随 1.1.0 一起删除，所以"控件是文本框、
+	// 设置是数组"这类转换只剩数字那一档（见下面的 cacheLimitMb）——
+	// 那是**唯一**需要转换的字段了，它的往返由本文件后半部分的断言守着。
 	assert.equal(fromControlValue("autoUpload", true), true, "普通字段原样");
 	assert.equal(fromControlValue("s3.bucket", "b"), "b", "嵌套文本字段原样");
+
+	// ⭐ 1.1.0 起**唯一**还需要转换的字段是缓存上限（设置里是数字、控件是文本框）。
+	// 数组型的「参与的文件类型」已经删掉，所以这两条现在是那一整套转换机制的**唯一**牙齿 ——
+	// 它坏掉时的症状最难查：界面照常显示、点了也存了，只是重开之后被打回默认值（"改了没用"）。
+	assert.equal(toControlValue("cacheLimitMb", 512), "512", "★ 数字要转成文本");
+	assert.equal(toControlValue("cacheLimitMb", 0), "0", "0 = 不限制，也要显示成 0");
+	assert.equal(
+		fromControlValue("cacheLimitMb", "512"),
+		512,
+		"★ 文本框的字符串必须转回数字 —— 否则下次加载时类型不符会被回落成默认值（表现为改了没用）"
+	);
+	assert.equal(fromControlValue("cacheLimitMb", "不是数字"), 0, "解析不出来时退回 0（不限制）");
 
 	// ============================================================
 	// 8. 哪些值可以写进设置
@@ -307,7 +295,7 @@ export function runSettingsUiSuite(mod) {
 	// ============================================================
 	// 10. 连通性前置检查
 	// ============================================================
-	const base = { autoUpload: true, enabledExtensions: ["png"], attachmentFolder: "", localCopy: "cache", cacheFolder: "c", fallbackDownload: true };
+	const base = { autoUpload: true, attachmentFolder: "", localCopy: "cache", cacheFolder: "c", fallbackDownload: true };
 	const s3Base = { endpoint: "https://s3.example.com", region: "auto", bucket: "b", publicUrlBase: "", accessKeyId: "AKIA", secretAccessKeyRef: "s", forcePathStyle: true, objectKeyTemplate: "{hash}.{ext}" };
 	const ready = connectionReadiness(readerWith({ s: "SECRET" }), { ...base, s3: s3Base });
 	assert.equal(ready.ready, true, "配置齐全时应就绪");

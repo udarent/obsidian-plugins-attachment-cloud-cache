@@ -41,9 +41,9 @@ await runMutations({
 			// 后果：防盗链回的 HTML 页被当成图片上传 ⇒ 用户图床里多了一个网页文件，
 			// 笔记里的链接指向它，图还是显示不出来。
 			name: "★ 不校验内容类型（把防盗链的 HTML 页当图片传上去）",
-			from: "\tif (!isImageResponse({ contentType, url, imageExtensions })) {\n\t\treturn { status: \"not-image\", detail: mimeFromContentType(contentType) || \"(没有类型头)\" };\n\t}\n",
+			from: "\tif (!isAttachmentResponse({ contentType, url })) {\n\t\treturn { status: \"not-attachment\", detail: mimeFromContentType(contentType) || \"(没有类型头)\" };\n\t}\n",
 			to: "\t// 变异：不校验内容类型\n",
-			expect: "not-image",
+			expect: "not-attachment",
 		},
 		{
 			// 后果：一条笔记里挂个几 GB 的文件就能把内存打满（`requestUrl` 一次返回整个 body）。

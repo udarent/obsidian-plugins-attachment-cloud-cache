@@ -164,8 +164,6 @@ export interface PluginSettings {
 	 * 但**已有缓存仍然生效** —— 所以"暂时不想上传、但要保留离线可看"成立。
 	 */
 	autoUpload: boolean;
-	/** 参与处理的扩展名（小写，不含点）。也是"什么不会被上传"的唯一判据。 */
-	enabledExtensions: string[];
 	/** 附件目录；空字符串 = 跟随 Obsidian 的附件设置。 */
 	attachmentFolder: string;
 	/** 上传成功后本地副本怎么处理。 */

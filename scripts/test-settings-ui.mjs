@@ -20,8 +20,8 @@ import { runSettingsUiSuite } from "./lib/settings-ui-suite.mjs";
 await withLoadedTs(["src/ui/settings-logic", "src/ui/settings-bindings", "src/s3/credentials"], async (mod) => {
 	runSettingsUiSuite(mod);
 	console.log(
-		"Settings-UI tests passed (extension lists parse from commas/spaces/ideographic commas/newlines " +
-			"and round-trip, conditional visibility hides the cache folder unless the copy is cached, " +
+		"Settings-UI tests passed (the only value conversion left is the numeric cache limit, which round-trips both ways, " +
+			"conditional visibility hides the cache folder unless the copy is cached, " +
 			"dropdown options are generated from the type list so no fake option can appear, " +
 			"bindings read/write dotted keys without inventing intermediate objects, " +
 			"empty values are refused only where empty would silently break a feature, " +

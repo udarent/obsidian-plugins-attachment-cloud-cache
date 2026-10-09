@@ -67,6 +67,13 @@ function createImageHost() {
 			res.end("just text");
 			return;
 		}
+		if (path === "/noext") {
+			// 既没有类型头、URL 最后一段也没有扩展名 —— 无法判断它是什么。
+			// 按原则④应当**拒收**：宁可不搬，也不要搬一个不知道是什么的东西。
+			res.writeHead(200);
+			res.end("who knows");
+			return;
+		}
 		if (path === "/page.html") {
 			// 防盗链的典型回包：200 但给一个 HTML 页
 			res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -167,7 +174,7 @@ export async function runExternalCacheSuite(mod) {
 		MAX_EXTERNAL_BYTES,
 		shouldReportExternalFailure,
 		localCopyForExternal,
-		isImageResponse,
+		isAttachmentResponse,
 		headerOf,
 		mimeFromContentType,
 		extensionFromUrl,
@@ -200,21 +207,30 @@ export async function runExternalCacheSuite(mod) {
 	assert.equal(fileNameFromUrl("nonsense"), undefined, "不是 URL → 兜底");
 	assert.equal(fileNameFromUrl("https://x.com/a%zz.png"), undefined, "★ 畸形编码不能抛错");
 
-	const exts = ["png", "jpg"];
+	// ⭐ 1.1.0（需求 R15）：判定从"是不是图片"放宽成"是不是一个可以搬走的附件"，
+	// 但**网页与纯文本这一条底线没有放宽** —— 它们必须被拒收。
+	// 判据写在 `isAttachmentResponse` 一处，所以"哪些东西会被搬走"只有一份定义。
 	for (const [label, contentType, url, want] of [
 		["image/png", "image/png", "https://x.com/a.png", true],
 		["image/svg+xml", "image/svg+xml", "https://x.com/a.svg", true],
 		["带参数", "image/webp; q=1", "https://x.com/a.webp", true],
-		["HTML（防盗链回包）", "text/html", "https://x.com/a.png", false],
-		["有类型但不是图片", "application/octet-stream", "https://x.com/a.png", false],
-		["无类型 + 已启用的扩展名", "", "https://x.com/a.png", true],
-		["无类型 + 未启用的扩展名", "", "https://x.com/a.webp", false],
-		["无类型 + 没有扩展名", "", "https://x.com/a", false],
+		["音频", "audio/mpeg", "https://x.com/a.mp3", true],
+		["视频", "video/mp4", "https://x.com/a.mp4", true],
+		["PDF", "application/pdf", "https://x.com/a.pdf", true],
+		["压缩包", "application/zip", "https://x.com/a.zip", true],
+		["通用二进制", "application/octet-stream", "https://x.com/a.bin", true],
+		["★ 网页（防盗链回包）", "text/html", "https://x.com/a.png", false],
+		["★ 纯文本", "text/plain", "https://x.com/robots.txt", false],
+		["★ CSS", "text/css", "https://x.com/a.css", false],
+		["无类型 + 有扩展名", "", "https://x.com/a.png", true],
+		["无类型 + 任意扩展名（形状判据，不依赖白名单）", "", "https://x.com/a.webp", true],
+		["无类型 + 没有扩展名（目录/接口）", "", "https://x.com/a", false],
+		["无类型 + 结尾是斜杠", "", "https://x.com/dir/", false],
 	]) {
 		assert.equal(
-			isImageResponse({ contentType, url, imageExtensions: exts }),
+			isAttachmentResponse({ contentType, url }),
 			want,
-			`isImageResponse（${label}）`
+			`isAttachmentResponse（${label}）`
 		);
 	}
 
@@ -228,7 +244,7 @@ export async function runExternalCacheSuite(mod) {
 	for (const status of [
 		"fetch-forbidden",
 		"fetch-missing",
-		"not-image",
+		"not-attachment",
 		"too-large",
 		"upload-failed",
 		"cached-no-rewrite",
@@ -243,7 +259,7 @@ export async function runExternalCacheSuite(mod) {
 	const host = createImageHost();
 	const base = await host.start();
 	const request = fetchRequest();
-	const fetchDeps = { request, imageExtensions: ["png"], timeoutMs: 1500 };
+	const fetchDeps = { request, timeoutMs: 1500 };
 
 	const ok = await fetchExternalImage(`${base}/a.png`, fetchDeps);
 	assert.equal(ok.status, "ok", "正常图片应下载成功");
@@ -255,8 +271,8 @@ export async function runExternalCacheSuite(mod) {
 		["404（图没了）", "/missing.png", "missing"],
 		["500", "/boom.png", "failed"],
 		["302（未跟随重定向一律当失败）", "/moved.png", "failed"],
-		["200 但回 HTML", "/page.html", "not-image"],
-		["200 但无类型头且扩展名未启用", "/notype.txt", "not-image"],
+		["200 但回 HTML（防盗链）", "/page.html", "not-attachment"],
+		["200 但无类型头、URL 也没有扩展名（判断不了它是什么）", "/noext", "not-attachment"],
 	]) {
 		const result = await fetchExternalImage(`${base}${path}`, fetchDeps);
 		assert.equal(result.status, want, `★ ${label} 应判成 ${want}（实际 ${result.status}）`);
@@ -266,6 +282,14 @@ export async function runExternalCacheSuite(mod) {
 		(await fetchExternalImage(`${base}/notype.png`, fetchDeps)).status,
 		"ok",
 		"★ 没有类型头时要靠扩展名兜底（有些图床就是不给）"
+	);
+	// ⭐ 1.1.0：兜底判据是**形状**（最后一段有没有扩展名），不再是"在不在图片白名单里"——
+	// 于是一个没有类型头的 `.txt` 会被收下。这是刻意的：用户完全可能有 .txt 附件，
+	// 而"我们没见过这个后缀"不该成为拒收它的理由（需求 R15：支持所有格式）。
+	assert.equal(
+		(await fetchExternalImage(`${base}/notype.txt`, fetchDeps)).status,
+		"ok",
+		"★ 无类型头但有扩展名 ⇒ 收下（判据是形状，不是白名单）"
 	);
 	assert.equal(
 		(await fetchExternalImage(`${base}/slow.png`, { ...fetchDeps, timeoutMs: 300 })).status,
@@ -564,7 +588,7 @@ export async function runExternalCacheSuite(mod) {
 
 	// ---------- 2.8 HTML 回包 / 超大：都要拒绝上传 ----------
 	for (const [label, target, options, want, key] of [
-		["200 回 HTML", `${liveBase}/page.html`, {}, "not-image", "externalNotImage"],
+		["200 回 HTML", `${liveBase}/page.html`, {}, "not-attachment", "externalNotAttachment"],
 		["超过大小上限", `${liveBase}/a.png`, { maxBytes: 4 }, "too-large", "externalTooLarge"],
 	]) {
 		const h = await makeHarness(options);

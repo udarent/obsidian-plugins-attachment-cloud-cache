@@ -35,10 +35,12 @@ export function runSettingsSuite(mod) {
 		"上传后本地副本默认应**移入缓存**（不是删除）—— 「本地副本即缓存」是离线可用的前提"
 	);
 
-	assert.deepEqual(
-		[...SETTINGS_DEFAULTS.enabledExtensions].sort(),
-		["avif", "bmp", "gif", "heic", "jpeg", "jpg", "png", "svg", "tiff", "webp"],
-		"默认应启用图片格式"
+	// ⭐ 1.1.0 起「参与的文件类型」整个设置项被删除（需求 R15：任何类型都上传，
+	// 用户不该为"我想传的其实是个 PDF"再去勾一个后缀）。这里做**反向**断言：
+	// 它不得以任何形式复活 —— 一个"看起来还在、实际不影响行为"的开关比没有更糟。
+	assert.ok(
+		!("enabledExtensions" in SETTINGS_DEFAULTS),
+		"「参与的文件类型」已被移除（任何类型都上传），它不得复活"
 	);
 
 	assert.equal(SETTINGS_DEFAULTS.s3.objectKeyTemplate, "{hash}.{ext}", "默认对象 key 为单段内容寻址");
@@ -163,13 +165,6 @@ export function runSettingsSuite(mod) {
 		assert.deepEqual(merged[key], custom, `设置项 ${key} 必须能往返持久化，不能被重置为默认值`);
 	}
 
-	// 数组字段单独钉（上面只覆盖标量）
-	assert.deepEqual(
-		roundTrip({ ...SETTINGS_DEFAULTS, enabledExtensions: ["png", "webp"] }).enabledExtensions,
-		["png", "webp"],
-		"数组字段必须能往返"
-	);
-
 	// s3 子对象逐字段往返
 	const s3Merged = roundTrip({
 		...SETTINGS_DEFAULTS,
@@ -239,11 +234,9 @@ export function runSettingsSuite(mod) {
 	const wrong = mergePluginSettings(SETTINGS_DEFAULTS, {
 		autoUpload: "yes",
 		localCopy: "explode",
-		enabledExtensions: "png",
 	});
 	assert.equal(wrong.autoUpload, true, "非布尔值应回落默认");
 	assert.equal(wrong.localCopy, SETTINGS_DEFAULTS.localCopy, "非法枚举应回落默认");
-	assert.deepEqual(wrong.enabledExtensions, SETTINGS_DEFAULTS.enabledExtensions, "非数组应回落默认");
 
 	// ============================================================
 	// 4b. ⭐ 用户填的**路径**要在读进来那一刻就归一
@@ -311,6 +304,9 @@ export function runSettingsSuite(mod) {
 		"cacheLayout",
 		"cacheDelaySeconds",
 		"localFileAction",
+		// ⭐ 1.1.0 删掉的设置项：旧的 data.json 里一定还留着它。
+		// 不丢掉的话，"界面上已经删掉的开关仍在暗处生效"会永远查不出来。
+		"enabledExtensions",
 	];
 	const legacyPayload = Object.fromEntries(REMOVED_KEYS.map((k) => [k, "legacy-value"]));
 
@@ -431,41 +427,12 @@ export function runSettingsSuite(mod) {
 	}
 
 	// ============================================================
-	// 10. ⭐ 扩展名列表的清洗细节
+	// 10.（已删除）扩展名列表的清洗细节
 	//
-	// 列表里的**元素**也是用户手改 data.json 时会写坏的地方，
-	// 而它比"整个字段类型不对"隐蔽：一条 `42` 混在数组里不会让类型检查报错，
-	// 却会一路流到 `isExtensionEnabled` 的比较里（或让 `trim()` 直接抛错）。
+	// 那一整节随着设置项「参与的文件类型」一起消失（1.1.0，需求 R15）：
+	// 它是**唯一**的数组型设置，而它的清洗规则（过滤脏元素、空数组回落默认）
+	// 随之不再需要。留下空壳只会让人以为那个字段还在。
 	// ============================================================
-	// ⚠️ 自己 try/catch 并喊出规则：若实现不去过滤，`item.trim()` 会直接抛
-	// `item.trim is not a function`，测试以那个类型错误收场 —— 那句话没有说清
-	// "它本该把脏元素滤掉"。捕获后自己断言，失败信息才指名道姓。
-	let filteredExtensions;
-	try {
-		filteredExtensions = mergePluginSettings(SETTINGS_DEFAULTS, {
-			enabledExtensions: ["png", 42, null, "", "  ", "PNG", "webp", "png"],
-		}).enabledExtensions;
-	} catch (error) {
-		assert.fail(
-			"⭐ 扩展名列表里的脏元素必须被**过滤掉**，而不是让它们流下去或直接抛错 —— " +
-				`列表元素是用户手改 data.json 时会写坏的地方。实际抛出：${error?.message ?? error}`
-		);
-	}
-	assert.deepEqual(
-		filteredExtensions,
-		["png", "webp"],
-		"扩展名列表应过滤非字符串与空串、统一小写，并按出现顺序去重"
-	);
-	assert.deepEqual(
-		mergePluginSettings(SETTINGS_DEFAULTS, { enabledExtensions: [] }).enabledExtensions,
-		SETTINGS_DEFAULTS.enabledExtensions,
-		"⭐ 空数组等于『一个都没勾』，应回落默认 —— 否则插件看起来开着却什么都不处理"
-	);
-	assert.deepEqual(
-		mergePluginSettings(SETTINGS_DEFAULTS, { enabledExtensions: [42, null, "   "] }).enabledExtensions,
-		SETTINGS_DEFAULTS.enabledExtensions,
-		"全是脏值时也应回落默认（清洗后为空 = 没填）"
-	);
 
 	return { scalars: scalars.length };
 }

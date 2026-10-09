@@ -27,7 +27,10 @@
  *   **移进**缓存目录（见 `localCopy`），引用的改写正是"搬走之后不会留下死链"的前提。
  *   用户放在附件目录里、**没有任何笔记引用**的文件一概不碰（既不传也不动）——
  *   那种文件多半是废弃的旧图，动了只会让人以为丢东西。
- * - 只挑**扩展名在启用清单里**的（用户已经声明过"这些才是要处理的图"）；
+ * - ⭐ 1.1.0 起**不再按类型白名单挑**，而是**排除制**：排除"笔记/画布/数据库"这三种
+ *   宿主自己的文本文件（它们不是附件），其余一律可处理（需求 R15：任何类型都能上传）。
+ *   ⚠️ 这条把候选面从"十来个图片后缀"放大到"库里每一个文件"，所以**排除列表是硬要求**，
+ *   测试逐项钉住（没有它，一条命令会把整个库搬空）；
  * - 跳过**已经在索引里**的（同一个 key = 同一份内容，重复上传没有意义，
  *   而且会让"哪些是新的"变得难以解释）；
  * - 跳过尺寸为 0 的（多半是同步中的占位文件，读出来是空的 ——
@@ -36,7 +39,6 @@
 
 import type { PluginSettings } from "../types";
 import type { CacheIndex } from "../cache/index";
-import { isExtensionEnabled } from "../settings";
 import { decideExternalCache, isCacheableExternal } from "../render/external-decide";
 
 /** 库内文件的最小形状。 */
@@ -96,14 +98,33 @@ export function referencedPathsFrom(resolvedLinks: unknown): Set<string> {
 	// 而 eslint 的 `no-unsafe-argument` 会因此判红（本项目 lint 是门禁的一部分）。
 	const table = resolvedLinks as Record<string, unknown>;
 	for (const [sourcePath, targets] of Object.entries(table)) {
-		// ⭐ 只认**笔记**（Markdown）作为来源 —— 见上面那段"为什么"
-		if (!/\.md$/i.test(sourcePath)) continue;
+		// ⭐ 来源**不筛**：Markdown 笔记与画布同等算数（需求 R16，2026-10-09 拍板）。
+		// 空的来源路径仍然跳过 —— 那不是宿主会给的形状。
+		if (!sourcePath) continue;
 		if (!targets || typeof targets !== "object") continue;
 		for (const targetPath of Object.keys(targets)) {
 			if (targetPath) referenced.add(targetPath);
 		}
 	}
 	return referenced;
+}
+
+/**
+ * 这些扩展名是**宿主自己的文本文件**，不是用户的附件。
+ *
+ * ⚠️ 排除它们的理由不是"传上去没用"，而是**传上去会坏**：
+ * 一个 `.md` 被上传 + 移入缓存目录之后，宿主的笔记索引看到的是一份
+ * 位置变了、名字变了（内容寻址）的文件 —— 笔记之间的 wikilink 会集体断掉。
+ * `.canvas` 同理（它引用别的文件），`.base` 是数据库。
+ *
+ * 用**扩展名**而不是 MIME/内容判断：这一步是纯判定（不读文件字节），
+ * 而这三类后缀是宿主的约定（宿主自己也按后缀识别它们）。
+ */
+const NOTE_LIKE_EXTENSIONS = new Set(["md", "canvas", "base"]);
+
+/** 这个扩展名是不是"宿主自己的文本文件"（笔记/画布/数据库）—— 见上面的说明。 */
+export function isNoteLikeExtension(extension: unknown): boolean {
+	return typeof extension === "string" && NOTE_LIKE_EXTENSIONS.has(extension.trim().toLowerCase());
 }
 
 export interface CandidateSelection {
@@ -134,9 +155,9 @@ export function selectUploadCandidates(files: readonly VaultFileLike[], options:
 			continue;
 		}
 
-		const extension = String(file.extension ?? "").replace(/^\./, "");
-		if (!isExtensionEnabled(extension, options.settings)) {
-			bump("扩展名不在启用清单里");
+		const extension = String(file.extension ?? "").replace(/^\./, "").toLowerCase();
+		if (isNoteLikeExtension(extension)) {
+			bump("是笔记/画布/数据库文件，不是附件");
 			continue;
 		}
 
@@ -219,27 +240,41 @@ export interface ExternalSelection {
 }
 
 /**
- * 找出笔记里的**外链图片**地址。
+ * 找出笔记里**指向站外文件**的地址。
  *
- * 只认"图片"的两种写法：
- * - Markdown：`![说明](https://…)`（允许尖括号包住、允许后面跟标题）
- * - 行内 HTML：`<img src="https://…">`
+ * 1.1.0 起不再只认图片（需求 R15）—— 音频、视频、PDF、压缩包同样可以缓存。
+ * 收这四种写法：
+ * - `![说明](https://…)`（嵌入，可带尖括号与标题）
+ * - `[说明](https://…)`（**普通链接** —— 它可能是 PDF、也可能是网页）
+ * - `<img src="https://…">`
+ * - `<a href="https://…">`
  *
- * ⚠️ **刻意不收普通链接**（`[说明](https://…)`）：它指向的是网页，不是图片。
- * 这条命令的候选是**真的要去下载**的，收进来只会换来一串"不是图片"的失败。
- * 这也与"看笔记时按需缓存"那条链路的范围一致 —— 那边只看得见 `<img>` 元素。
+ * ## 为什么现在敢收普通链接
+ *
+ * 以前不收，是因为下载端只接受图片：收进来只会换来一串"不是图片"的失败。
+ * 现在下载端接受**任意文件**（仍拒收网页，见 `isAttachmentResponse`），
+ * 而 `[说明](url)` 正是 PDF / 音频 / 压缩包最常见的写法 —— 不收它，
+ * "支持所有格式"就只覆盖用户用 `![]` 写的那部分。
+ *
+ * ⚠️ 于是候选里会混进**网页链接**。它们会在下载那一步被 `text/html` 判据挡掉，
+ * 用户看到的是"该地址返回的是网页或纯文本" —— 一句**如实**的说明，
+ * 而不是静默什么都不发生（原则⑥）。判定（要不要碰）仍然完全交给
+ * `decideExternalCache`，这里只负责"从正文里挑出候选地址"。
  *
  * wikilink（`![[…]]`）不可能是外链（它指的是库内路径），所以不用管。
  */
-export function externalImageUrlsIn(text: string): string[] {
+export function externalFileUrlsIn(text: string): string[] {
 	if (typeof text !== "string" || text === "") return [];
 	const urls = new Set<string>();
 
-	for (const match of text.matchAll(/!\[[^\]\n]*\]\(\s*(<[^>)\n]*>|[^)\s\n]+)/g)) {
+	// Markdown：嵌入与普通链接都收 —— **不需要**写 `!?`：`![a](url)` 里的 `[a](url)`
+	// 本来就会被 `\[` 命中（锚点在 `[` 上，`!` 不属于匹配的一部分）。
+	for (const match of text.matchAll(/\[[^\]\n]*\]\(\s*(<[^>)\n]*>|[^)\s\n]+)/g)) {
 		const raw = stripAngles(match[1]);
 		if (isHttpUrl(raw)) urls.add(raw);
 	}
-	for (const match of text.matchAll(/<img\b[^>]*?\bsrc\s*=\s*(?:"([^"\n]*)"|'([^'\n]*)')/gi)) {
+	// 行内 HTML：图片与锚点都收
+	for (const match of text.matchAll(/<(?:img|a)\b[^>]*?\b(?:src|href)\s*=\s*(?:"([^"\n]*)"|'([^'\n]*)')/gi)) {
 		const raw = String(match[1] ?? match[2] ?? "").trim();
 		if (isHttpUrl(raw)) urls.add(raw);
 	}
@@ -292,11 +327,11 @@ export function selectExternalUploadCandidates(
 		const path = typeof note?.path === "string" ? note.path.trim() : "";
 		if (!path) continue;
 
-		// 同一篇笔记里同一张图写两遍只产生一个候选 —— 去重**在 `externalImageUrlsIn` 里**已经做了
+		// 同一篇笔记里同一个地址写两遍只产生一个候选 —— 去重**在 `externalFileUrlsIn` 里**已经做了
 		//（它按地址去重）。这里曾经还有一层"按笔记 + 地址"的去重，**变异验证证明它永远走不到**：
 		// `getMarkdownFiles()` 不会给出重复路径，而每篇笔记的地址表本来就已去重。
 		// 与其留一段看起来在防什么、实际防不住的代码，不如删掉并把"去重来自哪里"写清楚。
-		for (const url of externalImageUrlsIn(note?.text ?? "")) {
+		for (const url of externalFileUrlsIn(note?.text ?? "")) {
 			const decision = decideExternalCache({
 				src: url,
 				settings: options.settings,

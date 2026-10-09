@@ -23,9 +23,9 @@
  */
 
 import {
-	altTextForFile,
-	buildLocalImageEmbed,
-	buildRemoteImageMarkdown,
+	buildLocalLink,
+	buildRemoteLink,
+	displayNameOf,
 	type TransferFileLike,
 } from "../editor/editor-hooks";
 import type { IngestRequest, IngestResult } from "./ingest";
@@ -52,6 +52,15 @@ export interface TransferDeps {
 	notify: (message: string) => void;
 	/** 取文案。 */
 	t: (key: string, params?: Record<string, unknown>) => string;
+	/**
+	 * 把库内路径渲染成**宿主语法**的链接（降级路径用）。
+	 *
+	 * 由接线层提供（`fileManager.generateMarkdownLink` + 一个 `TFile`），
+	 * **不含 `!`** —— 嵌不嵌由 `buildLocalLink` 按可嵌入类型表决定。
+	 * 取不到 `TFile` / 拿不到宿主能力时返回 `null`：那时退回我们自己拼的普通链接
+	 * （比什么都不插好得多；见 `buildLocalLink`）。
+	 */
+	generatedLocalLink?: (vaultPath: string) => string | null;
 	/** 触发这次操作的笔记路径。 */
 	sourcePath?: string;
 }
@@ -111,9 +120,10 @@ export async function processTransfer(
 
 	for (const file of files) {
 		const name = typeof file.name === "string" && file.name !== "" ? file.name : undefined;
-		// alt 用**主干**而不是整个文件名：`![shot](…)` 比 `![shot.png](…)` 更像说明文字，
-		// 而且附件名字里常带时间戳，写在链接里会把整段 Markdown 撑得很长。
-		const alt = altTextForFile(file);
+		// 显示名用**原文件名**（含扩展名）：链接文字要能让用户认出"这是哪个文件" ——
+		// `[report.pdf](…)` 比 `[report](…)` 有用得多，而 `report` 对着一堆同名文件毫无信息。
+		// 文件没有名字时（截图粘贴）留空，等编排层给出它造的那个可读名。
+		const displayName = displayNameOf(file);
 
 		let bytes: Uint8Array;
 		try {
@@ -137,7 +147,9 @@ export async function processTransfer(
 
 		if (result.status === "fallback") {
 			if (result.localPath) {
-				pushPart(buildLocalImageEmbed(result.localPath, alt));
+				// 降级链接：形态交回宿主（按用户的「新链接格式」设置），`!` 由我们按类型表加。
+				const generated = deps.generatedLocalLink ? deps.generatedLocalLink(result.localPath) : null;
+				pushPart(buildLocalLink(generated, result.localPath, result.ext));
 				outcome.fallback += 1;
 				deps.notify(
 					deps.t("hookUploadFailedKeptLocal", { error: describeError(result.error ?? "unknown") })
@@ -151,7 +163,7 @@ export async function processTransfer(
 			continue;
 		}
 
-		pushPart(buildRemoteImageMarkdown(result.remoteUrl, alt));
+		pushPart(buildRemoteLink(result.remoteUrl, displayName || result.name, result.ext));
 		if (result.status === "reused") outcome.reused += 1;
 		else outcome.uploaded += 1;
 	}

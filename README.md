@@ -42,20 +42,23 @@ images are both **yours** and **always visible**, with zero remote requests when
 
 - **Any S3-compatible storage**: Cloudflare R2, AWS S3, MinIO, Backblaze B2 or a self-hosted endpoint
 - **Uploads on paste or drag-and-drop**, rewriting the note link to your storage. Keys are
-  content-addressed (`{hash}.{ext}`) by default, so the same image is stored once and pasting it twice
+  content-addressed (`{hash}.{ext}`) by default, so the same file is stored once and pasting it twice
   uploads nothing
-- **Images render offline** from the local copy, with zero remote requests
+- **Any kind of attachment, not just images** — audio, video, PDF, archives, documents, files without
+  an extension. Types Obsidian can preview (images, audio, video, PDF) are inserted as embeds; the
+  rest become ordinary links you can click open
+- **Attachments render offline** from the local copy, with zero remote requests
 - **Never loses or overwrites a file**: a failed upload keeps the bytes locally and inserts a working
   link plus the reason; a same-named file becomes `a 1.png`, never replaced
-- **Two optional features, both off by default**: caching images from other sites (nothing happens
-  until you say so, and you can pick individual images), and a cache size limit that cleans up
+- **Two optional features, both off by default**: caching files from other sites (nothing happens
+  until you say so, and you can pick individual files), and a cache size limit that cleans up
   least-recently-used copies in the background
 - **Import a credentials file** instead of typing the keys. MinIO's “Download credentials” JSON is
   the shape it expects; the endpoint, access key and addressing mode are read from it, and the secret
   goes into your keychain. **The file is read where it sits** — nothing is copied into your vault, and
   no copy of it is kept anywhere
 - **Five commands** — cache usage, index repair, cleanup, uploading what you already have, and picking
-  off-site images one by one. See [Commands](#commands)
+  off-site files one by one. See [Commands](#commands)
 
 Works on desktop and mobile.
 
@@ -107,17 +110,22 @@ Five commands, all reachable from the command palette:
 | **Repair the local-copy index** | Drops index entries whose files are already gone, so the index matches the disk again. |
 | **Clean up unused cache files** | Deletes cache files no note points at any more. Deletion cannot be undone and the space is freed immediately. |
 | **Upload existing attachments** | Uploads the attachments your notes link to and rewrites those links. Each file is then moved into the cache folder (renamed); files no note links to are left alone. |
-| **Cache images from other sites…** | Lets you tick individual off-site images to fetch and upload. Needs the off-site feature turned on first. |
+| **Cache files from other sites…** | Lets you tick individual off-site files to fetch and upload. Needs the off-site feature turned on first. |
 
 ## Things to know
 
+- **`tiff`, `heic` and `ico` are now plain links, not embeds.** Obsidian cannot preview those in an
+  embed, so a remote `![]()` for them would render as a broken image. This changed with the all-types
+  release — your files are untouched, only the link shape is.
 - **A dropped file's link lands at the caret, not at the pointer.** No public API maps pointer
   coordinates to an editor position. Deliberate trade.
 - **After you change the storage URL, older links are not recognised on a new device.** "Ours" is
   decided from the current settings plus the local index, so those links still render online but not
   offline, and are never downloaded automatically. Also deliberate.
-- **"Do not keep a local copy" means no images offline.** The default, "move into the cache folder",
-  is the one that works offline.
+- **"Do not keep a local copy" means nothing is available offline.** The default, "move into the
+  cache folder", is the one that works offline.
+- **If an upload fails, the file stays local and the note gets a local link** plus a notice saying
+  why — nothing is ever dropped, and no remote link is invented for a file that was not uploaded.
 - **The cache folder can be deleted at any time** — images are rebuilt on demand.
 - **Moving to another device? Copy the plugin folder, but delete `.cache-index.json` first.** That file
   records where *this* device keeps its cached copies; `data.json` is what carries your settings. ⚠️ The
@@ -208,15 +216,17 @@ vault 小），渲染用本地副本 —— 于是图片既是**你自己的**�
 
 - **任何 S3 兼容存储**：Cloudflare R2、AWS S3、MinIO、Backblaze B2，或自建端点
 - **粘贴或拖入即上传**，并把笔记里的链接改写成指向你的存储。默认按内容寻址（`{hash}.{ext}`），
-  同一张图只存一份，粘两次不会重复上传
-- **断网也能看图**：渲染时用本地副本，离线时零远端请求
+  同一份文件只存一份，粘两次不会重复上传
+- **任何类型的附件都能上传**，不只是图片 —— 音频、视频、PDF、压缩包、文档、没有扩展名的文件。
+  Obsidian 能预览的类型（图片、音频、视频、PDF）插入为嵌入，其余插入为可点开的普通链接
+- **断网也能看附件**：渲染时用本地副本，离线时零远端请求
 - **不丢图、不覆盖**：上传失败会把字节留在本地、插入一条能用的链接并说明原因；同名文件自动变成
   `a 1.png`，绝不替换
-- **两个可选功能，默认都关**：缓存站外图片（默认什么都不做，可逐张挑选），以及缓存上限（超限时在后台按
+- **两个可选功能，默认都关**：缓存站外文件（默认什么都不做，可逐张挑选），以及缓存上限（超限时在后台按
   最近最少使用清理）
 - **从凭据文件导入**，不必手输密钥。它认的就是 MinIO「下载凭据」那份 JSON：服务地址、访问密钥与
   寻址方式从文件里读，秘密进系统钥匙串。**文件就在原地读** —— 不会拷进 vault，插件也不留副本
-- **五条命令** —— 查看缓存占用、修复索引、清理、上传已有附件、逐张挑选站外图片。见[命令](#命令)
+- **五条命令** —— 查看缓存占用、修复索引、清理、上传已有附件、逐张挑选站外文件。见[命令](#命令)
 
 桌面端与移动端都支持。
 
@@ -263,15 +273,20 @@ vault 小），渲染用本地副本 —— 于是图片既是**你自己的**�
 | **自检并修复本地副本索引** | 丢掉那些文件已经不在的索引记录，让索引和磁盘重新对上。 |
 | **清理未使用的缓存文件** | 删掉已经没有笔记指向的缓存文件。删除无法撤销，空间立刻释放。 |
 | **上传已存在的附件** | 把笔记里引用着的附件上传，并改写那些链接。上传成功后每个文件会被移入缓存目录（改名）；没有任何笔记引用的文件不会被碰。 |
-| **缓存站外图片（可挑选）…** | 勾选具体的站外图片去下载并上传。需要先打开站外图片功能。 |
+| **缓存站外文件（可挑选）…** | 勾选具体的站外文件去下载并上传。需要先打开站外文件功能。 |
 
 ## 需要注意的
 
+- **`tiff`、`heic`、`ico` 现在插入的是普通链接，不再嵌入。** 宿主无法在嵌入里预览这几种类型，
+  写 `![]()` 只会得到一个坏图。这是「全格式」这一版带来的**可见变化** —— 你的文件没被动，
+  变的只是链接形态。
 - **拖放文件的链接插在光标处，不是指针落点。** 公开 API 里没有「指针坐标 → 编辑器位置」的映射。
   这是有意取舍。
 - **改了存储地址之后，「新设备」上认不出老链接。** 判断「这张图是我们的」依赖当前设置加本地副本
   索引，所以那些老链接照常在线显示、但离线不显示，也不会被自动下载。同样是有意的。
-- **「不留本地副本」这一档会让断网时看不到图。** 默认档是「移入缓存目录」，那一档才离线可用。
+- **「不留本地副本」这一档断网时什么都看不到。** 默认档是「移入缓存目录」，那一档才离线可用。
+- **上传失败时，文件留在本地、笔记里插一条本地链接**，并提示失败原因 —— 绝不丢文件，
+  也绝不为没上传成功的文件编一条远端链接。
 - **缓存目录可以随时整体删除** —— 再看那张图时按需重建。
 - **换设备？把插件目录整体复制过去，但先删掉 `.cache-index.json`。** 那个文件记的是**这台设备**的
   缓存副本在哪，而 `data.json` 才装着你的设置。⚠️ **秘密访问密钥不在目录里** —— 它存在 Obsidian
