@@ -11,6 +11,14 @@ eslintcache
 # 验证脚本产物（截图与原始结果）
 _verify/
 
+# 凭据文件（MinIO / AWS 那种「下载凭据」）—— 里面是**明文秘密**，绝不入库。
+# ⚠️ 这只是第一道保险：真正的判据是 `npm run check:credentials`
+#（它同时按名字与内容认，改名也躲不掉）。
+credentials.json
+*credentials*.json
+*secret*.json
+mc-config.json
+
 # OS
 .DS_Store
 Thumbs.db

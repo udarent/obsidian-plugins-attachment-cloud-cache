@@ -11,6 +11,13 @@
  * 所以**不是两项都需要"换名字"**：访问密钥 ID 直接从设置读，秘密才需要
  * `getSecret(name)` 去换。这一层仍然值得存在，因为它把"两种失效"分清楚了。
  *
+ * ## 这个模块还有第二件事：解析**外来的凭据文件**
+ *
+ * 存储服务商往往会给你一个 json（MinIO 控制台的「下载凭据」就是
+ * `{url, accessKey, secretKey, api, path}`），让用户照着往下抄三项是纯粹的浪费。
+ * `parseCredentialFile` 把它读成「要写进设置的字段 + 一个**秘密**」——
+ * 秘密单独一个字段，**绝不混进要写设置的 `patch` 里**，这条由套件钉住。
+ *
  * ## 为什么绕这一层
  *
  * Obsidian 1.11.4 起的密钥模型是「**中心化的具名密钥**」：
@@ -175,4 +182,186 @@ export function connectionReadiness(reader: SecretReader, settings: PluginSettin
 			secretAccessKey,
 		},
 	};
+}
+
+// ═══════════════════════ 外来的凭据文件 ═══════════════════════
+//
+// ## 为什么值得做
+//
+// 存储服务商会给你一个 json。MinIO 控制台建完访问密钥后的「下载凭据」给的正是：
+//
+// ```json
+// { "url": "https://minio.example.com:9000",
+//   "accessKey": "…", "secretKey": "…", "api": "s3v4", "path": "auto" }
+// ```
+//
+// 没有这个入口时，用户要照着它**手抄三项**（服务地址、访问密钥 ID、秘密）——
+// 而其中那一项是 32 位随机串，手抄一遍的出错的概率不低，且抄错的症状是
+// "凭据被拒"，看不出是抄错了哪一位。
+//
+// ## ⚠️ 这里的硬约束：秘密**只走 `secret` 一个出口**
+//
+// 解析结果被拆成两半，这不是风格问题而是**安全边界**：
+//
+// | 出口 | 内容 | 去向 |
+// |---|---|---|
+// | `patch` | 服务地址 / 访问密钥 ID / 寻址方式 | 设置（`data.json`，明文） |
+// | `secret` | 秘密访问密钥的**值** | 钥匙串（`SecretStorage`），**绝不进设置** |
+//
+// 两半混在一起（比如把 `secretKey` 也放进 `patch`）不会有任何报错，
+// 只会让秘密悄悄落进 `data.json` —— 而那个文件会随 vault 同步、备份、分享出去。
+// 所以套件里有一条断言专门核"`patch` 里不含秘密值"。
+//
+// ## 为什么容忍多种拼写
+//
+// 各家给自己的字段名不一样（`url`/`endpoint`、`accessKey`/`accessKeyId`、
+// `secretKey`/`secretAccessKey`），用户也可能自己写一份。**认得多一种拼写，
+// 就少一次"文件明明是对的，插件却说认不出来"** —— 而这里没有歧义风险：
+// 这些名字都只可能指同一个东西。反过来，一个都不认识时**如实说认不出来**
+// （`noCredentials`），而不是猜一个近似的字段填进去。
+
+/**
+ * 认不出这份文件时的原因码。
+ *
+ * 返回**码**而不是句子：文案由界面那一层取（`s3ImportProblem_*`），
+ * 于是这个模块不依赖 i18n，能在没有真实 App 的地方穷举各种输入。
+ */
+export type CredentialFileProblem =
+	/** 不是合法 JSON（空文件、复制时截断、复制成了别的格式）。 */
+	| "notJson"
+	/** 是 JSON，但顶层不是对象（数组、字符串、数字）。 */
+	| "notObject"
+	/** 是对象，但里面没有任何能认出来的凭据字段。 */
+	| "noCredentials";
+
+/**
+ * 解析成功时要**写进设置**的字段。
+ *
+ * ⚠️ 每个字段都是可选的，而且只有文件里**真的有**才会出现 —— 一份只有秘密的
+ * 文件不该顺手把服务地址清空。界面据此报告"这次改了哪几项"。
+ */
+export interface CredentialFilePatch {
+	endpoint?: string;
+	accessKeyId?: string;
+	forcePathStyle?: boolean;
+}
+
+export type CredentialFileResult =
+	| {
+			ok: true;
+			/** 要写进设置的字段（**绝不含秘密**）。 */
+			patch: CredentialFilePatch;
+			/**
+			 * 秘密访问密钥的值，调用方**必须**把它写进钥匙串。
+			 * `null` = 文件里没有这一项（此时只导入别的字段，不动已存的秘密）。
+			 */
+			secret: string | null;
+			/**
+			 * 文件里有、但我们**用不上**的键（如 `api`）—— 如实回报，
+			 * 界面才能说清"文件认出来了，只是其中有几项与这里无关"，
+			 * 而不是让用户对着一个"部分生效"的结果猜。
+			 */
+			ignored: string[];
+	  }
+	| { ok: false; problem: CredentialFileProblem };
+
+/** 服务地址：`url` 是 MinIO 的写法，其余是各家 SDK / 手写的常见写法。 */
+const ENDPOINT_KEYS = ["url", "endpoint", "s3Endpoint", "s3EndpointUrl", "s3_endpoint"];
+/** 访问密钥 ID（标识符，可以含大写）。 */
+const ACCESS_KEY_KEYS = ["accessKey", "accessKeyId", "access_key_id", "access_key"];
+/** 秘密访问密钥（⚠️ 唯一的秘密来源，只走 `secret` 出口）。 */
+const SECRET_KEY_KEYS = ["secretKey", "secretAccessKey", "secret_key", "secret"];
+/** 寻址方式（MinIO 的 `path`）。 */
+const PATH_KEYS = ["path", "pathStyle", "forcePathStyle"];
+
+/** 取第一个**非空字符串**，都取不到返回 `null`（空串 = 这一项没填，不是"填了个空的"）。 */
+function firstText(record: Record<string, unknown>, keys: readonly string[]): string | null {
+	for (const key of keys) {
+		const value = record[key];
+		if (typeof value !== "string") continue;
+		const trimmed = value.trim();
+		if (trimmed !== "") return trimmed;
+	}
+	return null;
+}
+
+/**
+ * 取第一个**出现过**的键的原始值。
+ *
+ * 与 `firstText` 的区别：不要求它是非空字符串。给"要看原始类型才能判断"的字段用
+ * （寻址方式要区分 `on` / `off` / `auto`，而 `auto` 与"没写"是**不同**的结论 ——
+ * 前者是"由客户端判断"，后者是"文件里没提这件事"，虽然两者最终都不覆盖用户设置，
+ * 但混用会让以后想区分它们的人无从下手）。
+ */
+function firstRaw(record: Record<string, unknown>, keys: readonly string[]): unknown {
+	for (const key of keys) {
+		if (key in record) return record[key];
+	}
+	return undefined;
+}
+
+/**
+ * MinIO 的 `path` 取值 → 寻址方式。`auto` 返回 `undefined` = **不要覆盖**用户的设置。
+ *
+ * 三种取值的含义（`mc` 的口径）：`on` 强制 path-style，`off` 强制 virtual-host，
+ * `auto` = "由客户端自己判断"。`auto` 恰恰是**最常见**的那个值（也是 MinIO 的默认），
+ * 此时我们没有理由去动用户已有的选择 —— 而把它当 `true` 处理就会**静默改写**
+ * 一个用户可能刻意设成 `false` 的字段。
+ */
+function pathStyleFrom(raw: unknown): boolean | undefined {
+	if (typeof raw !== "string") return undefined;
+	switch (raw.trim().toLowerCase()) {
+		case "on":
+			return true;
+		case "off":
+			return false;
+		default:
+			return undefined;
+	}
+}
+
+/**
+ * 解析一份外来的凭据文件（MinIO 控制台的「下载凭据」是它的典型形状）。
+ *
+ * 纯函数：只读文本，不碰设置、不碰钥匙串、不碰文件系统。写进去的动作在 `main.ts`。
+ */
+export function parseCredentialFile(text: unknown): CredentialFileResult {
+	if (typeof text !== "string" || text.trim() === "") return { ok: false, problem: "notJson" };
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		return { ok: false, problem: "notJson" };
+	}
+	// 数组也是 `typeof "object"` —— 单独挡掉，否则 `["a"]` 会走到"没有任何凭据字段"，
+	// 报出的原因与实情不符（用户会以为文件内容不对，其实是文件结构形式不对）。
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		return { ok: false, problem: "notObject" };
+	}
+
+	const record = parsed as Record<string, unknown>;
+	const patch: CredentialFilePatch = {};
+
+	const endpoint = firstText(record, ENDPOINT_KEYS);
+	if (endpoint !== null) patch.endpoint = endpoint;
+
+	const accessKeyId = firstText(record, ACCESS_KEY_KEYS);
+	if (accessKeyId !== null) patch.accessKeyId = accessKeyId;
+
+	const pathStyle = pathStyleFrom(firstRaw(record, PATH_KEYS));
+	if (pathStyle !== undefined) patch.forcePathStyle = pathStyle;
+
+	const secret = firstText(record, SECRET_KEY_KEYS);
+
+	// 一项都没认出来 ⇒ 如实说。此时**不**返回空 patch 的"成功"：
+	// 那会让界面显示"已导入"，而实际上什么都没变 —— 最难查的那种结局。
+	if (Object.keys(patch).length === 0 && secret === null) {
+		return { ok: false, problem: "noCredentials" };
+	}
+
+	const consumed = new Set([...ENDPOINT_KEYS, ...ACCESS_KEY_KEYS, ...SECRET_KEY_KEYS, ...PATH_KEYS]);
+	const ignored = Object.keys(record).filter((key) => !consumed.has(key));
+
+	return { ok: true, patch, secret, ignored };
 }

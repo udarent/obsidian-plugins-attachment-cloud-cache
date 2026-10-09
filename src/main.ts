@@ -46,7 +46,9 @@ import type { ConfirmOptions } from "./ui/confirm-modal";
 import { keyFromUrl } from "./render/render-target";
 import { createS3Client } from "./s3/client";
 import type { S3Client } from "./s3/client";
-import { connectionReadiness } from "./s3/credentials";
+import { connectionReadiness, parseCredentialFile } from "./s3/credentials";
+import type { CredentialFileProblem } from "./s3/credentials";
+import { ensureSecretSlot, randomSlotPart } from "./ui/settings-logic";
 import { createLocalCopyEnsurer } from "./core/download";
 import type { LocalCopyOutcome } from "./core/download";
 import { installImageSrcPatch, processImages } from "./render/render-hook";
@@ -76,6 +78,32 @@ const ROTATION_STARTUP_DELAY_MS = 3 * 1000;
  * 而且还有一层分钟级节流。
  */
 const ROTATION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
+
+/**
+ * 导入一份凭据文件的结果。
+ *
+ * ⚠️ **不含秘密值**，只含"改了哪几项" —— 于是它可以被日志、通知、真机探针随便打印，
+ * 而不会把密钥漏到任何地方去。
+ */
+export type ImportCredentialsOutcome =
+	| {
+			ok: true;
+			/** 这次**真的改了**的设置项，值是**文案键**（界面负责翻译）。 */
+			applied: string[];
+			/** 文件里有、但本插件用不上的键（如 MinIO 的 `api`）。 */
+			ignored: string[];
+	  }
+	| {
+			ok: false;
+			/**
+			 * `secretStoreFailed` 是**这一步**特有的失败：文件本身没问题，
+			 * 只是钥匙串写不进去（宿主实现差异、被锁）。它与"这份文件认不出来"
+			 * 是两件该给不同提示的事 —— 前者的修法不是"换一份文件"。
+			 */
+			problem: CredentialFileProblem | "secretStoreFailed";
+			/** 仅 `secretStoreFailed` 时有值：宿主给的原始错误（可能很长，界面自己截）。 */
+			detail?: string;
+	  };
 
 export default class AttachmentCloudCachePlugin extends Plugin {
 	settings: PluginSettings = { ...SETTINGS_DEFAULTS };
@@ -696,6 +724,73 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 */
 	sampleObjectKey(): string | null {
 		return this.currentIndex().keys()[0] ?? null;
+	}
+
+	/**
+	 * 从一份**凭据文件**导入连接参数（MinIO 控制台「下载凭据」给的那个 json）。
+	 *
+	 * ## 为什么放在插件上、而不是写在设置页里
+	 *
+	 * 界面只负责"取到文本"，写设置与写钥匙串都在这里 —— 于是**真机探针能直接调它**，
+	 * 不必去点界面（点界面测的是"按钮接对了没有"，而这里测的是"导入到底做了什么"）。
+	 * `cachePickedExternalImages` 是同一个理由下的先例。
+	 *
+	 * ## ⚠️ 顺序：先写钥匙串，再写设置
+	 *
+	 * 反过来的话，钥匙串写入失败就会留下「**ID 换了、秘密还是旧的**」这种组合 ——
+	 * 它能签出一个格式完全正确、但服务端必然拒绝的请求，而用户看到的是
+	 * "凭据被拒"，会去怀疑自己抄错了密钥。所以任何一步失败都**整批不做**。
+	 *
+	 * ## 秘密的去向只有一处
+	 *
+	 * `parseCredentialFile` 把外来的 json 拆成「要写设置的字段」与「秘密」两半，
+	 * 这里也照着这个边界落：`patch` 里的字段进 `settings`，秘密只进钥匙串。
+	 * 秘密**永远不进** `data.json`（那个文件会随 vault 同步、备份、分享出去）。
+	 *
+	 * @returns 结果里**不含秘密值**，只含"改了哪几项"，供界面如实报告。
+	 */
+	async importCredentialsFile(text: string): Promise<ImportCredentialsOutcome> {
+		const parsed = parseCredentialFile(text);
+		if (!parsed.ok) return { ok: false, problem: parsed.problem };
+
+		const s3 = this.settings.s3;
+		const patch = parsed.patch;
+
+		// ① 秘密先进钥匙串（失败则什么都不改 —— 见上面那段）
+		let secretStored = false;
+		if (parsed.secret !== null) {
+			const slot = ensureSecretSlot(s3.secretAccessKeyRef, randomSlotPart());
+			try {
+				this.app.secretStorage.setSecret(slot, parsed.secret);
+			} catch (error) {
+				return {
+					ok: false,
+					problem: "secretStoreFailed",
+					detail: error instanceof Error ? error.message : String(error),
+				};
+			}
+			// ⚠️ 槽位名沿用已有的（`ensureSecretSlot` 从不改名）—— 改名会把已存的秘密孤儿化
+			s3.secretAccessKeyRef = slot;
+			secretStored = true;
+		}
+
+		// ② 其余字段进设置。**只有文件里真的有的那一项**才动：
+		// 一份只有秘密的文件不该顺手把服务地址清空。
+		if (patch.endpoint !== undefined) s3.endpoint = patch.endpoint;
+		if (patch.accessKeyId !== undefined) s3.accessKeyId = patch.accessKeyId;
+		if (patch.forcePathStyle !== undefined) s3.forcePathStyle = patch.forcePathStyle;
+
+		await this.saveSettings();
+
+		// 报告的次序与设置页上那几栏的次序一致（服务地址 → 访问密钥 → 秘密 → 寻址），
+		// 于是用户能把通知里的清单直接对着界面核。
+		const applied: string[] = [];
+		if (patch.endpoint !== undefined) applied.push("s3Endpoint");
+		if (patch.accessKeyId !== undefined) applied.push("s3AccessKey");
+		if (secretStored) applied.push("s3SecretKey");
+		if (patch.forcePathStyle !== undefined) applied.push("forcePathStyle");
+
+		return { ok: true, applied, ignored: parsed.ignored };
 	}
 
 	/**

@@ -40,6 +40,7 @@ export function runSettingsUiSuite(mod) {
 		// credentials
 		credentialStatus,
 		connectionReadiness,
+		parseCredentialFile,
 	} = mod;
 
 	// ============================================================
@@ -451,4 +452,126 @@ export function runSettingsUiSuite(mod) {
 		// 两次生成必须不同（否则两个 vault 会共用同一条钥匙串密钥 —— 静默串味）
 		assert.notEqual(ensureSecretSlot("", "aaa1"), ensureSecretSlot("", "bbb2"), "不同的随机部分要生成不同的槽位");
 	}
+
+	// ============================================================
+	// 11. 外来凭据文件：认得出、且秘密**绝不**混进设置
+	// ============================================================
+	//
+	// 这一段守两件不同的事：
+	//
+	// ① **认得出来** —— MinIO 控制台「下载凭据」给的是 `url`/`accessKey`/`secretKey`，
+	//    而各家 SDK 用的是 `endpoint`/`accessKeyId`/`secretAccessKey`。认错一个字段名，
+	//    用户看到的就是"我的文件明明是对的，插件却说认不出来"。
+	//
+	// ② ⭐ **秘密只走 `secret` 一个出口** —— 这是安全边界，不是风格：
+	//    `patch` 里的字段会被写进 `data.json`，而那个文件随 vault 同步、备份、分享出去。
+
+	// ── ① MinIO 控制台「下载凭据」的真实形状 ──
+	const minio = parseCredentialFile(
+		JSON.stringify({
+			url: "https://minio.example.com:9000",
+			accessKey: "MtUq3EXAMPLEKEY01",
+			secretKey: "wGSmzEXAMPLEsecretKEY0000000000000",
+			api: "s3v4",
+			path: "auto",
+		})
+	);
+	assert.equal(minio.ok, true, "MinIO 的凭据文件必须认得出来");
+	assert.equal(minio.patch.endpoint, "https://minio.example.com:9000", "url → 服务地址");
+	assert.equal(minio.patch.accessKeyId, "MtUq3EXAMPLEKEY01", "accessKey → 访问密钥 ID（可以含大写）");
+	assert.equal(minio.secret, "wGSmzEXAMPLEsecretKEY0000000000000", "secretKey → 秘密（单独一个出口）");
+	assert.equal(
+		minio.patch.forcePathStyle,
+		undefined,
+		"★ path=auto（mc 的默认值）= 不覆盖 —— 当成 true 会**静默改写**用户刻意设成 false 的字段"
+	);
+	assert.deepEqual(minio.ignored, ["api"], "用不上的键如实回报（api 恒为 s3v4，本插件不读它）");
+
+	// ⭐⭐ 安全边界：秘密的值**不得**出现在要给设置的那一半里。
+	// 混进去不会有任何报错，只会让明文秘密落进 data.json —— 只能靠机器挡住。
+	assert.ok(
+		!JSON.stringify(minio.patch).includes("wGSmzEXAMPLEsecretKEY"),
+		"★★ 秘密值绝不能出现在 patch 里（patch 会被写进明文的 data.json）"
+	);
+	for (const forbidden of ["secretAccessKey", "accessKey", "secretKey", "secret", "password"]) {
+		assert.ok(!(forbidden in minio.patch), `patch 里不得有 "${forbidden}" 这个键（它属于钥匙串）`);
+	}
+
+	// ── ② 等价拼写：认得多一种，就少一次"我的文件明明是对的" ──
+	const alt = parseCredentialFile(
+		JSON.stringify({
+			endpoint: "https://s3.example.org",
+			accessKeyId: "AKIAIOSFODNN7EXAMPLE",
+			secretAccessKey: "alt-secret",
+		})
+	);
+	assert.equal(alt.ok, true, "SDK 风格的字段名也要认");
+	assert.equal(alt.patch.endpoint, "https://s3.example.org", "endpoint 同样能当服务地址");
+	assert.equal(alt.patch.accessKeyId, "AKIAIOSFODNN7EXAMPLE", "accessKeyId 同样能当访问密钥 ID");
+	assert.equal(alt.secret, "alt-secret", "secretAccessKey 同样能当秘密");
+
+	// ── ③ 寻址方式：给值才动，`auto` 不动 ──
+	assert.equal(
+		parseCredentialFile(JSON.stringify({ url: "https://x", path: "on" })).patch.forcePathStyle,
+		true,
+		"path=on → 强制 path-style"
+	);
+	assert.equal(
+		parseCredentialFile(JSON.stringify({ url: "https://x", path: "off" })).patch.forcePathStyle,
+		false,
+		"path=off → 强制 virtual-host"
+	);
+	assert.equal(
+		parseCredentialFile(JSON.stringify({ url: "https://x", path: "auto" })).patch.forcePathStyle,
+		undefined,
+		"path=auto 与 path=on 是**不同**的结论，不能混"
+	);
+
+	// ── ④ 值两端的空白要清掉（从浏览器里复制常见带上换行/空格）──
+	const paddedValues = parseCredentialFile(JSON.stringify({ url: " https://x \n", secretKey: " s " }));
+	assert.equal(paddedValues.patch.endpoint, "https://x", "★ 服务地址两端的空白要清掉");
+	assert.equal(paddedValues.secret, "s", "秘密两端的空白也要清掉");
+
+	// ── ⑤ 空串 / 纯空白 = **没填**，不是"填了个空的" ──
+	const blankValues = parseCredentialFile(JSON.stringify({ url: "  ", accessKey: "  ", secretKey: "" }));
+	assert.equal(blankValues.ok, false, "全是空白等于没有凭据");
+	assert.equal(blankValues.problem, "noCredentials", "空白值不该被收下");
+
+	// ── ⑥ 部分字段：文件里没有的那一项**不许**被顺手改掉 ──
+	const secretOnly = parseCredentialFile(JSON.stringify({ secretKey: "only-the-secret" }));
+	assert.equal(secretOnly.ok, true, "只有秘密也算一份有用的文件");
+	assert.equal(secretOnly.secret, "only-the-secret", "只有秘密时也要把它交出来");
+	assert.deepEqual(
+		secretOnly.patch,
+		{},
+		"★ 只给了秘密时别的字段一个都不许动（否则会把用户已配好的地址清空）"
+	);
+
+	// ── ⑦ 三种认不出来的原因要分清（修法不同：换文件 / 换文件 / 换文件里的结构）──
+	assert.equal(parseCredentialFile("not json at all").problem, "notJson", "不是 JSON");
+	assert.equal(parseCredentialFile("").problem, "notJson", "空文件同样归到 notJson");
+	assert.equal(parseCredentialFile(undefined).problem, "notJson", "非字符串不抛错");
+	assert.equal(
+		parseCredentialFile("[1, 2, 3]").problem,
+		"notObject",
+		"★ 数组是 JSON 但不是对象 —— 报 notObject 而不是 noCredentials（否则用户会去怀疑文件内容）"
+	);
+	assert.equal(parseCredentialFile('"just a string"').problem, "notObject", "标量同理");
+	assert.equal(parseCredentialFile("123").problem, "notObject", "数字同理");
+	assert.equal(
+		parseCredentialFile(JSON.stringify({ hello: "world" })).problem,
+		"noCredentials",
+		"是对象但里面没有凭据字段 = 如实说没有"
+	);
+
+	// ── ⑧ 反向：不能因为"认出来了"就顺手把不相干的东西也吞掉 ──
+	const extra = parseCredentialFile(
+		JSON.stringify({ url: "https://x", secretKey: "s", region: "us-east-1", note: "hello" })
+	);
+	assert.deepEqual(extra.ignored, ["region", "note"], "认不出的键要如实列出来，而不是静默丢弃");
+	assert.equal(
+		extra.patch.region,
+		undefined,
+		"★ 不该去猜 region —— 猜错的表现是签名区域不符，而那个报错极难归因"
+	);
 }

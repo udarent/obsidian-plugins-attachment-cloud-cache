@@ -175,7 +175,93 @@ export class SettingsTab extends PluginSettingTab {
 				desc: this.t("testConnectionDesc"),
 				render: (setting) => this.renderConnectionTest(setting),
 			},
+
+			// ⚠️ 放在这两栏**之后**：导入是"一次性的省事入口"，而上面那几项才是
+			// 用户真要核对/修改的地方。顺序也由 `test-settings-ui.mjs` 的静态守卫钉着 ——
+			// 访问密钥 ID 与秘密访问密钥必须是**相邻的前两项**（成对编辑的前提）。
+			{
+				name: this.t("s3Import"),
+				desc: this.t("s3ImportDesc"),
+				aliases: ["minio", "credentials", "json", "import", "凭据", "导入"],
+				render: (setting) => this.renderCredentialImport(setting),
+			},
 		];
+	}
+
+	/**
+	 * 「导入凭据文件」—— MinIO 控制台建完密钥后点「下载凭据」给的就是那个 json。
+	 *
+	 * ## 为什么是隐藏的 `<input type="file">` 而不是别的
+	 *
+	 * Obsidian 没有公开的"让用户选一个文件"的 API，而 `<input type="file">` 恰好是
+	 * 两端都有的原生能力：桌面端弹系统文件对话框，移动端弹文件选择器。而且我们
+	 * **只读它的内容、不碰路径** —— 移动端本来也拿不到路径，所以这条路天然两端通用。
+	 *
+	 * ## 为什么不是拖拽进来
+	 *
+	 * 拖进门打开的是宿主自己的编辑器（拖进来的文件会被存进 vault）——
+	 * 那正是本插件**要接管**的事件，用它来当导入入口会把自己绕进去。
+	 *
+	 * ⚠️ 读完**立刻清空** `input.value`：不清的话那份内容会一直挂在 DOM 上，
+	 * 而它里面有明文秘密 —— 没有理由让它多留一秒。
+	 */
+	private renderCredentialImport(setting: Setting): void {
+		const input = setting.controlEl.createEl("input", { cls: "acc-credentials-file-input" });
+		input.type = "file";
+		// ⚠️ 只作提示、不作强制：用户完全可能把文件存成别的名字或后缀。
+		// 挡在对话框里只会让人以为"我的文件不对"，而真正该判的是内容。
+		input.accept = ".json,application/json";
+		input.addEventListener("change", () => void this.handleCredentialFile(input));
+
+		setting.addButton((button) =>
+			button.setButtonText(this.t("s3ImportButton")).onClick(() => input.click())
+		);
+	}
+
+	/** 读到文件内容 → 交给插件导入 → **如实**报告改了什么、以及为什么没成。 */
+	private async handleCredentialFile(input: HTMLInputElement): Promise<void> {
+		const file = input.files?.[0] ?? null;
+		let text = "";
+		try {
+			text = file ? await file.text() : "";
+		} catch (error) {
+			new Notice(
+				this.t("s3ImportFailed", { reason: error instanceof Error ? error.message : String(error) })
+			);
+			return;
+		} finally {
+			// ⚠️ 失败路径也要清。这里面是明文秘密，没理由留在 DOM 上。
+			input.value = "";
+		}
+		// 用户打开了对话框又取消 —— 不是错误，什么都不做
+		if (!file) return;
+
+		const outcome = await this.plugin.importCredentialsFile(text);
+		if (!outcome.ok) {
+			new Notice(
+				outcome.problem === "secretStoreFailed"
+					? // 文件没问题，是钥匙串写不进去 —— 复用现有的那条文案（修法不是"换一份文件"）
+						this.t("s3SecretStoreFailed", { error: outcome.detail ?? "" })
+					: this.t("s3ImportFailed", { reason: this.t(`s3ImportProblem_${outcome.problem}`) })
+			);
+			return;
+		}
+
+		const lines = [this.t("s3ImportDone"), ...outcome.applied.map((key) => `· ${this.t(key)}`)];
+		// 文件里那几项用不上的（如 MinIO 的 `api`）如实列出来：否则用户会去琢磨
+		// "我明明给它了 s3v4，怎么没反应"。一句话比让他猜强。
+		if (outcome.ignored.length > 0) {
+			lines.push(this.t("s3ImportIgnored", { fields: outcome.ignored.join(", ") }));
+		}
+
+		// ⚠️ 必须让设置页重新取值。上面那几栏（服务地址 / 访问密钥 ID / 秘密）是
+		// 我们**绕过控件**直接写进设置的，宿主没有任何理由自己重渲染 ——
+		// 不刷新的话它们会继续显示**导入前**的内容，用户看到的正是
+		// "通知说导入成功、可框里还是空的"，会以为没成、于是再手输一遍。
+		// `update()` 是公开 API 里为这件事准备的（其文档：dynamic tabs when their data changes）。
+		this.update();
+
+		new Notice(lines.join("\n"));
 	}
 
 	/**

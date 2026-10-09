@@ -26,7 +26,9 @@ await withLoadedTs(["src/ui/settings-logic", "src/ui/settings-bindings", "src/s3
 			"bindings read/write dotted keys without inventing intermediate objects, " +
 			"empty values are refused only where empty would silently break a feature, " +
 			"the keychain slot for the secret is generated once and never renamed, " +
-			"and credentials distinguish 'never chosen' from 'the chosen secret no longer exists')."
+			"credentials distinguish 'never chosen' from 'the chosen secret no longer exists', " +
+			"and an imported credentials file maps onto the right fields while the secret alone " +
+			"travels to the keychain (never into the settings patch')."
 	);
 });
 
@@ -106,3 +108,44 @@ assert.ok(
 	tab.includes("publicUrlFor(config, key)"),
 	"★ 探的必须是**真要写进笔记**的那个地址（同一个 publicUrlFor），不能自己另拼一个"
 );
+
+// ============================================================
+// 静态守卫：导入凭据文件时，秘密**只**进钥匙串
+// ============================================================
+//
+// 守的是一处**安全边界**：一份外来的凭据文件里有三样东西，而它们的**去向不同** ——
+// 服务地址与访问密钥 ID 进设置（`data.json`：明文，会随 vault 同步/备份/分享），
+// 秘密访问密钥必须进钥匙串。
+//
+// 两种退化在 review 里都看不出异常：
+// ① 界面自己实现一份导入 ⇒ 秘密的去向变成"界面里怎么写"，插件上那份成了摆设；
+// ② 读完不清空 file input ⇒ 那份**明文秘密**一直挂在 DOM 上。
+//
+// （"秘密没被塞进设置"这条另有行为断言钉着 —— 见套件第 11 节。这里守的是
+//  「只有一处实现」与「用完就清」这两件行为断言看不见的事。）
+{
+	const main = read("src/main.ts");
+
+	assert.ok(
+		tab.includes("plugin.importCredentialsFile("),
+		"★ 界面必须走插件那一个导入实现 —— 另写一份就等于秘密的去向由界面决定"
+	);
+	assert.ok(
+		tab.includes('input.value = ""'),
+		"★ 读完必须清空那个 file input —— 它里面是明文秘密，没有理由留在 DOM 上"
+	);
+	// 导入是**绕过控件**直接写设置的，宿主不会自己重渲染 ⇒ 不刷新的话那几栏
+	// 会继续显示导入前的内容（"通知说成功、框里还是空的"）。这条没有行为断言能看见。
+	assert.ok(
+		tab.includes("this.update()"),
+		"★ 导入成功后必须让设置页重新取值（update()）—— 否则端口/密钥那几栏还显示旧值"
+	);
+	assert.ok(
+		main.includes("secretStorage.setSecret(slot, parsed.secret)"),
+		"★ 导入时秘密必须写进钥匙串"
+	);
+	assert.ok(
+		!/settings\.s3\.[A-Za-z]*\s*=\s*parsed\.secret/.test(main),
+		"★★ 秘密绝不能被写进 settings —— data.json 是明文，且会随 vault 同步、备份、分享"
+	);
+}
