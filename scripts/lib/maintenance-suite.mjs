@@ -176,12 +176,51 @@ export function runMaintenanceSuite(mod) {
 	// ============================================================
 	const RULES = [{ from: "photo2.png", to: "https://img.example.com/abc.png" }];
 
+	// ⭐⭐ wikilink 遇上**远端 URL** 必须整条换成 Markdown。
+	//
+	// `![[https://…]]` 在宿主里**根本不显示**（真机实测；wiki 语法只解析库内文件），
+	// 所以"只替换路径那一段"这条路对远端目标是不成立的。
 	const alias = planLinkRewrites("![[photo2.png|600]]", RULES);
-	assert.equal(alias.text, "![[https://img.example.com/abc.png|600]]", "★ 别名/尺寸必须保留");
+	assert.equal(
+		alias.text,
+		"![600](https://img.example.com/abc.png)",
+		"★ 别名/尺寸必须保留：wikilink 装不下 URL ⇒ 整条换成 Markdown，`600` 落在 alt 位"
+	);
 	assert.equal(alias.count, 1);
 
 	const subpath = planLinkRewrites("![[photo2.png#page=2]]", RULES);
-	assert.equal(subpath.text, "![[https://img.example.com/abc.png#page=2]]", "★ 子路径必须保留");
+	assert.equal(
+		subpath.text,
+		"![photo2.png](https://img.example.com/abc.png#page=2)",
+		"★ 子路径必须保留（拼成 URL 片段）"
+	);
+
+	// 没有 `!` 的 wikilink 是**链接**不是嵌入，不许被升成图片
+	const plainWiki = planLinkRewrites("[[photo2.png]]", RULES);
+	assert.equal(
+		plainWiki.text,
+		"[photo2.png](https://img.example.com/abc.png)",
+		"★ 原文没有 `!` 就不是嵌入，改写后也不能带 `!`"
+	);
+
+	// 没有别名时 alt 取路径最后一段（别把 `attachments/` 带进去 —— 那是路径不是名字）
+	const noAlias = planLinkRewrites("![[attachments/photo2.png]]", RULES);
+	assert.equal(
+		noAlias.text,
+		"![photo2.png](https://img.example.com/abc.png)",
+		"★ 无别名时 alt 取文件名"
+	);
+
+	// ⭐ 反向：目标是**库内路径**时形态一个字都不动（只换路径那一段）。
+	// 形态是用户或宿主选的，把别人的 wikilink 改成 Markdown 属于越权。
+	const localTarget = planLinkRewrites("![[photo2.png|600]]", [
+		{ from: "photo2.png", to: "attachments/photo2.png" },
+	]);
+	assert.equal(
+		localTarget.text,
+		"![[attachments/photo2.png|600]]",
+		"★ 库内路径不换形态（别把用户的 wikilink 改成 Markdown）"
+	);
 
 	const titled = planLinkRewrites(
 		'![alt](photo2.png "标题")',
@@ -195,9 +234,17 @@ export function runMaintenanceSuite(mod) {
 		RULES
 	);
 	assert.equal(both.count, 3, "★ 短名（含不带扩展名的）与完整路径都应改到（否则老图只搬一半）");
-	assert.ok(
-		!both.text.includes("photo2"),
-		`改完之后不该还提到本地路径：${both.text}`
+	// ⚠️ 不能再用"文本里还有没有 photo2"来判：换成 Markdown 之后 **alt 位就是文件名**，
+	// 那是给人看的名字、不是路径（宿主自己生成链接也是这么写的）。
+	// 要判的是"还有没有指向本地的**目标**" ⇒ 把三条链接的目标读回来比。
+	assert.deepEqual(
+		findLinkSpans(both.text).map((span) => span.raw),
+		[
+			"https://img.example.com/abc.png",
+			"https://img.example.com/abc.png",
+			"https://img.example.com/abc.png",
+		],
+		"★ 改完之后三条链接的**目标**都必须已经在远端上"
 	);
 
 	// ⭐ 短名歧义：两个目录下有同名文件（都在候选里）→ 一条 `![[dup.png]]` 无法判断指哪个，
