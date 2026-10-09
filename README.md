@@ -1,11 +1,17 @@
 # Attachment Cloud Cache
 
-**English** · [简体中文](./README.zh.md)
+**English** · [简体中文（完整说明）](./README.zh.md)
+
+> **中文摘要** —— 把笔记里的附件上传到**你自己的** S3 兼容存储，并在本地保留一份副本，断网也能看图。
+> 需要 Obsidian **1.13.0 或更新**（桌面端与移动端）；更低版本在社区目录里会提示
+> *No appropriate version found.* —— 那是 Obsidian 的安装机制，不是插件坏了。
+> 界面（设置页 / 命令 / 通知）会跟随你的 Obsidian 界面语言自动切换成中文。
+> **完整中文说明见 [README.zh.md](./README.zh.md)。**
 
 Upload your note attachments to **your own** S3-compatible storage, and keep a local copy so images
 still render offline.
 
-> **Status: 1.0.0.** Everything below works, and the full upload/download round trip has been proven
+> **Status: 1.0.1.** Everything below works, and the full upload/download round trip has been proven
 > against a real MinIO instance. Not proven yet: iOS has never been run, and Android has not been run
 > on a real device.
 
