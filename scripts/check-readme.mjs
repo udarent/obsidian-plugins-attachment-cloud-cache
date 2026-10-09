@@ -94,6 +94,29 @@ if (canonical === null) {
 	}
 }
 
+// ── 两半都不得复述"自己是哪个版本" ──
+//
+// 为什么要有这条：README 描述的是**当前**插件，而"当前是哪个版本"的唯一来源是 `manifest.json`
+// （Obsidian 自己就会显示它）。在 README 里再写一遍就是**第二份真相**，而它只会漂移 ——
+// 实测：`Status: 1.0.0` 从 1.0.0 一直挂到 1.0.1 发布之后才被顺手改掉；
+// 更早还有"设置项数""签名器行数"两个手写数字过期。⇒ 按本项目自己的判据：
+// **宁可不显示，也不要显示一个可能不对的数字。**
+//
+// ⚠️ 只匹配"状态 / Status + 版本号"这种**自我描述**，不去禁止 README 里出现任何数字 ——
+// 例如 “Requires Obsidian 1.13.0+” 说的是**宿主**版本，那个数字不随本插件漂移。
+const SELF_VERSION_CLAIM = /(?:Status|状态)\s*[:：][^\n]{0,40}?\d+\.\d+\.\d+/;
+
+if (canonical !== null) {
+	const claim = canonical.split("\n").find((line) => SELF_VERSION_CLAIM.test(line));
+	if (claim !== undefined) {
+		problems.push(
+			`${CANONICAL} 里又出现了"自己是哪个版本"的自我描述（${claim.trim().slice(0, 60)}…）—— ` +
+				"版本号的唯一来源是 manifest.json，在这里复述它只会漂移。" +
+				"请删掉版本号，只保留对“验证到什么程度”的说明。"
+		);
+	}
+}
+
 // ── README.zh.md：只允许是指路牌 ──
 const pointer = read(POINTER);
 

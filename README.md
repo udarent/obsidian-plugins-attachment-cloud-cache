@@ -13,9 +13,9 @@
 Upload your note attachments to **your own** S3-compatible storage, and keep a local copy so images
 still render offline.
 
-> **Status: 1.0.1.** Everything below works, and the full upload/download round trip has been proven
-> against a real MinIO instance. Not proven yet: iOS has never been run, and Android has not been run
-> on a real device.
+> **Everything below works** — the full upload/download round trip has been proven against a real
+> MinIO instance. **Not proven yet:** iOS has never been run, and Android has not been run on a real
+> device.
 
 ## Why use it
 
@@ -135,7 +135,7 @@ with any other plugin.
 
 把笔记里的附件上传到**你自己的** S3 兼容存储，同时在本地留一份副本 —— 断网时图片照样能显示。
 
-> **状态：1.0.1。** 下面写的都可用，完整的上传/下载回环已在真实 MinIO 上被证实。
+> **下面写的都可用** —— 完整的上传/下载回环已在真实 MinIO 上被证实。
 > **还没验证的：** iOS 从未运行过；Android 也没在真机上跑过。
 
 ## 为什么用它
