@@ -13,6 +13,10 @@
 Upload your note attachments to **your own** S3-compatible storage, and keep a local copy so images
 still render offline.
 
+[Install](#installation) · [Releases](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases) · [Report a problem](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues)
+
+Requires Obsidian **1.13.0+** (desktop and mobile) — see [Requirements](#requirements).
+
 > **Everything below works** — the full upload/download round trip has been proven against a real
 > MinIO instance. **Not proven yet:** iOS has never been run, and Android has not been run on a real
 > device.
@@ -42,15 +46,23 @@ images are both **yours** and **always visible**, with zero remote requests when
 - **Two optional features, both off by default**: caching images from other sites (nothing happens
   until you say so, and you can pick individual images), and a cache size limit that cleans up
   least-recently-used copies in the background
-- **Five maintenance commands**: show cache usage · repair the local-copy index · clean up unused
-  cache files · upload existing attachments · pick which off-site images to cache
+- **Five commands** — cache usage, index repair, cleanup, uploading what you already have, and picking
+  off-site images one by one. See [Commands](#commands)
 
 Works on desktop and mobile.
 
-## Installation
+## Requirements
 
-Requires Obsidian **1.13.0**+ (desktop and mobile) — the floor comes from the declarative settings API.
-Anyone who has not updated Obsidian in the last few months cannot install this.
+- **Obsidian 1.13.0 or newer**, desktop and mobile. The floor comes from the declarative settings API
+  the settings page is built with. On anything older the community catalogue answers *No appropriate
+  version found.* — that is Obsidian's installer refusing, not this plugin failing.
+- **An S3-compatible bucket you control**, plus an access key pair for it. Cloudflare R2, AWS S3,
+  MinIO, Backblaze B2 and self-hosted endpoints all work — see [Features](#features).
+- **The bucket must allow anonymous reads**, or you must set a public URL prefix (a CDN or a custom
+  domain). Otherwise the links in your notes open for you but not for anyone else — **Test connection**
+  checks exactly this.
+
+## Installation
 
 **From inside Obsidian (recommended):** **Settings → Community plugins → Browse** → search for
 `Attachment Cloud Cache` → install and enable.
@@ -72,6 +84,18 @@ In **Settings → Attachment Cloud Cache**:
    below it
 4. **Test connection** — one signed request to your bucket, then one **credential-free** request to
    the exact URL your links would use, so you learn whether other people can open them
+
+## Commands
+
+Five commands, all reachable from the command palette:
+
+| Command | What it does |
+| --- | --- |
+| **Show cache usage** | How much the cache holds, and how much of it could be reclaimed. |
+| **Repair the local-copy index** | Drops index entries whose files are already gone, so the index matches the disk again. |
+| **Clean up unused cache files** | Deletes cache files no note points at any more. Deletion cannot be undone and the space is freed immediately. |
+| **Upload existing attachments** | Uploads attachments already sitting in your vault and rewrites the links. Your original files are kept. |
+| **Cache images from other sites…** | Lets you tick individual off-site images to fetch and upload. Needs the off-site feature turned on first. |
 
 ## Things to know
 
@@ -120,6 +144,15 @@ In **Settings → Attachment Cloud Cache**:
   avoids APIs known to be missing there, but that is reasoning, not evidence. Non-ASCII object keys
   have tests but no real-provider run.
 
+## Getting help
+
+- **Something broke?** Open an issue:
+  <https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues>
+- **Say what you saw**: the exact message, your Obsidian version, and which storage provider you use.
+  The errors are written to name the step that failed, so they usually place the problem on their own.
+- ⚠️ **Never paste your secret access key.** Nothing a report needs is in it — the message, the
+  endpoint and the bucket name are enough.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE). An independent implementation written from scratch; it shares no code
@@ -134,6 +167,10 @@ with any other plugin.
 [English](#attachment-cloud-cache) · **简体中文**
 
 把笔记里的附件上传到**你自己的** S3 兼容存储，同时在本地留一份副本 —— 断网时图片照样能显示。
+
+[安装](#安装) · [版本发布](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases) · [反馈问题](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues)
+
+需要 Obsidian **1.13.0+**（桌面端与移动端）—— 见[环境要求](#环境要求)。
 
 > **下面写的都可用** —— 完整的上传/下载回环已在真实 MinIO 上被证实。
 > **还没验证的：** iOS 从未运行过；Android 也没在真机上跑过。
@@ -158,15 +195,21 @@ vault 小），渲染用本地副本 —— 于是图片既是**你自己的**�
   `a 1.png`，绝不替换
 - **两个可选功能，默认都关**：缓存站外图片（默认什么都不做，可逐张挑选），以及缓存上限（超限时在后台按
   最近最少使用清理）
-- **五条维护命令**：查看缓存占用 · 自检并修复本地副本索引 · 清理未使用的缓存文件 ·
-  上传已存在的附件 · 挑选要缓存的外链图片
+- **五条命令** —— 查看缓存占用、修复索引、清理、上传已有附件、逐张挑选站外图片。见[命令](#命令)
 
 桌面端与移动端都支持。
 
-## 安装
+## 环境要求
 
-需要 Obsidian **1.13.0**+（桌面端与移动端）—— 下限由声明式设置 API 决定。最近几个月没更新过
-Obsidian 的用户装不了。
+- **Obsidian 1.13.0 或更新**，桌面端与移动端。下限来自设置页所用的声明式设置 API。更低的版本在
+  社区目录里只会回一句 *No appropriate version found.* —— 那是 Obsidian 的安装机制在拒绝，不是插件
+  坏了。
+- **一个你自己控制的 S3 兼容存储桶**，以及一对访问密钥。Cloudflare R2、AWS S3、MinIO、
+  Backblaze B2 与自建端点都可以 —— 见[功能](#功能)。
+- **存储桶要允许匿名读取**，或者你得填一个公开访问前缀（CDN 或自定义域名）。否则写进笔记的链接
+  你自己打得开、别人打不开 —— **测试连接** 检查的正是这件事。
+
+## 安装
 
 **在 Obsidian 里装（推荐）**：**设置 → 第三方插件 → 浏览** → 搜 `Attachment Cloud Cache` →
 安装并启用。
@@ -185,6 +228,18 @@ Obsidian 的用户装不了。
 3. **访问密钥 ID**（普通输入框，含大写是正常的），再在它下面那一格填 **秘密访问密钥**
 4. **测试连接** —— 先向你的桶发一次签名请求，再**不带任何凭据**请求一次「你笔记里会写的那条
    链接」，于是你能知道别人打不打得开
+
+## 命令
+
+一共五条，都在命令面板里：
+
+| 命令 | 做什么 |
+| --- | --- |
+| **查看缓存占用** | 缓存里有多少、其中多少可以回收。 |
+| **自检并修复本地副本索引** | 丢掉那些文件已经不在的索引记录，让索引和磁盘重新对上。 |
+| **清理未使用的缓存文件** | 删掉已经没有笔记指向的缓存文件。删除无法撤销，空间立刻释放。 |
+| **上传已存在的附件** | 把 vault 里已经存在的附件上传，并改写笔记里的链接。原文件会保留。 |
+| **缓存站外图片（可挑选）…** | 勾选具体的站外图片去下载并上传。需要先打开站外图片功能。 |
 
 ## 需要注意的
 
@@ -222,6 +277,13 @@ Obsidian 的用户装不了。
   可用 `npm run verify:real-storage` 复现（它会往你的桶里传一个对象）。
 - **没验证的**：iOS 从未运行过；Android 也没在真机上跑过 —— 代码避开了已知在那里缺失的 API，
   但那是推理，不是证据。含非 ASCII 字符的对象 key 有测试覆盖，但没在真实服务商上跑过。
+
+## 遇到问题
+
+- **出问题了？** 到 <https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues> 提 issue。
+- **请说清你看到的**：报错原文、你的 Obsidian 版本、用的哪家存储服务。插件的报错都写明了失败在
+  哪一步，通常靠它就能定位。
+- ⚠️ **绝不要把秘密访问密钥贴上来。** 报告里没有一处需要它 —— 报错原文、服务地址和桶名已经足够。
 
 ## 授权
 
