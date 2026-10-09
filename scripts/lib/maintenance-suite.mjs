@@ -13,7 +13,14 @@ import assert from "node:assert/strict";
 
 export function runMaintenanceSuite(mod) {
 	const { auditCache, planCleanup } = mod;
-	const { findLinkSpans, planLinkRewrites, planCanvasRewrites, keysInText } = mod;
+	const {
+		findLinkSpans,
+		planLinkRewrites,
+		planCanvasRewrites,
+		canvasTextTargets,
+		resolveCanvasTargets,
+		keysInText,
+	} = mod;
 	const { selectUploadCandidates } = mod;
 
 	const CACHE = "_attachment-cache";
@@ -295,6 +302,15 @@ export function runMaintenanceSuite(mod) {
 			{ from: "attachments/report.pdf", to: "https://img.example.com/hash.pdf" },
 		]);
 		assert.equal(unrelated.count, 0, "无关目标不该被改");
+		// ⚠️ 文件名里带点、但最后一段**不是扩展名**（`report.2026-final`）时，
+		// 不能把 `2026-final` 当扩展名剥掉 —— 剥了就会与规则给的真实路径对不上，
+		// 于是那个附件的链接**永远不会被改写**（一直是本地路径），而命令报告成功。
+		const dotted = planLinkRewrites("[x](attachments/report.2026-final)", [
+			{ from: "attachments/report.2026-final.pdf", to: "https://img.example.com/h.pdf" },
+		]);
+		assert.equal(dotted.count, 1, "只有'像扩展名'的后缀才该被剥掉");
+		assert.equal(dotted.text, "[x](https://img.example.com/h.pdf)", "改写后是远端链接");
+
 		// 目录名里的点**不是**扩展名：`notes.v2/photo` 必须在两边都保持完整
 		const dirDot = planLinkRewrites("![[notes.v2/photo.png]]", [
 			{ from: "notes.v2/photo.png", to: "https://img.example.com/photo.png" },
@@ -456,6 +472,74 @@ export function runMaintenanceSuite(mod) {
 			],
 		});
 		assert.equal(plan.count, 0, "★ 同名歧义时按短名匹配会把链接改到**别的文件**上 —— 宁可不改");
+	}
+
+	// ============================================================
+	// 5c. 画布文本里的引用目标 —— 用来**补齐**"引用集合"（需求 R16）
+	//
+	// `referencedPathsFrom` 只读宿主索引，而画布 `text` 节点里的链接是**文本内容**，
+	// 宿主会不会索引它没有保证（取证点 E-1c）。少了这一路，"只被画布文本引用的附件"
+	// 会被判成"没人引用"而永远不被处理 —— 与 R16 冲突，且不报错。
+	// ============================================================
+	{
+		const canvas = [
+			'{"nodes":[',
+			'{"type":"text","text":"![[photo.png]] 与 [报告](attachments/report.pdf)"},',
+			'{"type":"file","file":"img/a.png"}',
+			']}',
+		].join("");
+		assert.deepEqual(
+			canvasTextTargets(canvas),
+			["photo.png", "attachments/report.pdf"],
+			"只从 **text 节点**里取目标（file 节点那条路宿主的索引自己会认）"
+		);
+		assert.deepEqual(canvasTextTargets("{}"), [], "没有 text 节点 ⇒ 空");
+		assert.deepEqual(
+			canvasTextTargets('{"nodes":[{"type":"text","text":"这段文字里没有链接"}]}'),
+			[],
+			"文本里没有链接 ⇒ 空"
+		);
+		assert.deepEqual(canvasTextTargets(""), [], "空文本安全返回");
+		assert.deepEqual(canvasTextTargets(null), [], "非字符串安全返回");
+		// 解不开的转义 ⇒ 跳过（与改写器同一条纪律，绝不猜）
+		assert.deepEqual(
+		// ⚠️ 用 `String.raw`：普通字符串里的 `\q` 会被 JS 吃掉那个反斜杠，
+		// 于是 JSON 里就变成合法内容 —— 这条断言会变成「测了个不存在的情况」。
+			canvasTextTargets(String.raw`{"nodes":[{"type":"text","text":"![[a\q.png]]"}]}`),
+			[],
+			"解不开的 JSON 字符串要跳过，而不是猜一个目标出来"
+		);
+	}
+
+	// 5d. 把目标解析成库里**真实存在**的路径（短名、缺扩展名、同名歧义）
+	{
+		const vault = ["attachments/photo.png", "notes/a.md", "img/logo.svg"];
+		assert.deepEqual(
+			[...resolveCanvasTargets(["photo.png"], vault)],
+			["attachments/photo.png"],
+			"短名在唯一时要能对上"
+		);
+		assert.deepEqual(
+			[...resolveCanvasTargets(["attachments/photo"], vault)],
+			["attachments/photo.png"],
+			"没写扩展名也要能对上（与改写器同一套归一）"
+		);
+		assert.deepEqual([...resolveCanvasTargets(["img/logo.svg"], vault)], ["img/logo.svg"], "完整路径");
+		assert.deepEqual([...resolveCanvasTargets(["missing.png"], vault)], [], "库里没有的不能凭空造出来");
+
+		// ⚠️ 同名歧义 ⇒ **一个都不收**：收了就会把文件搬走，而改写器在歧义时拒绝改写
+		// ⇒ 笔记/画布里那条链接一处都改不掉 ⇒ 死链。宁可少处理。
+		const ambiguous = ["a/dup.png", "b/dup.png"];
+		assert.deepEqual(
+			[...resolveCanvasTargets(["dup.png"], ambiguous)],
+			[],
+			"★ 同名歧义一个都不收（搬得走却改不掉 = 死链）"
+		);
+		assert.deepEqual(
+			[...resolveCanvasTargets(["a/dup.png"], ambiguous)],
+			["a/dup.png"],
+			"写全路径时就不存在歧义"
+		);
 	}
 
 	// ============================================================

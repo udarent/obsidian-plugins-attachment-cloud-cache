@@ -37,7 +37,7 @@ await runMutations({
 			to: '\tif (dot > slash + 1) {\n\t\tvalue = value.slice(0, dot);\n\t}',
 			// ⚠️ 这条变异的**实际表现**是"把目录名里的点也当扩展名"（`notes.v2/photo` → `notes`），
 			// 于是短名匹配算出的名字变了 ⇒ 匹配不上。取那句最贴近的报错。
-			expect: "目录名里的点",
+			expect: "只有'像扩展名'的后缀才该被剥掉",
 		},
 		{
 			// 后果：wikilink 只换路径那一段 ⇒ 产出 `![[https://…]]`，而**wiki 语法只解析库内文件**
@@ -45,7 +45,7 @@ await runMutations({
 			name: "★ wikilink 指向 URL 时不整条换形态（产出宿主不显示的 `![[https://…]]`）",
 			from: '\t\tif (span.kind === "wikilink" && hasScheme(replacement)) {',
 			to: "\t\tif (false) {",
-			expect: "wikilink 要整条换成 Markdown",
+			expect: "别名/尺寸必须保留",
 		},
 		{
 			// 后果：画布 file 节点被改成**远端 URL** ⇒ 画布按库内路径取文件，
@@ -53,7 +53,7 @@ await runMutations({
 			name: "★ 画布 file 节点不按本地规则改（被改成远端 URL，画布上什么都看不到）",
 			from: "\tif (resolveFile) {\n\t\tcollect(\"file\", (value) => {",
 			to: "\tif (false) {\n\t\tcollect(\"file\", (value) => {",
-			expect: "file 字段应改指",
+			expect: "只该有一处被改（file 节点）",
 		},
 		{
 			// 后果：画布 text 节点里的链接不改 ⇒ 只有画布引用的附件被搬进缓存之后，
@@ -61,7 +61,7 @@ await runMutations({
 			name: "★ 画布 text 节点被忽略（画布里的链接原地不动，搬完就死链）",
 			from: "\tif (resolveLink) {\n\t\tcollect(\"text\", (value) => {",
 			to: "\tif (false) {\n\t\tcollect(\"text\", (value) => {",
-			expect: "text 节点里的链接指向远端",
+			expect: "text 节点的内容算**一处**改写",
 		},
 		{
 			// 后果：新值不按 JSON 规则编码 ⇒ 含换行/引号的文本会把画布写成**非法 JSON**，
@@ -70,6 +70,14 @@ await runMutations({
 			from: "\t\t\tedits.push({ start: span.start, end: span.end, next: encodeJsonString(next) });",
 			to: "\t\t\tedits.push({ start: span.start, end: span.end, next });",
 			expect: "换行必须仍是转义形态",
+		},
+		{
+			// 后果：从 `file` 节点而不是 `text` 节点里取引用目标 ⇒ "只被画布文本引用的附件"
+			// 永远进不了候选（用户把图放在画布的**文字**里就是常态），且不报错。
+			name: "★ 画布引用目标从错误的键上取（只被画布文本引用的附件永远不被处理）",
+			from: '\tfor (const span of jsonStringSpans(text, "text")) {',
+			to: '\tfor (const span of jsonStringSpans(text, "file")) {',
+			expect: "只从 **text 节点**里取目标",
 		},
 		{
 			// 后果：解不开的转义被**静默忽略** ⇒ 用户以为全改好了，而某处引用还指着旧位置。

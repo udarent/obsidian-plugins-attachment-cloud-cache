@@ -54,6 +54,7 @@
 import type { PluginSettings } from "../types";
 import type { CacheIndex } from "../cache/index";
 import { decideRenderTarget } from "./render-target";
+import { rebuildKindFor } from "./embed-rebuild";
 
 /** `<img>` 的最小形状（结构化类型，便于用假元素穷举）。 */
 export interface ImageElementLike {
@@ -111,6 +112,17 @@ export interface RenderHookDeps {
 	 * 调用方必须延后再解析（见 `render/external-live.ts`，那里的延后时长是实测出来的）。
 	 */
 	onExternalSrc?: (element: ImageElementLike, src: string) => void;
+	/**
+	 * 判定的结果是"用本地副本"，但那份副本**不是图片**（音频/视频/PDF）——
+	 * 交出去给重建那一条路（`render/embed-rebuild.ts`）。
+	 *
+	 * 为什么必须另走一条：宿主把远端 `![doc.pdf](url)` 渲染成 `<img>`，
+	 * 而 `<img>` **永远**显示不了 PDF/音频 —— 改 `src` 救不了，只能换节点。
+	 *
+	 * ⚠️ 实时预览那条路拿到它之后**不写 `src`**（元素保持空），
+	 * 于是"远端地址绝不进 DOM"这条结构性性质连情形都没变。
+	 */
+	onNonImageEmbed?: (element: ImageElementLike, localPath: string) => void;
 }
 
 export interface ProcessImagesResult {
@@ -157,6 +169,12 @@ export function processImages(
 		if (decision.action === "ignore") continue;
 
 		if (decision.action === "local") {
+			// ⚠️ 非图片（音频/视频/PDF）**不在这里处理**：`<img>` 显示不了它们，
+			// 改 `src` 只会得到一个坏图。交给重建那条路（同一个后处理器里紧接着跑）。
+			if (rebuildKindFor(decision.localPath)) {
+				deps.onNonImageEmbed?.(img, decision.localPath);
+				continue;
+			}
 			const resourceUrl = deps.resourceUrlFor(decision.localPath);
 			if (!resourceUrl) continue; // 拿不到可用地址 → 保持原样，别改成坏链接
 			wireFallback(img, deps, fallbacks, {
@@ -305,6 +323,14 @@ export function installImageSrcPatch(deps: RenderHookDeps, env: SrcPatchEnvironm
 						settings: deps.settings(),
 						index: deps.index(),
 					});
+
+					if (decision.action === "local" && rebuildKindFor(decision.localPath)) {
+						// ⚠️ **不写 `src`**：这是个 `<img>`，装不下 PDF/音频/视频。
+						// 保持空 src（不加载任何东西、更不会去连远端），
+						// 把元素交给重建队列换成正确的嵌入节点。
+						deps.onNonImageEmbed?.(element, decision.localPath);
+						return;
+					}
 
 					if (decision.action === "local") {
 						const resourceUrl = deps.resourceUrlFor(decision.localPath);

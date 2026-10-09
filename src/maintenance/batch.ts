@@ -40,6 +40,7 @@
 import type { PluginSettings } from "../types";
 import type { CacheIndex } from "../cache/index";
 import { decideExternalCache, isCacheableExternal } from "../render/external-decide";
+import { normalizeLinkTarget } from "./references";
 
 /** 库内文件的最小形状。 */
 export interface VaultFileLike {
@@ -125,6 +126,58 @@ const NOTE_LIKE_EXTENSIONS = new Set(["md", "canvas", "base"]);
 /** 这个扩展名是不是"宿主自己的文本文件"（笔记/画布/数据库）—— 见上面的说明。 */
 export function isNoteLikeExtension(extension: unknown): boolean {
 	return typeof extension === "string" && NOTE_LIKE_EXTENSIONS.has(extension.trim().toLowerCase());
+}
+
+/**
+ * 把"画布文本里写的链接目标"解析成库里**真实存在**的文件路径。
+ *
+ * ## 为什么需要它
+ *
+ * `referencedPathsFrom` 只读宿主的链接索引。而画布 `text` 节点里的 `![[x.png]]`
+ * 是**文本内容**，宿主会不会把它算进索引没有保证（取证点 E-1c）——
+ * 少了这一路，"只被画布文本引用的附件"会被判成"没人引用"而永远不被处理
+ * （与需求 R16 冲突，且不报错）。
+ *
+ * ## 匹配规则：与改写器**同一套**（含同名歧义的处理）
+ *
+ * `normalizeLinkTarget` 剥掉任意"像扩展名"的后缀并小写，于是 `photo`、`photo.png`、
+ * `attachments/photo.png` 都能对上真实路径。⚠️ **同名歧义时一个都不收**：
+ * 两个不同目录下有同名文件时，"这条引用到底指哪个"无法判断，而我们的改写器在
+ * 歧义时同样拒绝改写 —— 若这里把两个都算成"被引用"，命令就会**搬走**它们，
+ * 而笔记里的链接一处都改不掉 ⇒ 死链。宁可少处理（不搬）。
+ */
+export function resolveCanvasTargets(
+	targets: readonly string[],
+	vaultPaths: readonly string[]
+): Set<string> {
+	const byPath = new Map<string, string>();
+	const byName = new Map<string, string[]>();
+
+	for (const path of vaultPaths) {
+		if (typeof path !== "string" || path === "") continue;
+		const full = normalizeLinkTarget(path);
+		if (!full) continue;
+		byPath.set(full, path);
+		const name = full.split("/").pop() ?? full;
+		const list = byName.get(name);
+		if (list) list.push(path);
+		else byName.set(name, [path]);
+	}
+
+	const out = new Set<string>();
+	for (const target of targets ?? []) {
+		const full = normalizeLinkTarget(String(target ?? ""));
+		if (!full) continue;
+		const exact = byPath.get(full);
+		if (exact) {
+			out.add(exact);
+			continue;
+		}
+		const candidates = byName.get(full.split("/").pop() ?? full);
+		// ⚠️ 歧义 ⇒ 不收（与改写器一致，见上面的说明）
+		if (candidates && candidates.length === 1) out.add(candidates[0]);
+	}
+	return out;
 }
 
 export interface CandidateSelection {

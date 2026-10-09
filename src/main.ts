@@ -24,7 +24,7 @@
  * 而"没配置就用"时粘贴会给出明确报错并指向设置页 —— 那条路径比一个图标更有用。
  */
 
-import { TFile, Notice, Plugin, getLanguage } from "obsidian";
+import { Component, MarkdownRenderer, Notice, Plugin, TFile, getLanguage } from "obsidian";
 
 import { SETTINGS_DEFAULTS, mergePluginSettings } from "./settings";
 import type { PluginSettings } from "./types";
@@ -35,10 +35,16 @@ import { createIndexStore, makeSerializer } from "./host/runtime";
 import type { HostContext } from "./host/runtime";
 import { createEditorHandlers } from "./host/editor-bridge";
 import { auditForCleanup, collectCacheFiles, runBatchUpload, runCleanup, runEviction, scanReferences } from "./maintenance/run";
+import { canvasTextTargets } from "./maintenance/references";
 import type { MaintenanceDeps } from "./maintenance/run";
 import { createCacheRotator } from "./maintenance/rotation";
 import type { CacheRotator } from "./maintenance/rotation";
-import { referencedPathsFrom, selectExternalUploadCandidates, selectUploadCandidates } from "./maintenance/batch";
+import {
+	referencedPathsFrom,
+	resolveCanvasTargets,
+	selectExternalUploadCandidates,
+	selectUploadCandidates,
+} from "./maintenance/batch";
 
 import type { ExternalCandidate, NoteTextLike } from "./maintenance/batch";
 import { ingestAttachment } from "./core/ingest";
@@ -53,6 +59,9 @@ import { ensureSecretSlot, randomSlotPart } from "./ui/settings-logic";
 import { createLocalCopyEnsurer } from "./core/download";
 import type { LocalCopyOutcome } from "./core/download";
 import { installImageSrcPatch, processImages } from "./render/render-hook";
+import { createEmbedRebuildQueue, processEmbeds } from "./render/embed-rebuild";
+import type { EmbedRebuildDeps, EmbedRebuildQueue } from "./render/embed-rebuild";
+import { notePathForElement } from "./render/external-live";
 import type { ImageElementLike, RenderHookDeps } from "./render/render-hook";
 import { createExternalHook } from "./render/external-hook";
 import type { ExternalHook } from "./render/external-hook";
@@ -279,6 +288,9 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		}, ROTATION_CHECK_INTERVAL_MS);
 		this.register(() => window.clearInterval(intervalTimer));
 
+		// 重建节点时用的子 Component：挂进插件生命周期，卸载时一并清掉。
+		this.addChild(this.embedComponent);
+
 		// ── 渲染：把属于本存储的图换成本地副本（离线可用的落点）──
 		//
 		// 两条路径缺一不可：阅读视图（后处理器）与实时预览（setter 拦截）。
@@ -290,6 +302,9 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			// ⚠️ 这里**同步**完成，不 await —— 一旦 await，元素可能已连上 DOM
 			// 并开始加载远端图片，"零请求"就不成立了。理由见 render-hook 的头注释。
 			processImages(element, this.renderDeps());
+			// 非图片的可预览附件（音频/视频/PDF）：宿主把它们渲染成了 `<img>`，
+			// 改 `src` 救不了，只能重建节点（见 render/embed-rebuild.ts）。
+			processEmbeds(element, this.embedDeps(), ctx.sourcePath, this.embedQueue());
 			// 站外图：判定是同步的，真正的下载/上传是 fire-and-forget。
 			this.externalHook?.process(element, ctx);
 		});
@@ -300,6 +315,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				// 站外候选只从**这条路**上报：阅读视图那边的外站图由上面的后处理器
 				// 整批交给编排（那里天然带着 `ctx.sourcePath`，不需要延后解析归属）。
 				onExternalSrc: (element) => this.externalLive?.see(element),
+				// 实时预览：非图片 ⇒ 不写 `src`，把元素交给重建队列
+				onNonImageEmbed: (element, localPath) => this.embedQueue().see(element, localPath, null),
 			},
 			{
 				view: typeof window === "undefined" ? null : window,
@@ -509,7 +526,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			.filter((file) => typeof file?.path === "string");
 		// ⭐ 引用集合**算一次、用两次**（确认框的清单 + 真正执行的那趟）——
 		// 两份不一致的话，用户会按清单授权、却按另一份执行。
-		const referencedPaths = this.referencedVaultPaths();
+		const referencedPaths = await this.referencedVaultPaths();
 		const selection = selectUploadCandidates(files, {
 			settings: this.settings,
 			index: this.currentIndex(),
@@ -691,14 +708,36 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	}
 
 	/**
-	 * **被笔记引用着**的文件路径集合（取自宿主的链接索引）。
+	 * **被引用着**的文件路径集合（宿主的链接索引 + 我们自己扫的画布文本）。
 	 *
 	 * 这条命令跑完会把原文件移进缓存目录，所以"搬谁"必须由**引用**决定：
 	 * 引用会被同一条命令改写成远端地址，而没有任何引用的文件我们一概不碰。
-	 * 判据本身在 `referencedPathsFrom` 里（纯函数，含"为什么只认 Markdown 来源"）。
+	 *
+	 * ⚠️ 两条来源**都要看**（需求 R16：画布与笔记同等算数）：
+	 * - 宿主的链接索引（`resolvedLinks`）—— 覆盖笔记里的所有写法；
+	 * - **画布文本节点**里自己扫出来的目标 —— 那部分是文本内容，宿主是否索引没有保证
+	 *   （取证点 E-1c），少了它"只被画布文本引用的附件"会永远不被处理。
+	 *   多出来的候选由后续判据兜底，**少掉的那些才是真缺陷**。
 	 */
-	private referencedVaultPaths(): ReadonlySet<string> {
-		return referencedPathsFrom(this.app.metadataCache?.resolvedLinks);
+	private async referencedVaultPaths(): Promise<ReadonlySet<string>> {
+		const referenced = new Set(referencedPathsFrom(this.app.metadataCache?.resolvedLinks));
+
+		const vaultPaths = this.app.vault.getFiles().map((file) => file.path);
+		for (const file of this.app.vault.getFiles()) {
+			if (file.extension !== "canvas") continue;
+			let text: string;
+			try {
+				text = await this.app.vault.read(file);
+			} catch {
+				// 读不到就当它没有引用：这里多一份候选只会多一点工作，
+				// 而"读失败"绝不能变成"把它的引用当成不存在"以外的断言。
+				continue;
+			}
+			for (const path of resolveCanvasTargets(canvasTextTargets(text), vaultPaths)) {
+				referenced.add(path);
+			}
+		}
+		return referenced;
 	}
 
 	/** 抽成方法是为了让测试能替换掉它（真弹窗点不了）。 */
@@ -882,6 +921,89 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			if (typeof path === "string" && path) views.push({ root: view.containerEl, path });
 		});
 		return views;
+	}
+
+	/**
+	 * 非图片可预览附件（音频/视频/PDF）的**节点重建**队列。
+	 *
+	 * **懒建**：它要用宿主 API（`generateMarkdownLink` + `MarkdownRenderer`），
+	 * 而那些只有在插件实例就绪之后才拿得到；懒建顺带也保证"从没用过"的会话
+	 * 不建任何东西。卸载时 `dispose()`（丢掉攒下的候补，不再排调度）。
+	 */
+	private embedQueueField: EmbedRebuildQueue | null = null;
+
+	/**
+	 * 渲染重建节点时用的**子 Component**（见 `renderEmbed` 里的说明）。
+	 *
+	 * 与插件实例分开是为了让生命周期可控：它随插件注册（`addChild`），
+	 * 卸载时会被一起清掉；而"把插件实例当 Component 用"会让宿主以为
+	 * 那些子组件要活到整个插件结束。
+	 */
+	private embedComponent = new Component();
+
+	private embedQueue(): EmbedRebuildQueue {
+		if (!this.embedQueueField) {
+			this.embedQueueField = createEmbedRebuildQueue(this.embedDeps());
+			this.register(() => {
+				this.embedQueueField?.dispose();
+				this.embedQueueField = null;
+			});
+		}
+		return this.embedQueueField;
+	}
+
+	/**
+	 * 重建那一层要的宿主能力。
+	 *
+	 * ⚠️ `renderEmbed` 是这里面唯一的"宿主魔法"：先用**宿主的**生成器产出库内链接
+	 * （尊重用户的「新链接格式」设置），再交给**宿主的**渲染器变成节点 ——
+	 * 于是"该长什么样"完全由宿主决定，我们不猜任何 DOM 结构。
+	 * 造不出来（文件不在、渲染器抛错）时返回 `null`：调用方**保留原元素**，
+	 * 绝不产出一个坏节点。
+	 */
+	private embedDeps(): EmbedRebuildDeps {
+		return {
+			settings: () => this.settings,
+			index: () => this.currentIndex(),
+			resourceUrlFor: (path) => this.resourceUrlFor(path),
+			ensureLocalCopy: async (key, remoteUrl) => {
+				const outcome = await this.ensureLocalCopy(key, remoteUrl);
+				return outcome.localPath || null;
+			},
+			notePathFor: (element) => {
+				// 实时预览那条路：**等元素进 DOM 之后**反查归属（与站外图同一份实现）。
+				// 拿不准就返回 null —— 那会让重建发生在"没有归属"的上下文里，
+				// 对库内嵌入来说是安全的（`![[path]]` 不需要 sourcePath 也能解析）。
+				const views = this.app.workspace.getLeavesOfType("markdown").map((leaf) => {
+					const view = leaf.view as unknown as {
+						containerEl?: { contains?: (node: unknown) => unknown } | null;
+						file?: { path?: string } | null;
+					};
+					return {
+						root: view.containerEl ?? null,
+						path: view.file?.path ?? "",
+					};
+				});
+				return notePathForElement(views, element);
+			},
+			renderEmbed: async (localPath, sourcePath) => {
+				const file = this.app.vault.getAbstractFileByPath(localPath);
+				if (!(file instanceof TFile)) return null;
+				const link = this.app.fileManager.generateMarkdownLink(file, sourcePath ?? "");
+				const container = createDiv();
+				try {
+					// ⚠️ 传的是**我们自己的**子 Component（不是插件实例本身）：
+					// 渲染出来的子组件会挂在它下面，而我们可以在卸载时统一关掉。
+					// 直接传插件实例会让那些子组件的生命周期与整个插件一样长（lint 也拦这个）。
+					await MarkdownRenderer.render(this.app, `!${link}`, container, sourcePath ?? "", this.embedComponent);
+				} catch (error) {
+					console.error("[attachment-cloud-cache] 重建附件节点失败", error);
+					return null;
+				}
+				return container.firstElementChild;
+			},
+			onError: (error) => console.error("[attachment-cloud-cache] 重建附件节点时出错", error),
+		};
 	}
 
 	private renderDeps(): RenderHookDeps {

@@ -224,7 +224,7 @@ function buildResolver(rules: readonly RewriteRule[]): ((raw: string) => string 
 	const ambiguous = new Set<string>();
 
 	for (const rule of rules) {
-		const full = normalizeTarget(rule.from);
+		const full = normalizeLinkTarget(rule.from);
 		if (!full) continue;
 		byPath.set(full, rule.to);
 
@@ -235,7 +235,7 @@ function buildResolver(rules: readonly RewriteRule[]): ((raw: string) => string 
 	}
 
 	return (raw: string): string | undefined => {
-		const full = normalizeTarget(raw);
+		const full = normalizeLinkTarget(raw);
 		if (!full) return undefined;
 
 		const exact = byPath.get(full);
@@ -291,7 +291,7 @@ function baseNameOf(path: string): string {
  * 而且不报错。复用的正是 `vault-files.ts` 那条形状判据（纯字母数字、≤8 字符），
  * 于是 `report.pdf` 与 `report` 等价，而 `a.b/c`（目录里的点！）不会被误剥。
  */
-function normalizeTarget(target: string): string {
+export function normalizeLinkTarget(target: string): string {
 	let value = String(target ?? "")
 		.replace(/\\/g, "/")
 		.replace(/^\.?\//, "")
@@ -476,4 +476,39 @@ function jsonStringSpans(text: string, key: string): JsonStringSpan[] {
 /** 按 JSON 规则编码一个字符串（不含外层引号）。 */
 function encodeJsonString(value: string): string {
 	return JSON.stringify(value).slice(1, -1);
+}
+
+/**
+ * 从画布文本里取出**引用目标**（路径或短名，原样返回；只取路径那一段）。
+ *
+ * ## 为什么需要它（而不是只靠宿主的链接索引）
+ *
+ * "只处理被引用的文件"这条安全规则依赖"引用集合"的完备性。画布 `file` 节点那条路
+ * 宿主的索引**确实认得**（真机取证）。但 `text` 节点里的 `![[x.png]]` 是**文本内容**，
+ * 宿主是否把它算进 `resolvedLinks` 没有保证（这正是取证点 E-1c）。
+ *
+ * 而我们**不能**把"宿主没索引"当成"没人引用"：那样只被画布文本引用的附件会永远
+ * 不被处理 —— 与需求 R16（画布与笔记同等算数）直接冲突，而且**不报错**。
+ * 所以这里自己解析一遍，作为宿主索引的**补充**（多出来的候选由后续判据兜底，
+ * 少掉的那些才是真缺陷）。
+ *
+ * ⚠️ 与改写器共用同一套纪律：解不开的 JSON 字符串**跳过**（不猜），
+ * 绝不因为这里读不出来就当成"有引用"或"没引用"里的任意一边 —— 这里只负责
+ * 把能读出来的目标交出去。
+ */
+export function canvasTextTargets(text: string): string[] {
+	if (typeof text !== "string" || text === "") return [];
+	const out: string[] = [];
+	for (const span of jsonStringSpans(text, "text")) {
+		let decoded: string;
+		try {
+			decoded = JSON.parse(`"${span.escaped}"`) as string;
+		} catch {
+			// 解不开就跳过（与 `planCanvasRewrites` 同一条纪律）
+			continue;
+		}
+		if (typeof decoded !== "string") continue;
+		for (const link of findLinkSpans(decoded)) out.push(link.raw);
+	}
+	return out;
 }
