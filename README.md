@@ -19,9 +19,9 @@ shareable link while the copy stays behind, so files render with **zero remote r
 
 [Install](#installation) · [Releases](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases) · [Report a problem](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues) · Requires Obsidian **1.13.0+** ([why](#requirements))
 
-![Paste a file into a note: it uploads to your own storage, a copy stays in your vault, and the file still renders after the storage goes offline](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
+![Paste an image, a PDF and an audio clip into a note: each one uploads to your own storage, a copy of each stays in your vault, and all three still render after the storage goes offline](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
 
-*Recorded from the plugin running in Obsidian: paste a file → it uploads → the note keeps a link while a local copy stays behind. The last step stops the storage to show the file still renders.*
+*Recorded from the plugin running in Obsidian: paste an image, a PDF and an audio clip → each one uploads → the note keeps a link while a copy of each stays in the vault's cache folder. The last step stops the storage to show that all three still work — the image, the PDF page, and an audio player.*
 
 > **Everything here has been exercised for real** — see [How far it is verified](#how-far-it-is-verified).
 > **Not proven yet:** iOS never run; Android never run on a real device.
@@ -180,9 +180,9 @@ Obsidian version and which storage provider you use; the errors name the step th
 
 [安装](#安装) · [版本发布](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases) · [反馈问题](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues) · 需要 Obsidian **1.13.0+**（[为什么](#环境要求)）
 
-![演示：往笔记里粘贴一个文件 —— 它上传到你的存储，vault 里留一份缓存副本；随后把存储整个停掉，文件仍然正常显示](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
+![演示：往笔记里粘贴一张图片、一个 PDF 和一段音频 —— 它们各自上传到你的存储，vault 里各留一份缓存副本；随后把存储整个停掉，三者仍然正常显示与播放](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
 
-*动图取自真实运行中的 Obsidian：粘贴一个文件 → 上传 → 笔记里留下链接，同时本地留一份副本。最后一步把存储整个停掉，用来证明文件照样显示。*
+*动图取自真实运行中的 Obsidian：粘贴图片、PDF 和音频 → 各自上传 → 笔记里各留一条链接，同时 vault 的缓存目录里各留一份副本。最后一步把存储整个停掉，用来证明图片、PDF 页和音频播放器都照常工作。*
 
 > **下面写的每条行为都真机跑过** —— 见[已验证到什么程度](#已验证到什么程度)。
 > **还没验证的：** iOS 从未运行过；Android 也没在真机上跑过。
