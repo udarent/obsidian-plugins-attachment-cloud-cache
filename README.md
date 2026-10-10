@@ -5,7 +5,7 @@
 <p>
   <a href="https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases"><img alt="release" src="https://img.shields.io/github/v/release/udarent/obsidian-plugins-attachment-cloud-cache?label=release&amp;sort=semver&amp;color=2f6feb" vspace="6"></a>
   <a href="https://obsidian.md"><img alt="Obsidian" src="https://img.shields.io/badge/dynamic/json?logo=obsidian&amp;color=483699&amp;label=Obsidian&amp;query=%24.minAppVersion&amp;url=https%3A%2F%2Fraw.githubusercontent.com%2Fudarent%2Fobsidian-plugins-attachment-cloud-cache%2Fmain%2Fmanifest.json" vspace="6"></a>
-  <a href="./LICENSE"><img alt="license: MIT" src="https://img.shields.io/github/license/udarent/obsidian-plugins-attachment-cloud-cache?color=97ca00" vspace="6"></a>
+  <a href="https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/blob/main/LICENSE"><img alt="license: MIT" src="https://img.shields.io/github/license/udarent/obsidian-plugins-attachment-cloud-cache?color=97ca00" vspace="6"></a>
 </p>
 
 **English** · [简体中文](#attachment-cloud-cache附件云端缓存) —— 中文版在本文下方
@@ -45,12 +45,11 @@ once. This does both — the file goes to your bucket, and the copy that renders
   same bytes are stored once.
 - **Any file type, not just images** — images, audio, video, PDF, archives, documents, extension-less files. Types
   Obsidian can preview (image/audio/video/PDF) are inserted as embeds; everything else becomes a clickable link.
-- **Offline rendering from the local copy** — always, not only when the network happens to be down.
+- **Offline, multi-device, and light to sync** — the rendering copy is local (zero remote requests, always, not
+  just when the network is down); a new device back-fills copies on demand; and with the default "move into the cache
+  folder" the vault's bulk is text plus disposable copies, so syncing stays fast and cheap.
 - **Canvas references count the same as note references** — a file placed on a canvas is uploaded, and its canvas
   reference keeps working.
-- **Multi-device with no migration** — notes hold an ordinary remote link; the copy is downloaded on demand.
-- **A light vault to sync** — with the default "move into the cache folder", the vault's bulk becomes text plus
-  disposable copies. Exclude that folder and syncing gets fast and cheap.
 - **Bulk-upload what you already have** — one command handles the files your notes link to and leaves the rest alone.
 - **Cloud space cleanup** — lists the objects in your storage no note refers to, with the count and the size, and
   deletes only what you confirm.
@@ -158,12 +157,8 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 ## Getting help
 
 Open an issue: <https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues> — say what you saw, your
-Obsidian version and which storage provider you use; the errors name the step that failed. ⚠️ **Never paste your secret
-access key.** Working on the plugin? `npm install`, then `npm run dev` (watch build) or `npm test` (build + suites).
-
-## License
-
-MIT — see [LICENSE](./LICENSE). An independent implementation, written from scratch.
+Obsidian version and which storage provider you use; the errors name the step that failed. Working on the plugin?
+`npm install`, then `npm run dev` (watch build) or `npm test` (build + suites).
 
 ---
 
@@ -174,7 +169,7 @@ MIT — see [LICENSE](./LICENSE). An independent implementation, written from sc
 <p>
   <a href="https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases"><img alt="release" src="https://img.shields.io/github/v/release/udarent/obsidian-plugins-attachment-cloud-cache?label=release&amp;sort=semver&amp;color=2f6feb" vspace="6"></a>
   <a href="https://obsidian.md"><img alt="Obsidian" src="https://img.shields.io/badge/dynamic/json?logo=obsidian&amp;color=483699&amp;label=Obsidian&amp;query=%24.minAppVersion&amp;url=https%3A%2F%2Fraw.githubusercontent.com%2Fudarent%2Fobsidian-plugins-attachment-cloud-cache%2Fmain%2Fmanifest.json" vspace="6"></a>
-  <a href="./LICENSE"><img alt="license: MIT" src="https://img.shields.io/github/license/udarent/obsidian-plugins-attachment-cloud-cache?color=97ca00" vspace="6"></a>
+  <a href="https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/blob/main/LICENSE"><img alt="license: MIT" src="https://img.shields.io/github/license/udarent/obsidian-plugins-attachment-cloud-cache?color=97ca00" vspace="6"></a>
 </p>
 
 [English](#attachment-cloud-cache) · **简体中文**
@@ -210,11 +205,9 @@ MIT — see [LICENSE](./LICENSE). An independent implementation, written from sc
 - **粘贴或拖入即上传**，并改写笔记里的链接。key 默认按内容寻址（`{hash}.{ext}`），同一份字节只存一份。
 - **任何类型的附件，不只图片** —— 图片、音频、视频、PDF、压缩包、文档、没有扩展名的文件。Obsidian 能预览的
   类型（图片/音频/视频/PDF）插入为嵌入，其余插入为可点开的普通链接。
-- **用本地副本渲染，始终如此** —— 不只是"网恰好不通"的时候。
+- **离线、多设备、同步轻快** —— 渲染走本地副本（零远端请求，始终如此，不只是「网不通」时）；换新设备时副本按需补回；
+  默认档「移入缓存目录」下，vault 的体量是纯文本 + 可丢弃的副本，把那个目录排除在同步外就又快又省。
 - **画布引用与笔记引用同等算数** —— 摆在画布上的文件同样会被上传，画布里的引用会继续有效。
-- **多设备零迁移** —— 笔记里是普通远端链接，副本按需下载。
-- **库很轻，同步很快** —— 用默认档「移入缓存目录」时，vault 的体量变成纯文本 + 可丢弃的副本；把那个目录排除在
-  同步外，同步又快又省。
 - **存量附件一条命令搬完** —— 只处理笔记引用着的文件，其余的绝不碰。
 - **云端空间清理** —— 列出你存储里「本库没有笔记引用」的对象（连同个数与体积），只删你确认过的那些。
 - **两个可选功能，默认都关** —— 缓存站外文件；缓存大小上限（超限时后台按最近最少使用清理）。
@@ -315,9 +308,5 @@ MIT — see [LICENSE](./LICENSE). An independent implementation, written from sc
 ## 遇到问题
 
 到 <https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues> 提 issue —— 请说清你看到的、你的
-Obsidian 版本和用的哪家存储；插件的报错都写明了失败在哪一步。⚠️ **绝不要把秘密访问密钥贴上来。**
+Obsidian 版本和用的哪家存储；插件的报错都写明了失败在哪一步。
 想改插件本身？`npm install`，然后 `npm run dev`（监听构建）或 `npm test`（构建 + 全部套件）。
-
-## 授权
-
-MIT —— 见 [LICENSE](./LICENSE)。独立实现，从零写起。
