@@ -49,6 +49,8 @@ import {
 } from "./maintenance/batch";
 import { listAllObjects, runCloudCleanup, selectCleanupCandidates } from "./maintenance/cloud-cleanup";
 import { externalKeysOf, referencedKeysFromUrls } from "./maintenance/cloud-cleanup";
+import { createAttachWatcher, createSelfWriteLedger } from "./maintenance/attach-watch";
+import type { AttachWatcher } from "./maintenance/attach-watch";
 import { askCloudDelete } from "./ui/cloud-delete-modal";
 
 import type { ExternalCandidate, NoteTextLike } from "./maintenance/batch";
@@ -160,6 +162,22 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	private rotation: CacheRotator | null = null;
 
 	/**
+	 * 「库里新增的附件」那条入口（第三条）。
+	 *
+	 * ⚠️ 必须是**稳定的一份**：攒批与重试时刻表挂在它的闭包里，每次新建等于
+	 * 把"还没等到引用的那几个文件"丢掉。
+	 */
+	private attachWatch: AttachWatcher | null = null;
+
+	/**
+	 * 我们自己刚落盘的中转文件（`stageLocally` 上报，见 `SelfWriteLedger`）。
+	 *
+	 * 存在的理由：粘贴那条路的"先落盘再上传"与自动接管共用 `vault.on("create")`。
+	 * 台账的作用是让后者认出"这是自己刚写的"，别去重复接管。
+	 */
+	private readonly stagedPaths = createSelfWriteLedger();
+
+	/**
 	 * 「选择要缓存的外链图片」那个弹窗的接缝。
 	 *
 	 * ⚠️ 默认是**真弹窗**；入口验收测试会覆写它（真弹窗在测试里点不了）。
@@ -205,6 +223,57 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		});
 		this.registerEvent(this.app.workspace.on("editor-paste", handlers.onPaste));
 		this.registerEvent(this.app.workspace.on("editor-drop", handlers.onDrop));
+
+		// ── 第三条入口：**库里新增的文件** ──
+		//
+		// 上面两条是"用户在编辑器里主动放东西"。而手机上把图片加进笔记走的是**另一条路**：
+		// 底部工具栏的回形针执行宿主自己的 `editor:attach-file`，它的实现（1.14 字节码实测）是
+		// `app.saveAttachment`（内部 `vault.createBinary`）+ `generateMarkdownLink` + `replaceSelection`
+		// —— 文件**先落进库里**、链接**随后**才写进笔记，全程**没有粘贴/拖拽事件**。
+		// 于是用户报的"手机上添加图片附件不会自动上传"不是回归，而是 R2 从来没覆盖过的入口。
+		//
+		// 为什么用 `vault.on("create")` 而不是去猜"哪个平台、哪个按钮"：上面那三个宿主 API
+		// 是**全平台同一份实现**，所以"库内出现了一个新文件"是与平台无关的观察点，
+		// 顺带把分享菜单、桌面把文件拷进库这些入口一起覆盖了（附录 A：不做平台分支）。
+		//
+		// ⚠️ 接管有硬前提：**文件必须已经被某篇笔记引用**。上传成功后原文件会被搬进缓存目录，
+		// 而"引用会被同一趟改写成远端地址"正是"搬走不留死链"的前提 —— 所以这里不能立刻动手
+		// （那一刻链接还没写进笔记），退避重试与攒批都在 `attach-watch` 里。
+		this.attachWatch = createAttachWatcher({
+			autoUpload: () => this.settings.autoUpload,
+			cacheFolder: () => this.settings.cacheFolder,
+			isSelfWrite: (path) => this.stagedPaths.has(path),
+			index: () => this.currentIndex(),
+			settings: () => this.settings,
+			// 每次现查（文件可能已经被别的流程搬走/删掉）—— 与 `TFile` 的形状解耦
+			lookup: (path) => {
+				const file = this.app.vault.getAbstractFileByPath(path);
+				if (!(file instanceof TFile)) return null;
+				return { path: file.path, extension: file.extension, stat: { size: file.stat?.size ?? 0 } };
+			},
+			referencedPaths: () => this.referencedVaultPaths(),
+			adopt: async (paths) => {
+				// 存储没就绪时**什么都不做**，只把"去哪配"说清楚 —— 与粘贴那条路的口径一致：
+				// 不拦用户、不假装成功，也绝不留下半个动作（文件原地不动、笔记一个字不改）。
+				const readiness = connectionReadiness(this.app.secretStorage, this.settings);
+				if (!readiness.ready) {
+					new Notice(
+						this.t("hookNotConfigured", {
+							problem: readiness.problem,
+							where: this.t(readiness.fixIn === "credentials" ? "hookFixCredentials" : "hookFixConnection"),
+						})
+					);
+					return { uploaded: 0, reused: 0, failed: 0, linksRewritten: 0 };
+				}
+				// 复用批量那一趟（`referencedPaths` 只放这一个文件 ⇒ 候选也只有它）：
+				// 于是"上传 → 搬入缓存 → 改写引用（含画布）"只有一份实现。
+				return runBatchUpload(this.maintenanceDeps(), { referencedPaths: new Set(paths) });
+			},
+			notify: (message) => new Notice(message),
+			t: (key, params) => this.t(key, params),
+			log: (message) => console.debug(`[attachment-cloud-cache] ${message}`),
+		});
+		this.registerEvent(this.app.vault.on("create", (file) => this.attachWatch?.onCreated(file)));
 
 		this.ensureLocalCopy = createLocalCopyEnsurer({
 			app: this.app,
@@ -967,6 +1036,10 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	onunload(): void {
 		// 事件与 prototype 补丁都由 `registerEvent` / `register` 自动撤销，无需手写。
 		// 这里只清掉自有引用，避免插件实例被延长引用（热重载时尤其明显）。
+		// ⚠️ 自动接管那条链自己排了定时器，**必须显式取消**：`registerEvent` 管不到它，
+		// 留着的话插件卸载后还会去改用户的笔记（热重载时表现为"改了两次"）。
+		this.attachWatch?.dispose();
+		this.attachWatch = null;
 		this.indexStore = null;
 		this.externalHook = null;
 		this.externalLive = null;
@@ -1339,6 +1412,10 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			notify: (message) => new Notice(message),
 			t: (key, params) => this.t(key, params),
 			secretStorage: this.app.secretStorage,
+			// 中转文件标记：批处理走 `existingPath`（字节已经在库里，不落盘），
+			// 所以这条线当下用不到 —— 但留着它，将来任何在这条线上新增"落盘"的调用方
+			// 都不会踩同一个坑（自写的中转文件被当成用户的新附件）。
+			onStaged: (path) => this.stagedPaths.note(path),
 		};
 	}
 }

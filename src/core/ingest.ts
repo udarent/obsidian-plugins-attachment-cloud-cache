@@ -170,6 +170,15 @@ export interface IngestDeps {
 	/** 内容哈希。注入是为了让测试可确定，也为将来换算法留口子。 */
 	hashBytes?: (bytes: Uint8Array) => Promise<string>;
 	now?: () => Date;
+	/**
+	 * ⭐ 刚刚在附件目录里落下了一份**中转文件**（`path` 是它的库内路径）。
+	 *
+	 * 存在的理由只有一个：新增附件自动接管那条链挂在 `vault.on("create")` 上，
+	 * 而"先落盘再上传"这条纪律**也会触发同一个事件**（`vault.createBinary`）。
+	 * 少了这个标记，那条链会把自己刚写下去的中转文件当成"用户新加的附件"
+	 * 再接管一次 —— 重复上传，而且两条路会抢同一个文件。
+	 */
+	onStaged?: (path: string) => void;
 }
 
 /** 扩展名全缺时的兜底。用 `bin` 而不是空串 —— 见下方 `resolveKeyExtension`。 */
@@ -305,6 +314,9 @@ async function stageLocally(deps: IngestDeps, request: IngestRequest, fileName: 
 	const path = await uniqueVaultPath(desired, makeExists(app));
 
 	await app.vault.createBinary(path, bytesToArrayBuffer(request.bytes));
+	// ⚠️ 落盘之后**立刻**上报（而不是等上传完）：自动接管那条链可能在 create 的
+	// 下一拍就来问"这个新文件是不是用户加的"，晚一拍就会把它当成用户的附件。
+	deps.onStaged?.(path);
 	return path;
 }
 

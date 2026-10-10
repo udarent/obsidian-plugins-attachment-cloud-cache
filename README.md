@@ -41,8 +41,9 @@ once. This does both — the file goes to your bucket, and the copy that renders
 ## Features
 
 - **Any S3-compatible storage** — Cloudflare R2, AWS S3, MinIO, Backblaze B2, self-hosted.
-- **Upload on paste or drag-and-drop**, rewriting the note's link. Keys are content-addressed (`{hash}.{ext}`), so the
-  same bytes are stored once.
+- **Upload however the file gets in** — pasted, dropped, added from your phone's gallery or camera, shared into
+  Obsidian, or copied into the vault. The note's link is rewritten to the remote URL. Keys are content-addressed
+  (`{hash}.{ext}`), so the same bytes are stored once.
 - **Any file type, not just images** — images, audio, video, PDF, archives, documents, extension-less files. Types
   Obsidian can preview (image/audio/video/PDF) are inserted as embeds; everything else becomes a clickable link.
 - **Offline, multi-device, and light to sync** — the rendering copy is local (zero remote requests, always, not
@@ -86,7 +87,7 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 | **Public URL prefix** | Optional. Empty means `endpoint/bucket/key`, which requires anonymous reads. |
 | **Test connection** | One signed request, then one **credential-free** request to the address your links would use. |
 | **Import from a credentials file** | MinIO's "Download credentials" JSON fills in endpoint, key and addressing mode; no copy is kept. |
-| **Upload on paste and drop** | On by default; off leaves paste and drop to Obsidian. |
+| **Upload new attachments automatically** | On by default; off returns all of it to Obsidian, leaving files local only. |
 | **Where the local copy goes** | Cache folder (default), attachments folder, or none — "none" means nothing works offline. |
 | **Cache folder** | Relative to the vault root. Disposable: deleting it costs one re-download. |
 | **Cache size limit (MB)** | Trims least-recently-used copies past this; `0` means no limit. |
@@ -202,7 +203,7 @@ Obsidian version and which storage provider you use; the errors name the step th
 ## 功能
 
 - **任何 S3 兼容存储** —— Cloudflare R2、AWS S3、MinIO、Backblaze B2、自建端点。
-- **粘贴或拖入即上传**，并改写笔记里的链接。key 默认按内容寻址（`{hash}.{ext}`），同一份字节只存一份。
+- **附件怎么进来都行** —— 粘贴、拖入、手机相册或相机、分享到 Obsidian、从别处拷进库，都会被上传，笔记里的链接换成远端地址。key 默认按内容寻址（`{hash}.{ext}`），同一份字节只存一份。
 - **任何类型的附件，不只图片** —— 图片、音频、视频、PDF、压缩包、文档、没有扩展名的文件。Obsidian 能预览的
   类型（图片/音频/视频/PDF）插入为嵌入，其余插入为可点开的普通链接。
 - **离线、多设备、同步轻快** —— 渲染走本地副本（零远端请求，始终如此，不只是「网不通」时）；换新设备时副本按需补回；
@@ -242,7 +243,7 @@ Obsidian version and which storage provider you use; the errors name the step th
 | **公开访问前缀** | 可留空。留空就用 `服务地址/存储桶/键`，那要求存储桶允许匿名读取。 |
 | **测试连接** | 先发一次签名请求，再**不带凭据**请求一次「你笔记里会写的那条地址」。 |
 | **从凭据文件导入** | MinIO「下载凭据」的 JSON 会填好服务地址、密钥与寻址方式；不留副本。 |
-| **粘贴或拖入时自动上传** | 默认开启；关闭后粘贴与拖拽交回 Obsidian。 |
+| **新增附件自动上传** | 默认开启；关闭后这些全交回 Obsidian，文件只存在本地。 |
 | **本地副本的处理** | 缓存目录（默认）/ 附件目录 / 不留 —— 选「不留」就离线不可用。 |
 | **缓存目录** | 相对 vault 根目录。可丢弃：删掉只会多下载一次。 |
 | **缓存大小上限（MB）** | 超过后按最近最少使用清理；`0` 表示不限制。 |

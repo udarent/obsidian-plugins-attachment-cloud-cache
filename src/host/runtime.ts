@@ -207,6 +207,14 @@ export interface HostContext {
 	t: (key: string, params?: Record<string, unknown>) => string;
 	/** 钥匙串读取（凭据的值只在这里取，绝不进设置）。 */
 	secretStorage: SecretReader;
+	/**
+	 * 刚刚在附件目录里落下一份**中转文件**（见 `IngestDeps.onStaged`）。
+	 *
+	 * 粘贴那条路的"先落盘再上传"与"新增附件自动接管"共用同一个宿主事件
+	 * （`vault.on("create")`）—— 有了这个上报，后者才分得清"用户加的附件"
+	 * 与"我们自己刚写下去的"。
+	 */
+	onStaged?: (path: string) => void;
 }
 
 export interface TransferRequest {
@@ -236,6 +244,9 @@ export async function runTransfer(host: HostContext, request: TransferRequest): 
 				index: host.index(),
 				persistIndex: host.persistIndex,
 				notify: host.notify,
+				// 中转文件的标记（见 `HostContext.onStaged`）：没有它，自动接管那条链
+				// 会把自己刚落下、还要用它上传的中转文件当成用户新加的附件再传一遍。
+				onStaged: host.onStaged,
 			},
 			req
 		);

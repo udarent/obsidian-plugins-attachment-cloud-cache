@@ -72,9 +72,11 @@ export const I18N: Record<string, Locale> = {
 		testPublic_noSample: "Nothing uploaded yet, so there is no link to check — upload a file first.",
 
 		// ── 上传 ──
-		autoUpload: "Upload on paste and drop",
+		autoUpload: "Upload new attachments automatically",
 		autoUploadDesc:
-			"When off, pasting and dropping are left to Obsidian, so files are saved locally as usual. Files already cached still render offline.",
+			"Covers every way a file ends up in your vault: pasting, dropping, adding one from your phone's gallery or camera, sharing into Obsidian, or copying files in. Uploaded files are linked from your note as remote URLs. Turn it off and all of that goes back to Obsidian, leaving files local only.",
+		attachAutoUploaded: "Uploaded {count} attachment(s) that had just been added to your vault.",
+		attachAutoFailed: "{count} newly added attachment(s) could not be uploaded — the files are still in your vault.",
 
 		// ── 离线副本 ──
 		localCopy: "Where the local copy goes",
@@ -298,9 +300,11 @@ export const I18N: Record<string, Locale> = {
 		testPublic_other: "无法判断链接是否可用（HTTP {status}）。检查的是：{url}",
 		testPublic_noSample: "还没上传过任何东西，没有链接可检查 —— 先上传一个文件。",
 
-		autoUpload: "粘贴或拖入时自动上传",
+		autoUpload: "新增附件自动上传",
 		autoUploadDesc:
-			"关闭后粘贴与拖拽交回 Obsidian 处理，文件照常存在本地。已经缓存的附件仍然离线可见。",
+			"覆盖附件进入库的所有方式：粘贴、拖入、手机相册或相机、分享到 Obsidian、从别处拷进库。上传后笔记里的链接会换成远端地址。关闭后这些全部交回 Obsidian 处理，文件只存在本地。已经缓存的附件仍然离线可见。",
+		attachAutoUploaded: "已自动上传刚加入库的 {count} 个附件。",
+		attachAutoFailed: "刚加入库的 {count} 个附件上传失败 —— 文件仍然留在你的库里。",
 
 		localCopy: "本地副本的处理",
 		localCopyDesc: "上传后，本地副本放在哪里。不留副本时，断网就看不到附件。",
