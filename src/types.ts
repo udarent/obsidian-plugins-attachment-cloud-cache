@@ -65,6 +65,14 @@ export type LocalCopyAction =
 	 * 不留本地副本（上传后把本地文件移入回收站）。
 	 *
 	 * vault 最干净 —— 代价是**离线看不了**，这是三档里唯一与"离线可用"相冲突的取舍。
+	 *
+	 * ⭐ 这一档同时**关掉缓存的两条主动行为**（见 {@link isCacheDisabled}）：
+	 * 不为新附件保留副本（上传后移走，索引也不登记），渲染时也**不为它把副本取回来**
+	 * （不联网、不落盘）。等价于"只把本插件当普通图床用"：上传 → 拿到一条链接。
+	 *
+	 * ⚠️ **已经存在的**副本仍然照常使用（例如旧档位留下的，或用户显式缓存进来的站外图）——
+	 * 那是"缓存里有什么就用什么"，与"不再往里写"是两件事。想让 vault 真的干净，
+	 * 跑一次 `clean-cache` 即可（缓存目录可整体清理，是承诺过的）。
 	 */
 	| "trash";
 
@@ -72,6 +80,23 @@ export const LOCAL_COPY_ACTIONS: readonly LocalCopyAction[] = ["cache", "keep", 
 
 export function isLocalCopyAction(value: unknown): value is LocalCopyAction {
 	return typeof value === "string" && (LOCAL_COPY_ACTIONS as readonly string[]).includes(value);
+}
+
+/**
+ * 「不留本地副本」这一档是不是等于**关闭缓存**。
+ *
+ * ⭐ 这个语义只在**这一处**定义，因为有三个互不相干的层要各自做判断，
+ * 而它们必须给出同一个答案（不一致的后果都不报错）：
+ * - 渲染判定（`render/render-target.ts`）：这一档下不为缺副本的图去联网补齐；
+ * - 回退下载（`core/download.ts`）：最后一道闸门 —— 这一层是唯一会把远端字节写进 vault 的地方；
+ * - 设置界面（`ui/settings-tab.ts`）：那些在这一档下**永远不会起作用**的开关不显示
+ *   （显示一个不起作用的开关比不显示更糟 —— 与「缓存目录」同一条纪律）。
+ *
+ * 判据写成"要不要写副本"，而不是"要不要用副本"：已经存在的副本不受影响
+ * （用户显式缓存进来的站外图仍然离线可见）。
+ */
+export function isCacheDisabled(action: unknown): boolean {
+	return action === "trash";
 }
 
 /**

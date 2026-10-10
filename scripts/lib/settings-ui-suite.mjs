@@ -18,6 +18,7 @@ export function runSettingsUiSuite(mod) {
 	const {
 		// settings-logic
 		shouldShowCacheFolder,
+		shouldShowFallbackDownload,
 		localCopyOptions,
 		deleteModeOptions,
 		classifyConnectionFailure,
@@ -57,6 +58,17 @@ export function runSettingsUiSuite(mod) {
 	assert.equal(shouldShowCacheFolder("trash"), false, "★ 不留副本时同理");
 	assert.equal(shouldShowCacheFolder("nonsense"), false, "非法值也隐藏（宁可少显示，不可误导）");
 	assert.equal(shouldShowCacheFolder(undefined), false, "缺值时隐藏");
+
+	// ⭐ 「缺本地副本时自动下载」：只有「不留副本」那一档才隐藏。
+	//
+	// 那一档等于**关闭缓存**（用户口径），这一项永远不会动手 —— 显示它只会让用户
+	// 以为自己关掉的那件事还有开关可用。⚠️ 而「留在附件目录」**不能**跟着隐藏：
+	// 副本就在附件目录里，换设备时正是这一项把副本补回来。
+	assert.equal(shouldShowFallbackDownload("cache"), true, "移入缓存时要显示");
+	assert.equal(shouldShowFallbackDownload("keep"), true, "★ 原地保留时**仍然**要显示（换设备靠它补副本）");
+	assert.equal(shouldShowFallbackDownload("trash"), false, "★ 不留副本 = 关闭缓存，这一项没有作用，必须隐藏");
+	assert.equal(shouldShowFallbackDownload("nonsense"), true, "非法值不该把开关藏起来（宁可多显示，不可静默少一个开关）");
+	assert.equal(shouldShowFallbackDownload(undefined), true, "缺值时按默认档显示");
 
 	// ============================================================
 	// 3. 下拉选项必须与类型清单同源

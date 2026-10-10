@@ -146,6 +146,52 @@ export function runRenderTargetSuite(mod) {
 	assert.equal(viaVhost.action, "fetch", "virtual-host 形式的链接也要认得出");
 
 	// ============================================================
+	// 3b. ⭐ 「不留副本」= 关闭缓存：不 fetch，但**仍然用已有的副本**
+	//
+	// 用户口径（2026-10-11）：选「不留副本」就该等价于关掉缓存、只保留常规图床的行为
+	//（上传 → 拿到一条链接）。在此之前，这一档的图**在你第一次看到它时**
+	// 会被自动下载回缓存目录 —— 用户的选择被悄悄推翻，界面上也看不出来。
+	// ============================================================
+	const trashSettings = { ...settingsWith(baseAddress), localCopy: "trash" };
+
+	// ① 属于本存储但没副本 → ignore（**不是** fetch）：这一档不为它联网。
+	assert.equal(
+		decideRenderTarget({ src: `${baseAddress.publicUrlBase}/other.png`, settings: trashSettings, index }).action,
+		"ignore",
+		"★ 「不留副本」档下不为缺副本的图去联网（等于关闭缓存）"
+	);
+
+	// ② **已有的**副本照常走 local：旧档位留下的，或用户**显式**缓存进来的站外图
+	//（「缓存站外图片」那条链会强制用 `cache` 档写副本）。
+	// ⚠️ 这条是"不要把关闭缓存做成无视一切副本"的钉子 —— 反过来会让那个显式动作白做。
+	assert.equal(
+		decideRenderTarget({ src: `${baseAddress.publicUrlBase}/k1.png`, settings: trashSettings, index }).action,
+		"local",
+		"★ 这一档下已有的副本仍然照用（否则用户显式缓存进来的图会静默失效）"
+	);
+
+	// ③ 站外图在任何档位下都不碰（红线不受设置影响）
+	assert.equal(
+		decideRenderTarget({ src: "https://evil.example.net/a.png", settings: trashSettings, index }).action,
+		"ignore",
+		"站外图在任何档位下都不碰"
+	);
+
+	// ④ 反向：另外两档仍然是 fetch —— 否则"换设备时把副本补回来"整条链会静默消失
+	//（那种症状是"新设备上断网就全是破图"，而不会有任何报错）。
+	for (const action of ["cache", "keep"]) {
+		assert.equal(
+			decideRenderTarget({
+				src: `${baseAddress.publicUrlBase}/other.png`,
+				settings: { ...settingsWith(baseAddress), localCopy: action },
+				index,
+			}).action,
+			"fetch",
+			`${action} 档下缺副本的图仍要交给回退下载`
+		);
+	}
+
+	// ============================================================
 	// 4. ⭐ 改了 publicUrlBase 之后，**旧链接仍要认得出来**
 	//
 	// 否则症状是"改完设置，之前离线能看的图全看不了了"，且不报错。

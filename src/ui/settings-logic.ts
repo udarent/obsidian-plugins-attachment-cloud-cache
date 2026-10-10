@@ -7,7 +7,7 @@
  */
 
 import type { ExternalImageDefault, LocalCopyAction } from "../types";
-import { CACHE_LIMIT_MB_MAX, EXTERNAL_IMAGE_DEFAULTS, LOCAL_COPY_ACTIONS } from "../types";
+import { CACHE_LIMIT_MB_MAX, EXTERNAL_IMAGE_DEFAULTS, LOCAL_COPY_ACTIONS, isCacheDisabled } from "../types";
 
 /**
  * 秘密访问密钥在钥匙串里那条槽位的名字前缀。
@@ -96,6 +96,20 @@ export function externalImageDefaultOptions(
  */
 export function shouldShowCacheFolder(action: unknown): boolean {
 	return action === "cache";
+}
+
+/**
+ * 「缺本地副本时自动下载」这一项要不要显示。
+ *
+ * ⚠️ 与缓存目录同一个理由：选「不留副本」时那一档**等于关闭缓存**
+ * （判定在 `types.ts` 的 `isCacheDisabled`），这一项永远不会动手 ——
+ * 显示一个永远不起作用的开关比不显示更糟。
+ *
+ * ⚠️ 但**不能**图省事复用 `shouldShowCacheFolder`：选「留在附件目录」时缓存目录确实没用，
+ * 而这一项**仍然有用** —— 副本就在附件目录里，换设备时正是它把副本补回来。
+ */
+export function shouldShowFallbackDownload(action: unknown): boolean {
+	return !isCacheDisabled(action);
 }
 
 /**

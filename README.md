@@ -88,10 +88,10 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 | **Test connection** | One signed request, then one **credential-free** request to the address your links would use. |
 | **Import from a credentials file** | MinIO's "Download credentials" JSON fills in endpoint, key and addressing mode; no copy is kept. |
 | **Upload new attachments automatically** | On by default; off returns all of it to Obsidian, leaving files local only. |
-| **Where the local copy goes** | Cache folder (default), attachments folder, or none — "none" means nothing works offline. |
+| **Where the local copy goes** | Cache folder (default), attachments folder, or none. "None" turns caching off: the plugin uploads and rewrites links, and never fetches a copy back — so nothing works offline. |
 | **Cache folder** | Relative to the vault root. Disposable: deleting it costs one re-download. |
 | **Cache size limit (MB)** | Trims least-recently-used copies past this; `0` means no limit. |
-| **Download missing copies** | Auto-downloads our own objects that have no local copy — never anything from other sites. |
+| **Download missing copies** | Auto-downloads our own objects that have no local copy — never anything from other sites. Hidden when "none" is selected above, because caching is off then. |
 | **Cache files from other sites** | Off by default; while it is off, nothing off-site is touched. |
 | **When a note links to a file on another site** | `Leave it alone` (default) or `Cache straight away`. |
 | **Pick specific files** | Tick individual off-site files; only those are fetched. |
@@ -119,7 +119,8 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 - **Deleting an uploaded file asks whether the cloud copy should go too**, defaulting to "local only". The same content
   is stored once, so an object may be shared across notes and devices, and a cloud deletion cannot be undone. Cleanup
   can only see *this* device's references.
-- **"Do not keep a local copy" means nothing is available offline.**
+- **"Do not keep a local copy" turns caching off**, which is the plain-image-host behaviour: files are uploaded and
+  the note's link is rewritten, but nothing is kept or fetched back, so nothing is available offline.
 - **Moving to another device: copy the plugin folder, but delete `.cache-index.json` first** — it records where *this*
   device keeps its copies. The secret access key is not in the folder at all (it lives in Obsidian's keychain).
 
@@ -244,10 +245,10 @@ Obsidian version and which storage provider you use; the errors name the step th
 | **测试连接** | 先发一次签名请求，再**不带凭据**请求一次「你笔记里会写的那条地址」。 |
 | **从凭据文件导入** | MinIO「下载凭据」的 JSON 会填好服务地址、密钥与寻址方式；不留副本。 |
 | **新增附件自动上传** | 默认开启；关闭后这些全交回 Obsidian，文件只存在本地。 |
-| **本地副本的处理** | 缓存目录（默认）/ 附件目录 / 不留 —— 选「不留」就离线不可用。 |
+| **本地副本的处理** | 缓存目录（默认）/ 附件目录 / 不留。选「不留」等于关闭缓存：只上传并改写链接，也不会把副本补回来，所以离线不可用。 |
 | **缓存目录** | 相对 vault 根目录。可丢弃：删掉只会多下载一次。 |
 | **缓存大小上限（MB）** | 超过后按最近最少使用清理；`0` 表示不限制。 |
-| **缺本地副本时自动下载** | 只自动下载**本存储**没有副本的对象，站外文件永不下载。 |
+| **缺本地副本时自动下载** | 只自动下载**本存储**没有副本的对象，站外文件永不下载。上面选「不留」时这一项不显示（那一档已关闭缓存）。 |
 | **缓存站外文件** | 默认关闭；关着时站外的东西一步都不会被碰。 |
 | **遇到站外文件链接时** | `什么都不做`（默认）或 `直接缓存`。 |
 | **挑选要缓存的文件** | 勾选具体的站外文件，只有勾中的会被取。 |
@@ -272,7 +273,8 @@ Obsidian version and which storage provider you use; the errors name the step th
 - **改了存储地址之后，「新设备」上认不出老链接** —— 那些链接照常在线显示，但离线不显示、也不会被自动下载。
 - **删掉一个已上传的文件时，会问你要不要连云端那份一起删**，默认「仅删本地」。相同内容只存一份，所以一个对象可能
   被多篇笔记、多台设备共用，而云端删除无法撤销。清理只能看到**本设备**的引用。
-- **「不留本地副本」这一档断网时什么都看不到。**
+- **「不留本地副本」这一档等于关闭缓存**，也就是普通图床的行为：文件照常上传、笔记里的链接照样改写，
+  但不保留副本、也不把副本取回来，所以断网时什么都看不到。
 - **换设备：把插件目录复制过去，但先删掉 `.cache-index.json`** —— 它记的是**这台设备**的副本在哪。秘密访问密钥
   根本不在目录里（它存在 Obsidian 的钥匙串中）。
 

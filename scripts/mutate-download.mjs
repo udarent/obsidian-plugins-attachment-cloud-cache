@@ -51,6 +51,16 @@ await runMutations({
 			expect: "关掉开关",
 		},
 		{
+			// 后果：用户选了「不留副本」（= 关闭缓存，见 `types.ts` 的 `isCacheDisabled`），
+			// 而这一层照样把远端字节写进他的 vault ⇒ 离线不可用的承诺被静默推翻。
+			// ⚠️ 与上一条**不是**同一件事：上一条是单项开关，这一条是整档语义 ——
+			// 渲染判定那边已经拦过一次，这里是"唯一会写 vault 的那一层"的兜底。
+			name: "★ 不认「不留副本」档（把远端字节写进明确说了不要副本的 vault）",
+			from: "\t\tif (isCacheDisabled(settings.localCopy)) {\n\t\t\treturn { status: \"disabled\", key, localPath: \"\" };\n\t\t}\n",
+			to: "\t\t// 变异：不认「不留副本」档\n",
+			expect: "档下不做任何事",
+		},
+		{
 			// 后果：断网时每张图都弹一条"下载失败" —— 那正是用户此刻的状态，
 			// 弹提示既无用又刷屏。
 			name: "离线失败也提示（断网时被每张图的提示刷屏）",

@@ -48,6 +48,7 @@ import {
 	publicLinkTone,
 	randomSlotPart,
 	shouldShowCacheFolder,
+	shouldShowFallbackDownload,
 } from "./settings-logic";
 
 /** 一次连接测试的**一行**结果（已翻成文案 key，界面只负责显示）。 */
@@ -504,6 +505,11 @@ export class SettingsTab extends PluginSettingTab {
 				name: this.t("fallbackDownload"),
 				desc: this.t("fallbackDownloadDesc"),
 				aliases: ["download", "sync", "下载", "同步"],
+				// ⚠️ 与缓存目录同一个理由：选「不留副本」时那一档等于关闭缓存，
+				// 这一项永远不会动手 —— 显示一个不起作用的开关比不显示更糟。
+				// ⚠️ 但「留在附件目录」时它**仍然有用**（副本在附件目录，换设备要它补回来），
+				// 所以只能按"缓存是否被关掉"判，不能复用它上面那个"只在 cache 档显示"。
+				visible: () => shouldShowFallbackDownload(this.plugin.settings.localCopy),
 				control: { type: "toggle", key: "fallbackDownload" },
 			},
 			{

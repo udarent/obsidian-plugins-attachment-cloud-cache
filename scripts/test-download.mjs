@@ -14,6 +14,7 @@ await withLoadedTs(
 		console.log(
 			`Download passed (byte-identical to disk, index registered and persisted, concurrent requests for one key ` +
 				`collapse to a single GET, failures stay retryable, third-party URLs refused, setting off = no request, ` +
+				`"no local copy" keeps caching off = no request either, ` +
 				`never clobbers an occupied path, offline failures stay silent while auth failures speak up, ` +
 				`sha256 of the round-tripped bytes matches ${stats.sha256Prefix}…).`
 		);

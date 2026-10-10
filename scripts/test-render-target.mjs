@@ -11,6 +11,7 @@ await withLoadedTs(["src/render/render-target", "src/cache/index", "src/s3/clien
 	runRenderTargetSuite(mod);
 	console.log(
 		"Render-target decisions passed (index hit → local; own storage without a copy → fetch; " +
+			"\"no local copy\" is caching off, so no fetch — but existing copies still render; " +
 			"everything else ignored including third-party images; key round-trips through publicUrlFor for " +
 			"multi-segment and non-ASCII keys; malformed input never throws)."
 	);

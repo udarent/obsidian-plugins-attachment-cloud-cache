@@ -12,6 +12,11 @@
  * 这两类图在断网时就是破的 —— 直到我们把副本取回来。所以这一层是
  * "离线可用"这个定位在**新设备**上的入口。
  *
+ * ⚠️ 但它只在**缓存开着**的时候动手：「本地副本的处理」选「不留副本」时，
+ * 这一档等于关闭缓存（用户口径："只保留常规图床的功能"），
+ * 于是不为任何图取回副本 —— 判定见 `types.ts` 的 `isCacheDisabled`。
+ * 已经存在的副本不受影响（那由渲染判定使用，与"要不要写"是两件事）。
+ *
  * ## 三条硬边界
  *
  * 1. **只下载属于本存储的 URL。** 判定侧已经用前缀/索引筛过一遍，这里**再验一次**
@@ -36,6 +41,7 @@
 import type { App } from "obsidian";
 
 import type { PluginSettings } from "../types";
+import { isCacheDisabled } from "../types";
 import type { CacheIndex, CacheEntry } from "../cache/index";
 import { cachePathFor } from "../cache-path";
 import { parentFolderOf, uniqueVaultPath } from "../vault-files";
@@ -50,7 +56,10 @@ export interface LocalCopyOutcome {
 		| "downloaded"
 		/** 本地已经有了（索引 + 文件都在）—— 零网络。 */
 		| "reused"
-		/** 设置里关掉了回退下载。 */
+		/**
+		 * 缓存被关掉，所以不下载：设置里关掉了回退下载，**或者**「本地副本的处理」选了
+		 * 「不留副本」（那一档等于关闭缓存，见 `types.ts` 的 `isCacheDisabled`）。
+		 */
 		| "disabled"
 		/** 不下载：这个 URL 不属于本存储。 */
 		| "refused"
@@ -146,8 +155,18 @@ export function createLocalCopyEnsurer(deps: LocalCopyDeps) {
 	async function run(key: string, remoteUrl: string): Promise<LocalCopyOutcome> {
 		const settings = deps.settings();
 
-		// 判定的顺序是刻意的，四步都由不同的原因拒绝，且**都不发请求**：
-		// ① 用户主动关掉 → ② 不是我们的 URL（红线）→ ③ 还没配置好 → ④ 本地已有。
+		// 判定的顺序是刻意的，五步都由不同的原因拒绝，且**都不发请求**：
+		// ① 缓存整体被关掉 → ② 用户关掉了回退下载 → ③ 不是我们的 URL（红线）
+		// → ④ 还没配置好 → ⑤ 本地已有。
+		//
+		// ⭐ ① 是「不留副本」档：那一档下渲染判定已经不产生 `fetch`（见 `render/render-target.ts`），
+		// 但这里**再拦一次**。理由是这一层是**唯一**会把远端字节写进用户 vault 的地方，
+		// 而"不留副本"的语义就是"不要往里写" —— 防线只有一道的话，
+		// 将来任一条新入口（命令、别的调用点）都能悄悄绕过用户的选择，且不报错。
+		if (isCacheDisabled(settings.localCopy)) {
+			return { status: "disabled", key, localPath: "" };
+		}
+
 		if (!settings.fallbackDownload) {
 			return { status: "disabled", key, localPath: "" };
 		}

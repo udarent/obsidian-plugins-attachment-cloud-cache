@@ -294,6 +294,26 @@ export async function runDownloadSuite(mod) {
 	}
 
 	// ============================================================
+	// 5b. ⭐ 「不留副本」档 = 关闭缓存 → 不下载（用户的选择，不是失败）
+	//
+	// 这一层是**唯一**会把远端字节写进用户 vault 的地方。用户选了"不留副本"之后，
+	// 若某条别的入口（命令、将来的新调用点）走到这里，那道闸门必须拦住它 ——
+	// 否则"离线不可用"的承诺会被静默推翻，而界面上完全看不出来。
+	// ============================================================
+	{
+		const h = await makeHarness({ settings: { localCopy: "trash" } });
+		try {
+			const key = "cacheoff.png";
+			h.putObject(key, HOSTILE_BYTES, "image/png");
+			const outcome = await h.ensure(key, h.urlFor(key));
+			assert.equal(outcome.status, "disabled", "「不留副本」档下不做任何事");
+			assert.equal(h.server.countByMethod("GET"), 0, "★ 这一档绝不能联网（否则用户的选择被悄悄推翻）");
+		} finally {
+			await h.close();
+		}
+	}
+
+	// ============================================================
 	// 6. ⭐ 绝不覆盖：目标路径已被占用时另取序号
 	//
 	// 用户完全可以把 key 模板改成 `{filename}`，那时"同路径"不再等于"同内容"。

@@ -81,16 +81,16 @@ export const I18N: Record<string, Locale> = {
 		// ── 离线副本 ──
 		localCopy: "Where the local copy goes",
 		localCopyDesc:
-			"Where the local copy of an uploaded file is kept. Without a local copy, files cannot be shown offline.",
+			"Where the local copy of an uploaded file is kept. Without a local copy, files cannot be shown offline. Choosing \"do not keep\" turns caching off: the plugin uploads and rewrites links, and never fetches a copy back.",
 		localCopy_cache: "Move into the cache folder (offline works)",
 		localCopy_keep: "Leave in the attachments folder (offline works)",
-		localCopy_trash: "Do not keep a local copy (offline unavailable)",
+		localCopy_trash: "Do not keep a local copy (caching off; offline unavailable)",
 		cacheFolder: "Cache folder",
 		cacheFolderDesc:
 			"Relative to the vault root. This folder is disposable: deleting it only costs one re-download.",
 		fallbackDownload: "Download missing copies",
 		fallbackDownloadDesc:
-			"For files from this storage that have no local copy, such as ones synced from another device. Files from other sites are never downloaded.",
+			"For files from this storage that have no local copy, such as ones synced from another device. Files from other sites are never downloaded. Not used when no local copy is kept, since caching is off then.",
 
 		// ── 高级 ──
 		attachmentFolder: "Attachments folder override",
@@ -307,15 +307,16 @@ export const I18N: Record<string, Locale> = {
 		attachAutoFailed: "刚加入库的 {count} 个附件上传失败 —— 文件仍然留在你的库里。",
 
 		localCopy: "本地副本的处理",
-		localCopyDesc: "上传后，本地副本放在哪里。不留副本时，断网就看不到附件。",
+		localCopyDesc:
+			"上传后，本地副本放在哪里。选「不留」等于关闭缓存：插件只负责上传与改写链接，不会把副本补回来。",
 		localCopy_cache: "移入缓存目录（离线可用）",
 		localCopy_keep: "留在附件目录（离线可用）",
-		localCopy_trash: "不留本地副本（离线不可用）",
+		localCopy_trash: "不留本地副本（等于关闭缓存，离线不可用）",
 		cacheFolder: "缓存目录",
 		cacheFolderDesc: "相对 vault 根目录。这个目录是可丢弃的：删掉只会导致重新下载一次。",
 		fallbackDownload: "缺本地副本时自动下载",
 		fallbackDownloadDesc:
-			"属于本存储、却没有本地副本的附件（例如从另一台设备同步来的）会自动下载。站外文件永不下载。",
+			"属于本存储、却没有本地副本的附件（例如从另一台设备同步来的）会自动下载。站外文件永不下载。选「不留副本」时不生效（那一档已关闭缓存）。",
 
 		attachmentFolder: "附件目录覆盖",
 		attachmentFolderPlaceholder: "跟随 Obsidian",

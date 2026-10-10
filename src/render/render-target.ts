@@ -28,8 +28,21 @@
  * | 不是 http(s) 图（已经是 `app://`、data:、blob:、相对路径） | `ignore` | 不是我们的图 |
  * | 索引里有本地副本 | `local` | 零网络，这是离线可用的来源 |
  * | 属于本存储但本地没有 | `fetch` | 交给回退下载（换设备/缓存被清） |
+ * | 属于本存储但本地没有，**且是「不留副本」档** | `ignore` | 这一档等于关闭缓存：不为它联网取回副本 |
  * | 站外图 | `ignore` | **永不**下载站外图（否则等于做成了另一个插件的定位） |
  * | 没配存储 | `ignore` | 连"自己的存储"是什么都不知道，不该动任何图 |
+ *
+ * ## ⭐ 「不留副本」= 关闭缓存（与"用不用已有的副本"是两件事）
+ *
+ * 用户口径：选「不留副本」就该等价于**关掉缓存功能、只保留常规图床的行为**
+ * （上传 → 拿到一条链接）。所以这一档下**不再产生 `fetch`** ——
+ * 不为缺副本的图联网、更不会把远端字节写进 vault。
+ *
+ * ⚠️ 但**索引里已经有的副本仍然走 `local`**：那可能是旧档位留下的，
+ * 也可能是用户**显式**把某张站外图缓存进来时留下的（「缓存站外图片」这条链
+ * 会强制用 `cache` 档写副本，见 `core/external-cache.ts` 的 `localCopyForExternal`）。
+ * 判定顺序因此是"先看有没有副本，再看缓存开不开" —— 反过来会让那个显式动作
+ * 白做（搬进来了却不用，且界面上看不出来）。
  *
  * ## ⚠️ 一处已知限制（写下来而不是含糊过去）
  *
@@ -49,6 +62,7 @@
  */
 
 import type { PluginSettings } from "../types";
+import { isCacheDisabled } from "../types";
 import type { CacheIndex } from "../cache/index";
 import { normalizeEndpoint, requestTargetFor } from "../s3/client";
 
@@ -155,6 +169,14 @@ export function decideRenderTarget(input: RenderDecisionInput): RenderTarget {
 	const known = input.index.findByRemoteUrl(src);
 	if (known && known.cachePath) {
 		return { action: "local", key: known.key, remoteUrl: known.remoteUrl || src, localPath: known.cachePath };
+	}
+
+	// ⭐ 「不留副本」= 关闭缓存：这一档下**不产生 `fetch`** —— 不为缺副本的图联网，
+	// 也就更不会把远端字节写进 vault。放在这里（索引之后、算 key 之前）是刻意的：
+	// ① 已经存在的副本仍然照常走 `local`（理由见模块头注释）；
+	// ② 这一档连"是不是我们的图"都不必算 —— 反正不动它。
+	if (isCacheDisabled(input.settings.localCopy)) {
+		return { action: "ignore", reason: "「不留副本」档：缓存已关闭，不为缺副本的图取回副本" };
 	}
 
 	const key = keyFromUrl(src, input.settings.s3);
