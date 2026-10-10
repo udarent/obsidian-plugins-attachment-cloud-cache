@@ -1,7 +1,7 @@
 {
 	"id": "attachment-cloud-cache",
 	"name": "Attachment Cloud Cache",
-	"version": "1.1.0",
+	"version": "1.1.1",
 	"minAppVersion": "1.13.0",
 	"description": "Upload any attachment to your own S3-compatible storage and keep a local cache, so files still render with no network.",
 	"author": "udarent",
