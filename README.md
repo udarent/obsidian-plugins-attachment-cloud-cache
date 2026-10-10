@@ -2,7 +2,11 @@
 
 # Attachment Cloud Cache
 
-[![release](https://img.shields.io/github/v/release/udarent/obsidian-plugins-attachment-cloud-cache?label=release&sort=semver&color=2f6feb)](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases) [![Obsidian](https://img.shields.io/badge/dynamic/json?logo=obsidian&color=483699&label=Obsidian&query=%24.minAppVersion&url=https%3A%2F%2Fraw.githubusercontent.com%2Fudarent%2Fobsidian-plugins-attachment-cloud-cache%2Fmain%2Fmanifest.json)](https://obsidian.md) [![license](https://img.shields.io/github/license/udarent/obsidian-plugins-attachment-cloud-cache?color=97ca00)](./LICENSE)
+<p>
+  <a href="https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases"><img alt="release" src="https://img.shields.io/github/v/release/udarent/obsidian-plugins-attachment-cloud-cache?label=release&amp;sort=semver&amp;color=2f6feb" vspace="6"></a>
+  <a href="https://obsidian.md"><img alt="Obsidian" src="https://img.shields.io/badge/dynamic/json?logo=obsidian&amp;color=483699&amp;label=Obsidian&amp;query=%24.minAppVersion&amp;url=https%3A%2F%2Fraw.githubusercontent.com%2Fudarent%2Fobsidian-plugins-attachment-cloud-cache%2Fmain%2Fmanifest.json" vspace="6"></a>
+  <a href="./LICENSE"><img alt="license: MIT" src="https://img.shields.io/github/license/udarent/obsidian-plugins-attachment-cloud-cache?color=97ca00" vspace="6"></a>
+</p>
 
 **English** · [简体中文](#attachment-cloud-cache附件云端缓存) —— 中文版在本文下方
 
@@ -15,12 +19,12 @@ shareable link while the copy stays behind, so files render with **zero remote r
 
 [Install](#installation) · [Releases](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases) · [Report a problem](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues) · Requires Obsidian **1.13.0+** ([why](#requirements))
 
-> **Everything here has been exercised for real** — see [How far it is verified](#how-far-it-is-verified).
-> **Not proven yet:** iOS never run; Android never run on a real device.
-
 ![Paste a file into a note: it uploads to your own storage, a copy stays in your vault, and the file still renders after the storage goes offline](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
 
 *Recorded from the plugin running in Obsidian: paste a file → it uploads → the note keeps a link while a local copy stays behind. The last step stops the storage to show the file still renders.*
+
+> **Everything here has been exercised for real** — see [How far it is verified](#how-far-it-is-verified).
+> **Not proven yet:** iOS never run; Android never run on a real device.
 
 ## Why use it
 
@@ -118,10 +122,15 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 - **"Do not keep a local copy" means nothing is available offline.**
 - **Moving to another device: copy the plugin folder, but delete `.cache-index.json` first** — it records where *this*
   device keeps its copies. The secret access key is not in the folder at all (it lives in Obsidian's keychain).
-- **Common failures:** *No appropriate version found.* → your Obsidian is too old. Links open for you but not others →
-  no anonymous read and no public prefix (**Test connection** says so). Broken on a second device → no local copy, and
-  it could not download one. An off-site file refused as "a web page or plain text" → that address serves HTML, so it
-  is refused on purpose.
+
+**Common failures**
+
+| Symptom | What it means |
+| --- | --- |
+| *No appropriate version found.* | Your Obsidian is older than 1.13.0 — the installer refusing, not a broken plugin. |
+| Links open for you but not for others | No anonymous read and no public URL prefix; **Test connection** says exactly that. |
+| Broken on a second device | No local copy there, and it could not download one. |
+| An off-site file refused as "a web page or plain text" | That address serves HTML, so it is refused on purpose. |
 
 ## Privacy & security
 
@@ -162,7 +171,11 @@ MIT — see [LICENSE](./LICENSE). An independent implementation, written from sc
 
 # Attachment Cloud Cache（附件云端缓存）
 
-[![release](https://img.shields.io/github/v/release/udarent/obsidian-plugins-attachment-cloud-cache?label=release&sort=semver&color=2f6feb)](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases) [![Obsidian](https://img.shields.io/badge/dynamic/json?logo=obsidian&color=483699&label=Obsidian&query=%24.minAppVersion&url=https%3A%2F%2Fraw.githubusercontent.com%2Fudarent%2Fobsidian-plugins-attachment-cloud-cache%2Fmain%2Fmanifest.json)](https://obsidian.md) [![license](https://img.shields.io/github/license/udarent/obsidian-plugins-attachment-cloud-cache?color=97ca00)](./LICENSE)
+<p>
+  <a href="https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases"><img alt="release" src="https://img.shields.io/github/v/release/udarent/obsidian-plugins-attachment-cloud-cache?label=release&amp;sort=semver&amp;color=2f6feb" vspace="6"></a>
+  <a href="https://obsidian.md"><img alt="Obsidian" src="https://img.shields.io/badge/dynamic/json?logo=obsidian&amp;color=483699&amp;label=Obsidian&amp;query=%24.minAppVersion&amp;url=https%3A%2F%2Fraw.githubusercontent.com%2Fudarent%2Fobsidian-plugins-attachment-cloud-cache%2Fmain%2Fmanifest.json" vspace="6"></a>
+  <a href="./LICENSE"><img alt="license: MIT" src="https://img.shields.io/github/license/udarent/obsidian-plugins-attachment-cloud-cache?color=97ca00" vspace="6"></a>
+</p>
 
 [English](#attachment-cloud-cache) · **简体中文**
 
@@ -172,12 +185,12 @@ MIT — see [LICENSE](./LICENSE). An independent implementation, written from sc
 
 [安装](#安装) · [版本发布](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases) · [反馈问题](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues) · 需要 Obsidian **1.13.0+**（[为什么](#环境要求)）
 
-> **下面写的每条行为都真机跑过** —— 见[已验证到什么程度](#已验证到什么程度)。
-> **还没验证的：** iOS 从未运行过；Android 也没在真机上跑过。
-
 ![演示：往笔记里粘贴一个文件 —— 它上传到你的存储，vault 里留一份缓存副本；随后把存储整个停掉，文件仍然正常显示](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
 
 *动图取自真实运行中的 Obsidian：粘贴一个文件 → 上传 → 笔记里留下链接，同时本地留一份副本。最后一步把存储整个停掉，用来证明文件照样显示。*
+
+> **下面写的每条行为都真机跑过** —— 见[已验证到什么程度](#已验证到什么程度)。
+> **还没验证的：** iOS 从未运行过；Android 也没在真机上跑过。
 
 ## 为什么用它
 
@@ -268,9 +281,15 @@ MIT — see [LICENSE](./LICENSE). An independent implementation, written from sc
 - **「不留本地副本」这一档断网时什么都看不到。**
 - **换设备：把插件目录复制过去，但先删掉 `.cache-index.json`** —— 它记的是**这台设备**的副本在哪。秘密访问密钥
   根本不在目录里（它存在 Obsidian 的钥匙串中）。
-- **常见故障：** 社区目录说 *No appropriate version found.* → 你的 Obsidian 太旧。链接自己打得开、别人打不开 →
-  没开匿名读也没填公开前缀（**测试连接** 会这么报）。换台设备就裂 → 那台设备没有副本、也补不下来。站外文件被以
-  「返回的是网页或纯文本」拒收 → 那个地址回的是 HTML，所以刻意拒收。
+
+**常见故障**
+
+| 现象 | 含义 |
+| --- | --- |
+| 社区目录说 *No appropriate version found.* | 你的 Obsidian 低于 1.13.0 —— 安装机制在拒绝，不是插件坏了。 |
+| 链接自己打得开、别人打不开 | 没开匿名读，也没填公开前缀；**测试连接** 会明确报出这一条。 |
+| 换台设备就裂 | 那台设备没有本地副本，也补不下来。 |
+| 站外文件被以「返回的是网页或纯文本」拒收 | 那个地址回的是 HTML，所以刻意拒收。 |
 
 ## 隐私与安全
 
