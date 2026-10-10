@@ -113,6 +113,62 @@ export function referencedKeysFromUrls(
 	return keys;
 }
 
+/** 入口 A（删除附件时询问）的判定输入。 */
+export interface CloudDeleteHintInput {
+	/** 索引里按这个路径能找到记录吗（= 这个文件确实是本插件落下的本地副本）。 */
+	indexHit: boolean;
+	/** 这个路径落在缓存目录里吗（那是缓存管理的地盘，见 `clean-cache`）。 */
+	underCacheFolder: boolean;
+	/** 本库还有引用吗 —— **路径**维度：别的笔记/画布直接指着这个文件本身。 */
+	referencedByPath: boolean;
+	/** 本库还有引用吗 —— **对象 key** 维度：同内容的另一份附件写的 URL 就是这个 key。 */
+	referencedByKey: boolean;
+	/** 存储配置与凭据齐吗（不齐时连"删云端"这个动作都做不了）。 */
+	clientReady: boolean;
+}
+
+export type CloudDeleteHint =
+	/** 弹三选一。`cloudAllowed` 为 false 时云端那一档禁用，原因键显示在界面上。 */
+	| { action: "ask"; cloudAllowed: boolean; cloudDisabledReason?: string }
+	/** 这件事不归入口 A 管，静默跳过（不是错误）。 */
+	| { action: "skip"; reason: "no-local-copy" | "in-cache-folder" | "not-configured" };
+
+/**
+ * 「删掉这个附件之后，要不要问用户删云端」的判定（**纯函数**）。
+ *
+ * ## ⭐ 核心：两个维度的"仍被引用"，取并集
+ *
+ * 内容寻址意味着**同一个对象可以被多份不同的本地文件共用**（同一张图贴两次、
+ * 或复制一份进来 ⇒ key 相同 ⇒ 同一个远端 URL）。于是只问
+ * "这个**文件路径**还有别的笔记在用吗"会漏掉另一半：删掉其中一份时，
+ * 另一份的笔记里写着**同一条 URL**，而路径判据看不见它 ⇒ 放行删云端 ⇒
+ * 把仍在使用的对象删掉（R17 明确要防的那件事）。
+ *
+ * 反过来也**不行**：真机取证里验过另一种情形（另一篇笔记用库内链接 `![[a.png]]`
+ * 指着它），那种引用**没有 URL**，只看 key 会漏。
+ * ⇒ 两个维度**任一成立**就算"仍被引用"（取更保守的一侧）。
+ *
+ * ## 为什么"跳过"有三种，而不是一种
+ *
+ * 三种都不是错误，但原因不同：删的不是我们落的副本（索引里没有记录）、
+ * 删的是缓存目录里的副本（那是 `clean-cache` 的地盘，两处不抢）、
+ * 或者还没配好存储（根本没有"云端"这一说）。
+ * 分开记与 `LocalCopyOutcome` 同一条理由：合并成一个"跳过"会让排查时看不出是哪种。
+ *
+ * ⚠️ 判据由调用方算好再传进来（这个函数不做 I/O），所以两个维度哪个贵、
+ * 什么时候去算，由接线层决定。
+ */
+export function planCloudDeleteHint(input: CloudDeleteHintInput): CloudDeleteHint {
+	if (!input.indexHit) return { action: "skip", reason: "no-local-copy" };
+	if (input.underCacheFolder) return { action: "skip", reason: "in-cache-folder" };
+	if (!input.clientReady) return { action: "skip", reason: "not-configured" };
+
+	const stillReferenced = input.referencedByPath || input.referencedByKey;
+	return stillReferenced
+		? { action: "ask", cloudAllowed: false, cloudDisabledReason: "cloudDeleteStillReferenced" }
+		: { action: "ask", cloudAllowed: true };
+}
+
 /** 索引里标记为「站外缓存」的 key 集合。 */
 export function externalKeysOf(index: CacheIndex | null | undefined): Set<string> {
 	const keys = new Set<string>();
@@ -173,6 +229,18 @@ export interface CloudCleanupDeps {
 export interface CloudCleanupResult {
 	/** 真的删掉的对象数。 */
 	deleted: number;
+	/**
+	 * 服务端回 **404**（对象本来就不存在）的数量。
+	 *
+	 * ⚠️ 与 `deleted` 分开计数是刻意的：把"本来就没有"算进"已删除"会让提示语撒谎。
+	 * 但它**不是失败** —— `deleteObject` 的契约就是"404 → `false`（本来就不存在），其它错误照抛"，
+	 * 目标状态已经达成，所以索引记录**照摘**（那条记录指向的对象确实不在了；
+	 * 留着会让 audit / 淘汰把它当有效记录 —— 症状是"明明删了，占用统计还在涨"）。
+	 *
+	 * ⚠️ 两条入口此前对同一个 `false` 给了**相反**的解释（入口 A 当"已完成"、这里当"失败"），
+	 * 见审计报告 P2 / 2026-10-11 已统一。
+	 */
+	alreadyGone: number;
 	/** 删除失败的对象数（如实汇报，绝不静默）。 */
 	failed: number;
 	/** 顺带摘掉的索引记录数（见 `maintenance/run.ts` 里"删完要摘记录"的同一条理由）。 */
@@ -190,6 +258,10 @@ export interface CloudCleanupResult {
  * 那条记录消失之后，渲染时会以为"远端也没有"，于是把这条 URL 当成站外图
  * （不下载、离线看不到）—— 明明对象还在。
  *
+ * ⚠️ 所以**只有失败不摘**：`deleteObject` 返回 `false` 表示服务端回了 404
+ * （对象本来就不存在），那是"目标状态已达成"，不是失败 —— 同样要摘。
+ * 单独计进 `alreadyGone`，免得提示语把"本来就没了"说成"删掉了"。
+ *
  * ## 本地副本一律不动
  *
  * 删的是**云端**对象。本地副本还在 ⇒ 那张图照常显示；下次缓存清理按孤儿规则
@@ -199,18 +271,19 @@ export async function runCloudCleanup(
 	deps: CloudCleanupDeps,
 	keys: readonly string[]
 ): Promise<CloudCleanupResult> {
-	const result: CloudCleanupResult = { deleted: 0, failed: 0, unindexed: 0 };
+	const result: CloudCleanupResult = { deleted: 0, alreadyGone: 0, failed: 0, unindexed: 0 };
 	const removed: string[] = [];
 
 	for (const key of keys ?? []) {
 		if (typeof key !== "string" || key === "") continue;
 		try {
 			const ok = await deps.client.deleteObject(key);
-			if (!ok) {
-				result.failed += 1;
-				continue;
+			if (ok) {
+				result.deleted += 1;
+			} else {
+				// 404 ⇒ 本来就不存在 ⇒ 目标状态已达成（见上面那段说明）
+				result.alreadyGone += 1;
 			}
-			result.deleted += 1;
 			if (deps.index().remove(key)) removed.push(key);
 		} catch (error) {
 			// 单个对象失败不能中断整批（用户要的是"把能清的清掉"），但必须计数

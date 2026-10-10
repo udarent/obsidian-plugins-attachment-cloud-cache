@@ -47,7 +47,7 @@ import {
 	selectExternalUploadCandidates,
 	selectUploadCandidates,
 } from "./maintenance/batch";
-import { listAllObjects, runCloudCleanup, selectCleanupCandidates } from "./maintenance/cloud-cleanup";
+import { listAllObjects, planCloudDeleteHint, runCloudCleanup, selectCleanupCandidates } from "./maintenance/cloud-cleanup";
 import { externalKeysOf, referencedKeysFromUrls } from "./maintenance/cloud-cleanup";
 import { createAttachWatcher, createSelfWriteLedger } from "./maintenance/attach-watch";
 import type { AttachWatcher } from "./maintenance/attach-watch";
@@ -487,6 +487,11 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 */
 	private async askAboutCloudDelete(path: string): Promise<void> {
 		const entry = this.currentIndex().findByCachePath(path);
+
+		// ⚠️ 前三条闸门在这里先判一次，纯粹是**成本**保护：下面那两个引用维度里有一个要
+		// 扫全库正文，不该为"根本不归这个入口管"的删除付这份代价。
+		// ⚠️ 它们与 `planCloudDeleteHint` 里的同名条件**不是**两套规则：那条规则只有一处定义，
+		// 这里只是"先问最便宜的"。判定的权威仍然是那个纯函数（它有独立的套件与变异锚点）。
 		if (!entry) return;
 		// 缓存目录里的副本：那是缓存管理的地盘（见上面第 2 条）
 		if (isUnderCacheFolder(path, this.settings.cacheFolder)) return;
@@ -494,14 +499,30 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		const client = this.buildClient();
 		if (!client) return;
 
-		// 还剩多少引用 —— 用与批量命令同一份判据（含画布），免得两处口径不一致
-		let stillReferenced = false;
+		// ⭐ 两个维度的"仍被引用"：
+		//  · **路径**：别的笔记/画布直接指着这个文件本身；
+		//  · **对象 key**：同内容的**另一份**附件写的 URL 就是这个 key（内容寻址下共用一个对象）。
+		// 只看路径会漏掉后一半 ⇒ 删掉一份时，另一份的引用看不见，云端照删（R17 要防的事）。
+		// 反向也要留着：库内链接 `![[a.png]]` 那种引用**没有 URL**，只看 key 会漏。
+		let referencedByPath = false;
+		let referencedByKey = false;
 		try {
-			stillReferenced = (await this.referencedVaultPaths()).has(path);
+			referencedByPath = (await this.referencedVaultPaths()).has(path);
+			referencedByKey = (await this.cloudReferencedKeys()).has(entry.key);
 		} catch {
 			// 读不到引用集合时按"还有引用"处理：那是**保守**的一侧
-			stillReferenced = true;
+			referencedByPath = true;
+			referencedByKey = true;
 		}
+
+		const plan = planCloudDeleteHint({
+			indexHit: true,
+			underCacheFolder: false,
+			referencedByPath,
+			referencedByKey,
+			clientReady: true,
+		});
+		if (plan.action === "skip") return;
 
 		const choice = await askCloudDelete(this.app, {
 			title: this.t("cloudDeleteTitle"),
@@ -510,8 +531,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				this.t("cloudDeleteWarning"),
 				this.t("cloudDeleteKeepLocal"),
 			],
-			cloudAllowed: !stillReferenced,
-			cloudDisabledReason: stillReferenced ? this.t("cloudDeleteStillReferenced") : undefined,
+			cloudAllowed: plan.cloudAllowed,
+			cloudDisabledReason: plan.cloudDisabledReason ? this.t(plan.cloudDisabledReason) : undefined,
 			localCta: this.t("cloudDeleteLocalOnly"),
 			cloudCta: this.t("cloudDeleteBoth"),
 			cancelCta: this.t("cloudDeleteCancel"),
@@ -617,6 +638,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		new Notice(
 			this.t("cloudCleanupDone", {
 				deleted: result.deleted,
+				alreadyGone: result.alreadyGone,
 				failed: result.failed,
 				unindexed: result.unindexed,
 			})

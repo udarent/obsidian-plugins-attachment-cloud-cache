@@ -44,9 +44,38 @@ await runMutations({
 			// 后果：摘索引不看删除结果 ⇒ 对象还在，而记录没了；
 			// 渲染时那条 URL 会被当成站外图（不下载、离线看不到），且**永远查不出原因**。
 			name: "★ 删除失败也摘索引（那条 URL 从此被当成站外图）",
-			from: "\t\t\tresult.deleted += 1;\n\t\t\tif (deps.index().remove(key)) removed.push(key);",
-			to: "\t\t\tif (deps.index().remove(key)) removed.push(key);\n\t\t\tresult.failed += 0;",
-			expect: "成功数要如实统计",
+			from: "\t\t} catch (error) {\n\t\t\t// 单个对象失败不能中断整批（用户要的是\"把能清的清掉\"），但必须计数\n\t\t\tresult.failed += 1;\n\t\t\tvoid error;\n\t\t}",
+			to: "\t\t} catch (error) {\n\t\t\tresult.failed += 1;\n\t\t\tif (deps.index().remove(key)) removed.push(key);\n\t\t\tvoid error;\n\t\t}",
+			expect: "只有**删成功**的对象才摘索引",
+		},
+		{
+			// 后果：服务端回 404（对象本来就不在桶里）被记成"删除失败" ⇒ 提示语撒谎
+			//（用户看到"有一个没删掉"，其实早就没了），而那条指向 404 的记录会被
+			// audit / 淘汰当成**有效记录**（症状："明明删了，占用统计还在涨"）。
+			// ⚠️ 这也是两个入口对同一个返回值给出**相反解释**的那一半（审计 P2）。
+			name: "★ 404 被记成失败（提示语撒谎 + 留下指向空对象的有效记录）",
+			from: "\t\t\tif (ok) {\n\t\t\t\tresult.deleted += 1;\n\t\t\t} else {\n\t\t\t\t// 404 ⇒ 本来就不存在 ⇒ 目标状态已达成（见上面那段说明）\n\t\t\t\tresult.alreadyGone += 1;\n\t\t\t}\n\t\t\tif (deps.index().remove(key)) removed.push(key);",
+			to: "\t\t\tif (!ok) {\n\t\t\t\tresult.failed += 1;\n\t\t\t\tcontinue;\n\t\t\t}\n\t\t\tresult.deleted += 1;\n\t\t\tif (deps.index().remove(key)) removed.push(key);",
+			// ⚠️ 这条变异会同时破坏三件事（`alreadyGone` 计数、`failed` 的归因、索引摘除），
+			// 而套件是"第一条失败断言决定报错" ⇒ 它红在**最先**那条（`alreadyGone` 计数）上。
+			// 按纪律把 expect 如实写成那一条（不是"随便红了就算抓住"）。
+			expect: "要单独计数",
+		},
+		{
+			// 后果：**入口 A** 只看文件路径 ⇒ 库里有两份同内容的附件时，删掉其中一份会放行删云端，
+			// 而另一份的笔记里写着**同一条 URL** ⇒ 删掉仍在使用的对象（审计 P1，R17 明确要防的那件事）。
+			name: "★★ 入口 A 只看路径维度（同内容的另一份附件仍在引用，却被放行删云端）",
+			from: "\tconst stillReferenced = input.referencedByPath || input.referencedByKey;",
+			to: "\tconst stillReferenced = input.referencedByPath; // 变异：丢掉 key 维度",
+			expect: "key 维度",
+		},
+		{
+			// 后果：在缓存目录里的副本也会弹"要不要连云端一起删" ⇒
+			// 与 clean-cache 抢同一批文件，而且那个副本删除**本来就不该问**（它是可再生的）。
+			name: "★ 缓存目录里的副本也走这个入口（和 clean-cache 抢地盘）",
+			from: "\tif (input.underCacheFolder) return { action: \"skip\", reason: \"in-cache-folder\" };",
+			to: "\t// 变异：不判缓存目录",
+			expect: "缓存目录里的副本",
 		},
 	],
 });

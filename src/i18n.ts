@@ -142,7 +142,8 @@ export const I18N: Record<string, Locale> = {
 		cloudCleanupNothing: "Nothing to clean up: every object in your storage is still referenced.",
 		cloudCleanupTruncatedNothing:
 			"Nothing to clean up in the part that was listed, and the listing stopped early — try again later.",
-		cloudCleanupDone: "Deleted {deleted} object(s); {failed} failed. {unindexed} index record(s) removed.",
+		cloudCleanupDone:
+			"Deleted {deleted} object(s); {alreadyGone} were already gone; {failed} failed. {unindexed} index record(s) removed.",
 		cloudCleanupListFailed: "Could not list the objects in your storage: {error}",
 		cloudCleanupPersistFailed: "Could not save the cache index: {error}",
 		cloudCleanupUnreadableNote: "Could not read {path}, so the cleanup was cancelled.",
@@ -353,7 +354,8 @@ export const I18N: Record<string, Locale> = {
 		cloudCleanupTruncatedWarning: "列举提前结束了（对象太多），所以这份清单可能不全。",
 		cloudCleanupNothing: "没有需要清理的：你存储里的对象都还被引用着。",
 		cloudCleanupTruncatedNothing: "已列出的部分没有可清理的对象，而列举提前结束了 —— 可以稍后再试。",
-		cloudCleanupDone: "已删除 {deleted} 个对象，失败 {failed} 个，摘掉 {unindexed} 条索引记录。",
+		cloudCleanupDone:
+			"已删除 {deleted} 个对象；另有 {alreadyGone} 个本来就不存在；失败 {failed} 个；摘掉 {unindexed} 条索引记录。",
 		cloudCleanupListFailed: "无法列出你存储里的对象：{error}",
 		cloudCleanupPersistFailed: "缓存索引保存失败：{error}",
 		cloudCleanupUnreadableNote: "读不到 {path}，因此取消了这次清理。",
