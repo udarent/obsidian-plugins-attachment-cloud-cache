@@ -48,12 +48,24 @@ export function confirmWithModal(app: App, options: ConfirmOptions): Promise<boo
 		}
 
 		new Setting(modal.contentEl)
-			.addButton((button) =>
-				button.setButtonText(options.cta).onClick(() => {
+			.addButton((button) => {
+				const cta = button.setButtonText(options.cta);
+				// ⭐ 破坏性动作必须**看得出来** —— 宿主会把它染成警示色。
+				//
+				// ⚠️ 这个选项以前是**死的**：它传进来了、注释也写着"宿主会把它染成警示色"，
+				// 但从来没有人调用过宿主那个方法。2026-10-10 在真机上量到：「彻底删除」与
+				// 「Cancel」的 class、背景色、字色、描边**四项逐项相同** —— 而这是用户按下
+				// 不可逆按钮前**唯一**读到的安全信号。
+				//
+				// 为什么一直没人发现：这一层刻意不在单元测试网里（见文件头），
+				// 所以只有"在真机上量效果"能发现它。现在的判据在真机验证链条里：
+				// 把鼠标挪开、焦点清掉之后比两个按钮的样式，两者必须看得出不同。
+				if (options.destructive) cta.setDestructive();
+				cta.onClick(() => {
 					finish(true);
 					modal.close();
-				})
-			)
+				});
+			})
 			.addButton((button) =>
 				button.setButtonText("Cancel").onClick(() => {
 					finish(false);
