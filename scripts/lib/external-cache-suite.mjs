@@ -381,7 +381,6 @@ export async function runExternalCacheSuite(mod) {
 				accessKeyId: "",
 				secretAccessKeyRef: "",
 				forcePathStyle: true,
-				objectKeyTemplate: "{hash}.{ext}",
 			},
 		};
 

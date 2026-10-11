@@ -3,10 +3,17 @@
  *
  * ## 这一层坏掉的方式是「白干活」或「该干不干」
  *
- * - 门槛失效 → 每次上传、每个周期都去列目录 + **读全库笔记**（在大库里就是卡顿）；
- * - 节流失效 → 连粘 20 张图触发 20 轮，每轮都量磁盘删文件；
+ * - 门槛失效 → 每次上传、每个周期都去**读全库笔记**（在大库里就是卡顿）；
+ * - 节流失效 → 连粘 20 张图触发 20 轮，每轮都删文件；
  * - 并发标志写错 → 两轮同时删同一批文件，结果没法解释；
  * - 出错抛出去 → 后台任务把异常抛进插件的生命周期里（用户看到的是插件报错）。
+ *
+ * ## ⭐ 1.3.0（D-17）：门槛从两道变一道（与候选同源）
+ *
+ * 从前有第二道门槛"列缓存目录 + 逐个 stat"，用来发现"索引记的比磁盘小"。
+ * 缓存目录取消之后，候选与统计**都来自索引**，那道门槛没有可看的对象了 ——
+ * 而索引之外的文件**绝不能删**（那可能是用户的附件）。所以它被删掉，
+ * 代价是"索引不全时上限偏保守"，这正是安全的那一侧（下面有一条断言专门把它写下来）。
  *
  * 所以这里用**注入的假依赖**把每一次调用都数出来，逐条钉住。
  */
@@ -31,10 +38,6 @@ function entryFor(key, options = {}) {
 		sourceName: key,
 		lastUsedAt: options.lastUsedAt ?? 0,
 	};
-}
-
-function diskFor(path, bytes) {
-	return { path, bytes };
 }
 
 export async function runRotationSuite(mod) {
@@ -71,37 +74,33 @@ export async function runRotationSuite(mod) {
 	// 2. 环境（把每一次调用都数出来）
 	// ============================================================
 	function makeHarness(options = {}) {
-		const calls = { collect: 0, scan: 0, evict: 0 };
+		const calls = { index: 0, scan: 0, evict: 0 };
 		const notices = [];
 		const errors = [];
 		const plans = [];
+		const presentQueries = [];
 		let clock = options.now ?? NOW;
-		/**
-		 * 让 `collectFiles` 能一直挂着（用来构造「上一轮还没跑完」的情形）。
-		 *
-		 * ⚠️ 用**数组**收集所有挂起的 resolve，而不是只留最后一个：
-		 * 万一并发标志失效（变异），两轮会**同时**挂在这里，
-		 * 而只释放最后一个会让另一轮永远挂着 —— 那时测试不是"断言失败"而是**卡死**
-		 * （Node 事件循环一空就会带一句 unsettled top-level await 直接退出，
-		 * 变异运行器只看到一个语焉不详的退出码）。让它老老实实断言失败要好得多。
-		 */
-		let pendingCollect = [];
+		/** 让"扫引用"能一直挂着（用来构造「上一轮还没跑完」的情形）。 */
+		let pendingScan = [];
 
 		const deps = {
 			settings: () => options.settings ?? settingsWith(),
-			index: () => ({ toArray: () => options.entries ?? [] }),
-			collectFiles: async () => {
-				calls.collect += 1;
-				if (options.collectThrows) throw new Error("列目录失败");
-				if (options.collectHangs) {
-					await new Promise((resolve) => {
-						pendingCollect.push(resolve);
-					});
-				}
-				return options.files ?? [];
+			index: () => {
+				calls.index += 1;
+				return { toArray: () => options.entries ?? [] };
+			},
+			isPresent: (path) => {
+				presentQueries.push(path);
+				return (options.present ?? (() => true))(path);
 			},
 			scanReferencedKeys: async () => {
 				calls.scan += 1;
+				if (options.scanThrows) throw new Error("扫笔记失败");
+				if (options.scanHangs) {
+					await new Promise((resolve) => {
+						pendingScan.push(resolve);
+					});
+				}
 				return options.referencedKeys ?? new Set();
 			},
 			evict: async (plan) => {
@@ -126,23 +125,33 @@ export async function runRotationSuite(mod) {
 			notices,
 			errors,
 			plans,
+			presentQueries,
 			setNow: (value) => {
 				clock = value;
 			},
-			/** 放行**所有**挂起的列目录调用（见 `pendingCollect` 的说明）。 */
+			/**
+			 * 放行**所有**挂起的扫引用调用（见 `pendingScan` 的说明）。
+			 *
+			 * ⚠️ 用**数组**收集，而不是只留最后一个：万一并发标志失效（变异），
+			 * 两轮会同时挂在这里，只释放最后一个会让另一轮永远挂着 ——
+			 * 那时测试不是"断言失败"而是**卡死**（Node 事件循环一空就会带一句
+			 * 语焉不详的退出码直接退出，变异运行器只看到一个说不出原因的退出码）。
+			 */
 			release: () => {
-				const waiting = pendingCollect;
-				pendingCollect = [];
+				const waiting = pendingScan;
+				pendingScan = [];
 				for (const resolve of waiting) resolve();
 			},
 		};
 	}
 
-	// 一个「超限」的公共场景：索引记 2 MB，磁盘上也是 2 MB，上限 1 MB
+	// 「超限」的公共场景：索引记 2 MB，上限 1 MB。
+	// ⚠️ 副本放在**附件目录**里 —— 1.3.0 之后那才是常态，而且它照样计入（P7 的关闭依据）。
 	const overLimit = {
 		settings: settingsWith({ cacheLimitMb: 1 }),
-		entries: [entryFor("big.png", { size: 2 * MB, lastUsedAt: NOW - 10 * HOUR })],
-		files: [diskFor("_attachment-cache/big.png", 2 * MB)],
+		entries: [
+			entryFor("big.png", { cachePath: "attachments/big.png", size: 2 * MB, lastUsedAt: NOW - 10 * HOUR }),
+		],
 	};
 
 	// ============================================================
@@ -151,50 +160,45 @@ export async function runRotationSuite(mod) {
 	{
 		const h = makeHarness({ ...overLimit, settings: settingsWith({ cacheLimitMb: 0 }) });
 		assert.equal(await h.rotator.maybeRotate("startup"), null, "0 = 不限制 → 不跑");
-		assert.equal(h.calls.collect, 0, "★ 不限制时连磁盘都不该碰（默认就是状态，不能有代价）");
+		assert.equal(h.calls.index, 0, "★ 不限制时连索引都不该读（默认就是这个状态，不能有代价）");
 		assert.equal(h.calls.scan, 0, "更不该扫笔记");
 		assert.deepEqual(h.notices, [], "什么都不该提示");
 	}
 
 	// ============================================================
-	// 4. ⭐ 门槛 ①：索引字节没超 → 不列目录（这是「每次上传都跑」的成本所在）
+	// 4. ⭐ 门槛：索引字节没超 → 连笔记都不扫（这是「每次上传都跑」的成本所在）
 	// ============================================================
 	{
-		const h = makeHarness({
-			...overLimit,
-			entries: [entryFor("small.png", { size: 0.1 * MB })],
-			files: [diskFor("_attachment-cache/small.png", 0.1 * MB)],
-		});
+		const h = makeHarness({ ...overLimit, entries: [entryFor("small.png", { size: 0.1 * MB })] });
 		assert.equal(await h.rotator.maybeRotate("growth"), null, "索引没超 → 不跑");
-		assert.equal(h.calls.collect, 0, "★ 便宜的门槛挡住时**不该列目录**（这是每次上传都会走的路径）");
-		assert.equal(h.calls.scan, 0, "也不该扫笔记");
+		assert.equal(h.calls.index, 1, "门槛本身就是一次内存求和");
+		assert.equal(h.calls.scan, 0, "★ 便宜的门槛挡住时**不该扫笔记**（读全库笔记是这条链上最贵的一步）");
+		assert.equal(h.calls.evict, 0, "更不该动文件");
 	}
 
-	// ============================================================
-	// 5. ⭐ 门槛 ②：磁盘上没超 → 不扫笔记（最贵的一步）
-	// ============================================================
-	// 约定：`null` 只表示「根本没去量」（没设上限 / 被便宜门槛挡住 / 被节流 / 并发 / 出错）；
-	// 一旦量过磁盘，就给出一份结果 —— 哪怕是「没超、什么都没做」，
-	// 因为"量到的真实占用"本身就是排查时要看的东西。
+	// 门槛与候选**同源**：过了门槛就一定有一份能算的总量（不再有"列目录量磁盘"那一步）
+	{
+		const h = makeHarness({ ...overLimit });
+		const summary = await h.rotator.maybeRotate("growth");
+		assert.ok(summary, "超限 → 真的跑一轮");
+		assert.equal(summary.totalBytes, 2 * MB, "统计口径 = 索引里的字节之和（含附件目录里的副本）");
+		assert.equal(h.calls.scan, 1, "真的超了才去扫笔记");
+	}
+
+	// ⭐ 索引与磁盘不一致（索引记的比磁盘小）时**不再被发现** —— 把取舍写下来
 	{
 		const h = makeHarness({
 			...overLimit,
-			// 索引记的比上限大（触发了门槛①），但磁盘上其实只有一点点
-			entries: [entryFor("stale.png", { size: 5 * MB })],
-			files: [diskFor("_attachment-cache/stale.png", 200 * 1024)],
+			entries: [entryFor("understated.png", { size: 0.1 * MB, lastUsedAt: NOW - 50 * HOUR })],
 		});
-		const summary = await h.rotator.maybeRotate("growth");
-		assert.ok(summary, "量过磁盘了 → 要给出结果（`null` 只表示「根本没去量」）");
-		assert.equal(summary.totalBytes, 200 * 1024, "结果里带上量到的**真实**占用");
-		assert.equal(summary.evicted, 0, "磁盘上没超 → 一份都不淘汰");
-		assert.equal(h.calls.collect, 1, "这一层要量磁盘才知道到底超没超");
-		assert.equal(h.calls.scan, 0, "★ 磁盘也没超时**不该扫笔记**（读全库笔记是这条链上最贵的一步）");
-		assert.equal(h.calls.evict, 0, "更不该动文件");
-		assert.deepEqual(h.notices, [], "什么都没删 → 不提示");
+		assert.equal(await h.rotator.maybeRotate("growth"), null, "索引说没超 → 不跑（不再去量磁盘对照）");
+		assert.equal(h.calls.scan, 0, "连笔记都不扫");
+		// ⚠️ 反过来（凭磁盘清单猜）会删到索引外的文件 —— 那可能是用户的附件。
+		// 所以宁可偏保守：索引不全/记小了 ⇒ 上限晚一点生效。
 	}
 
 	// ============================================================
-	// 6. 真的超了 → 淘汰并如实汇报
+	// 5. 真的超了 → 淘汰并如实汇报
 	// ============================================================
 	{
 		const h = makeHarness(overLimit);
@@ -206,12 +210,9 @@ export async function runRotationSuite(mod) {
 		assert.equal(summary.freed, 2 * MB, "回收 2 MB");
 		assert.equal(summary.overBy, 0, "腾到上限以内了 → 不该报「仍超出」");
 		assert.equal(h.calls.evict, 1, "执行层被调用一次");
+		assert.deepEqual(h.presentQueries, ["attachments/big.png"], "候选要问一次「这份副本还在磁盘上吗」");
 		assert.equal(h.notices.length, 1, "★ 真的淘汰了才提示，且只提示一次");
-		assert.match(
-			h.notices[0],
-			/cacheEvicted /,
-			`应用「已删除」那条文案（实际 ${h.notices[0]}）`
-		);
+		assert.match(h.notices[0], /cacheEvicted /, `应用「已删除」那条文案（实际 ${h.notices[0]}）`);
 		assert.match(h.notices[0], /2\.0/, "提示里要带上腾出了多少 MB");
 	}
 
@@ -219,26 +220,21 @@ export async function runRotationSuite(mod) {
 	{
 		const h = makeHarness({
 			...overLimit,
-			evictOutcome: { evicted: 1, freed: 0.5 * MB, skipped: [{ path: "x", reason: "宿主的索引滞后" }] },
+			evictOutcome: { evicted: 1, freed: 0.5 * MB, skipped: [{ path: "x", reason: "云端确认不上" }] },
 		});
 		const summary = await h.rotator.maybeRotate("growth");
 		assert.equal(summary.skipped, 1, "被跳过的要计数");
 		assert.equal(summary.overBy, 0.5 * MB, "★ 「还超多少」要用**实际**回收量算，而不是计划里的数字");
-		assert.match(
-			h.notices[0],
-			/cacheEvictedPartial /,
-			"还超出时应换一条文案，把「仍超出」说出来"
-		);
+		assert.match(h.notices[0], /cacheEvictedPartial /, "还超出时应换一条文案，把「仍超出」说出来");
 	}
 
 	// ============================================================
-	// 7. ⭐ 全在宽限期内 → 不动手，也不打扰
+	// 6. ⭐ 全在宽限期内 → 不动手，也不打扰
 	// ============================================================
 	{
 		const h = makeHarness({
 			...overLimit,
 			entries: [entryFor("fresh.png", { size: 2 * MB, lastUsedAt: NOW - 1 * MINUTE })],
-			files: [diskFor("_attachment-cache/fresh.png", 2 * MB)],
 		});
 		const summary = await h.rotator.maybeRotate("growth");
 		assert.ok(summary, "量过了，所以要给出结果（而不是含糊地返回 null）");
@@ -248,36 +244,30 @@ export async function runRotationSuite(mod) {
 		assert.deepEqual(h.notices, [], "★ 什么都没删就不该提示（后台任务不该插嘴）");
 	}
 
-	// ============================================================
-	// 8. ⭐ 启动那一轮不看索引（索引坏掉时上限不能形同虚设）
-	// ============================================================
+	// 索引里有、磁盘上没有 → 没有可删的东西，不调执行层
 	{
-		// 索引是空的（`loadCacheIndex` 遇到坏 JSON 就是这样），但缓存目录里有一堆文件
-		const h = makeHarness({
-			settings: settingsWith({ cacheLimitMb: 1 }),
-			entries: [],
-			files: [diskFor("_attachment-cache/orphan.png", 2 * MB)],
-		});
-		const summary = await h.rotator.maybeRotate("startup");
-		assert.ok(summary, "★ 启动时必须去量磁盘 —— 索引空不等于缓存是空的");
-		assert.equal(h.calls.collect, 1, "启动那一轮要列目录");
-		assert.equal(summary.evicted, 1, "★ 孤儿也要被淘汰（它们一样占着用户的磁盘）");
-		assert.equal(h.plans[0].evict[0].key, "", "挑中的是孤儿（没有 key）");
-	}
-
-	// 反过来：同一份数据用 growth 触发，会被门槛①挡住 → 这正是那个刻意的取舍
-	{
-		const h = makeHarness({
-			settings: settingsWith({ cacheLimitMb: 1 }),
-			entries: [],
-			files: [diskFor("_attachment-cache/orphan.png", 2 * MB)],
-		});
-		assert.equal(await h.rotator.maybeRotate("growth"), null, "非启动触发会被便宜的门槛挡住（索引记 0 字节）");
-		assert.equal(h.calls.collect, 0, "因此不列目录 —— 这是刻意的取舍：那类情况由启动那一轮兜住");
+		const h = makeHarness({ ...overLimit, present: () => false });
+		const summary = await h.rotator.maybeRotate("growth");
+		assert.equal(summary.evicted, 0, "文件不在磁盘上 → 没有可删的东西");
+		assert.equal(h.calls.evict, 0, "候选为空时不该调执行层");
 	}
 
 	// ============================================================
-	// 9. 节流与并发
+	// 7. ⭐ 启动那一轮**也只看索引**（与旧实现相反的取舍）
+	//
+	// 旧实现让启动那轮绕过索引、直接量磁盘：那时"磁盘上有、索引里没有"的东西
+	// 都在缓存目录里，删掉是安全的。现在索引外的文件可能是**用户的附件** ——
+	// 一律不能自动删 ⇒ 索引不全时上限偏保守，而不是"凭磁盘清单猜"。
+	// ============================================================
+	{
+		const h = makeHarness({ settings: settingsWith({ cacheLimitMb: 1 }), entries: [] });
+		assert.equal(await h.rotator.maybeRotate("startup"), null, "★ 索引是空的时候，启动那一轮也什么都不做");
+		assert.equal(h.calls.scan, 0, "连笔记都不扫");
+		assert.equal(h.calls.evict, 0, "★ 绝不因为「磁盘上还有些文件」就去删 —— 那些可能是用户的附件");
+	}
+
+	// ============================================================
+	// 8. 节流与并发
 	// ============================================================
 	{
 		const h = makeHarness({ ...overLimit, minIntervalMs: 5 * MINUTE });
@@ -286,7 +276,7 @@ export async function runRotationSuite(mod) {
 
 		assert.equal(await h.rotator.maybeRotate("growth"), null, "★ 紧接着的第二轮要被节流挡住");
 		assert.equal(h.calls.evict, 1, "★ 连粘多张图不该触发多轮淘汰");
-		assert.equal(h.calls.collect, 1, "连节点目录都不该再发生");
+		assert.equal(h.calls.scan, 1, "连扫笔记都不该再发生");
 
 		h.setNow(NOW + 5 * MINUTE);
 		assert.ok(await h.rotator.maybeRotate("interval"), "过了最短间隔 → 该跑");
@@ -294,19 +284,18 @@ export async function runRotationSuite(mod) {
 	}
 
 	{
-		// 上一轮还挂在 collectFiles 里 → 这一轮必须让路，而不是也去删同一批文件
-		const h = makeHarness({ ...overLimit, collectHangs: true });
+		// 上一轮还挂在扫引用里 → 这一轮必须让路，而不是也去删同一批文件
+		const h = makeHarness({ ...overLimit, scanHangs: true });
 		const first = h.rotator.maybeRotate("growth");
-		// 让第一轮走到 collectFiles 之后
+		// 让第一轮走到扫引用之后
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
 		// ⚠️ 这里**不能** `await` 第二轮再放行：万一并发标志失效，
-		// 第二轮也会挂在 collectFiles 上，而 `release()` 在 await 之后 —— 死锁，
+		// 第二轮也会挂在扫引用上，而 `release()` 在 await 之后 —— 死锁，
 		// 于是"测试失败"退化成了"进程卡死"（变异运行器只能看到一个退出码，说不出原因）。
-		// 所以先拿到 promise、给它机会去抢跑、断言、再放行。
 		const second = h.rotator.maybeRotate("interval");
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		assert.equal(h.calls.collect, 1, "★ 并发时只跑一轮（不能两轮同时删同一批文件）");
+		assert.equal(h.calls.scan, 1, "★ 并发时只跑一轮（不能两轮同时删同一批文件）");
 
 		h.release();
 		assert.ok(await first, "第一轮照常完成");
@@ -314,10 +303,10 @@ export async function runRotationSuite(mod) {
 	}
 
 	// ============================================================
-	// 10. 出错必须被吞住（后台任务不能把异常抛给调用方）
+	// 9. 出错必须被吞住（后台任务不能把异常抛给调用方）
 	// ============================================================
 	{
-		const h = makeHarness({ ...overLimit, collectThrows: true });
+		const h = makeHarness({ ...overLimit, scanThrows: true });
 		let thrown = null;
 		let summary;
 		try {
@@ -341,10 +330,10 @@ export async function runRotationSuite(mod) {
 
 	// 节流时间戳在出错后也要推进：否则出错会变成「每次事件都重试」的死循环
 	{
-		const h = makeHarness({ ...overLimit, collectThrows: true, minIntervalMs: 5 * MINUTE });
+		const h = makeHarness({ ...overLimit, scanThrows: true, minIntervalMs: 5 * MINUTE });
 		await h.rotator.maybeRotate("growth");
-		assert.equal(h.calls.collect, 1, "第一次尝试了");
+		assert.equal(h.calls.scan, 1, "第一次尝试了");
 		await h.rotator.maybeRotate("growth");
-		assert.equal(h.calls.collect, 1, "★ 出错之后也要计入节流（否则一次失败会变成每个事件都重试）");
+		assert.equal(h.calls.scan, 1, "★ 出错之后也要计入节流（否则一次失败会变成每个事件都重试）");
 	}
 }

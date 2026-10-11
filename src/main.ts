@@ -26,7 +26,7 @@
 
 import { Component, MarkdownRenderer, Notice, Plugin, TFile, getLanguage } from "obsidian";
 
-import { SETTINGS_DEFAULTS, mergePluginSettings } from "./settings";
+import { SETTINGS_DEFAULTS, hasLegacyObjectKeyTemplate, mergePluginSettings } from "./settings";
 import type { PluginSettings } from "./types";
 import { detectLocale, translate } from "./i18n";
 import { SettingsTab } from "./ui/settings-tab";
@@ -34,7 +34,7 @@ import { CacheIndex } from "./cache/index";
 import { createIndexStore, makeSerializer } from "./host/runtime";
 import type { HostContext } from "./host/runtime";
 import { createEditorHandlers } from "./host/editor-bridge";
-import { auditForCleanup, collectCacheFiles, runBatchUpload, runCleanup, runEviction, scanReferences } from "./maintenance/run";
+import { auditForCleanup, runBatchUpload, runCleanup, runEviction, scanReferences } from "./maintenance/run";
 import { canvasTextTargets, keysInText } from "./maintenance/references";
 import { describeError } from "./error-text";
 import type { MaintenanceDeps } from "./maintenance/run";
@@ -180,6 +180,14 @@ export type ImportCredentialsOutcome =
 export default class AttachmentCloudCachePlugin extends Plugin {
 	settings: PluginSettings = { ...SETTINGS_DEFAULTS };
 	locale = "en";
+
+	/**
+	 * 这份 `data.json` 里带着**已被取消的 key 模板**（1.3.0），且我们已经清理过它。
+	 *
+	 * 只在 `loadSettings` 里置位，等文案语种与界面都就绪之后再告诉用户 ——
+	 * 提示要等他看得懂、而不是在插件还在启动时闪一下。
+	 */
+	private legacyKeyTemplateUpgraded = false;
 
 	/** 索引的读写（含串行化落盘）。`onload` 里初始化。 */
 	private indexStore: ReturnType<typeof createIndexStore> | null = null;
@@ -432,9 +440,10 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		this.rotation = createCacheRotator({
 			settings: () => this.settings,
 			index: () => this.currentIndex(),
-			// 复用维护功能那几个函数，而不是另写一套：列目录、扫引用、按设置删文件
-			// 都只有一处实现，行为不会因为"从哪条路径进来"而不同。
-			collectFiles: () => collectCacheFiles(this.app, this.settings.cacheFolder),
+			// ⭐ 1.3.0：候选与统计**一律来自索引**（缓存目录已经不在了）。
+			// 存在性用宿主的文件索引回答 —— 它可能滞后，而滞后只会让这一轮少淘汰几个。
+			isPresent: (path) => Boolean(this.app.vault.getAbstractFileByPath(path)),
+			// 扫引用这条仍然复用维护功能那一份实现（只此一处）
 			scanReferencedKeys: async () => (await scanReferences(this.app, (url) => this.keyOfUrl(url))).keys,
 			evict: (plan) => runEviction(this.maintenanceDeps(), plan),
 			notify: (message) => new Notice(message),
@@ -571,6 +580,14 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		// 快照在布局就绪后建立（那时文件已可读），且**不阻塞启动**
 		this.app.workspace.onLayoutReady(() => {
 			void this.warmUpOrphanWatch();
+
+			// ⭐ 一次性兼容升级的**告知**（1.3.0）：`loadSettings` 已经把遗留的 key 模板
+			// 从 `data.json` 里清掉了，但用户得知道"之后上传的对象命名变了"。
+			// 放在这里而不是 `onload` 里：那时语种与界面都就绪，提示不会被启动过程吞掉。
+			if (this.legacyKeyTemplateUpgraded) {
+				this.legacyKeyTemplateUpgraded = false;
+				new Notice(this.t("legacyKeyTemplateUpgraded"));
+			}
 		});
 
 		this.registerMaintenanceCommands();
@@ -1108,6 +1125,9 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			// ⚠️ 复用「缓存站外图片」那条链，而不是另写一套下载+上传：
 			// 于是同意复核、失败分类、"URL 在笔记里总是字面出现"那几条纪律只有一份实现。
 			cacheExternal: (url, notePath) => this.cacheExternalImage(url, notePath),
+			// ⭐ 淘汰本地副本前的**云端复核**（HEAD）：确认对象此刻真的还在。
+			// 删文件前的安全线 —— 答不上来（离线、出错）一律当作"没有"，于是不删。
+			confirmRemote: (key) => this.isObjectInCloud(key),
 			notify: (message) => new Notice(message),
 			t: (key, params) => this.t(key, params),
 		};
@@ -1561,6 +1581,28 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * 云端**现在**还有这个对象吗（淘汰本地副本前的复核）。
+	 *
+	 * 为什么不能只查台账：台账记的是"我们传过它"，而别的设备可能已经把云端对象清掉了 ——
+	 * 那种情况下本机这份副本是**最后一份**，删它就是丢数据。
+	 * 缓存目录时代不需要这一问（那条目录里的东西必然是刚传上去的）。
+	 *
+	 * ⚠️ 任何异常（离线、鉴权、404 之外的服务端错）一律返回 `false` ⇒ 不淘汰。
+	 * 方向是刻意的：这一条的存在意义就是"没有确认就不动手"。
+	 */
+	private async isObjectInCloud(key: string): Promise<boolean> {
+		const client = this.buildClient();
+		if (!client) return false;
+		try {
+			const head = await client.headObject(key);
+			return head !== null;
+		} catch (error) {
+			console.debug(`[attachment-cloud-cache] 云端复核失败（本轮不淘汰 ${key}）`, error);
+			return false;
+		}
+	}
+
 	private async referencedVaultPaths(): Promise<ReadonlySet<string>> {
 		const referenced = new Set(referencedPathsFrom(this.app.metadataCache?.resolvedLinks));
 
@@ -1908,7 +1950,28 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	async loadSettings(): Promise<void> {
 		// ⚠️ 走 mergePluginSettings 而不是直接赋值：data.json 可能是手改的、
 		// 旧版本的、或被别的工具写坏的，必须逐字段校验后再用。
-		this.settings = mergePluginSettings(SETTINGS_DEFAULTS, await this.loadData());
+		// ⚠️ 标 `unknown`：`loadData()` 的返回是 `any`，而这里正是"数据可能被手改/写坏"
+		// 的入口 —— 让它显式地不信任，而不是靠 `any` 悄悄流过去。
+		const stored: unknown = await this.loadData();
+		this.settings = mergePluginSettings(SETTINGS_DEFAULTS, stored);
+
+		// ⭐ 一次性兼容升级（1.3.0）：老 `data.json` 里的 `objectKeyTemplate` 已被取消。
+		//
+		// 合并结果里本来就不会带上它（字段表只写自己列出的键），所以这一步**不是**在为
+		// "设置生效"做迁移 —— 它做两件别的事：把遗留值从文件里清掉，并让用户**知道**
+		// 他的 key 形状从此固定成「原名-哈希.扩展名」了。
+		//
+		// ⚠️ 幂等：清掉之后再进来就查不到了 ⇒ 只会写这一次（`hasLegacy...` 问的就是
+		// "文件里还有没有那个键"）。写失败也不影响本次运行 —— 设置已经是对的，
+		// 只是文件要到下次保存才干净，所以这里**不提示失败**（那会变成每次启动都弹一条噪音）。
+		if (hasLegacyObjectKeyTemplate(stored)) {
+			this.legacyKeyTemplateUpgraded = true;
+			try {
+				await this.saveData(this.settings);
+			} catch (error) {
+				console.error("[attachment-cloud-cache] 清理遗留设置失败（不影响本次运行）", error);
+			}
+		}
 	}
 
 	async saveSettings(): Promise<void> {

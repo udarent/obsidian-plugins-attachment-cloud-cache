@@ -49,6 +49,7 @@ import {
 	publicLinkTone,
 	randomSlotPart,
 	shouldShowCacheFolder,
+	shouldShowCacheLimit,
 	shouldShowFallbackDownload,
 } from "./settings-logic";
 
@@ -500,7 +501,8 @@ export class SettingsTab extends PluginSettingTab {
 				aliases: ["limit", "quota", "size", "rotate", "上限", "轮换", "容量", "空间"],
 				// ⚠️ 与缓存目录同一个显示条件：副本不在缓存目录里时（`keep`），
 				// 这个上限永远不会触发 —— 显示一个永远不起作用的开关比不显示更糟。
-				visible: () => shouldShowCacheFolder(this.plugin.settings.localCopy),
+				// ⭐ P7 的关闭方式：可见性跟着"这一档会不会有副本"走（见 `shouldShowCacheLimit`）
+				visible: () => shouldShowCacheLimit(this.plugin.settings.localCopy),
 				control: { type: "text", key: "cacheLimitMb", placeholder: this.t("cacheLimitPlaceholder") },
 			},
 			{
@@ -585,12 +587,6 @@ export class SettingsTab extends PluginSettingTab {
 					key: "attachmentFolder",
 					placeholder: this.t("attachmentFolderPlaceholder"),
 				},
-			},
-			{
-				name: this.t("objectKeyTemplate"),
-				desc: this.t("objectKeyTemplateDesc"),
-				aliases: ["key", "template", "path", "命名", "模板"],
-				control: { type: "text", key: "s3.objectKeyTemplate" },
 			},
 			{
 				name: this.t("forcePathStyle"),

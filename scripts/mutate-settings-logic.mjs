@@ -55,6 +55,14 @@ await runMutations({
 			to: "\treturn true;",
 			expect: "原地保留时缓存目录必须隐藏",
 		},
+		{
+			// 后果：又退回旧规则（只认 "cache" 档）⇒ 「原地保留」档的上限**看不见却仍在后台生效**，
+			// 那正是 P7：一个用户不知道存在的开关在删他的副本。
+			name: "★ 上限又变成只在「移入缓存」档显示（P7 复发：看不见的开关在删副本）",
+			from: "export function shouldShowCacheLimit(action: unknown): boolean {\n\treturn !isCacheDisabled(action);\n}",
+			to: 'export function shouldShowCacheLimit(action: unknown): boolean {\n\treturn action === "cache";\n}',
+			expect: "原地保留档**也要显示**",
+		},
 
 		// ── 选项生成 ──
 		{

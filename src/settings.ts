@@ -31,13 +31,15 @@ import { normalizePath } from "obsidian";
  *   这正是这一版砍掉 5 个参数后**不需要写迁移代码**的原因：旧键自动消失，
  *   新字段拿默认值，而 `localCopy` 这个新字段的默认值（`cache`）恰好等于
  *   旧组合 `cacheEnabled: true + localFileAction: "cache"` 的效果。
+ *   ⚠️ 唯一的例外是 1.3.0 取消的 `objectKeyTemplate`：设置同样不需要迁移，
+ *   但**用户需要被告知**（他的 key 形状固定成 `名字-哈希.扩展名` 了），
+ *   而且遗留值该从文件里清掉 ⇒ 见 `hasLegacyObjectKeyTemplate` 与 `main.ts` 的载入流程。
  */
 
 import { EXTERNAL_IMAGE_DEFAULTS, LOCAL_COPY_ACTIONS, ORPHAN_ASK_MODES, isExternalImageDefault, isLocalCopyAction, isOrphanAskMode } from "./types";
 import type { ExternalImageDefault, LocalCopyAction, OrphanAskMode, PluginSettings, S3Config } from "./types";
 import { CACHE_LIMIT_MB_MAX } from "./types";
 import { isPlainRecord } from "./records";
-import { DEFAULT_OBJECT_KEY_TEMPLATE } from "./object-key";
 
 // 枚举类型守卫定义在 types.ts（与枚举本身同处一地，避免两个模块各存一份）。
 // 这里转出去，让"读设置的模块"同时就是"拿守卫的模块"。
@@ -92,7 +94,7 @@ function pathValue(options: { required?: boolean } = {}): FieldReader<string> {
 	};
 }
 
-/** 非空字符串：用于**为空会直接导致功能不可用**的字段（如目录名、key 模板）。 */
+/** 非空字符串：用于**为空会直接导致功能不可用**的字段（如目录名、区域）。 */
 function requiredTextValue(): FieldReader<string> {
 	return (raw, fallback) => (typeof raw === "string" && raw.trim() !== "" ? raw : fallback);
 }
@@ -189,10 +191,9 @@ const S3_FALLBACKS: S3Config = {
 	secretAccessKeyRef: "",
 	// path-style 默认开：R2 的 S3 端点不支持 virtual-host，而其余各家都接受 path-style
 	forcePathStyle: true,
-	// 默认模板 = 名字 + 完整哈希尾（理由见 object-key.ts 的 DEFAULT_OBJECT_KEY_TEMPLATE）。
-	// ⚠️ 只影响**新装**：老用户的 data.json 里已持久化了模板值，不会被这里改掉 ——
-	// 这正是想要的：把文件名写进 key 意味着名字会进入服务商日志，得由用户自己选。
-	objectKeyTemplate: DEFAULT_OBJECT_KEY_TEMPLATE,
+	// ⚠️ 1.3.0 起这里**没有** key 模板字段了：形状不可配置（理由见 `object-key.ts` 文件头 ——
+	// 不含完整 `{hash}` 的模板会静默串内容/覆盖对象）。老 `data.json` 里那个遗留键
+	// 由字段表自动丢弃（见下面的 `hasLegacyObjectKeyTemplate` 与文件头第 2 条约束）。
 };
 
 /** s3 子对象的字段表（同样由映射类型保证不漏字段）。 */
@@ -204,10 +205,42 @@ const S3_SPEC: { [K in keyof S3Config]: FieldReader<S3Config[K]> } = {
 	accessKeyId: textValue(),
 	secretAccessKeyRef: textValue(),
 	forcePathStyle: boolValue(),
-	objectKeyTemplate: requiredTextValue(),
 };
 
 export const S3_DEFAULTS: S3Config = { ...S3_FALLBACKS };
+
+/**
+ * 老 `data.json` 里有没有**已被取消的 key 模板**字段（1.3.0）。
+ *
+ * ## 为什么要单独问一句，而不是"反正字段表会丢掉"
+ *
+ * 字段表确实会丢掉它（合并结果里不可能带上未知键），所以**设置本身不需要迁移**。
+ * 但有两件事它也做不到：
+ *
+ * 1. **告诉用户**：他的 key 形状要从"自定义/纯哈希"变成固定的 `名字-哈希.扩展名`。
+ *    这不需要他做任何事，但**必须让他知道** —— 否则某天他会发现桶里对象的命名变了。
+ * 2. **把文件本身弄干净**：遗留值会一直躺在 `data.json` 里，直到用户碰巧保存了一次设置。
+ *
+ * ⚠️ 刻意只看**这一个**键：更早版本砍掉的字段（`cacheEnabled`、明文凭据……）
+ * 一直没有迁移代码、也不需要有 —— 为它们写一次全量重写会把"顺手清理未知键"
+ * 变成一条隐式行为，那不是这一次要解决的问题。
+ */
+/**
+ * 从原始设置里取出 `s3` 段（不是对象就当空对象）。
+ *
+ * ⚠️ 抽出来只有一个理由：**"怎么读这一块"必须只有一处定义**。
+ * 合并逻辑与遗留键识别都要读它；两处各写一遍的话，"其中一处读错"不会有任何报错 ——
+ * 而它的表现是"整块配置读不出来"或"升级不触发"，都属于最难查的那一类（不报错的静默失效）。
+ */
+function s3BlockOf(raw: Record<string, unknown>): Record<string, unknown> {
+	return isPlainRecord(raw.s3) ? raw.s3 : {};
+}
+
+export function hasLegacyObjectKeyTemplate(loaded: unknown): boolean {
+	const raw = isPlainRecord(loaded) ? loaded : {};
+	const rawS3 = s3BlockOf(raw);
+	return Object.prototype.hasOwnProperty.call(rawS3, "objectKeyTemplate");
+}
 
 /**
  * 出厂默认设置。
@@ -244,7 +277,7 @@ function readFields<T extends object>(
  */
 export function mergePluginSettings(defaults: PluginSettings, loaded: unknown): PluginSettings {
 	const raw = isPlainRecord(loaded) ? loaded : {};
-	const rawS3 = isPlainRecord(raw.s3) ? raw.s3 : {};
+	const rawS3 = s3BlockOf(raw);
 
 	const { s3: _ignoredS3, ...rest } = defaults;
 	void _ignoredS3;

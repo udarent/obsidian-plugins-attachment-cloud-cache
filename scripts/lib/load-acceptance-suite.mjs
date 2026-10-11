@@ -161,9 +161,16 @@ const EXTERNAL_IMAGE_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a,
  *（我第一版就是这么写的，现场是"哪儿都没有新文件"）。
  */
 const PICKER_IMAGE_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x11, 0x22]);
-/** 8b4 用的一对地址：**路径不同、字节相同** —— 用来制造"这张图其实已经在缓存里了"。 */
+/**
+ * 8b4 用的一对地址：**路径不同、文件名相同、字节相同** ——
+ * 用来制造"这张图其实已经在缓存里了"。
+ *
+ * ⚠️ 文件名必须相同：1.3.0 起 key = `名字-内容哈希.扩展名`，**文件名是对象身份的一部分**，
+ * 换个文件名就是另一个对象（跨名去重不再成立）。所以"同一份内容换个地址再取"这件事，
+ * 只有在**文件名也相同**时才落回同一个 key —— 这条路径要按这个口径钉住。
+ */
 const PICKER_FRESH_URL = `https://images.example.test/pick-a.png`;
-const PICKER_REUSE_URL = `https://images.example.test/pick-b.png`;
+const PICKER_REUSE_URL = `https://images.example.test/deep/pick-a.png`;
 /**
  * 8b4 用的第三个地址：**Bing 图片 CDN 那种形状** ——
  * 最后一段自己带一个点，点后面是令牌而不是类型，并且带查询串。
@@ -182,9 +189,9 @@ function externalImageResponse(url) {
 	if (String(url).includes("/a.png")) {
 		return { status: 200, headers: { "content-type": "image/png" }, arrayBuffer: EXTERNAL_IMAGE_BYTES.buffer };
 	}
-	// ⭐ 8b4 用的一对地址：**路径不同、字节相同**。
-	// 内容寻址的必然结果 —— 两个不同的外站 URL 会命中同一个 key，
-	// 于是第二个地址走的是"复用已有副本"。这条路径要从两端都钉住（见 8b4）。
+	// ⭐ 8b4 用的一对地址：**路径不同、文件名相同、字节相同**。
+	// 于是两个地址得到同一个 key，第二个走的是"复用已有副本"。
+	// 这条路径要从两端都钉住（见 8b4）。
 	if (String(url).includes("/pick-a.png") || String(url).includes("/pick-b.png")) {
 		return { status: 200, headers: { "content-type": "image/png" }, arrayBuffer: PICKER_IMAGE_BYTES.buffer };
 	}
@@ -400,6 +407,18 @@ export async function runLoadAcceptance(options = {}) {
 
 	// ── 插件实例 ──
 	const plugin = new PluginClass(app, { id: "attachment-cloud-cache", dir: ".obsidian/plugins/attachment-cloud-cache" });
+	/**
+	 * 记录 `saveData` 的调用。
+	 *
+	 * ⚠️ 替身的 `_data` **初始就是 `{}`**，所以"它非空"证明不了任何事 ——
+	 * 要判断"设置到底有没有被重写"，只能数调用次数（见下面第 1 条断言）。
+	 */
+	const saveDataCalls = [];
+	const rawSaveData = plugin.saveData.bind(plugin);
+	plugin.saveData = async (data) => {
+		saveDataCalls.push(data);
+		return rawSaveData(data);
+	};
 	// 设置由测试给定（指向本地 mock S3）。⚠️ 绝不能读真实 vault 的 data.json ——
 	// 那会把图上传到用户的真实对象存储。
 	plugin.loadData = async () => ({
@@ -422,6 +441,8 @@ export async function runLoadAcceptance(options = {}) {
 			accessKeyId: ACCESS_KEY_ID,
 			secretAccessKeyRef: "acc-test-sk",
 			forcePathStyle: true,
+			// ⚠️ 这一条是**故意的遗留键**（1.3.0 取消了 key 模板）：老用户的 data.json
+			// 里就躺着它。它已不参与任何行为，但要能被下面那条"一次性兼容升级"识别并清掉。
 			objectKeyTemplate: "{hash}.{ext}",
 		},
 	});
@@ -490,6 +511,20 @@ export async function runLoadAcceptance(options = {}) {
 		const onloadTimers = createdTimers.slice();
 
 		assert.ok(plugin.settingTabs.length >= 1, "★ 设置页必须被注册（否则用户连配置入口都没有）");
+
+		// ⭐ 一次性兼容升级（1.3.0）：上面夹具里那个 `objectKeyTemplate` 是遗留键，
+		// 载入时应当把设置**重写一次** —— 遗留键消失、其余字段照旧。
+		// ⚠️ "恰好一次"是刻意的：onload 期间除了这次升级，没有别人会写 data.json
+		//（唯一的另一处 `saveSettings` 挂在命令里）。数量对不上就说明这条链路没跑到。
+		assert.equal(
+			saveDataCalls.length,
+			1,
+			"★ 带遗留 key 模板的 data.json 必须被**重写一次**（否则用户不会知道 key 形状固定了）"
+		);
+		assert.ok(
+			!("objectKeyTemplate" in saveDataCalls[0].s3),
+			"★ 重写后的设置里不得再有遗留的 key 模板键（它已不参与任何行为）"
+		);
 
 		// ⭐ 后台自动轮换必须**真的接上了**：轮换器存在（忘了 new 就等于没有这个功能），
 		// 而它依赖的两个定时器必须**登记了清理回调** —— 后者放在第 9b 节按**效果**验
@@ -572,9 +607,12 @@ export async function runLoadAcceptance(options = {}) {
 		assert.equal(entry.remoteUrl, text.slice(text.indexOf("http"), text.indexOf(")")));
 
 		// 同一份内容再粘一次：命中缓存 ⇒ **零** PUT（这是"不重复上传"的核心承诺）
+		//
+		// ⚠️ 必须用**同一个文件名**：1.3.0 起名字是对象身份的一部分（key = `名字-哈希.扩展名`），
+		// 换个名字就是另一个 key、另一份对象 —— 那测的就不是"缓存命中"了。
 		const before = server.countByMethod("PUT");
 		const editor2 = makeEditor();
-		app.workspace.trigger("editor-paste", makePasteEvent([makeFile("again.png", HOSTILE_BYTES)]), editor2, info);
+		app.workspace.trigger("editor-paste", makePasteEvent([makeFile("shot.png", HOSTILE_BYTES)]), editor2, info);
 		await waitFor(() => editor2.replaced.length > 0, "第二次粘贴插入链接", 5000, diagnose);
 		assert.equal(
 			server.countByMethod("PUT"),
@@ -1259,8 +1297,10 @@ export async function runLoadAcceptance(options = {}) {
 
 			// ── 乙：同一份字节、另一个地址（= 这张图其实**已经在缓存里**了）──
 			//
-			// 内容寻址的必然结果：两个不同的外站 URL 只要字节相同就是**同一个 key**，
+			// 内容寻址的必然结果：两个地址只要**文件名**与字节都相同就是**同一个 key**，
 			// 于是"没有新的本地副本"是**正确**行为 —— 那份副本早就在了。
+			// ⚠️ 文件名不同的话就不成立了（名字是身份的一部分，见常量的说明）——
+			// 所以这一对地址的**文件名必须一样**，换了名字这条断言就不再测那件事。
 			// 这一条必须钉住，因为用户看到的正是这一幕：它得是**可解释**的
 			//（"复用已有副本"），而不是看起来像什么都没做。
 			const sameBytesUrl = PICKER_REUSE_URL;
@@ -1350,16 +1390,15 @@ export async function runLoadAcceptance(options = {}) {
 		}
 
 		// ============================================================
-		// 8c. 缓存上限：超过后自动淘汰「最久没用过」的**遗留**副本
+		// 8c. 本地副本上限：超过后自动淘汰「最久没用过」的副本
 		//
-		// ⚠️ 1.3.0（D-17）之后这条链路**只对遗留缓存目录里的旧副本生效**：
-		// 新副本一律原地保留（附件就是副本），没有任何东西会再被写进缓存目录。
-		// 所以这一段直接**播下**一份遗留副本（模拟升级前的状态），而不是靠粘贴落进去
-		// ——粘贴已经不会落进缓存目录了。
+		// ⚠️ 1.3.0（D-17）改造后这一段的形态变了：候选与统计**一律来自索引**
+		//（副本就散在附件目录里，不再有可枚举的缓存目录），而且淘汰前要**逐个 HEAD 复核**
+		// "云端现在确实还有它"。所以这里直接**播下**索引记录 + 磁盘文件 + 云端对象，
+		// 而不是靠粘贴落进某条目录。
 		//
-		// ⚠️ 轮换本体会在 **B2（产品面）**随「释放本地空间」命令一起退役，
-		// 那一段连同这一节一起删。判定细节（挑谁、宽限期、腾不到目标怎么报）
-		// 在 `test-rotation.mjs` 与 `test-eviction.mjs` 里穷举。
+		// 判定细节（挑谁、宽限期、腾不到目标怎么报）在 `test-rotation.mjs` 与
+		// `test-eviction.mjs` 里穷举；这里验的是"入口把这条链路接对了"。
 		// ============================================================
 		{
 			// ⚠️ 先等"启动那一轮定时器"跑掉。它此刻**没有上限**、会立刻返回，
@@ -1370,13 +1409,19 @@ export async function runLoadAcceptance(options = {}) {
 				await new Promise((resolve) => setTimeout(resolve, STARTUP_WINDOW_MS - sinceLoad));
 			}
 
-			// 播一份够大的**遗留**副本：1 MB 的上限之下必须**有东西可腾**。
+			// 播两份够大的副本（各 2 MB，上限 1 MB ⇒ 必须有东西可腾）：
+			// ① 云端还在的 ⇒ 该被淘汰；② 云端**已经没了**的 ⇒ 绝不能删（新加的安全线）。
 			const bigBytes = new Uint8Array(2 * 1024 * 1024);
 			bigBytes.set(HOSTILE_BYTES);
 			const legacyKey = "legacy-big-1f.png";
+			const orphanKey = "legacy-gone-2f.png";
 			const legacyPath = `${plugin.settings.cacheFolder}/${legacyKey}`;
+			const orphanPath = `${plugin.settings.cacheFolder}/${orphanKey}`;
 			await mkdir(join(root, plugin.settings.cacheFolder), { recursive: true });
 			await writeFile(join(root, legacyPath), Buffer.from(bigBytes));
+			await writeFile(join(root, orphanPath), Buffer.from([...bigBytes, 0x7c]));
+			// ⭐ 只有第一份在"云端"（HEAD 复核要能查到它）
+			server.objects.set(legacyKey, { body: Buffer.from(bigBytes), contentType: "image/png" });
 			await harness.refreshPathCache();
 
 			const index = plugin.indexStore.index;
@@ -1392,6 +1437,18 @@ export async function runLoadAcceptance(options = {}) {
 				//（避免"刚下载完就删掉"），那样这条场景就永远只测到"什么都没发生"。
 				lastUsedAt: Date.now() - 2 * 60 * 60 * 1000,
 				sourceName: legacyKey,
+			});
+			// 第二份更新一点（更晚被用到）⇒ 排在第一份之后被挑中
+			index.set({
+				key: orphanKey,
+				cachePath: orphanPath,
+				remoteUrl: `${PUBLIC_BASE}/${orphanKey}`,
+				size: bigBytes.length + 1,
+				contentType: "image/png",
+				etag: "",
+				uploadedAt: new Date().toISOString(),
+				lastUsedAt: Date.now() - 1 * 60 * 60 * 1000,
+				sourceName: orphanKey,
 			});
 
 			const entriesBefore = index.size;
@@ -1429,6 +1486,15 @@ export async function runLoadAcceptance(options = {}) {
 				5000,
 				diagnose
 			);
+
+			// ⭐⭐ 新加的安全线：云端**已经没有了**的那份副本绝不能删
+			//（删掉它就是丢数据 —— 那可能是最后一份）。方向是"确认不上就不动手"。
+			assert.equal(
+				await existsOnDisk(root, orphanPath),
+				true,
+				"★ 云端确认不上时，本地副本必须留着（宁可上限晚点生效，也不能删掉最后一份）"
+			);
+			assert.ok(index.has(orphanKey), "★ 那份副本的索引记录也必须留着（否则渲染层以为它不在了）");
 
 			// 关掉上限，免得影响后面的场景
 			plugin.settings.cacheLimitMb = 0;

@@ -123,7 +123,6 @@ export function isWritableValue(key: unknown, value: unknown): boolean {
 	switch (key) {
 		case "cacheFolder":
 		case "s3.region":
-		case "s3.objectKeyTemplate":
 			return value.trim() !== "";
 		case "cacheLimitMb":
 			// 解析不出来就**不写**（保留原值），而不是把用户的输入静默变成「不限制」——

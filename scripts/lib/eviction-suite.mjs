@@ -60,7 +60,7 @@ function candidateFor(key, options = {}) {
 }
 
 export function runEvictionSuite(mod) {
-	const { buildEvictionCandidates, planEviction, megabytesToBytes, DEFAULT_EVICTION_GRACE_MS } = mod;
+	const { buildEvictionCandidates, planEviction, sumOwnedBytes, megabytesToBytes, DEFAULT_EVICTION_GRACE_MS } = mod;
 
 	// ============================================================
 	// 1. 单位换算
@@ -74,89 +74,81 @@ export function runEvictionSuite(mod) {
 	assert.equal(DEFAULT_EVICTION_GRACE_MS > 0, true, "宽限期必须有正的默认值（否则刚下载的会被立刻淘汰）");
 
 	// ============================================================
-	// 2. 候选怎么造：⭐ 三类东西绝不能进来
+	// 2. ⭐ 候选怎么造（1.3.0 / D-17：一律来自索引）
+	//
+	// 判错的代价：这是**自动删文件**的路径。挑错了人 = 把用户常看的删掉、
+	// 留下的却是几个月没碰过的；多算了人 = 动了不属于我们的文件。
 	// ============================================================
 	{
 		const entries = [
-			entryFor("cached.png"),
-			// ⭐ `localCopy: "keep"` 时副本在用户的**附件目录**里 —— 那是他的正常附件
-			entryFor("kept.png", { cachePath: "attachments/kept.png" }),
-			// 索引里有、磁盘上没有：没有可删的文件
-			entryFor("gone.png"),
+			// 遗留缓存目录里的旧副本
+			entryFor("cached.png", { size: 1024 }),
+			// ⭐ keep 档的副本就在**附件目录**里 —— 那同样是我们写下的副本，照样计入、照样可淘汰
+			entryFor("kept.png", { cachePath: "attachments/kept.png", size: 4096 }),
+			// 索引里有、磁盘上却没有：没有可删的东西
+			entryFor("gone.png", { size: 999 }),
 		];
-		const files = [
-			diskFor("_attachment-cache/cached.png", 1024),
-			diskFor("attachments/kept.png", 4096),
-			// ⭐ 磁盘上有、索引里没有 → 孤儿（最该淘汰的一类）
-			diskFor("_attachment-cache/stray.png", 2048),
-			// 缓存目录**外**的文件（理论上 `collectCacheFiles` 不会给，但这是删文件的路径）
-			diskFor("notes/important.md", 512),
-		];
+		// 存在性探针：只有前两条在磁盘上
+		const present = (path) => path !== "_attachment-cache/gone.png";
 
-		const candidates = buildEvictionCandidates({
+		const selection = buildEvictionCandidates({
 			entries,
-			files,
+			present,
 			referencedKeys: new Set(["cached.png"]),
-			cacheFolder: "_attachment-cache",
 		});
-
+		const candidates = selection.candidates;
 		const byKey = new Map(candidates.map((c) => [c.key, c]));
 
-		// ⭐ 这两条"绝不能进来"的断言放在**数量断言之前**：
-		// 数量不对时人想知道的是"谁多进来了"，而不是"数量是 4 不是 2"。
-		// ⭐ 附件目录那道是钉子：`localCopy=keep` 的副本是用户的正常附件，
-		// 自动淘汰碰到它等于删用户自己的东西。
+		assert.equal(selection.missing, 1, "★ 索引有、磁盘没有的要被数出来（没有可删的文件）");
+
+		// ⭐ 这是本次改造的核心行为变化：**附件目录里的副本也要进来**
 		assert.equal(
-			candidates.some((c) => c.cachePath === "attachments/kept.png"),
-			false,
-			"★ localCopy=keep 的副本在附件目录里 —— 绝不能进候选（那是用户的正常附件）"
+			byKey.has("kept.png"),
+			true,
+			"★ keep 档的副本在附件目录里 —— 它同样占用户的磁盘，必须计入上限并可淘汰（P7 关闭的依据）"
 		);
-		assert.equal(
-			candidates.some((c) => c.cachePath.startsWith("notes/")),
-			false,
-			"★ 缓存目录外的路径绝不能进候选"
-		);
-		// 数量放在最后：它是个笼统的兜底（上面两条已经把"谁多进来了"说清楚了）
-		assert.equal(candidates.length, 2, `应只有 2 个候选（缓存内的副本 + 孤儿），实际 ${candidates.length}`);
 		assert.equal(byKey.has("gone.png"), false, "索引有、磁盘没有 → 没有可删的文件，不该进候选");
 
-		assert.equal(byKey.get("cached.png").bytes, 1024, "★ 字节数要取**磁盘上的真实值**（索引里的可能不准）");
+		// 字节数：索引记的值（文件是我们写下的；不再需要磁盘清单）
+		assert.equal(byKey.get("kept.png").bytes, 4096, "字节数取索引记录的值");
 		assert.equal(byKey.get("cached.png").referenced, true, "被笔记引用的要标记出来");
 
-		const orphan = byKey.get("");
-		assert.ok(orphan, "★ 孤儿（磁盘有、索引没有）必须进候选，且 key 为空串");
-		assert.equal(orphan.cachePath, "_attachment-cache/stray.png", "孤儿靠路径识别");
-		assert.equal(orphan.bytes, 2048, "孤儿的字节数来自磁盘");
-		assert.equal(orphan.referenced, false, "★ 孤儿一定是「未被引用」的（它连 key 都没有）");
-		assert.equal(orphan.lastUsedAt, 0, "孤儿没有时间戳 → 0（按最旧处理）");
+		// ⭐ 孤儿这一类**消失了**：磁盘上有的文件若索引不认得，绝不会成为候选
+		//（1.3.0 之前它是"最该淘汰"的一类，因为缓存目录里的东西必然是我们的副本；
+		//  现在索引外的文件可能是**用户的附件**，一律不能自动删）
+		assert.equal(
+			candidates.some((c) => c.key === ""),
+			false,
+			"★ 不该再有「孤儿」候选（索引外的文件一律不碰 —— 那可能是用户的附件）"
+		);
+		assert.equal(
+			candidates.some((c) => c.cachePath === "notes/important.md"),
+			false,
+			"★ 索引外的路径永远进不来（删文件的路径上不允许存在这种可能）"
+		);
 	}
 
-	// 磁盘大小拿不到（stat 失败 → bytes 0）时退回索引里的数字：否则「能腾多少」会报成 0
+	// 候选里的 key 永远非空（旧实现用空串表示孤儿）
 	{
-		const candidates = buildEvictionCandidates({
-			entries: [entryFor("na.png", { size: 777 })],
-			files: [diskFor("_attachment-cache/na.png", 0)],
-			cacheFolder: "_attachment-cache",
+		const selection = buildEvictionCandidates({
+			entries: [entryFor("a.png")],
+			present: () => true,
 		});
-		assert.equal(candidates[0].bytes, 777, "★ 磁盘大小拿不到时要退回索引记录的数字（否则「能腾出的空间」会报成 0）");
+		assert.equal(selection.candidates.length, 1, "在磁盘上的那份要进候选");
+		assert.equal(selection.candidates[0].key, "a.png", "候选的 key 永远非空");
 	}
 
 	// 使用时间：优先用 lastUsedAt，没有就退回上传时间，都没有就 0
 	{
-		const candidates = buildEvictionCandidates({
+		const selection = buildEvictionCandidates({
 			entries: [
 				entryFor("used.png", { lastUsedAt: NOW - 1 * HOUR }),
 				entryFor("uploaded.png", { uploadedAt: NOW - 3 * HOUR }),
 				entryFor("unknown.png", { uploadedAt: "" }),
 			],
-			files: [
-				diskFor("_attachment-cache/used.png", 1),
-				diskFor("_attachment-cache/uploaded.png", 1),
-				diskFor("_attachment-cache/unknown.png", 1),
-			],
-			cacheFolder: "_attachment-cache",
+			present: () => true,
 		});
-		const byKey = new Map(candidates.map((c) => [c.key, c]));
+		const byKey = new Map(selection.candidates.map((c) => [c.key, c]));
 		assert.equal(byKey.get("used.png").lastUsedAt, NOW - 1 * HOUR, "有使用时间就用它");
 		assert.equal(
 			byKey.get("uploaded.png").lastUsedAt,
@@ -168,16 +160,36 @@ export function runEvictionSuite(mod) {
 
 	// 没扫引用时一律当「已引用」：保守（宁可按 LRU 排，也不把「未知」当成「没人用」）
 	{
-		const candidates = buildEvictionCandidates({
+		const selection = buildEvictionCandidates({
 			entries: [entryFor("a.png")],
-			files: [diskFor("_attachment-cache/a.png", 1)],
-			cacheFolder: "_attachment-cache",
+			present: () => true,
 		});
 		assert.equal(
-			candidates[0].referenced,
+			selection.candidates[0].referenced,
 			true,
 			"★ 没扫引用时一律当「已引用」（「不知道」不该被当成「没人用」，否则会优先删掉它们）"
 		);
+	}
+
+	// ============================================================
+	// 2b. ⭐ 统计范围：**所有**本地副本（含附件目录里的那些）
+	//
+	// 这条正是 P7 的关闭依据：从前只算缓存目录内的字节，于是 keep 档
+	// "界面上看不见上限、后台却在算另一个数"。现在统计范围与设置文案一致。
+	// ============================================================
+	{
+		const entries = [
+			entryFor("in-cache.png", { size: 100 }),
+			entryFor("in-attachments.png", { cachePath: "attachments/in-attachments.png", size: 200 }),
+			entryFor("bad-size.png", { size: Number.NaN }),
+			entryFor("negative.png", { size: -5 }),
+		];
+		assert.equal(
+			sumOwnedBytes(entries),
+			300,
+			"★ 统计范围 = 索引里的全部本地副本（含附件目录），坏值按 0（绝不把 NaN 带进求和）"
+		);
+		assert.equal(sumOwnedBytes([]), 0, "空索引 = 0");
 	}
 
 	// ============================================================

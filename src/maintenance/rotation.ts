@@ -8,33 +8,29 @@
  * ③ 结果怎么报（什么时候提示、什么时候保持安静）。
  * 这些都塞进 `main.ts` 的接线里就没法测了。
  *
- * ## ⭐ 两道门槛：把"读全库笔记"挡住
+ * ## ⭐ 一道门槛：索引里的字节之和（1.3.0 起与候选**同源**）
  *
- * 这条链上最贵的一步是**扫全库笔记**（判断哪些副本还被引用，见 `scanReferences`）。
- * 而"缓存有没有超上限"这件事可以先用两个便宜的信号判断：
+ * 这条链上最贵的一步是**扫全库笔记**（判断哪些副本还被引用，见 `scanReferences`），
+ * 所以先用一次内存求和挡住绝大多数轮次：没超上限就直接返回。
  *
- * | 门槛 | 代价 | 挡掉的情形 |
- * |---|---|---|
- * | ① 索引里的字节之和 | 一次内存求和 | 绝大多数时候（没超） |
- * | ② 磁盘上的真实总量 | 列目录 + 逐个 stat | 索引记的比上限小、但磁盘上其实还多 |
- *
- * 只有两道都过了，才去扫笔记、才去动文件。
+ * ⚠️ 从前还有第二道门槛（"列缓存目录 + 逐个 stat"），用来发现"索引记的比上限小、
+ * 但磁盘上其实还多"。它随缓存目录一起**取消**了：那条目录的清单本身也来自索引，
+ * 列不出索引之外的东西；而索引之外的文件现在**绝不能删**（那可能是用户的附件）。
+ * 代价如实记：**索引不全时上限偏保守**（宁可少删），这是安全的那一侧。
  *
  * ## 触发（由接线层决定，这一层只管"该不该跑"）
  *
  * | 触发 | 时机 | 为什么需要它 |
  * |---|---|---|
- * | `startup` | 加载后延迟一次 | 缓存可能在插件没运行时长大了；**这一轮不看索引**（见下） |
- * | `growth` | 每次上传/下载完成后 | 缓存长大的**真正原因**都在这里，反应最快 |
+ * | `startup` | 加载后延迟一次 | 副本可能在插件没运行时长大了（回退下载、同步带来的新图） |
+ * | `growth` | 每次上传/下载完成后 | 副本长大的**真正原因**都在这里，反应最快 |
  * | `settings` | 保存设置后 | 用户刚把上限调小，想立刻看到效果 |
- * | `interval` | 周期性兜底 | 覆盖"非上传引起"的增长（回退下载、同步带来的新图） |
+ * | `interval` | 周期性兜底 | 覆盖上面几种之外的缓慢增长 |
  *
- * ## ⚠️ `startup` 那一轮刻意不看索引
- *
- * 索引文件是**可能坏掉或丢掉**的（`loadCacheIndex` 遇到坏 JSON 就降级成空索引）。
- * 那时缓存目录里全是"孤儿"（磁盘上有、索引里没有），它们一样占着用户的磁盘 ——
- * 上限不能因为索引坏了就形同虚设。所以启动这一轮**直接量磁盘**。
- * 其余触发用索引做便宜门槛（它们发生得更频繁，值得省这一次列目录）。
+ * ⚠️ `startup` 那一轮**不再特殊**（从前它绕过索引、直接量磁盘）：
+ * 那时"磁盘上有、索引里没有"的东西都在缓存目录里，删掉是安全的；
+ * 现在索引外的文件可能是**用户的附件**，一律不能自动删 ⇒ 索引不全时上限偏保守，
+ * 而不是"凭磁盘清单猜"。
  *
  * ## 安静是默认值
  *
@@ -44,13 +40,12 @@
 
 import type { CacheIndex } from "../cache/index";
 import type { PluginSettings } from "../types";
-import type { DiskFile } from "./audit";
 import {
 	buildEvictionCandidates,
 	formatMegabytes,
 	megabytesToBytes,
 	planEviction,
-	sumIndexedBytes,
+	sumOwnedBytes,
 } from "./eviction";
 import type { EvictionOutcome, EvictionPlan } from "./eviction";
 
@@ -78,8 +73,13 @@ export function isRotationDue(input: { now: number; lastRunAt: number; minInterv
 export interface CacheRotationDeps {
 	settings: () => PluginSettings;
 	index: () => CacheIndex;
-	/** 列缓存目录下的文件（接线层复用 `collectCacheFiles`）。 */
-	collectFiles: () => Promise<DiskFile[]>;
+	/**
+	 * "这份副本还在磁盘上吗"（**同步**）。
+	 *
+	 * 接线层用宿主的文件索引回答：它**可能滞后**于磁盘，而滞后只会让这一轮
+	 * 少淘汰几个（执行层拿不到删除凭据时会跳过），方向是安全的。
+	 */
+	isPresent: (path: string) => boolean;
 	/** 扫全库笔记，收集仍被引用的 key（接线层复用 `scanReferences`）。 */
 	scanReferencedKeys: () => Promise<Set<string>>;
 	/** 执行淘汰（接线层复用 `runEviction`）。 */
@@ -154,25 +154,15 @@ export function createCacheRotator(deps: CacheRotationDeps): CacheRotator {
 		}
 	};
 
-	async function rotate(
-		reason: RotationReason,
-		settings: PluginSettings,
-		limitBytes: number,
-		at: number
-	): Promise<RotationSummary> {
-		const files = await deps.collectFiles();
-		const totalBytes = files.reduce((sum, file) => sum + Math.max(0, file.bytes), 0);
-		// 磁盘上其实没超 → 连笔记都不用扫（那是这条链上最贵的一步）
-		if (totalBytes <= limitBytes) {
-			return { reason, totalBytes, limitBytes, evicted: 0, freed: 0, skipped: 0, overBy: 0 };
-		}
+	async function rotate(reason: RotationReason, limitBytes: number, at: number): Promise<RotationSummary> {
+		const entries = deps.index().toArray();
+		const totalBytes = sumOwnedBytes(entries);
 
 		const referencedKeys = await deps.scanReferencedKeys();
-		const candidates = buildEvictionCandidates({
-			entries: deps.index().toArray(),
-			files,
+		const { candidates } = buildEvictionCandidates({
+			entries,
+			present: deps.isPresent,
 			referencedKeys,
-			cacheFolder: settings.cacheFolder,
 		});
 		const plan = planEviction({ candidates, totalBytes, limitBytes, now: at, graceMs: deps.graceMs });
 
@@ -209,13 +199,8 @@ export function createCacheRotator(deps: CacheRotationDeps): CacheRotator {
 				// 没设上限 → 什么都不做（连索引都不读）—— 默认就是这个状态
 				if (limitBytes <= 0) return null;
 
-				// 门槛 ①（**便宜**）：索引里记的字节。启动那一轮跳过它，理由见模块头注释。
-				if (
-					reason !== "startup" &&
-					sumIndexedBytes(deps.index().toArray(), settings.cacheFolder) <= limitBytes
-				) {
-					return null;
-				}
+				// 门槛（**便宜**）：索引里记的字节 —— 与候选**同源**，所以它同时是"该不该跑"与"总量是多少"。
+				if (sumOwnedBytes(deps.index().toArray()) <= limitBytes) return null;
 
 				const at = now();
 				if (!isRotationDue({ now: at, lastRunAt, minIntervalMs })) return null;
@@ -223,7 +208,7 @@ export function createCacheRotator(deps: CacheRotationDeps): CacheRotator {
 				running = true;
 				lastRunAt = at;
 				try {
-					return await rotate(reason, settings, limitBytes, at);
+					return await rotate(reason, limitBytes, at);
 				} finally {
 					// ⚠️ 只有**真的跑过**的那一次才清这个标志。
 					// 若把 `finally` 挂在更外层，上面任何一个提前 return 都会把

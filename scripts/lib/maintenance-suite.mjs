@@ -560,7 +560,6 @@ export function runMaintenanceSuite(mod) {
 			accessKeyId: "",
 			secretAccessKeyRef: "",
 			forcePathStyle: true,
-			objectKeyTemplate: "{hash}.{ext}",
 		},
 	};
 	const index = new CacheIndex([entry("cached.png", "attachments/cached.png")]);

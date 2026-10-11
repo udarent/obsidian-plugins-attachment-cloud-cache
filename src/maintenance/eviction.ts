@@ -1,44 +1,57 @@
 /**
- * 缓存上限与自动轮换：**纯判定**。
+ * 本地副本的上限与自动淘汰：**纯判定**。
  *
  * ## 为什么需要它
  *
- * 缓存目录只会涨：每次粘贴/拖拽/回退下载都会留一份副本。对磁盘有限（或用同步服务）
- * 的用户来说，一个只涨不落的目录迟早变成问题，而"记得手动去清理"这件事没人做得到。
- * 所以要有上限，且要在后台自己轮换。
+ * 本地副本只会涨：每次上传、回退下载都会留一份。对磁盘有限（或用同步服务）的用户来说，
+ * 一份只涨不落的副本集迟早变成问题，而"记得手动清理"这件事没人做得到。
+ * 所以要有上限，且要在后台自己淘汰 —— **这一条的含义从 1.0 起没有变过**。
+ *
+ * ## ⭐ 1.3.0（D-17）：含义不变，实现换了
+ *
+ * 缓存目录取消之后，本地副本 = **附件目录里那份原文件**（索引记着它在哪）。
+ * 于是这一层换了三处实现，每一处都是"物理位置不再提供答案"的直接后果：
+ *
+ * | | 旧实现 | 新实现 |
+ * |---|---|---|
+ * | 候选与统计 | 列**缓存目录** + 逐个 stat | **一律来自索引**（一次内存求和） |
+ * | 孤儿（目录里有、索引里没有） | 可删（那条目录承诺可整体清理） | **这一类消失** —— 索引里没有的文件一律不碰（那可能是用户的附件，不是我们的副本） |
+ * | "云端还有它吗" | 不必问（缓存目录里的东西必然是刚传上去的） | ⭐ **执行层逐个 HEAD 复核**（见下） |
+ *
+ * ⚠️ 第三条是这次改造里**唯一加强了的安全线**，理由是新的失效形态：
+ * 副本现在可能比云端对象**活得久**（别的设备把云端对象清掉了，而本机的台账还记着它）。
+ * 那种副本是**最后一份**，删它就是丢数据 —— 所以"我们传过它"不再够用，
+ * 必须确认"云端**现在**确实还有它"，而这件事只能问服务端。
  *
  * ## 淘汰谁：三类对象，优先级不同
  *
  * | 类别 | 判据 | 为什么这么排 |
  * |---|---|---|
- * | **孤儿** | 磁盘上有、索引里没有 | 最先淘汰：它连"是哪张图"都无从查起，渲染钩子也不可能用到它 |
- * | **未引用副本** | 有索引记录，但没有任何笔记引用 | 次先淘汰：引用它的笔记已经删了，纯占地方 |
- * | **被引用的副本** | 有索引记录，且仍有笔记引用 | 最后淘汰：删掉它会让那张图**暂时失去离线能力** |
+ * | **未引用副本** | 有索引记录，但没有任何笔记引用 | 先淘汰：引用它的笔记已经删了，纯占地方 |
+ * | **被引用的副本** | 有索引记录，且仍有笔记引用 | 后淘汰：删掉它会让那张图**暂时失去离线能力** |
  *
  * ## ⚠️ 淘汰是被允许的，因为"副本"不是唯一的一份
  *
- * 被淘汰的副本可以从用户自己的存储**重新下载**（笔记里存的是远端 URL，从没被改动）。
- * 所以这里的代价是"那张图下次看到它时会重新拉一遍"，**不是丢数据**。
- * 也正因如此，淘汰之后调用方**必须摘掉索引记录** —— 否则渲染层会以为本地还有那份副本，
- * 于是走 error 兜底、每次渲染都白试一次（见 `run.ts` 的 `runEviction`）。
+ * 笔记里存的是**远端 URL**（从没被改写），所以被淘汰的副本下次看到那张图时会**自动重新下载**。
+ * 代价是"重新拉一遍"，**不是丢数据**。也正因如此，淘汰之后调用方**必须摘掉索引记录** ——
+ * 否则渲染层会以为本地还有那份副本，于是每次渲染都白试一次（见 `run.ts` 的 `runEviction`）。
  *
  * ## ⚠️ 两条绝不能越过的界
  *
- * 1. `localCopy: "keep"` 时副本在**用户的附件目录**里 —— 那是正常附件，绝不进候选
- *    （判据是 `isUnderCacheFolder`，与维护功能同一套）。
- * 2. 只淘汰"**不新鲜**"的（`graceMs` 内刚用过/刚放进缓存的不动）：否则会出现
- *    "刚下载完就删掉"，把刚花掉的流量白扔，而且会形成稳定的来回抖动。
+ * 1. **只碰索引认得的副本**：索引里没有的文件（用户的附件、别的插件放的东西）绝不进候选。
+ *    旧实现有一条"孤儿优先淘汰"，它当时是安全的（缓存目录里的东西都是我们的）；
+ *    现在**没有任何目录**能提供这种保证，所以那一类被整条删掉了。
+ * 2. **只淘汰"不新鲜"的**（`graceMs` 内刚用过的不动）：否则会出现"刚下载完就删掉"，
+ *    把刚花掉的流量白扔，还会形成稳定的来回抖动。
  */
 
 import type { CacheEntry } from "../cache/index";
-import { isUnderCacheFolder } from "../cache-path";
-import type { DiskFile } from "./audit";
 // 路径归一用**共享**的实现（`vault-files.ts` → 宿主的 `normalizePath`）：
-// 淘汰要拿索引里的路径与磁盘上的路径做比较，两侧必须同源。
+// 淘汰要拿索引里的路径与真实路径做比较，两侧必须同源。
 import { normalizeVaultPath } from "../vault-files";
 
 /**
- * 刚放进缓存多久之内的副本不参与淘汰。
+ * 刚用过多久之内的副本不参与淘汰。
  *
  * 10 分钟是刻意的：粘贴完一张图后用户多半会立刻看图、改笔记，那段时间里
  * 我们不该去碰它。代价是"上限生效最多晚 10 分钟"，而这不是一件急事。
@@ -47,11 +60,11 @@ export const DEFAULT_EVICTION_GRACE_MS = 10 * 60 * 1000;
 
 /** 淘汰候选。 */
 export interface EvictionCandidate {
-	/** 对象 key。**空串表示孤儿**（磁盘上有、索引里没有）—— 索引里的 key 永远非空，所以不歧义。 */
+	/** 对象 key。新实现里**永远非空**（候选一律来自索引）。 */
 	key: string;
-	/** 缓存目录内的 vault 相对路径。 */
+	/** 本地副本的 vault 相对路径（1.3.0 起通常在附件目录里，不再叫"缓存路径"）。 */
 	cachePath: string;
-	/** 字节数（**磁盘上的真实值**优先）。 */
+	/** 字节数（索引记的值 —— 文件是我们写下的）。 */
 	bytes: number;
 	/** 最近一次使用（epoch ms）。**0 = 不确知**，按"最旧"处理。 */
 	lastUsedAt: number;
@@ -70,7 +83,7 @@ export interface EvictionOutcome {
 	evicted: number;
 	/** 真的回收的字节数。 */
 	freed: number;
-	/** 被跳过的（宿主的文件索引滞后于磁盘等）。 */
+	/** 被跳过的（宿主索引滞后、云端确认不上等）。 */
 	skipped: { path: string; reason: string }[];
 }
 
@@ -86,7 +99,6 @@ export function formatMegabytes(bytes: unknown): string {
 	return (value / (1024 * 1024)).toFixed(1);
 }
 
-
 /** ISO 时间串 → 毫秒；解析不出来返回 0（= 不确知）。 */
 function parseTime(value: unknown): number {
 	if (typeof value !== "string" || value === "") return 0;
@@ -95,18 +107,15 @@ function parseTime(value: unknown): number {
 }
 
 /**
- * 索引里**缓存目录内**的副本占了多少字节（一次内存求和，不碰磁盘）。
+ * 索引里所有**本地副本**占了多少字节（一次内存求和，不碰磁盘）。
  *
- * 编排层拿它做"要不要去量磁盘"的**便宜门槛**：缓存是慢慢涨的，
- * 而"量一次磁盘"要列目录 + 逐个 stat —— 不该在每次上传、每个周期都做。
- *
- * ⚠️ 只算缓存目录内的：`localCopy: "keep"` 的副本在附件目录里，
- * 那是用户的附件，不该计入缓存上限。
+ * ⚠️ 1.3.0 起**不再按目录过滤**：缓存目录已经不存在，而 keep 档的副本就在附件目录里 ——
+ * 那同样占用户的磁盘，那正是这个上限要管的东西。旧实现只算缓存目录内的字节，
+ * 于是在 keep 档"看不见的开关在后台生效/不生效"（P7）：现在统计范围与设置文案一致。
  */
-export function sumIndexedBytes(entries: readonly CacheEntry[], cacheFolder: string): number {
+export function sumOwnedBytes(entries: readonly CacheEntry[]): number {
 	let total = 0;
 	for (const entry of entries) {
-		if (!isUnderCacheFolder(entry.cachePath, cacheFolder)) continue;
 		const size = typeof entry.size === "number" && Number.isFinite(entry.size) && entry.size > 0 ? entry.size : 0;
 		total += size;
 	}
@@ -115,8 +124,11 @@ export function sumIndexedBytes(entries: readonly CacheEntry[], cacheFolder: str
 
 export interface CandidateInput {
 	entries: readonly CacheEntry[];
-	/** 缓存目录下的文件（调用方负责只列这个目录）。 */
-	files: readonly DiskFile[];
+	/**
+	 * "这份副本还在磁盘上吗"。**同步**谓词 —— 由调用方算好（见 `rotation.ts` 的说明）。
+	 * 返回假的后果只是"这一轮不淘汰它"，安全。
+	 */
+	present: (path: string) => boolean;
 	/**
 	 * 笔记里引用到的对象 key 集合。
 	 *
@@ -125,69 +137,52 @@ export interface CandidateInput {
 	 * 优先删掉一批可能还有人要的副本。
 	 */
 	referencedKeys?: ReadonlySet<string>;
-	cacheFolder: string;
+}
+
+export interface CandidateSelection {
+	candidates: EvictionCandidate[];
+	/** 索引里有记录、但磁盘上找不到那份文件的数量（没有可删的东西）。 */
+	missing: number;
 }
 
 /**
  * 造出可淘汰的候选。**纯函数**：不改索引、不碰文件。
  *
- * 三类东西绝不会进来：缓存目录**外**的副本（用户的附件）、磁盘上**不存在**的记录
- * （没有可删的文件）、以及缓存目录外的任何文件。
+ * ⚠️ 只有**索引里的**副本会进来。索引里没有的文件（用户自己的附件、别的插件放的东西）
+ * 一律不碰 —— 旧实现里那条"目录里有、索引里没有 ⇒ 可删"的规则，
+ * 依赖的是"缓存目录里的东西都是我们的"这个物理保证；那份保证随缓存目录一起消失了。
  */
-export function buildEvictionCandidates(input: CandidateInput): EvictionCandidate[] {
-	const disk = new Map<string, DiskFile>();
-	for (const file of input.files) {
-		if (!isUnderCacheFolder(file.path, input.cacheFolder)) continue;
-		disk.set(normalizeVaultPath(file.path), file);
-	}
-
-	const out: EvictionCandidate[] = [];
-	const indexedPaths = new Set<string>();
+export function buildEvictionCandidates(input: CandidateInput): CandidateSelection {
+	const candidates: EvictionCandidate[] = [];
+	let missing = 0;
 
 	for (const entry of input.entries) {
 		const path = normalizeVaultPath(entry.cachePath);
-		// ⚠️ 只管缓存目录里的副本：附件目录里的那份是用户的正常附件。
-		//
-		// 这一道与上面（构造磁盘映射时）的过滤是**刻意的双保险**，与 `runCleanup` 同一条纪律：
-		// 这是"自动删文件"的路径，多一道校验的代价是零，而少一道的代价不可逆。
-		// 也因此**只拆这一道不会漏东西**（另一道已经把那些路径挡在外面了）——
-		// 变异验证打的是上面那一道，别把这里的冗余当成"没人管的死代码"。
-		if (!isUnderCacheFolder(path, input.cacheFolder)) continue;
-
-		const file = disk.get(path);
+		if (!path) continue;
 		// 磁盘上没有 → 没有可删的东西（这条记录该由自愈去摘，不是淘汰的事）
-		if (!file) continue;
-		indexedPaths.add(path);
+		if (!input.present(path)) {
+			missing += 1;
+			continue;
+		}
 
-		out.push({
+		candidates.push({
 			key: entry.key,
 			cachePath: path,
-			// 磁盘大小优先（那才是能腾出的空间）；stat 拿不到时退回索引记录的数字
-			bytes: file.bytes > 0 ? file.bytes : Math.max(0, entry.size),
+			// 索引记的字节：这份文件是我们写下的（用户改过它就不是我们的副本了，
+			// 那时真正的修复是自愈/重新下载，不是在这里猜大小）
+			bytes: Math.max(0, entry.size),
 			// 有使用时间就用它；否则退回上传时间（"刚上传的"约等于"刚用过"）
 			lastUsedAt: entry.lastUsedAt > 0 ? entry.lastUsedAt : parseTime(entry.uploadedAt),
 			referenced: input.referencedKeys ? input.referencedKeys.has(entry.key) : true,
 		});
 	}
 
-	// 孤儿：磁盘上有、索引里没有。它们不可能被渲染钩子用到，是最该淘汰的一类。
-	for (const [path, file] of disk) {
-		if (indexedPaths.has(path)) continue;
-		out.push({
-			key: "",
-			cachePath: path,
-			bytes: Math.max(0, file.bytes),
-			lastUsedAt: 0,
-			referenced: false,
-		});
-	}
-
-	return out;
+	return { candidates, missing };
 }
 
 export interface EvictionInput {
 	candidates: readonly EvictionCandidate[];
-	/** 缓存目录当前的总字节（磁盘上的真实值）。 */
+	/** 当前占用的总字节。 */
 	totalBytes: number;
 	/** 上限（字节）。0 = 不限制。 */
 	limitBytes: number;
@@ -240,7 +235,7 @@ export function planEviction(input: EvictionInput): EvictionPlan {
 	if (over <= 0) return done("没超上限");
 
 	const graceMs = input.graceMs ?? DEFAULT_EVICTION_GRACE_MS;
-	// 刚用过 / 刚放进缓存的这一轮不动 —— 否则"刚下载完就删掉"，还会来回抖动。
+	// 刚用过的这一轮不动 —— 否则"刚下载完就删掉"，还会来回抖动。
 	const eligible = input.candidates.filter((candidate) => input.now - candidate.lastUsedAt >= graceMs);
 
 	const ordered = [...eligible].sort((a, b) => {
@@ -269,11 +264,11 @@ export function planEviction(input: EvictionInput): EvictionPlan {
 	if (overBy <= 0) {
 		reason = "已腾到上限以内";
 	} else if (fresh > 0) {
-		reason = `仍超出 ${overBy} 字节：有 ${fresh} 份副本在宽限期内（刚用过或刚放进缓存），本轮不动`;
+		reason = `仍超出 ${overBy} 字节：有 ${fresh} 份副本在宽限期内（刚用过），本轮不动`;
 	} else {
-		// 候选不够 —— 常见原因是缓存目录里还有没被索引收录的文件（孤儿之外的，
-		// 例如索引损坏后重建中）。那种情况要靠"清理缓存"命令处理。
-		reason = `仍超出 ${overBy} 字节：可淘汰的对象不够（缓存目录里可能还有未被索引收录的文件）`;
+		// 候选不够 —— 常见原因是索引里没有更多副本可淘汰了（例如多数目标都在云端确认不上、
+		// 或索引本身不全）。索引不全时上限偏保守，这是安全的那一侧。
+		reason = `仍超出 ${overBy} 字节：可淘汰的副本不够（索引里的副本已挑完）`;
 	}
 
 	return { evict, reclaimable, totalBytes: total, limitBytes: limit, projectedBytes, overBy, reason };

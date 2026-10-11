@@ -15,6 +15,7 @@
  */
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -127,9 +128,9 @@ async function makeHarness(mod, options = {}) {
 	const settings = {
 		...mod.SETTINGS_DEFAULTS,
 		...options.settings,
-		// ⚠️ 钉住旧模板：本套件断言的是传输行为，不是默认模板长什么样 ——
-		// 不钉就会随默认模板漂移（与 ingest-suite 同一处教训）。
-		s3: { ...mod.SETTINGS_DEFAULTS.s3, objectKeyTemplate: "{hash}.{ext}", ...options.settings?.s3 },
+		// ⚠️ 1.3.0 起没有"钉模板"那一步了：key 形状不可配置（模板设置已取消），
+		// 本套件断言的形状就是产品唯一的形状（与 ingest-suite 同一处结论）。
+		s3: { ...mod.SETTINGS_DEFAULTS.s3, ...options.settings?.s3 },
 	};
 	const index = new mod.CacheIndex();
 	const notices = makeNotices();
@@ -595,7 +596,7 @@ export async function runTransferSuite(mod) {
 		assert.equal(calls.selection.length, 1, "应插入一次文本（一次撤销就能回退）");
 		assert.match(
 			calls.selection[0],
-			/^!\[shot\.png\]\(http:\/\/127\.0\.0\.1:\d+\/test-bucket\/[0-9a-f]{64}\.png\)$/,
+			/^!\[shot\.png\]\(http:\/\/127\.0\.0\.1:\d+\/test-bucket\/shot-[0-9a-f]{64}\.png\)$/,
 			`插入的应是远端嵌入链接（显示名＝原文件名），实际：${calls.selection[0]}`
 		);
 		assert.equal(outcome.text, calls.selection[0], "返回的文本应与插入的一致");
@@ -768,9 +769,13 @@ export async function runTransferSuite(mod) {
 			makeFile("a-copy.png", "image/png", IMAGE_BYTES),
 		]);
 
-		assert.equal(outcome.uploaded, 1, "第一张上传");
-		assert.equal(outcome.reused, 1, "第二张内容相同 → 复用");
-		assert.equal(h.server.countByMethod("PUT"), 1, "相同内容只应发 1 次 PUT");
+		// ⚠️ 1.3.0 起这条的**口径变了**，两侧都钉住才不会让人误读：
+		// 名字进了 key ⇒ 同一份字节配不同名字是**两个对象**（跨名去重失效，C2 的已知代价），
+		// 于是"两张图"在结果上也确实是两条链接（不会被上游按 key 合并掉）。
+		// 「同内容同名字只插一条」由 §7a2 单独钉（那才是用户报的重复插入）。
+		assert.equal(outcome.uploaded, 2, "名字不同 ⇒ 两个 key ⇒ 真的传了两份");
+		assert.equal(outcome.reused, 0, "跨名不再复用");
+		assert.equal(h.server.countByMethod("PUT"), 2, "两次 PUT（字节完全一样，但身份不同）");
 		assert.equal(calls.selection[0].split("\n").length, 2, "⭐ 两张图都要插入链接（不能因为复用就少插一条）");
 	});
 
@@ -780,16 +785,19 @@ export async function runTransferSuite(mod) {
 		await processTransfer(h.deps, editor, [makeFile("first.png", "image/png")]);
 		assert.equal(h.server.countByMethod("PUT"), 1);
 
-		const outcome = await processTransfer(h.deps, editor, [makeFile("again.png", "image/png")]);
-		assert.equal(outcome.reused, 1, "同一份内容第二次粘贴应命中复用");
+		// ⚠️ 必须用**同一个名字**：换名字会得到另一个 key，那测的就是 7f 那条"两份对象"
+		const outcome = await processTransfer(h.deps, editor, [makeFile("first.png", "image/png")]);
+		assert.equal(outcome.reused, 1, "同内容同名字第二次粘贴应命中复用");
 		assert.equal(h.server.countByMethod("PUT"), 1, "⭐ 重复粘贴同一张图不得再发 PUT");
 	});
 
 	// 7h. ⭐ 非 ASCII 文件名不得被**双重编码**（P0 验收标准之一）
 	//
-	// 用 `{filename}` 模板，让中文名真的进入 URL —— 默认模板 `{hash}.{ext}` 里没有文件名，
-	// 那样这条断言就测不到编码路径（是个"看着在测其实没测"的假断言）。
-	await withHarness(mod, { settings: { s3: { objectKeyTemplate: "{filename}" } } }, async (h) => {
+	// ⚠️ 1.3.0 之前这条必须靠 `{filename}` 自定义模板才能让中文名进 URL
+	//（默认模板是纯哈希，测不到编码路径 —— 那是个"看着在测其实没测"的假断言）。
+	// 现在形状固定成 `<原名>-<哈希>.<扩展名>`，中文名**必然**进 key，这条用例不再需要
+	// 任何设置配合，而且测的就是出厂行为本身。
+	await withHarness(mod, {}, async (h) => {
 		const { editor, calls } = makeEditor();
 		await processTransfer(h.deps, editor, [makeFile("中文 名字.png", "image/png")]);
 		const markdown = calls.selection[0];
@@ -802,16 +810,16 @@ export async function runTransferSuite(mod) {
 
 		assert.ok(!url.includes(" "), `URL 里不得有裸空格（会被 Markdown 截断）：${url}`);
 		assert.ok(!url.includes("%25"), `⭐ URL 里不得出现二次编码：${url}`);
+		// ⚠️ 期望值必须**独立算出来**（内容是固定字节 ⇒ 哈希可算），
+		// 而不是从服务端解出的 key 反推 —— 那样断言就变成了"我用我自己验我自己"。
+		const contentHash = createHash("sha256").update(Buffer.from(IMAGE_BYTES)).digest("hex");
+		const expectedKey = `中文 名字-${contentHash}.png`;
 		assert.ok(
-			url.endsWith("/%E4%B8%AD%E6%96%87%20%E5%90%8D%E5%AD%97.png"),
+			url.endsWith(`/${encodeURIComponent(expectedKey)}`),
 			`⭐ 非 ASCII 与空格必须**恰好编码一次**，实际 ${url}`
 		);
 		// 服务端解出来的 key 应与写入笔记的那串一致（否则链接指向一个不存在的对象）
-		assert.equal(
-			h.server.requests[0].key,
-			"中文 名字.png",
-			"服务端解出的 key 应是原始文件名（编码只发生在 URL 层）"
-		);
+		assert.equal(h.server.requests[0].key, expectedKey, "服务端解出的 key 应是原名 + 内容哈希（编码只发生在 URL 层）");
 	});
 
 	// 7i. 空文件列表 → 不插入、不发请求

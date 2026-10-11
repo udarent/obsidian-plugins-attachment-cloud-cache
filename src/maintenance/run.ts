@@ -59,6 +59,17 @@ export interface MaintenanceDeps {
 	 * 未提供时批量上传只处理库内文件。
 	 */
 	cacheExternal?: (url: string, notePath: string | undefined) => Promise<ExternalCacheOutcome>;
+	/**
+	 * ⭐ "云端**现在**确实还有这个对象吗"（1.3.0 新增，`maintenance/eviction.ts` 用）。
+	 *
+	 * 淘汰本地副本前逐个复核。**为什么不能只查台账**：台账记的是"我们传过它"，
+	 * 而别的设备可能已经把云端对象清掉了 —— 那种情况下本机这份副本是**最后一份**，
+	 * 删它就是丢数据。缓存目录时代不需要这一问（那条目录里的东西必然是刚传上去的），
+	 * 现在副本可能活得比云端对象久。
+	 *
+	 * 未提供 ⇒ 一律当作"确认不了" ⇒ **不淘汰**（安全的一侧）。
+	 */
+	confirmRemote?: (key: string) => Promise<boolean>;
 	notify: (message: string) => void;
 	t: (key: string, params?: Record<string, unknown>) => string;
 }
@@ -254,10 +265,29 @@ export async function runEviction(deps: MaintenanceDeps, plan: EvictionPlan): Pr
 	const removedKeys: string[] = [];
 
 	for (const victim of plan.evict) {
-		// 双保险：清单理论上只含缓存目录内的路径，但这是**删文件**的循环，
-		// 少一层校验的代价不可逆。
-		if (!isUnderCacheFolder(victim.cachePath, deps.settings().cacheFolder)) {
-			result.skipped.push({ path: victim.cachePath, reason: deps.t("maintainSkipOutsideCache") });
+		// ⭐ 双保险（1.3.0 换掉了旧的那道）：清单来自索引，但这是**删文件**的循环，
+		// 少一层校验的代价不可逆。两道新的：
+		//   ① 索引**此刻**仍认这份副本（key 与路径都对得上）—— 清单可能是上一拍算的，
+		//      而这一拍用户可能已经把它挪走/改名/换成了别的文件；
+		//   ② 云端**现在**确实还有这个对象（`confirmRemote`）—— 否则删掉的是最后一份。
+		const known = deps.index().findByCachePath(victim.cachePath);
+		if (!known || known.key !== victim.key) {
+			result.skipped.push({ path: victim.cachePath, reason: deps.t("maintainSkipUnknownCopy") });
+			continue;
+		}
+		if (!deps.confirmRemote) {
+			result.skipped.push({ path: victim.cachePath, reason: deps.t("maintainSkipUnconfirmed") });
+			continue;
+		}
+		let stillInCloud = false;
+		try {
+			stillInCloud = (await deps.confirmRemote(victim.key)) === true;
+		} catch (error) {
+			result.skipped.push({ path: victim.cachePath, reason: describeError(error) });
+			continue;
+		}
+		if (!stillInCloud) {
+			result.skipped.push({ path: victim.cachePath, reason: deps.t("maintainSkipNotInCloud") });
 			continue;
 		}
 
@@ -272,8 +302,8 @@ export async function runEviction(deps: MaintenanceDeps, plan: EvictionPlan): Pr
 			await removeCacheFile(deps.app, file);
 			result.evicted += 1;
 			result.freed += Math.max(0, victim.bytes);
-			// 只有"有索引记录"的才需要摘（孤儿本来就没有记录）
-			if (victim.key) removedKeys.push(victim.key);
+			// 候选一律来自索引（孤儿那一类已随缓存目录取消），所以每个受害者都有一条记录要摘
+			removedKeys.push(victim.key);
 		} catch (error) {
 			result.skipped.push({ path: victim.cachePath, reason: describeError(error) });
 		}

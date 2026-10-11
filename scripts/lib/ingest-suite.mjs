@@ -89,10 +89,9 @@ async function makeHarness(mod, options = {}) {
 	const settings = {
 		...mod.SETTINGS_DEFAULTS,
 		...options.settings,
-		// ⚠️ 钉住旧模板：本套件断言的是 ingest 行为，不是默认模板长什么样 ——
-		// 不钉就会随默认模板漂移（C2 把默认改成 `{name}-{hash}.{ext}` 时就红过一次）。
-		// 新默认模板的端到端覆盖在本文件 §2 末尾的专设用例 + object-key 套件。
-		s3: { ...mod.SETTINGS_DEFAULTS.s3, objectKeyTemplate: "{hash}.{ext}", ...options.settings?.s3 },
+		// ⚠️ 1.3.0 起这里没有"钉模板"那一步了：key 形状**不可配置**（模板设置已取消），
+		// 所以本套件判断的形状就是产品唯一的形状，不会再随某个默认值漂移。
+		s3: { ...mod.SETTINGS_DEFAULTS.s3, ...options.settings?.s3 },
 	};
 
 	const index = new mod.CacheIndex();
@@ -211,10 +210,11 @@ export async function runIngestSuite(mod) {
 		});
 
 		const expectedHash = sha256Hex(HOSTILE_BYTES);
-		const expectedKey = `${expectedHash}.png`;
+		// ⭐ 1.3.0：形状固定 = `<原名>-<内容哈希>.<扩展名>`（独立算出的哈希，不读实现）
+		const expectedKey = `photo-${expectedHash}.png`;
 
 		assert.equal(result.status, "uploaded", `应上传成功，实际 ${result.status}`);
-		assert.equal(result.key, expectedKey, "key 应由**独立算出的**内容哈希决定");
+		assert.equal(result.key, expectedKey, "key 应由**独立算出的**内容哈希与原始文件名决定");
 		assert.equal(
 			result.remoteUrl,
 			`${h.endpoint}/${BUCKET}/${expectedKey}`,
@@ -277,9 +277,9 @@ export async function runIngestSuite(mod) {
 	});
 
 	// ============================================================
-	// 2b. 新默认模板（C2）：key = `{name}-{hash}.{ext}`，名字进 key、哈希尾仍是完整 64 位
+	// 2b. 非 ASCII 名字进 key：**不编码**（编码会让链接 404）
 	// ============================================================
-	await withHarness(mod, { settings: { s3: { objectKeyTemplate: "{name}-{hash}.{ext}" } } }, async (h) => {
+	await withHarness(mod, {}, async (h) => {
 		const result = await ingestAttachment(h.deps, {
 			bytes: HOSTILE_BYTES,
 			name: "报告 扫描.png",
@@ -298,25 +298,52 @@ export async function runIngestSuite(mod) {
 	});
 
 	// ============================================================
-	// 3. 内容寻址：同一份内容重复粘贴 → 跳过上传（零网络请求）
+	// 3. 同内容**同名**重复粘贴 → 跳过上传（零网络请求）
+	//
+	// ⚠️ 1.3.0 起"去重"的口径收窄了一格，这条用例把这个收窄**如实钉住**：
+	// key = `<名字>-<哈希>.<扩展名>`，所以"同一份内容"只有在**名字也相同**时才会
+	// 落到同一个 key 上。名字不同的同一份内容 = 另一个对象（这是 C2 的已知代价：
+	// 桶里按名字组织 ⇒ 名字就成了身份的一部分）。
+	//
+	// 代价最常出现在**剪贴板**上：那是**时间戳命名**（`Pasted image 2026...`），
+	// 所以同一张图贴两次得到两个名字 ⇒ 两份对象。⚠️ 目前**未做**任何缓解
+	// （按内容哈希复用已有对象是一条可行路：`CacheIndex.wasContentUploaded` 现成），
+	// 要不要做是独立决定，别顺手加。
 	// ============================================================
 	await withHarness(mod, {}, async (h) => {
 		const first = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "photo.png", mime: "image/png" });
 		assert.equal(first.status, "uploaded");
 		assert.equal(h.server.countByMethod("PUT"), 1, "第一次应上传");
 
-		// ⚠️ 换个文件名，但内容相同 → 哈希相同 → key 相同
-		const second = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "另一个名字.png", mime: "image/png" });
-		assert.equal(second.status, "reused", "内容与 URL 都已知时应复用，而不是重新上传");
-		assert.equal(second.key, first.key, "同一份内容必须得到同一个 key");
-		assert.equal(second.remoteUrl, first.remoteUrl, "复用时 URL 应与首次一致");
-		assert.equal(second.localPath, first.localPath, "复用时本地副本路径应一致");
+		// 同名同内容 ⇒ 同 key ⇒ 复用（一个字都不重传）
+		const again = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "photo.png", mime: "image/png" });
+		assert.equal(again.status, "reused", "同内容同名字应复用，而不是重新上传");
+		assert.equal(again.key, first.key, "同内容同名字必须得到同一个 key");
+		assert.equal(again.remoteUrl, first.remoteUrl, "复用时 URL 应与首次一致");
+		assert.equal(again.localPath, first.localPath, "复用时本地副本路径应一致");
 		assert.equal(
 			h.server.countByMethod("PUT"),
 			1,
-			"重复粘贴同一张图**不得**再发 PUT —— 省掉一次可能几十 MB 的上行"
+			"同内容同名字重复粘贴**不得**再发 PUT —— 省掉一次可能几十 MB 的上行"
 		);
 		assert.equal(h.server.countByMethod("GET"), 0, "复用路径上不该有任何下载");
+	});
+
+	// 3b. 同内容**不同名字** ⇒ 另一个对象（名字进了 key，跨名去重就不再成立）
+	await withHarness(mod, {}, async (h) => {
+		const first = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "photo.png", mime: "image/png" });
+		assert.equal(first.status, "uploaded");
+
+		const renamed = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "另一个名字.png", mime: "image/png" });
+		assert.equal(renamed.status, "uploaded", "换名字的同一份内容会得到另一个 key ⇒ 会真的再传一次（C2 的已知代价）");
+		assert.notEqual(renamed.key, first.key, "★ 名字不同 ⇒ key 必须不同（否则链接会指向名字对不上的对象）");
+		assert.equal(h.server.countByMethod("PUT"), 2, "两份对象、两次 PUT");
+		// ⚠️ 但**字节**仍然各存一份、内容一致：桶里多了一份，不是丢了什么
+		assert.equal(
+			Buffer.compare(h.server.stored(first.key), h.server.stored(renamed.key)),
+			0,
+			"两份对象的字节完全一样（多占一份空间，不是数据不一致）"
+		);
 	});
 
 	// ⚠️ 复用的前提是**索引里有记录**，而不是"附件目录里恰好有个同名文件"。
@@ -324,13 +351,13 @@ export async function runIngestSuite(mod) {
 	//
 	// 这一条同时记录了一个**刻意的取舍**：目标路径已占用时，落盘一律另取序号
 	// （`… .png` → `… 1.png`），而**不是**判断"内容相同就直接复用"。
-	// 理由：只有当 key 完全由内容决定（模板含 `{hash}`）时"同路径 ⇒ 同内容"才成立；
-	// 用户可以把模板改成 `{filename}`，那时同路径可能是**不同内容**，
-	// 直接复用就等于认错了文件。另取序号的代价只是"索引丢失后重贴同一张图会多一份副本"，
-	// 而那份副本用户随时可以在「释放本地空间」里收掉 —— 用一点可回收的空间
-	// 换"任何模板下都不会认错文件"，这个交换是划算的。
+	// 理由：落盘名来自**原始文件名**（不是 key），所以"同一个路径"绝不等于"同一份内容"——
+	// 两个不同内容的 `photo.png` 会落在同一处。直接复用就等于认错了文件。
+	// 另取序号的代价只是"索引丢失后重贴同一张图会多一份副本"，
+	// 而多出来的那份会被「本地副本上限」按最久未用淘汰 —— 用一点可回收的空间
+	// 换"任何情况下都不会认错文件"，这个交换是划算的。
 	await withHarness(mod, {}, async (h) => {
-		const key = `${sha256Hex(HOSTILE_BYTES)}.png`;
+		const key = `photo-${sha256Hex(HOSTILE_BYTES)}.png`;
 		const occupied = "photo.png";
 		await h.write(occupied, Buffer.from(HOSTILE_BYTES)); // 只放文件，不登记索引
 
@@ -529,24 +556,20 @@ export async function runIngestSuite(mod) {
 	// ============================================================
 
 	// ============================================================
-	// 9. 嵌套 key（{date}/...）→ 缓存目录要按需建出中间层
+	// 9. ~~嵌套 key（`{date}/…`）~~
 	// ============================================================
-	await withHarness(mod, { settings: { s3: { objectKeyTemplate: "{date}/{hash}.{ext}" } } }, async (h) => {
-		const result = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "nested.png", mime: "image/png" });
-		assert.equal(result.status, "uploaded");
-		const expectedKey = `2026-10-06/${sha256Hex(HOSTILE_BYTES)}.png`;
-		assert.equal(result.key, expectedKey, "key 应按模板带上日期目录");
-		// ⭐ 1.3.0：key 里的目录**不再**映到本地路径（本地副本是附件本身，不是镜像目录树）。
-		assert.equal(result.localPath, "nested.png", "本地副本就是附件本身（key 的目录结构不再镜像到 vault）");
-		assert.ok(await h.exists(result.localPath), "副本必须真的落盘");
-		assert.equal(
-			Buffer.compare(await h.read(result.localPath), Buffer.from(HOSTILE_BYTES)),
-			0,
-			"副本字节应一致"
-		);
-		// 服务端存的是带目录的 key
-		assert.ok(h.server.stored(expectedKey), "服务端应存下带目录的 key");
-	});
+	//
+	// ⚠️ 这一节随 1.3.0 **删掉了**：key 形状固定成 `<原名>-<哈希>.<扩展名>`，
+	// 里面**不可能再有目录分隔符**，于是"带目录的 key / 按需建出中间层"这个主题
+	// 整体消失了。留一条跑不到的用例，比没有用例更糟：它会让人以为那个能力还在
+	//（死主题的断言永远绿，而且改坏了也没人知道）。
+	//
+	// ⚠️ 顺带如实记一条**能力损失**：从前用户可以靠 `{date}/…`、`{hash2}/…` 在桶里
+	// 分层组织对象，现在没有了。要换回来只能重新引入模板 —— 而模板正是
+	// "不含完整哈希 ⇒ 静默串内容"那条事故的来源，取舍已经做过。
+	//
+	// `sanitizeKey` 本身保留（key 的最后一道闸门）：即使上游哪一步漏了分隔符清洗，
+	// 它也保证不产出危险 key。它的断言在 `object-key` 套件里。
 
 	// ============================================================
 	// 10. 截图粘贴：没有文件名，靠 MIME 推扩展名

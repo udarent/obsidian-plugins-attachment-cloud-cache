@@ -17,17 +17,19 @@ console.log(
 		"leaves exactly one link — one paste must not show the same picture twice; rendering rewrote the src to the local copy with **zero** requests in both reading view and " +
 		"live preview, while a third-party image was left alone; clean-cache deleted only the orphan through " +
 		"Vault.delete (never the trash), said so in the confirmation text, left the referenced copy alone, and " +
-		"cancelling touched nothing; batch upload rewrote both link forms, moved the file into the cache " +
-		"folder (a move, not a copy) and left both the attachment no note refers to and any stray copy alone; " +
+		"cancelling touched nothing; batch upload rewrote both link forms, left the user's file exactly where it " +
+		"was (no cache folder is ever created — that file *is* the local copy) and left both the attachment no note " +
+		"refers to and any stray copy alone; " +
 		"an unconfigured paste is left to Obsidian; batch upload also picks up the images notes " +
 		"link to elsewhere, and its dialog names the sites it will visit (that confirmation is the authorisation) " +
 		"while cancelling downloads nothing; with the feature on and the default set to \"cache straight away\" such " +
 		"an image is downloaded, uploaded and its link rewritten, whereas the default \"leave it alone\" sends no " +
 		"request and leaves the note byte-for-byte identical; changing that setting makes the plugin look at the notes " +
 		"that are open right now; the \"pick which to cache\" command was driven end to end (its dialog standing in for " +
-		"\"see the list, select all, confirm\") — a fresh image leaves a file in the cache folder *and* a row in the " +
+		"\"see the list, select all, confirm\") — a fresh image lands a local copy *and* a row in the " +
 		"index file, an image whose bytes are already cached reuses that copy instead of adding anything, and a " +
-		"CDN-style URL whose last path segment carries a token after the dot still produces a cache file ending in the " +
+		"CDN-style URL whose last path segment carries a token after the dot still produces a local copy whose name ends " +
+		"in the " +
 		"real type; and with a cache limit set, the background rotation deleted the least recently used " +
 		"copies outright (freeing the space now) and removed their index entries, without ever going near the trash, " +
 		"and with the note itself untouched))."

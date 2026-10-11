@@ -193,8 +193,11 @@ export interface S3Config {
 	 * 属于高级设置，不该出现在主流程里。
 	 */
 	forcePathStyle: boolean;
-	/** 对象 key 模板，支持 `{hash} {hash2} {ext} {filename} {name} {date}`（默认见 object-key.ts）。 */
-	objectKeyTemplate: string;
+	// 曾经这里有一个 `objectKeyTemplate`（用户可以自由拼 `{hash} {name} {date}` 之类）。
+	// ⭐ 1.3.0 **取消了它**：不含完整 `{hash}` 的模板会让**同名但内容不同**的文件得到
+	// 同一个 key，而那条路上的"命中缓存即复用"判定不比内容 ⇒ 静默地复用错文件、
+	// 甚至在本地副本不在时覆盖桶里的对象。形状现在固定在 `object-key.ts` 的
+	// `objectKeyFor` 一处（`<名字>-<完整哈希>[.<扩展名>]`），不再可配。
 }
 
 /**

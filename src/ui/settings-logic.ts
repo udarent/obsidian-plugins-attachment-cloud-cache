@@ -126,6 +126,25 @@ export function shouldShowFallbackDownload(action: unknown): boolean {
 }
 
 /**
+ * 「本地副本上限」这一项要不要显示。
+ *
+ * ⚠️ 这一条正是 **P7 的关闭方式**（1.3.0 / D-17）：从前这项只在「移入缓存」档显示，
+ * 而后台判定只看 `cacheLimitMb > 0` ⇒ 「留在附件目录」档**看不见的开关却在生效**
+ * （与"不起作用的开关不显示"正好相反）。
+ *
+ * 现在上限的统计范围 = **索引里的所有本地副本**（含附件目录里那两份），于是：
+ * - 「保留副本」档：这一档会产生副本 ⇒ 显示，且**确实生效**；
+ * - 「不留副本」档：这一档不产生副本（上传后删除、下载也不落盘）⇒ 隐藏，且**确实不起作用**。
+ *
+ * 判据与 `shouldShowFallbackDownload` 同形（都问"这一档会不会有副本"），
+ * 但**刻意不合并成同一个函数**：它们回答的是两个不同的问题
+ *（"要不要把副本补回来"与"副本总量该不该有上限"），将来任何一个的判据变化都不该牵动另一个。
+ */
+export function shouldShowCacheLimit(action: unknown): boolean {
+	return !isCacheDisabled(action);
+}
+
+/**
  * 「测试连接」失败的归类。
  *
  * 不直接把 `error.message` 抛给用户：那是给排查用的（可能带一屏 XML），

@@ -61,7 +61,6 @@ const SETTINGS = {
 		accessKeyId: "",
 		secretAccessKeyRef: "",
 		forcePathStyle: true,
-		objectKeyTemplate: "{hash}.{ext}",
 	},
 };
 

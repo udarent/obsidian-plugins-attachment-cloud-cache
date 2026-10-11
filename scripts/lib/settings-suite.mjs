@@ -20,7 +20,7 @@ import assert from "node:assert/strict";
  * @returns {{ scalars: number }}  供日志汇报用的统计
  */
 export function runSettingsSuite(mod) {
-	const { SETTINGS_DEFAULTS, mergePluginSettings, isLocalCopyAction } = mod;
+	const { SETTINGS_DEFAULTS, mergePluginSettings, isLocalCopyAction, hasLegacyObjectKeyTemplate } = mod;
 
 	// ============================================================
 	// 1. 默认值必须体现产品定位
@@ -43,7 +43,13 @@ export function runSettingsSuite(mod) {
 		"「参与的文件类型」已被移除（任何类型都上传），它不得复活"
 	);
 
-	assert.equal(SETTINGS_DEFAULTS.s3.objectKeyTemplate, "{name}-{hash}.{ext}", "默认对象 key = 名字 + 完整哈希尾（C2）");
+	// ⭐ 1.3.0：「对象 key 模板」整个设置项被取消（形状固定为 `<名字>-<完整哈希>[.<扩展名>]`，
+	// 理由见 `object-key.ts` 文件头 —— 不含完整哈希的模板会静默串内容）。
+	// 与上面「参与的文件类型」同理，这里做**反向**断言：它不得以任何形式复活。
+	assert.ok(
+		!("objectKeyTemplate" in SETTINGS_DEFAULTS.s3),
+		"对象 key 模板不应再是可配项（形状固定，用户改不动）"
+	);
 	// 缓存布局不再是设置项：单段 key 下 flat 与 mirror 结果相同，
 	// 提供一个不产生差异的开关比不提供更糟。见 cache-path.ts 的说明。
 	assert.ok(!("cacheLayout" in SETTINGS_DEFAULTS), "缓存布局不应再是用户可配项");
@@ -207,15 +213,14 @@ export function runSettingsSuite(mod) {
 		"默认应为 path-style —— R2/MinIO/B2/Wasabi/AWS 都接受它，反过来则 R2 不可用"
 	);
 
-	// s3 里坏类型同样要回落
+	// s3 里坏类型同样要回落；而**已被取消的**那个遗留键必须直接消失
 	const s3Wrong = mergePluginSettings(SETTINGS_DEFAULTS, {
-		s3: { forcePathStyle: "yes", objectKeyTemplate: 42 },
+		s3: { forcePathStyle: "yes", objectKeyTemplate: "危险模板" },
 	});
 	assert.equal(s3Wrong.s3.forcePathStyle, true, "s3.forcePathStyle 非布尔应回落默认");
-	assert.equal(
-		s3Wrong.s3.objectKeyTemplate,
-		SETTINGS_DEFAULTS.s3.objectKeyTemplate,
-		"s3.objectKeyTemplate 非字符串应回落默认"
+	assert.ok(
+		!("objectKeyTemplate" in s3Wrong.s3),
+		"遗留的 key 模板键必须被丢弃（它已不参与任何行为，留着只会让人以为它还有用）"
 	);
 
 	// ============================================================
@@ -224,10 +229,9 @@ export function runSettingsSuite(mod) {
 	for (const bad of [null, undefined, 42, "nope", [], true]) {
 		const merged = mergePluginSettings(SETTINGS_DEFAULTS, bad);
 		assert.equal(merged.autoUpload, SETTINGS_DEFAULTS.autoUpload, `输入 ${JSON.stringify(bad)} 应回落到默认值`);
-		assert.equal(
-			merged.s3.objectKeyTemplate,
-			SETTINGS_DEFAULTS.s3.objectKeyTemplate,
-			"坏输入下 s3 子对象也应完整回落到默认值"
+		assert.ok(
+			!("objectKeyTemplate" in merged.s3),
+			"坏输入下 s3 子对象也应完整回落到默认值（且不带任何遗留键）"
 		);
 	}
 
@@ -361,19 +365,11 @@ export function runSettingsSuite(mod) {
 		const label = JSON.stringify(emptyish);
 		const merged = mergePluginSettings(SETTINGS_DEFAULTS, {
 			cacheFolder: emptyish,
-			s3: {
-				region: emptyish,
-				objectKeyTemplate: emptyish,
-				},
+			s3: { region: emptyish },
 		});
 
 		assert.equal(merged.cacheFolder, SETTINGS_DEFAULTS.cacheFolder, `cacheFolder 为 ${label} 时应回落默认`);
 		assert.equal(merged.s3.region, SETTINGS_DEFAULTS.s3.region, `s3.region 为 ${label} 时应回落默认`);
-		assert.equal(
-			merged.s3.objectKeyTemplate,
-			SETTINGS_DEFAULTS.s3.objectKeyTemplate,
-			`s3.objectKeyTemplate 为 ${label} 时应回落默认`
-		);
 	}
 
 	// ⭐ 反向守护：`attachmentFolder` **允许**为空串 —— 它表示"跟随宿主的附件设置"，
@@ -425,6 +421,31 @@ export function runSettingsSuite(mod) {
 			`s3.${key} 收到类型不对的值（${JSON.stringify(wrongTypeFor(expected))}）时应回落默认`
 		);
 	}
+
+	// ============================================================
+	// 11. ⭐ 遗留 key 模板的识别（1.3.0 的一次性兼容升级靠它）
+	//
+	// 为什么不能只靠字段表"顺手丢掉"：丢掉的是**合并结果**，而"文件里还有没有那个键"
+	// 是另一件事 —— 升级要做两件字段表做不到的事：清掉文件里的遗留值，
+	// 以及**告诉用户**他的 key 形状从此固定了（见 `main.ts` 的载入流程）。
+	//
+	// ⚠️ 判据必须看 `hasOwnProperty`，而不是"值是不是空"：
+	// 用户把模板清空过（`""`）也是遗留键，同样该清理与告知。
+	// ============================================================
+	assert.equal(hasLegacyObjectKeyTemplate({ s3: { objectKeyTemplate: "{hash}.{ext}" } }), true, "带模板的旧设置应被识别");
+	assert.equal(hasLegacyObjectKeyTemplate({ s3: { objectKeyTemplate: "" } }), true, "清空过的模板同样是遗留键（值是什么不重要）");
+	assert.equal(hasLegacyObjectKeyTemplate({ s3: {} }), false, "没有那个键就不是遗留设置");
+	assert.equal(hasLegacyObjectKeyTemplate({}), false, "没有 s3 段也不是");
+	assert.equal(hasLegacyObjectKeyTemplate(null), false, "坏输入（null）不该让它抛错");
+	assert.equal(hasLegacyObjectKeyTemplate("nope"), false, "坏输入（字符串）不该让它抛错");
+	assert.equal(hasLegacyObjectKeyTemplate({ s3: "nope" }), false, "s3 不是对象时不该抛错");
+	// ⚠️ 刻意**只认**这一个键：更早版本砍掉的字段（明文凭据、cacheEnabled…）
+	// 从来没有迁移代码，也不需要有 —— 顺手做全量清理会把"隐式重写用户配置"变成常规行为。
+	assert.equal(
+		hasLegacyObjectKeyTemplate({ cacheEnabled: true, s3: { region: "us-east-1" } }),
+		false,
+		"其它历史字段不在这条升级的职责范围内"
+	);
 
 	// ============================================================
 	// 10.（已删除）扩展名列表的清洗细节

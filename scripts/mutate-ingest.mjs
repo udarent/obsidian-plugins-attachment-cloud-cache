@@ -38,10 +38,14 @@ await runMutations({
 		},
 		// ── 命名与类型 ──
 		{
-			name: "扩展名全缺时不再兜底（产出以点结尾的 key，Windows 会丢掉那个点）",
+			// ⚠️ 1.3.0 起可见的后果**变了**：key 形状固定成 `<名字>-<哈希>[.<扩展名>]`，
+			// 不再有"扩展名段为空 ⇒ key 以点结尾"那种形态 —— 扩展名没了就是没接上去。
+			// 现在红的是"类型信息整个丢掉"（key 与**落盘名**都没有类型 ⇒
+			// Obsidian 按名字判断怎么显示 ⇒ 用户看不到图）。
+			name: "扩展名全缺时不再兜底（key 与落盘名都丢掉类型信息）",
 			from: "return resolveExtension(name, mime) || FALLBACK_EXTENSION;",
 			to: "return resolveExtension(name, mime);",
-			expect: "key 不得以点结尾",
+			expect: "未知类型应兜底成 .bin",
 		},
 		{
 			name: "不再声明 Content-Type（浏览器里会变成下载而不是显示）",

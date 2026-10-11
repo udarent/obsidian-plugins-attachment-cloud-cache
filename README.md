@@ -257,7 +257,7 @@ Obsidian version and which storage provider you use; the errors name the step th
 | **缓存站外文件** | 默认关闭；关着时站外的东西一步都不会被碰。 |
 | **遇到站外文件链接时** | `什么都不做`（默认）或 `直接缓存`。 |
 | **挑选要缓存的文件** | 勾选具体的站外文件，只有勾中的会被取。 |
-| **附件目录覆盖 · 对象 key 模板 · 兼容模式** | 高级：覆盖 Obsidian 的附件目录；改 key 模板（`{hash}`、`{ext}`、`{filename}`、`{date}`）；按「地址/桶/键」寻址（R2 与 MinIO 都要开着）。 |
+| **附件目录覆盖 · 兼容模式** | 高级：覆盖 Obsidian 的附件目录；按「地址/桶/键」寻址（R2 与 MinIO 都要开着）。 |
 
 ## 命令
 

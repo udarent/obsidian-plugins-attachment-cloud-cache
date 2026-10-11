@@ -122,7 +122,6 @@ export async function runDownloadSuite(mod) {
 				accessKeyId: "",
 				secretAccessKeyRef: "",
 				forcePathStyle: true,
-				objectKeyTemplate: "{hash}.{ext}",
 			},
 			...options.settings,
 		};

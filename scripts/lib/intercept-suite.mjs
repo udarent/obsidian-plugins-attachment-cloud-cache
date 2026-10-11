@@ -37,7 +37,6 @@ export function runInterceptSuite(mod) {
 			accessKeyId: "ak",
 			secretAccessKeyRef: "sk",
 			forcePathStyle: true,
-			objectKeyTemplate: "{hash}.{ext}",
 		},
 	};
 

@@ -14,36 +14,29 @@ await runMutations({
 	suite: runRotationSuite,
 	mutations: [
 		{
-			// 后果：用户没设上限（0）时仍然继续跑 ⇒ 整体超限 ⇒ **把整个缓存淘汰掉**。
+			// 后果：用户没设上限（0）时仍然继续跑 ⇒ 整体超限 ⇒ **把副本全清掉**。
 			// "0 = 不限制"是默认值，所以这条错法会落在绝大多数用户身上。
-			name: "★ 不再区分「不限制」（默认设置下就开始清空缓存）",
+			name: "★ 不再区分「不限制」（默认设置下就开始清副本）",
 			from: "\t\t\t\tif (limitBytes <= 0) return null;\n",
 			to: "\t\t\t\t// 变异：不区分「不限制」\n",
 			expect: "不限制",
 		},
 		{
-			// 后果：每次上传都要**列一次目录 + 逐个 stat**（这是"缓存长大"的最常见路径）。
-			// 门槛①存在的全部意义就是挡住这一步。
-			name: "★ 去掉便宜的门槛（每次上传都去列目录）",
-			from: "\t\t\t\tif (\n\t\t\t\t\treason !== \"startup\" &&\n\t\t\t\t\tsumIndexedBytes(deps.index().toArray(), settings.cacheFolder) <= limitBytes\n\t\t\t\t) {\n\t\t\t\t\treturn null;\n\t\t\t\t}\n",
-			to: "\t\t\t\t// 变异：不做便宜的门槛检查\n",
-			expect: "索引没超",
+			// 后果：每次上传/每个周期都要**扫全库笔记**（读全库笔记是这条链上最贵的一步）。
+			// 门槛存在的全部意义就是挡住它。
+			name: "★ 去掉便宜的门槛（没超也去读全库笔记）",
+			from: "\t\t\t\tif (sumOwnedBytes(deps.index().toArray()) <= limitBytes) return null;\n",
+			to: "\t\t\t\t// 变异：不做门槛检查\n",
+			// 最先红的其实是**上一句**（"没超 → 不跑"）：门槛一去，那一轮照样会跑起来
+			expect: "索引没超 → 不跑",
 		},
 		{
-			// 后果：磁盘上其实没超，却仍去**读全库笔记**（大库里就是几秒到几十秒的 I/O），
-			// 而且会周期性重复。
-			name: "★ 去掉磁盘门槛（没超也去读全库笔记）",
-			from: "\t\tif (totalBytes <= limitBytes) {\n\t\t\treturn { reason, totalBytes, limitBytes, evicted: 0, freed: 0, skipped: 0, overBy: 0 };\n\t\t}\n",
-			to: "\t\t// 变异：不做磁盘门槛检查\n",
-			expect: "不该扫笔记",
-		},
-		{
-			// 后果：索引坏掉/被删时（那时索引里 0 字节）启动那一轮会被便宜门槛挡下 ⇒
-			// 缓存目录里那堆"孤儿"永远腾不掉，上限形同虚设。
-			name: "★ 启动那一轮也去看索引（索引坏掉后上限永久失效）",
-			from: '\t\t\t\t\treason !== "startup" &&\n',
-			to: "\t\t\t\t\ttrue &&\n",
-			expect: "启动时必须去量磁盘",
+			// 后果：候选与统计**不再是同一个口径** ⇒ 门槛放行后挑不出对应的人，
+			// 或者反过来：统计说没超、候选却有一堆（下面那条单测钉的就是这个同源关系）。
+			name: "★ 统计口径改成只算遗留缓存目录（与候选不再同源）",
+			from: "\t\tconst totalBytes = sumOwnedBytes(entries);",
+			to: "\t\tconst totalBytes = sumOwnedBytes(entries.filter((e) => e.cachePath.startsWith(\"_attachment-cache/\")));",
+			expect: "统计口径",
 		},
 		{
 			// 后果：节流失效 ⇒ 连粘 20 张图触发 20 轮，每轮都量磁盘、扫笔记、删文件。

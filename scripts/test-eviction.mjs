@@ -10,9 +10,10 @@ import { runEvictionSuite } from "./lib/eviction-suite.mjs";
 await withLoadedTs(["src/maintenance/eviction", "src/cache-path", "src/records"], (mod) => {
 	runEvictionSuite(mod);
 	console.log(
-		"Eviction tests passed (victims picked by last-use with unreferenced copies first, a freshly cached copy is never " +
-			"a victim, 'keep' copies living in the attachment folder are never candidates, orphans on disk become candidates " +
-			"with an empty key, whole files only — never a partial delete, byte counts read from disk rather than the index, " +
-			"stable ordering under ties, and the remaining overage reported honestly)."
+		"Eviction tests passed (candidates and the size total both come from the index — copies living in the " +
+			"attachment folder count just like legacy ones, and a file the index does not know is never a candidate " +
+			"(the old 'orphan on disk' category is gone: such a file could be the user's own attachment); victims " +
+			"picked by last-use with unreferenced copies first; a freshly used copy is never a victim; whole files " +
+			"only — never a partial delete; stable ordering under ties; and the remaining overage reported honestly)."
 	);
 });

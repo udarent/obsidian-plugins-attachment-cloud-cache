@@ -18,6 +18,7 @@ export function runSettingsUiSuite(mod) {
 	const {
 		// settings-logic
 		shouldShowCacheFolder,
+		shouldShowCacheLimit,
 		shouldShowFallbackDownload,
 		localCopyOptions,
 		deleteModeOptions,
@@ -70,6 +71,20 @@ export function runSettingsUiSuite(mod) {
 	assert.equal(shouldShowFallbackDownload("trash"), false, "★ 不留副本 = 关闭缓存，这一项没有作用，必须隐藏");
 	assert.equal(shouldShowFallbackDownload("nonsense"), true, "非法值不该把开关藏起来（宁可多显示，不可静默少一个开关）");
 	assert.equal(shouldShowFallbackDownload(undefined), true, "缺值时按默认档显示");
+
+	// ⭐ 1.3.0（D-17）：上限的可见性 = "这一档会不会产生本地副本"。
+	// 这**正是 P7 的关闭方式**：从前它只在「移入缓存」档显示，而后台判定只看
+	// `cacheLimitMb > 0` ⇒ 「原地保留」档"看不见的开关却在生效"。
+	// 现在统计范围含附件目录里的副本，于是"看得见 = 真的生效、看不见 = 真的不起作用"。
+	assert.equal(shouldShowCacheLimit("cache"), true, "移入缓存（老设置）档要显示");
+	assert.equal(
+		shouldShowCacheLimit("keep"),
+		true,
+		"★ 原地保留档**也要显示** —— 上限现在管的就是那些副本（这正是 P7 的关闭方式）"
+	);
+	assert.equal(shouldShowCacheLimit("trash"), false, "★ 不留副本档不产生副本 ⇒ 隐藏，且确实不起作用");
+	assert.equal(shouldShowCacheLimit("nonsense"), true, "非法值不该把开关藏起来（宁可多显示）");
+	assert.equal(shouldShowCacheLimit(undefined), true, "缺值时按默认档显示");
 
 	// ============================================================
 	// 3. 下拉选项必须与类型清单同源
@@ -204,7 +219,6 @@ export function runSettingsUiSuite(mod) {
 	);
 	assert.equal(isWritableValue("cacheFolder", "   "), false, "纯空白同样不可写");
 	assert.equal(isWritableValue("s3.region", ""), false, "区域不能为空");
-	assert.equal(isWritableValue("s3.objectKeyTemplate", ""), false, "key 模板不能为空（否则每次上传都失败）");
 	assert.equal(
 		isWritableValue("attachmentFolder", ""),
 		true,
@@ -309,7 +323,7 @@ export function runSettingsUiSuite(mod) {
 	// 10. 连通性前置检查
 	// ============================================================
 	const base = { autoUpload: true, attachmentFolder: "", localCopy: "cache", cacheFolder: "c", fallbackDownload: true };
-	const s3Base = { endpoint: "https://s3.example.com", region: "auto", bucket: "b", publicUrlBase: "", accessKeyId: "AKIA", secretAccessKeyRef: "s", forcePathStyle: true, objectKeyTemplate: "{hash}.{ext}" };
+	const s3Base = { endpoint: "https://s3.example.com", region: "auto", bucket: "b", publicUrlBase: "", accessKeyId: "AKIA", secretAccessKeyRef: "s", forcePathStyle: true };
 	const ready = connectionReadiness(readerWith({ s: "SECRET" }), { ...base, s3: s3Base });
 	assert.equal(ready.ready, true, "配置齐全时应就绪");
 	assert.equal(

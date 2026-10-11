@@ -10,9 +10,11 @@ import { runRotationSuite } from "./lib/rotation-suite.mjs";
 await withLoadedTs(["src/maintenance/rotation", "src/maintenance/eviction", "src/cache-path"], async (mod) => {
 	await runRotationSuite(mod);
 	console.log(
-		"Rotation tests passed (the quota check works from disk state on startup, a cheap threshold stops it before " +
-			"listing anything or scanning notes, one round at a time so two rounds never delete the same files, " +
-			"failures are throttled instead of retried on every event, the background job never throws at its caller, " +
-			"and it only speaks when something was really deleted)."
+		"Rotation tests passed (candidates and the size total both come from the index, so the cheap threshold and " +
+			"the victims can never disagree; a copy living in the attachment folder counts just like a legacy one; " +
+			"the startup round no longer bypasses the index - a file the index does not know is never deleted, so an " +
+			"incomplete index makes the limit conservative rather than guess from disk; one round at a time so two " +
+			"rounds never delete the same files; failures are throttled instead of retried on every event; the " +
+			"background job never throws at its caller, and it only speaks when something was really deleted)."
 	);
 });

@@ -98,9 +98,6 @@ export const I18N: Record<string, Locale> = {
 		attachmentFolderPlaceholder: "Follow Obsidian",
 		attachmentFolderDesc:
 			"Leave empty to follow Obsidian's own attachment setting; a value here overrides it.",
-		objectKeyTemplate: "Object key template",
-		objectKeyTemplateDesc:
-			"Available: {name} (file name without extension), {filename} (with extension), {hash}, {hash2}, {ext}, {date}. Default {name}-{hash}.{ext}: objects stay recognizable by name in your storage, and delete confirmations can show the original file name; with a template containing neither, confirmations fall back to showing the key. Changing this affects new uploads only; existing links keep working.",
 		forcePathStyle: "Compatibility mode",
 		forcePathStyleDesc:
 			"Addresses objects as endpoint/bucket/key. Keep this on for Cloudflare R2, MinIO and most self-hosted services; turn it off only if your provider requires bucket subdomains.",
@@ -176,6 +173,8 @@ export const I18N: Record<string, Locale> = {
 			"Cache: {totalMb} MB in {count} files. Reclaimable: {reclaimableMb} MB — {orphans} orphaned, {unused} unused, {missing} entries pointing at missing files. Limit: {limit}.",
 		selfHealRepaired:
 			"Cache index repaired automatically: {count} record(s) pointed at files that are no longer there.",
+		legacyKeyTemplateUpgraded:
+			"The object-key template setting is gone: new uploads are always named “original-name-content-hash.ext”, so files stay findable by name in your storage (the name therefore also reaches your storage provider). Existing links keep working; content you uploaded under the old naming is stored once more if you paste it again.",
 		repairIndexFound: "Index repaired: {count} stale record(s) dropped.",
 		repairIndexNothing: "Index is fine — no stale records.",
 		maintainNothingToClean: "Nothing to clean up. {healed} stale index entries were repaired.",
@@ -192,6 +191,9 @@ export const I18N: Record<string, Locale> = {
 		maintainCleaned: "Cleaned {removed} file(s); repaired {healed} index entries; {skipped} skipped.",
 		maintainPersistFailed: "Could not save the index after repairing it: {error}",
 		maintainSkipOutsideCache: "Not inside the cache folder",
+		maintainSkipUnknownCopy: "The index no longer points at this file — skipped",
+		maintainSkipUnconfirmed: "Could not confirm the cloud still has it — skipped",
+		maintainSkipNotInCloud: "Your storage no longer has this object — skipped, this copy is the only one left",
 		maintainSkipNotIndexed: "Obsidian cannot see this file yet — skipped instead of deleting it directly",
 		maintainNotConfigured: "The storage connection is not set up yet, so nothing was uploaded.",
 		maintainBatchNothing: "No attachments to upload (everything is already handled).",
@@ -249,17 +251,17 @@ export const I18N: Record<string, Locale> = {
 		externalUploadFailed: "Downloaded the file but could not upload it: {error}",
 
 		// ── 缓存上限与自动轮换 ──
-		cacheLimit: "Cache size limit (MB)",
+		cacheLimit: "Local copy limit (MB)",
 		cacheLimitDesc:
-			"Once the cache folder grows past this, the least recently used copies are deleted in the background and the disk space is freed right away — they are downloaded again the next time you view them. 0 means no limit.",
+			"Once your local copies grow past this, the least recently used ones are deleted in the background and the disk space is freed right away — they are downloaded again the next time you view them. A copy is only ever deleted after confirming it still exists in your storage. 0 means no limit.",
 		cacheLimitPlaceholder: "0 = no limit",
 		cacheLimitNone: "unlimited",
 		cacheLimitValue: "{mb} MB",
 		// 缓存清理只有一种方式（直接删除），所以通知只有一条。
 		cacheEvicted:
-			"Cache is over its limit: deleted {count} least recently used copies ({mb} MB). They will be downloaded again when you view them.",
+			"Over the local copy limit: deleted {count} least recently used copies ({mb} MB). They will be downloaded again when you view them.",
 		cacheEvictedPartial:
-			"Cache is over its limit: deleted {count} copies ({mb} MB), still {overMb} MB over the limit.",
+			"Over the local copy limit: deleted {count} copies ({mb} MB), still {overMb} MB over the limit.",
 
 		// ── 无人引用的附件：怎么告诉你 ──
 		orphanAsk: "When an attachment is no longer linked",
@@ -343,9 +345,6 @@ export const I18N: Record<string, Locale> = {
 		attachmentFolder: "附件目录覆盖",
 		attachmentFolderPlaceholder: "跟随 Obsidian",
 		attachmentFolderDesc: "留空表示跟随 Obsidian 自己的附件设置；填写后将覆盖它。",
-		objectKeyTemplate: "对象 key 模板",
-		objectKeyTemplateDesc:
-			"可用占位符：{name}（文件名，不含扩展名）、{filename}（含扩展名）、{hash}、{hash2}、{ext}、{date}。默认 {name}-{hash}.{ext}：存储里能按名字认文件，删除确认框也能显示原始文件名；若改成两者都不含的模板，确认框将退化为只显示 key。改动只影响之后的上传，已有链接不受影响。",
 		forcePathStyle: "兼容模式",
 		forcePathStyleDesc:
 			"以「地址/桶/键」的方式寻址。Cloudflare R2、MinIO 与多数自建服务都需要开着；只有服务商要求用桶名做子域时才关掉。",
@@ -404,6 +403,8 @@ export const I18N: Record<string, Locale> = {
 		maintainUsageReport:
 			"缓存共 {count} 个文件、{totalMb} MB。其中可回收 {reclaimableMb} MB —— 孤儿 {orphans} 个、未引用 {unused} 个、索引指向的文件已不在 {missing} 条。上限：{limit}。",
 		selfHealRepaired: "缓存索引已自动修复：{count} 条记录指向的本地副本已经不在了。",
+		legacyKeyTemplateUpgraded:
+			"「对象 key 模板」设置已取消：之后上传的对象固定命名为「原文件名-内容哈希.扩展名」，存储里可以按名字找到文件（文件名因此也会出现在你的存储服务商那边）。已有链接不受影响；按旧命名传过的内容若再贴一次，会在云端多存一份。",
 		repairIndexFound: "索引已修复：摘掉 {count} 条失效记录。",
 		repairIndexNothing: "索引没有失效记录，无需修复。",
 		maintainNothingToClean: "没有需要清理的内容。已修复失效索引记录 {healed} 条。",
@@ -420,6 +421,9 @@ export const I18N: Record<string, Locale> = {
 		maintainCleaned: "已清理 {removed} 个文件；修复索引记录 {healed} 条；跳过 {skipped} 个。",
 		maintainPersistFailed: "修复后保存索引失败：{error}",
 		maintainSkipOutsideCache: "不在缓存目录内",
+		maintainSkipUnknownCopy: "索引里已经不再指向这个文件 —— 跳过",
+		maintainSkipUnconfirmed: "确认不了云端是否还有它 —— 跳过",
+		maintainSkipNotInCloud: "你的存储里已经没有这个对象 —— 跳过，这份是仅剩的副本",
 		maintainSkipNotIndexed: "Obsidian 还看不到这个文件 —— 已跳过，而不是直接删除",
 		maintainNotConfigured: "存储连接尚未配置，没有上传任何内容。",
 		maintainBatchNothing: "没有需要上传的附件（都已经处理过了）。",
@@ -474,16 +478,16 @@ export const I18N: Record<string, Locale> = {
 		externalUploadFailed: "文件已下载，但上传失败：{error}",
 
 		// ── 缓存上限与自动轮换 ──
-		cacheLimit: "缓存大小上限（MB）",
+		cacheLimit: "本地副本上限（MB）",
 		cacheLimitDesc:
-			"缓存目录超过这个大小后，后台会把最久没用过的副本删掉，磁盘空间立刻释放 —— 下次看到它们时会自动重新下载。填 0 表示不限制。",
+			"本地副本总量超过这个大小后，后台会把最久没用过的副本删掉，磁盘空间立刻释放 —— 下次看到它们时会自动重新下载。只有在确认你的存储里仍然有这个对象之后才会删。填 0 表示不限制。",
 		cacheLimitPlaceholder: "0 = 不限制",
 		cacheLimitNone: "不限",
 		cacheLimitValue: "{mb} MB",
 		// 缓存清理只有一种方式（直接删除），所以通知只有一条。
 		cacheEvicted:
-			"缓存超出上限：已删除 {count} 份最久没用过的副本（{mb} MB）。下次看到它们时会自动重新下载。",
-		cacheEvictedPartial: "缓存超出上限：已删除 {count} 份（{mb} MB），仍超出上限 {overMb} MB。",
+			"超出本地副本上限：已删除 {count} 份最久没用过的副本（{mb} MB）。下次看到它们时会自动重新下载。",
+		cacheEvictedPartial: "超出本地副本上限：已删除 {count} 份（{mb} MB），仍超出上限 {overMb} MB。",
 
 		// ── 无人引用的附件：怎么告诉你 ──
 		orphanAsk: "附件没人引用时",

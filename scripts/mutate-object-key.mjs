@@ -4,8 +4,12 @@ import { runObjectKeySuite } from "./lib/object-key-suite.mjs";
 /**
  * 变异验证：对象 key 模块。
  *
- * 这是**安全关键**模块（它的输出会变成实际文件路径），
- * 所以这里逐个确认每道防线都是真的在起作用 —— 尤其是路径穿越那几条。
+ * 这是**安全关键**模块：它的输出是桶里对象的**身份**。所以逐条确认每道防线都在起作用 ——
+ * 尤其是两件事：① 路径穿越进不了 key；② 名字与哈希两个分量都真的进了 key
+ * （少了哈希 = 同名不同内容互相覆盖；少了名字 = C2 的意义没了）。
+ *
+ * ⚠️ 1.3.0 起模板设置取消，与模板渲染相关的变异（未知占位符、默认模板回落、`{date}`…）
+ * 随代码一起删掉了 —— 死代码的锚点留着，只会让"全都抓住了"这句话不可信。
  *
  * 每个变异都要求报错里出现对应的线索（`expect`）：
  * 只要"有报错"是不够的，一条规则坏了可能被另一条规则的报错掩护着。
@@ -45,34 +49,59 @@ await runMutations({
 			expect: "超长文件名应被截断",
 		},
 		{
-			name: "未知占位符被替换成空串（静默变空）",
-			from: "\t\tObject.prototype.hasOwnProperty.call(values, name) ? values[name] : match",
-			to: '\t\tvalues[name] ?? ""',
-			expect: "未知占位符应保留原样",
-		},
-		{
-			name: "空/纯符号文件名不再兜底（会生成空段或怪名）",
+			name: "空/纯符号文件名不再兜底（名字段变空）",
 			from: 'if (!/[^\\s._]/.test(name)) return "file";',
 			to: "// 变异：去掉兜底",
 			expect: "应有兜底",
 		},
 		{
-			name: "{name} 不再去扩展名（渲染出 报告.pdf-<hash>.pdf 双扩展名）",
-			from: "return dot > 0 ? name.slice(0, dot) : name;",
-			to: "return name;",
-			expect: "{name} 应去掉扩展名",
+			// ⚠️ 红的会是 §1 那条**整体形状**断言（它最先看到"名字里带着扩展名"这件事），
+			// 而不是 §7 专门讲多扩展名的那条 —— `expect` 必须照实跑的报错写。
+			name: "名字不再去扩展名（key 里出现 `报告.pdf-<hash>.pdf` 双扩展名）",
+			from: "\tconst dot = name.lastIndexOf(\".\");\n\treturn dot > 0 ? name.slice(0, dot) : name;",
+			to: "\treturn name;",
+			expect: "key 应带原始文件名与完整哈希",
 		},
 		{
-			name: "默认模板退回纯哈希（文件名不再进 key）",
-			from: 'const tpl = typeof template === "string" && template.trim() !== "" ? template : DEFAULT_OBJECT_KEY_TEMPLATE;',
-			to: 'const tpl = typeof template === "string" && template.trim() !== "" ? template : "{hash}.{ext}";',
-			expect: "空模板应回落到默认模板",
+			// ⚠️ 同上：大写/缺点的扩展名会先撞上 §1 的整体形状断言。
+			name: "扩展名不再归一（大写/带点的扩展名原样进 key）",
+			from: 'parts.ext.toLowerCase().replace(/^\\./, "")',
+			to: "parts.ext",
+			expect: "扩展名应小写且去掉前导点",
 		},
 		{
-			name: "哈希尾长度放宽（短十六进制尾被误剥一截）",
-			from: "([0-9a-f]{64})",
-			to: "([0-9a-f]{1,64})",
-			expect: "短十六进制尾不应被当成哈希尾剥掉",
+			// 后果：**名字不再进 key** ⇒ 桶里按名字搜不到、确认框只能显示哈希 ——
+			// C2 的产品诉求整个失效（这正是 1.3.0 把它固定成不可配置的原因）。
+			name: "★ 名字不再进 key（退回纯内容寻址，C2 失效）",
+			from: "\treturn sanitizeKey(ext ? `${stem}-${hash}.${ext}` : `${stem}-${hash}`);",
+			to: "\treturn sanitizeKey(hash);",
+			expect: "key 应带原始文件名与完整哈希",
+		},
+		{
+			// 后果：同名不同内容会撞成**同一个 key** ⇒ 上传路径的复用判定不比内容，
+			// 于是静默复用错文件；本地副本不在时 PUT 直接覆盖桶里的对象（不可逆）。
+			name: "★ 不再校验哈希形状（拿不到身份也照传 ⇒ 所有文件可能共用一个 key）",
+			from: "\tif (!FULL_HASH_PATTERN.test(hash)) return \"\";\n",
+			to: "\t// 变异：不校验身份\n",
+			expect: "非法哈希必须返回空串",
+		},
+		{
+			// 后果同上，但走的是"判据放宽"这条路：短哈希被当成合法身份。
+			// ⚠️ 生成器与解析器共用这一处判据，所以红的是 §3（生成侧最先受影响）。
+			name: "哈希长度判据放宽（短十六进制被当成合法身份）",
+			from: 'const HASH_PATTERN = "[0-9a-f]{64}";',
+			to: 'const HASH_PATTERN = "[0-9a-f]{1,64}";',
+			expect: "非法哈希必须返回空串",
+		},
+		{
+			// 后果："这份内容我们传过吗"永远答不出来 ⇒ 同步到达的副本判不出来（白等退避窗口），
+			// 下载撞名时也比不了内容（只能一路加序号）。
+			// ⚠️ 先红的是 §2 那条（"改名只应改名字段，哈希段必须仍在"）—— 它比 §15 更早看到
+			// "哈希段取不出来"这件事；两条讲的是同一条规则，位置不同而已。
+			name: "★ 只认老形状（名字在前的 key 取不出哈希）",
+			from: "\tif (named) return named[2];\n",
+			to: "\t// 变异：不认名字在前的形状\n",
+			expect: "改名只应改名字段，哈希段必须仍在",
 		},
 		{
 			name: "老格式 key 也硬猜名字（纯哈希 key 被错误解析）",
@@ -81,7 +110,7 @@ await runMutations({
 			expect: "老格式纯哈希 key 应解析为空",
 		},
 		{
-			name: "Windows 路径不按分隔符取末段（缓存路径解析失败）",
+			name: "Windows 路径不按分隔符取末段（路径解析失败）",
 			from: "raw.split(/[\\\\/]/)",
 			to: 'raw.split("/")',
 			expect: "Windows 路径应按分隔符取末段再解析",

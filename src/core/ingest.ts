@@ -36,7 +36,7 @@
 
 import type { App } from "obsidian";
 import { CacheIndex, normalizeUrl, type CacheEntry } from "../cache/index";
-import { renderObjectKey } from "../object-key";
+import { objectKeyFor } from "../object-key";
 import type { S3Client } from "../s3/client";
 import { sha256Hex } from "../s3/hash";
 import type { LocalCopyAction, PluginSettings } from "../types";
@@ -308,14 +308,15 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 	const fileName = request.name ?? fallbackFileName(ext, now);
 	let key: string;
 	try {
-		key = renderObjectKey(settings.s3.objectKeyTemplate, {
+		// ⭐ 1.3.0：key 的形状不再可配置（模板设置已取消）——
+		// 固定 `<名字>-<完整哈希>.<扩展名>`，两个分量分别给人看与给机器判身份。
+		key = objectKeyFor({
 			hash: await hashBytes(bytes),
 			ext,
-			filename: request.name ?? fallbackFileName(ext, now),
-			date: now,
+			filename: fileName,
 		});
 	} catch (error) {
-		// renderObjectKey 是纯函数、不该抛；真抛了说明模板或哈希出了问题
+		// `objectKeyFor` 是纯函数、不该抛；真抛了说明**哈希那一步**出了问题
 		return { status: "fallback", key: "", ext, name: fileName, remoteUrl: "", localPath: "", etag: "", error: asError(error) };
 	}
 
@@ -328,7 +329,10 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 			remoteUrl: "",
 			localPath: "",
 			etag: "",
-			error: new Error("对象 key 渲染为空 —— 请检查对象 key 模板设置"),
+			// 只有一种成因：哈希不是 sha256 的形状 ⇒ 拿不到对象身份。
+			// 这时**必须**放弃这次上传（绝不生成"所有文件共用"的 key），
+			// 而字节已经/仍然在本地，用户的图不会丢。
+			error: new Error("对象 key 为空 —— 内容哈希不可用，无法为对象生成身份"),
 		};
 	}
 
