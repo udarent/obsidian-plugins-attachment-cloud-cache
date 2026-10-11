@@ -113,62 +113,6 @@ export function referencedKeysFromUrls(
 	return keys;
 }
 
-/** 入口 A（删除附件时询问）的判定输入。 */
-export interface CloudDeleteHintInput {
-	/** 索引里按这个路径能找到记录吗（= 这个文件确实是本插件落下的本地副本）。 */
-	indexHit: boolean;
-	/** 这个路径落在缓存目录里吗（那是缓存管理的地盘，见 `clean-cache`）。 */
-	underCacheFolder: boolean;
-	/** 本库还有引用吗 —— **路径**维度：别的笔记/画布直接指着这个文件本身。 */
-	referencedByPath: boolean;
-	/** 本库还有引用吗 —— **对象 key** 维度：同内容的另一份附件写的 URL 就是这个 key。 */
-	referencedByKey: boolean;
-	/** 存储配置与凭据齐吗（不齐时连"删云端"这个动作都做不了）。 */
-	clientReady: boolean;
-}
-
-export type CloudDeleteHint =
-	/** 弹三选一。`cloudAllowed` 为 false 时云端那一档禁用，原因键显示在界面上。 */
-	| { action: "ask"; cloudAllowed: boolean; cloudDisabledReason?: string }
-	/** 这件事不归入口 A 管，静默跳过（不是错误）。 */
-	| { action: "skip"; reason: "no-local-copy" | "in-cache-folder" | "not-configured" };
-
-/**
- * 「删掉这个附件之后，要不要问用户删云端」的判定（**纯函数**）。
- *
- * ## ⭐ 核心：两个维度的"仍被引用"，取并集
- *
- * 内容寻址意味着**同一个对象可以被多份不同的本地文件共用**（同一张图贴两次、
- * 或复制一份进来 ⇒ key 相同 ⇒ 同一个远端 URL）。于是只问
- * "这个**文件路径**还有别的笔记在用吗"会漏掉另一半：删掉其中一份时，
- * 另一份的笔记里写着**同一条 URL**，而路径判据看不见它 ⇒ 放行删云端 ⇒
- * 把仍在使用的对象删掉（R17 明确要防的那件事）。
- *
- * 反过来也**不行**：真机取证里验过另一种情形（另一篇笔记用库内链接 `![[a.png]]`
- * 指着它），那种引用**没有 URL**，只看 key 会漏。
- * ⇒ 两个维度**任一成立**就算"仍被引用"（取更保守的一侧）。
- *
- * ## 为什么"跳过"有三种，而不是一种
- *
- * 三种都不是错误，但原因不同：删的不是我们落的副本（索引里没有记录）、
- * 删的是缓存目录里的副本（那是 `clean-cache` 的地盘，两处不抢）、
- * 或者还没配好存储（根本没有"云端"这一说）。
- * 分开记与 `LocalCopyOutcome` 同一条理由：合并成一个"跳过"会让排查时看不出是哪种。
- *
- * ⚠️ 判据由调用方算好再传进来（这个函数不做 I/O），所以两个维度哪个贵、
- * 什么时候去算，由接线层决定。
- */
-export function planCloudDeleteHint(input: CloudDeleteHintInput): CloudDeleteHint {
-	if (!input.indexHit) return { action: "skip", reason: "no-local-copy" };
-	if (input.underCacheFolder) return { action: "skip", reason: "in-cache-folder" };
-	if (!input.clientReady) return { action: "skip", reason: "not-configured" };
-
-	const stillReferenced = input.referencedByPath || input.referencedByKey;
-	return stillReferenced
-		? { action: "ask", cloudAllowed: false, cloudDisabledReason: "cloudDeleteStillReferenced" }
-		: { action: "ask", cloudAllowed: true };
-}
-
 /** 索引里标记为「站外缓存」的 key 集合。 */
 export function externalKeysOf(index: CacheIndex | null | undefined): Set<string> {
 	const keys = new Set<string>();

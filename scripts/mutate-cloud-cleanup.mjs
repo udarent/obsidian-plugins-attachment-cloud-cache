@@ -61,21 +61,5 @@ await runMutations({
 			// 按纪律把 expect 如实写成那一条（不是"随便红了就算抓住"）。
 			expect: "要单独计数",
 		},
-		{
-			// 后果：**入口 A** 只看文件路径 ⇒ 库里有两份同内容的附件时，删掉其中一份会放行删云端，
-			// 而另一份的笔记里写着**同一条 URL** ⇒ 删掉仍在使用的对象（审计 P1，R17 明确要防的那件事）。
-			name: "★★ 入口 A 只看路径维度（同内容的另一份附件仍在引用，却被放行删云端）",
-			from: "\tconst stillReferenced = input.referencedByPath || input.referencedByKey;",
-			to: "\tconst stillReferenced = input.referencedByPath; // 变异：丢掉 key 维度",
-			expect: "key 维度",
-		},
-		{
-			// 后果：在缓存目录里的副本也会弹"要不要连云端一起删" ⇒
-			// 与 clean-cache 抢同一批文件，而且那个副本删除**本来就不该问**（它是可再生的）。
-			name: "★ 缓存目录里的副本也走这个入口（和 clean-cache 抢地盘）",
-			from: "\tif (input.underCacheFolder) return { action: \"skip\", reason: \"in-cache-folder\" };",
-			to: "\t// 变异：不判缓存目录",
-			expect: "缓存目录里的副本",
-		},
 	],
 });

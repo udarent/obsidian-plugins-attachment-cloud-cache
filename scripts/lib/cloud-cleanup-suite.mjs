@@ -20,7 +20,6 @@ import assert from "node:assert/strict";
 export async function runCloudCleanupSuite(mod) {
 	const {
 		selectCleanupCandidates,
-		planCloudDeleteHint,
 		referencedKeysFromUrls,
 		externalKeysOf,
 		listAllObjects,
@@ -248,81 +247,5 @@ export async function runCloudCleanupSuite(mod) {
 		);
 	}
 
-	// ============================================================
-	// 6. ⭐⭐ 入口 A 的判定（纯函数）：两个维度取并集 + 三种跳过
-	//
-	// 这一层以前**没有任何门禁判据**（只有一次性真机探针），而它判错的后果是
-	// "删掉一个还在被用的对象"—— 正是 R17 要防的那件事（审计 P4）。
-	// ⚠️ 同一层还出过另一种形态的缺陷：`confirm-modal` 的 `destructive` 是死选项，
-	// 也是"选项传进去了但没人用"，只有真机才量得出来 ⇒ 所以这里按纯函数穷举。
-	// ============================================================
-	{
-		const base = {
-			indexHit: true,
-			underCacheFolder: false,
-			referencedByPath: false,
-			referencedByKey: false,
-			clientReady: true,
-		};
-
-		assert.deepEqual(
-			planCloudDeleteHint(base),
-			{ action: "ask", cloudAllowed: true },
-			"没人引用时云端那一档可选（这是入口 A 的正常路径）"
-		);
-
-		// ⭐⭐ 核心：两个维度**任一**成立就拦（取更保守的一侧）
-		assert.equal(
-			planCloudDeleteHint({ ...base, referencedByPath: true }).cloudAllowed,
-			false,
-			"★ 路径维度：别的笔记直接指着这个文件 ⇒ 禁用云端档"
-		);
-		assert.equal(
-			planCloudDeleteHint({ ...base, referencedByKey: true }).cloudAllowed,
-			false,
-			"★★ key 维度：同内容的**另一份**附件写的 URL 就是这个 key ⇒ 也必须禁用 —— " +
-				"只看路径会漏掉它，于是删掉仍在被使用的对象（审计 P1）"
-		);
-		assert.equal(
-			planCloudDeleteHint({ ...base, referencedByPath: true, referencedByKey: true }).cloudAllowed,
-			false,
-			"两个维度都成立时同样禁用"
-		);
-		assert.equal(
-			planCloudDeleteHint({ ...base, referencedByKey: true }).cloudDisabledReason,
-			"cloudDeleteStillReferenced",
-			"禁用必须带原因键 —— 否则用户只看到一个灰按钮，不知道被什么挡住"
-		);
-
-		// 三种跳过，各因各自的原因（分开记是为了排查时看得出是哪种）
-		assert.deepEqual(
-			planCloudDeleteHint({ ...base, indexHit: false }),
-			{ action: "skip", reason: "no-local-copy" },
-			"索引里没有记录 ⇒ 不是我们落的副本，不归这个入口管"
-		);
-		assert.deepEqual(
-			planCloudDeleteHint({ ...base, underCacheFolder: true }),
-			{ action: "skip", reason: "in-cache-folder" },
-			"★ 缓存目录里的副本 ⇒ 那是 clean-cache 的地盘（两处不抢）"
-		);
-		assert.deepEqual(
-			planCloudDeleteHint({ ...base, clientReady: false }),
-			{ action: "skip", reason: "not-configured" },
-			"还没配好存储 ⇒ 没有「云端」可删"
-		);
-
-		// ⚠️ 反向：三种跳过**优先于**引用判定 —— 不是我们落的东西，这个问题本身都不该问
-		assert.equal(
-			planCloudDeleteHint({ ...base, indexHit: false, referencedByPath: true }).action,
-			"skip",
-			"★ 跳过条件要排在引用判定之前（否则会对着不属于我们的文件问「要不要删云端」）"
-		);
-		assert.equal(
-			planCloudDeleteHint({ ...base, underCacheFolder: true, referencedByKey: true }).action,
-			"skip",
-			"同上：在缓存目录里的副本一律走 clean-cache，不进这个入口"
-		);
-	}
-
-	return { cases: 12 };
+	return { cases: 11 };
 }

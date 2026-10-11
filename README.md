@@ -116,9 +116,9 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
   position. Deliberate.
 - **Links written before you change the storage URL are not recognised as "ours" on a new device** — they still work
   online, but never render offline and are never downloaded automatically.
-- **Deleting an uploaded file asks whether the cloud copy should go too**, defaulting to "local only". The same content
-  is stored once, so an object may be shared across notes and devices, and a cloud deletion cannot be undone. Cleanup
-  can only see *this* device's references.
+- **When a file you uploaded stops being linked from any note, the plugin asks once whether to delete it from your
+  storage too**, and keeps it unless you say otherwise. The same content is stored once, so an object may be shared
+  across notes and devices, and a cloud deletion cannot be undone. Cleanup can only see *this* device's references.
 - **"Do not keep a local copy" turns caching off**, which is the plain-image-host behaviour: files are uploaded and
   the note's link is rewritten, but nothing is kept or fetched back, so nothing is available offline.
 - **Moving to another device: copy the plugin folder, but delete `.cache-index.json` first** — it records where *this*
@@ -271,8 +271,8 @@ Obsidian version and which storage provider you use; the errors name the step th
   你的文件没被动；这一版变的只是链接形态。
 - **拖放文件的链接插在光标处，不是指针落点** —— 公开 API 里没有「指针坐标 → 编辑器位置」的映射。有意取舍。
 - **改了存储地址之后，「新设备」上认不出老链接** —— 那些链接照常在线显示，但离线不显示、也不会被自动下载。
-- **删掉一个已上传的文件时，会问你要不要连云端那份一起删**，默认「仅删本地」。相同内容只存一份，所以一个对象可能
-  被多篇笔记、多台设备共用，而云端删除无法撤销。清理只能看到**本设备**的引用。
+- **某个已上传的对象在本库不再被任何笔记引用时，会问你一次要不要连云端那份一起清掉**，默认保留。相同内容只存一份，
+  所以一个对象可能被多篇笔记、多台设备共用，而云端删除无法撤销。清理只能看到**本设备**的引用。
 - **「不留本地副本」这一档等于关闭缓存**，也就是普通图床的行为：文件照常上传、笔记里的链接照样改写，
   但不保留副本、也不把副本取回来，所以断网时什么都看不到。
 - **换设备：把插件目录复制过去，但先删掉 `.cache-index.json`** —— 它记的是**这台设备**的副本在哪。秘密访问密钥

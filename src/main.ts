@@ -36,7 +36,6 @@ import type { HostContext } from "./host/runtime";
 import { createEditorHandlers } from "./host/editor-bridge";
 import { auditForCleanup, collectCacheFiles, runBatchUpload, runCleanup, runEviction, scanReferences } from "./maintenance/run";
 import { canvasTextTargets, keysInText } from "./maintenance/references";
-import { isUnderCacheFolder } from "./cache-path";
 import { describeError } from "./error-text";
 import type { MaintenanceDeps } from "./maintenance/run";
 import { createCacheRotator } from "./maintenance/rotation";
@@ -47,11 +46,13 @@ import {
 	selectExternalUploadCandidates,
 	selectUploadCandidates,
 } from "./maintenance/batch";
-import { listAllObjects, planCloudDeleteHint, runCloudCleanup, selectCleanupCandidates } from "./maintenance/cloud-cleanup";
+import { listAllObjects, runCloudCleanup, selectCleanupCandidates } from "./maintenance/cloud-cleanup";
 import { externalKeysOf, referencedKeysFromUrls } from "./maintenance/cloud-cleanup";
 import { createAttachWatcher, createSelfWriteLedger } from "./maintenance/attach-watch";
 import type { AttachWatcher } from "./maintenance/attach-watch";
-import { askCloudDelete } from "./ui/cloud-delete-modal";
+import { askOrphanCloudDelete } from "./ui/cloud-delete-modal";
+import { createOrphanWatcher, selectOrphanAsks } from "./maintenance/orphan-watch";
+import type { NoteKind, OrphanWatcher } from "./maintenance/orphan-watch";
 
 import type { ExternalCandidate, NoteTextLike } from "./maintenance/batch";
 import { ingestAttachment } from "./core/ingest";
@@ -95,6 +96,33 @@ const ROTATION_STARTUP_DELAY_MS = 3 * 1000;
  * 而且还有一层分钟级节流。
  */
 const ROTATION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
+
+/** 引用重算的防抖窗口。编辑途中宿主的自动保存会反复触发 `modify`。 */
+const ORPHAN_CHECK_DEBOUNCE_MS = 1500;
+
+/**
+ * 询问的防抖窗口。
+ *
+ * 它比上面那个**更长**：一次编辑可能连着让好几个对象变成孤儿（删掉一段带三张图的文字），
+ * 而"一次整理"里用户可能连着删好几次 —— 攒在一起只问一次，比连着弹三次礼貌得多。
+ */
+const ORPHAN_ASK_DEBOUNCE_MS = 4000;
+
+/** 询问框里最多列出几个对象的文件名（再多就只报数量）。 */
+const ORPHAN_LIST_MAX = 8;
+
+/**
+ * 这篇文件是不是"引用的来源"（只监视笔记与画布）。
+ *
+ * ⚠️ 只认扩展名，不读内容：`modify` 事件很频繁，这里必须便宜。
+ * 认错方向的代价只是"多读一次文件"，而漏认的代价是"孤儿问不出来" ⇒ 宁可多认。
+ */
+function noteKindOf(file: unknown): NoteKind | null {
+	if (!(file instanceof TFile)) return null;
+	if (file.extension === "md") return "md";
+	if (file.extension === "canvas") return "canvas";
+	return null;
+}
 
 /**
  * 导入一份凭据文件的结果。
@@ -168,6 +196,26 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 把"还没等到引用的那几个文件"丢掉。
 	 */
 	private attachWatch: AttachWatcher | null = null;
+
+	/**
+	 * 「某个已上传对象失去最后一个引用」（= 出现孤儿）那条入口。
+	 *
+	 * ⚠️ 必须是**稳定的一份**：每篇笔记的引用快照与全局引用计数挂在它的闭包里 ——
+	 * 每次新建就等于把"哪篇笔记引用过什么"全忘掉，于是**谁都不会再变成孤儿**。
+	 */
+	private orphanWatch: OrphanWatcher | null = null;
+
+	/** 本会话里已经问过的孤儿 key（冷却：问过就不再打扰）。 */
+	private orphanAsked = new Set<string>();
+
+	/** 待询问的孤儿（一次编辑可能删掉好几条引用 ⇒ 攒成一批只问一次）。 */
+	private orphanPending = new Set<string>();
+
+	/** 引用重算的防抖（编辑途中，宿主的自动保存会反复触发 `modify`）。 */
+	private orphanCheckTimer: ReturnType<typeof setTimeout> | null = null;
+
+	/** 询问的防抖（把同一小段时间里出现的孤儿攒到一起）。 */
+	private orphanAskTimer: ReturnType<typeof setTimeout> | null = null;
 
 	/**
 	 * 我们自己刚落盘的中转文件（`stageLocally` 上报，见 `SelfWriteLedger`）。
@@ -403,14 +451,68 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 
 		// ── 云端空间清理（F15 / 需求 R17）──
 		//
-		// 入口 A：用户删掉一个"本库上传过"的附件时，**删完之后**问他要不要
-		// 连云端那一份一起删（`vault.on("delete")` 是通知型，删之前拦不住，
-		// 所以问题只能问在删之后 —— 需求 R17 的措辞也正是"删除时给选择"）。
+		// ⭐ 入口：**某个已上传对象失去最后一个引用**（= 出现孤儿）时，问一次要不要连云端一起清。
+		//
+		// 为什么不是"用户删掉那个文件时问"（上一版的落地方式）：用户在 Obsidian 里表达
+		// "我不要这张图了"几乎总是**删掉笔记里的引用**（或删掉整篇笔记）—— 两者都不删文件；
+		// 而默认档（移入缓存目录）下那个附件文件根本不在附件目录里（上传时就被搬走了）
+		// ⇒ 挂在"删文件"上的询问，默认配置下**一次都不会出现**（详细设计 §13.1）。
+		this.orphanWatch = createOrphanWatcher({
+			listNotes: () => {
+				const notes: Array<{ path: string; kind: NoteKind }> = [];
+				for (const file of this.app.vault.getFiles()) {
+					const kind = noteKindOf(file);
+					if (kind) notes.push({ path: file.path, kind });
+				}
+				return notes;
+			},
+			readText: async (path) => {
+				const file = this.app.vault.getAbstractFileByPath(path);
+				if (!file || !(file instanceof TFile)) throw new Error(`不是文件：${path}`);
+				return await this.app.vault.cachedRead(file);
+			},
+			extractKeys: (kind, text) => this.extractStoredKeys(kind, text),
+			onError: (error) => {
+				// 读不到某一篇只是"这一篇这一趟没算进来"，下一轮事件会重新算它
+				console.error("[attachment-cloud-cache] 建立引用快照时读文件失败", error);
+			},
+		});
+
 		this.registerEvent(
-			this.app.vault.on("delete", (file) => {
-				void this.askAboutCloudDelete(file.path);
+			this.app.vault.on("modify", (file) => {
+				const kind = noteKindOf(file);
+				if (kind) this.scheduleOrphanCheck(file.path, kind);
 			})
 		);
+		this.registerEvent(
+			this.app.vault.on("create", (file) => {
+				// ⭐ 新建的笔记/画布也要**立刻登记**进快照。
+				//
+				// ⚠️ 这一条是真机探针查出来的：原先只监听 `modify` 时，一篇**新建**的笔记
+				// （例如用户刚写好、里面贴了引用）在快照里还不存在 —— 于是它**第一次内容变化**
+				// 被当成"第一次见到这篇"（只登记、不判定），那一刻的引用消失被**丢掉**。
+				// 症状是"新建笔记里删掉一张图的引用，不问"（老笔记正常）。
+				// 登记本身不会产出孤儿（`apply` 对没有旧快照的路径返回空），所以这一条是安全的。
+				const kind = noteKindOf(file);
+				if (kind) this.scheduleOrphanCheck(file.path, kind);
+			})
+		);
+		this.registerEvent(
+			this.app.vault.on("delete", (file) => {
+				// 删整篇笔记也会让它引用过的图失去引用（缓存副本之类的路径从来不在快照里）
+				this.handleNoteRemoved(file.path);
+			})
+		);
+		this.registerEvent(
+			this.app.vault.on("rename", (file, oldPath) => {
+				// 快照跟着搬：改名不是"引用消失"，计数不变
+				this.orphanWatch?.noteRenamed(oldPath, file.path);
+			})
+		);
+		// 快照在布局就绪后建立（那时文件已可读），且**不阻塞启动**
+		this.app.workspace.onLayoutReady(() => {
+			void this.warmUpOrphanWatch();
+		});
 
 		this.registerMaintenanceCommands();
 	}
@@ -464,96 +566,176 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		});
 	}
 
-	/** 维护命令共用的依赖装配。 */
 	/**
-	 * **入口 A**：用户删掉一个本库上传过的附件之后，问要不要连云端一起删。
+	 * **云端清理入口**：某个已上传对象**失去最后一个引用**（= 出现孤儿）时问用户一次。
 	 *
-	 * ## 命中判定（三条，缺一不可）
+	 * ## 为什么不是"用户删掉那个文件时问"（上一版的落地方式）
 	 *
-	 * 1. 这个路径在索引里（说明它确实上传过）；
-	 * 2. 它不是**缓存目录**里的文件 —— 那是 `clean-cache`/上限轮换的地盘，
-	 *    在这里再问一次会和"副本丢了自动补回"打架（用户删副本的意思本来就是"重新下"）；
-	 * 3. 存储配置就绪（否则连客户端都没有，问了也做不成）。
+	 * 那个动作选错了：用户在 Obsidian 里表达"我不要这张图了"几乎总是**删掉笔记里的引用**
+	 *（或删掉整篇笔记）—— 两者都**不删文件**；而默认档（移入缓存目录）下那个附件文件
+	 * 根本不在附件目录里（上传时就被搬进缓存目录了）。⇒ 挂在"删文件"上的询问，
+	 * 默认配置下**一次都不会出现**（详细设计 §13.1）。
 	 *
-	 * ## ⚠️ 两个必须如实说的事
+	 * ## 判定链
 	 *
-	 * - **同一个对象可能被别处共用**（内容寻址 + 多设备）；
-	 * - **云端删除不可恢复**。
+	 * 1. `orphan-watch` 维护"每篇笔记引用了哪些对象"的快照，某个 key 的引用数归零 ⇒ 候选；
+	 * 2. 筛掉**不是我们上传的**（索引里没有记录 —— 对别人的对象我们没有任何处置权）；
+	 * 3. 筛掉**本会话已经问过的**（冷却：用户做过选择就不再追着问）；
+	 * 4. 攒批后**只弹一次**（一次编辑可能删掉好几条引用）。
 	 *
-	 * 两条都写进了弹窗正文（原则⑥：做不到的事必须讲清楚，不许静默删）。
+	 * ## ⚠️ 两条必须如实告知（需求 R17 的纪律）
 	 *
-	 * ⚠️ 本库**还有引用**时云端那一档**禁用**：删了会让那些引用变成死链，
-	 * 而用户此刻删的是另一个文件（需求 R17 的硬要求）。
+	 * - **云端删除不可恢复**；
+	 * - **多设备盲区**：只看得到本设备的引用，别的设备/别的 vault 可能仍在用同一个对象。
+	 *
+	 * 而且默认是**保留**（主按钮），删除是破坏性样式 —— 这个弹窗会自动出现，
+	 * 顺手按回车的代价在两个方向上并不对等。
 	 */
-	private async askAboutCloudDelete(path: string): Promise<void> {
-		const entry = this.currentIndex().findByCachePath(path);
+	private scheduleOrphanCheck(path: string, kind: NoteKind): void {
+		if (this.orphanCheckTimer) clearTimeout(this.orphanCheckTimer);
+		this.orphanCheckTimer = setTimeout(() => {
+			this.orphanCheckTimer = null;
+			void this.checkOrphans(path, kind);
+		}, ORPHAN_CHECK_DEBOUNCE_MS);
+	}
 
-		// ⚠️ 前三条闸门在这里先判一次，纯粹是**成本**保护：下面那两个引用维度里有一个要
-		// 扫全库正文，不该为"根本不归这个入口管"的删除付这份代价。
-		// ⚠️ 它们与 `planCloudDeleteHint` 里的同名条件**不是**两套规则：那条规则只有一处定义，
-		// 这里只是"先问最便宜的"。判定的权威仍然是那个纯函数（它有独立的套件与变异锚点）。
-		if (!entry) return;
-		// 缓存目录里的副本：那是缓存管理的地盘（见上面第 2 条）
-		if (isUnderCacheFolder(path, this.settings.cacheFolder)) return;
+	/** 重算**这一篇**的引用，看有没有对象因此变成孤儿（只扫一篇，不是全库）。 */
+	private async checkOrphans(path: string, kind: NoteKind): Promise<void> {
+		const watcher = this.orphanWatch;
+		if (!watcher) return;
+
+		const file = this.app.vault.getAbstractFileByPath(path);
+		// 文件可能刚被删/改名 ⇒ 那不是"内容变了"（删除与改名各有自己的事件）
+		if (!file || !(file instanceof TFile)) return;
+
+		let text: string;
+		try {
+			// 用 `read`（真实读取）而不是 `cachedRead`：后者读宿主的文本缓存，
+			// 而"缓存有没有跟上刚才那次修改"是**额外的一个时序假设**。
+			// ⚠️ 如实记：真机上**没有**观察到它滞后（探针的诊断显示快照被正确更新）——
+			// 所以这不是"修了一个 bug"，而是把假设去掉：这条链已经在防抖之后，
+			// 每篇改动读一次磁盘的代价可以接受，而判错的代价是"该弹的框不弹"。
+			text = await this.app.vault.read(file);
+		} catch (error) {
+			// 读不到就跳过这一轮（下一条事件会重算）。
+			// ⚠️ **绝不能**因此当成"它没有引用了" —— 那会把仍在用的对象判成孤儿。
+			console.error("[attachment-cloud-cache] 读笔记以统计引用失败", error);
+			return;
+		}
+		this.collectOrphans(watcher.noteChanged(path, kind, text));
+	}
+
+	/** 文件被删（含删整篇笔记）：它引用过的对象都少了一个引用。 */
+	private handleNoteRemoved(path: string): void {
+		this.collectOrphans(this.orphanWatch?.noteRemoved(path) ?? []);
+	}
+
+	/**
+	 * 引用快照的冷启动。放在布局就绪之后，**不阻塞启动**。
+	 *
+	 * ⚠️ 这一趟的语义是"第一次看到它们"，不是"引用变少了" —— 所以它**不会**弹任何询问
+	 *（`orphan-watch` 的 `apply` 对没有旧快照的路径只登记、不判定）。
+	 */
+	private async warmUpOrphanWatch(): Promise<void> {
+		try {
+			await this.orphanWatch?.warmUp();
+		} catch (error) {
+			// 快照建不起来只是"这一趟不工作"，不该影响插件其余部分；
+			// 之后任何一条编辑事件都会从那一篇开始重新建立。
+			console.error("[attachment-cloud-cache] 建立引用快照失败", error);
+		}
+	}
+
+	/** 攒批：一次编辑/一次删笔记可能让好几个对象同时成为孤儿 ⇒ 只问一次。 */
+	private collectOrphans(keys: readonly string[]): void {
+		if (keys.length === 0) return;
+		for (const key of keys) this.orphanPending.add(key);
+		if (this.orphanAskTimer) clearTimeout(this.orphanAskTimer);
+		this.orphanAskTimer = setTimeout(() => {
+			this.orphanAskTimer = null;
+			void this.askAboutOrphans();
+		}, ORPHAN_ASK_DEBOUNCE_MS);
+	}
+
+	/** 把攒下的孤儿筛一遍、问用户一次；选了删就复用批量那条执行链。 */
+	private async askAboutOrphans(): Promise<void> {
+		const pending = [...this.orphanPending];
+		this.orphanPending.clear();
+		if (pending.length === 0) return;
+
+		const index = this.currentIndex();
+		const selection = selectOrphanAsks(pending, {
+			hasEntry: (key) => Boolean(index.get(key)),
+			hasAsked: (key) => this.orphanAsked.has(key),
+		});
+		if (selection.asks.length === 0) return;
+
+		// ⭐ 问过就记住，**无论用户怎么回答** —— 这是"不打扰"的底线
+		//（他可能还在整理笔记，同一条引用被删掉的原因有很多种）
+		for (const key of selection.asks) this.orphanAsked.add(key);
 
 		const client = this.buildClient();
 		if (!client) return;
 
-		// ⭐ 两个维度的"仍被引用"：
-		//  · **路径**：别的笔记/画布直接指着这个文件本身；
-		//  · **对象 key**：同内容的**另一份**附件写的 URL 就是这个 key（内容寻址下共用一个对象）。
-		// 只看路径会漏掉后一半 ⇒ 删掉一份时，另一份的引用看不见，云端照删（R17 要防的事）。
-		// 反向也要留着：库内链接 `![[a.png]]` 那种引用**没有 URL**，只看 key 会漏。
-		let referencedByPath = false;
-		let referencedByKey = false;
-		try {
-			referencedByPath = (await this.referencedVaultPaths()).has(path);
-			referencedByKey = (await this.cloudReferencedKeys()).has(entry.key);
-		} catch {
-			// 读不到引用集合时按"还有引用"处理：那是**保守**的一侧
-			referencedByPath = true;
-			referencedByKey = true;
-		}
-
-		const plan = planCloudDeleteHint({
-			indexHit: true,
-			underCacheFolder: false,
-			referencedByPath,
-			referencedByKey,
-			clientReady: true,
-		});
-		if (plan.action === "skip") return;
-
-		const choice = await askCloudDelete(this.app, {
-			title: this.t("cloudDeleteTitle"),
+		const names = selection.asks.map((key) => index.get(key)?.sourceName || key);
+		const choice = await askOrphanCloudDelete(this.app, {
+			title: this.t("orphanTitle"),
 			lines: [
-				this.t("cloudDeleteBody", { name: entry.sourceName || path }),
-				this.t("cloudDeleteWarning"),
-				this.t("cloudDeleteKeepLocal"),
+				this.t("orphanBody", { count: selection.asks.length }),
+				...names.slice(0, ORPHAN_LIST_MAX).map((name) => `· ${name}`),
+				...(names.length > ORPHAN_LIST_MAX
+					? [this.t("orphanMore", { count: names.length - ORPHAN_LIST_MAX })]
+					: []),
+				// ⚠️ 显著位置：这两句是"不可恢复"与"多设备盲区"的如实告知
+				this.t("cloudCleanupCannotUndo"),
+				this.t("cloudCleanupDeviceBlindSpot"),
 			],
-			cloudAllowed: plan.cloudAllowed,
-			cloudDisabledReason: plan.cloudDisabledReason ? this.t(plan.cloudDisabledReason) : undefined,
-			localCta: this.t("cloudDeleteLocalOnly"),
-			cloudCta: this.t("cloudDeleteBoth"),
-			cancelCta: this.t("cloudDeleteCancel"),
+			keepCta: this.t("orphanKeep"),
+			deleteCta: this.t("orphanDelete"),
 		});
-
-		if (choice !== "cloud") return;
+		if (choice !== "delete") return;
 
 		try {
-			await client.deleteObject(entry.key);
+			const result = await runCloudCleanup(
+				{
+					client,
+					index: () => this.currentIndex(),
+					persistIndex: () => this.hostContext().persistIndex(),
+					notify: (message) => new Notice(message),
+					t: (key, params) => this.t(key, params),
+				},
+				selection.asks
+			);
+			new Notice(
+				this.t("orphanDeleted", {
+					deleted: result.deleted,
+					alreadyGone: result.alreadyGone,
+					failed: result.failed,
+				})
+			);
 		} catch (error) {
 			new Notice(this.t("cloudDeleteFailed", { error: describeError(error) }));
-			return;
 		}
-		if (this.currentIndex().remove(entry.key)) {
-			try {
-				await this.hostContext().persistIndex();
-			} catch (error) {
-				new Notice(this.t("cloudCleanupPersistFailed", { error: describeError(error) }));
-			}
+	}
+
+	/**
+	 * 从一篇正文里取出"属于本存储的对象 key"（孤儿监视的取数口）。
+	 *
+	 * 复用 `keysInText`（与入口 B 的引用扫描、与渲染判定共用同一个 `keyFromUrl`）
+	 * ⇒ "哪些对象算被引用"与"渲染时认不认这条 URL"永远是同一套规则。
+	 *
+	 * 画布的引用藏在 JSON 字符串里：先按画布规则把文本目标取出来，再走同一套 URL 识别
+	 *（`canvasTextTargets` 已处理"转义解不开就跳过那一条"的纪律）。
+	 */
+	private extractStoredKeys(kind: NoteKind, text: string): Set<string> {
+		const keyOf = (url: string): string | null => keyFromUrl(url, this.settings.s3);
+		if (kind !== "canvas") return keysInText(text, keyOf);
+
+		const keys = new Set<string>();
+		for (const raw of canvasTextTargets(text)) {
+			for (const key of keysInText(raw, keyOf)) keys.add(key);
 		}
-		new Notice(this.t("cloudDeleteDone"));
+		return keys;
 	}
 
 	/**
@@ -1062,6 +1244,14 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		// 留着的话插件卸载后还会去改用户的笔记（热重载时表现为"改了两次"）。
 		this.attachWatch?.dispose();
 		this.attachWatch = null;
+		// ⚠️ 孤儿监视排了两个定时器（重算与询问），同样**必须显式取消**：
+		// 留着的话插件卸载后还会弹一次"要不要删云端"—— 而那时插件已经卸载了。
+		if (this.orphanCheckTimer) clearTimeout(this.orphanCheckTimer);
+		if (this.orphanAskTimer) clearTimeout(this.orphanAskTimer);
+		this.orphanCheckTimer = null;
+		this.orphanAskTimer = null;
+		this.orphanWatch = null;
+		this.orphanPending.clear();
 		this.indexStore = null;
 		this.externalHook = null;
 		this.externalLive = null;
