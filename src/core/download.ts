@@ -233,7 +233,15 @@ export function createLocalCopyEnsurer(deps: LocalCopyDeps) {
 				// 下载来的副本没有"原始文件名"这个概念，留空（字段本身只用于报告可读性）
 				sourceName: "",
 			};
-			deps.index().set(entry);
+			const store = deps.index();
+			store.set(entry);
+			// ⭐ 顺带记进**上传台账**（"这个 key 在我们的系统里"）。
+			//
+			// 为什么这里也要记：`CacheIndex.fromJSON` 读文件时取的是「台账 ∪ 条目里的 key」，
+			// 所以只要有条目，**下次启动后台账里就会有它**。若这里不记，同一个对象
+			// 在本会话被判成"不是我们的"、重启后却变成"是我们的" ——
+			// 那种"重启就变"的不一致正是本项目反复消除的一类问题。
+			store.markUploaded(key);
 			try {
 				await deps.persistIndex();
 			} catch (error) {

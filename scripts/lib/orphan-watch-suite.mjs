@@ -173,18 +173,23 @@ export async function runOrphanWatchSuite(mod) {
 	}
 
 	// ============================================================
-	// 8. ⭐ 筛选：只问"我们上传过的"，且问过就不再问
+	// 8. ⭐ 筛选：只问"我们经手过的"，且问过就不再问
+	//
+	// ⚠️ 判据是 `isOurs`（**上传台账**），不是"索引里有没有条目"。
+	// 这一条是 2026-10-11 新查出的 N11 的钉子：「不留副本」那一档**没有条目**
+	// （上传后本地文件被移走 ⇒ 按纪律不写条目），若判据接的是条目，
+	// 该档**所有**对象都会被判 `not-ours` ⇒ 这个询问在那个档位一次都不出现。
 	// ============================================================
 	{
 		const context = {
-			hasEntry: (key) => key !== "theirs.png",
+			isOurs: (key) => key !== "theirs.png",
 			hasAsked: (key) => key === "asked.png",
 		};
 		const selection = selectOrphanAsks(
 			["ours.png", "theirs.png", "asked.png", "ours.png"],
 			context
 		);
-		assert.deepEqual(selection.asks, ["ours.png"], "★ 只留下我们上传过、且没问过的（重复的只算一次）");
+		assert.deepEqual(selection.asks, ["ours.png"], "★ 只留下我们经手过、且没问过的（重复的只算一次）");
 		assert.deepEqual(
 			selection.skipped,
 			[
@@ -196,10 +201,22 @@ export async function runOrphanWatchSuite(mod) {
 
 		// ⚠️ 反向：全都不是我们的 ⇒ **一个都不问**（对别人的对象我们没有处置权）
 		assert.deepEqual(
-			selectOrphanAsks(["theirs.png"], { hasEntry: () => false, hasAsked: () => false }).asks,
+			selectOrphanAsks(["theirs.png"], { isOurs: () => false, hasAsked: () => false }).asks,
 			[],
-			"★ 不是我们上传的对象，绝不拿去问（更没有删的道理）"
+			"★ 不是我们经手过的对象，绝不拿去问（更没有删的道理）"
 		);
+
+		// ⭐ 反向（N11 的主钉子）：**有台账、但没有索引条目** ⇒ 必须照问。
+		// 这一格就是「不留副本」档的形态：对象是我们上传的（台账有），
+		// 而本地没有副本（索引里没有条目）。判据写成"查条目"就会在这一格静默失效。
+		{
+			const ledgerOnly = { isOurs: (key) => key === "no-local-copy.png", hasAsked: () => false };
+			assert.deepEqual(
+				selectOrphanAsks(["no-local-copy.png"], ledgerOnly).asks,
+				["no-local-copy.png"],
+				"★ 台账里有它、索引里没有它（不留副本档）⇒ 仍然要问，不能静默跳过"
+			);
+		}
 
 		// 反向：空输入 ⇒ 空结果（不该崩，也不该产出）
 		assert.deepEqual(selectOrphanAsks([], context).asks, [], "空候选不产出");

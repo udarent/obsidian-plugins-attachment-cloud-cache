@@ -44,6 +44,7 @@ import {
 	ensureSecretSlot,
 	externalImageDefaultOptions,
 	localCopyOptions,
+	orphanAskOptions,
 	publicLinkKey,
 	publicLinkTone,
 	randomSlotPart,
@@ -96,6 +97,7 @@ export class SettingsTab extends PluginSettingTab {
 			{ type: "group", heading: this.t("sectionStorage"), items: this.storageItems() },
 			{ type: "group", heading: this.t("sectionUpload"), items: this.uploadItems() },
 			{ type: "group", heading: this.t("sectionOffline"), items: this.offlineItems() },
+			{ type: "group", heading: this.t("sectionCleanup"), items: this.cleanupItems() },
 			{ type: "group", heading: this.t("sectionAdvanced"), items: this.advancedItems() },
 		];
 	}
@@ -543,6 +545,31 @@ export class SettingsTab extends PluginSettingTab {
 		];
 
 		return items;
+	}
+
+	// ─────────────────────── 云端清理 ───────────────────────
+
+	/**
+	 * 云端清理那一段。
+	 *
+	 * 现在只有一项，但仍然**单独成组**而不是塞进「离线副本」：
+	 * 它管的是**云端对象**（删了找不回来），与"本地副本"是两件风险等级不同的事 ——
+	 * 混在一组里会让人以为它们是同一类开关。
+	 */
+	private cleanupItems(): SettingGroupItem[] {
+		return [
+			{
+				name: this.t("orphanAsk"),
+				desc: this.t("orphanAskDesc"),
+				aliases: ["orphan", "unused", "cleanup", "delete", "孤儿", "无人引用", "清理", "删除"],
+				control: {
+					type: "dropdown",
+					key: "orphanAsk",
+					// 选项由类型清单生成（与"合法的值"同源）
+					options: orphanAskOptions((value) => this.t(`orphanAsk_${value}`)),
+				},
+			},
+		];
 	}
 
 	// ─────────────────────── 高级 ───────────────────────

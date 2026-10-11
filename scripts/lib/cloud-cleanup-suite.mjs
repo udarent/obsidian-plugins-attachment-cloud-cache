@@ -141,9 +141,11 @@ export async function runCloudCleanupSuite(mod) {
 	// ============================================================
 	{
 		const removed = [];
+		const forgotten = [];
 		const persisted = [];
 		const notified = [];
 		const deleted = [];
+		const recorded = [];
 		const result = await runCloudCleanup(
 			{
 				client: {
@@ -153,12 +155,27 @@ export async function runCloudCleanupSuite(mod) {
 						return true;
 					},
 				},
-				index: () => ({ remove: (key) => (removed.push(key), true) }),
+				// ⚠️ 这个替身要**真的**反映"记录被摘掉"：`remove` 之后 `get` 必须返回 undefined，
+				// 否则"名字在摘记录之后才读"这个缺陷会被**替身**掩盖（变异验证实测抓到过：
+				// 那时这条锚点是"漏过"的 —— 测试无牙，而不是代码没问题）。
+				index: () => {
+					const gone = new Set();
+					return {
+						remove: (key) => (removed.push(key), gone.add(key), true),
+						forgetUploaded: (key) => (forgotten.push(key), true),
+						get: (key) =>
+							!gone.has(key) && key === "a.png"
+								? { key, sourceName: "报告,1.png", cachePath: "c/a.png" }
+								: undefined,
+					};
+				},
 				persistIndex: async () => {
 					persisted.push(true);
 				},
 				notify: (message) => notified.push(message),
 				t: (key) => key,
+				// 留痕：只有"对象真的不在了"才回调（失败的不算 —— 它还在桶里）
+				onRemoved: (record) => recorded.push(record),
 			},
 			["a.png", "boom.png", "b.png"]
 		);
@@ -167,6 +184,21 @@ export async function runCloudCleanupSuite(mod) {
 		assert.equal(result.deleted, 2, "成功数要如实统计");
 		assert.equal(result.failed, 1, "失败数也要如实统计");
 		assert.deepEqual(removed, ["a.png", "b.png"], "★ 只有**删成功**的对象才摘索引（失败的摘了会以为远端也没有）");
+		assert.deepEqual(
+			forgotten,
+			["a.png", "b.png"],
+			"★ 上传台账同样只在删成功时忘掉（失败时对象还在云端，忘掉就等于以后不再认领它）"
+		);
+		// ⭐ 留痕：**名字要在摘记录之前读到**（摘掉之后就没地方取了），
+		// 且失败的那个（`boom.png`）**不许出现**在留痕里 —— 它还在桶里。
+		assert.deepEqual(
+			recorded.map((record) => record.key),
+			["a.png", "b.png"],
+			"★ 留痕只记真的不在桶里的对象（失败的那个还在，记它会让人以为已经删了）"
+		);
+		assert.equal(recorded[0].name, "报告,1.png", "★ 名字要在摘记录**之前**读到（含逗号的也要原样带出来）");
+		assert.equal(recorded[0].outcome, "deleted", "真的删掉了");
+		assert.equal(recorded[0].key, "a.png", "key 原样带出（留痕要能对上对象）");
 		assert.equal(result.unindexed, 2, "摘掉的记录数要报出来");
 		assert.equal(persisted.length, 1, "整批结束**只落盘一次**（不是每删一个写一次索引）");
 		assert.equal(notified.length, 0, "都成功了就不该打扰用户");
@@ -186,7 +218,11 @@ export async function runCloudCleanupSuite(mod) {
 		const result = await runCloudCleanup(
 			{
 				client: { deleteObject: async () => false },
-				index: () => ({ remove: (key) => (removed.push(key), true) }),
+				index: () => ({
+					remove: (key) => (removed.push(key), true),
+					forgetUploaded: () => true,
+					get: () => undefined,
+				}),
 				persistIndex: async () => {},
 				notify: () => {},
 				t: (key) => key,
@@ -199,13 +235,35 @@ export async function runCloudCleanupSuite(mod) {
 		assert.deepEqual(removed, ["gone.png"], "★ 对象确定不在 ⇒ 记录照摘（留着会被 audit/淘汰当有效记录）");
 	}
 
+	// 5e. ⭐ 台账单独变化也要落盘
+	//
+	// 为什么单独立一条：条目与台账平时同进同退（有副本才有条目），但**「不留副本」那一档
+	// 只有台账**（没有副本 ⇒ 没有条目）。若落盘条件只判"摘掉了条目"，那一档的云端删除
+	// 就永远不落盘 ⇒ 下次启动台账又把那些对象认回来 —— 表现为"删了，重启后又问你一遍"。
+	{
+		const persisted = [];
+		const result = await runCloudCleanup(
+			{
+				client: { deleteObject: async () => true },
+				index: () => ({ remove: () => false, forgetUploaded: () => true, get: () => undefined }),
+				persistIndex: async () => persisted.push(true),
+				notify: () => {},
+				t: (key) => key,
+			},
+			["no-local-copy.png"]
+		);
+		assert.equal(result.deleted, 1, "云端删掉了");
+		assert.equal(result.unindexed, 0, "这一档没有条目可摘");
+		assert.equal(persisted.length, 1, "★ 台账变了也必须落盘（否则那一档的删除下次启动就被忘掉了）");
+	}
+
 	// 5c. 摘索引之后落盘失败：**必须说出来**（否则重启后看到幽灵记录，查不出原因）
 	{
 		const notified = [];
 		const result = await runCloudCleanup(
 			{
 				client: { deleteObject: async () => true },
-				index: () => ({ remove: () => true }),
+				index: () => ({ remove: () => true, forgetUploaded: () => true, get: () => undefined }),
 				persistIndex: async () => {
 					throw new Error("磁盘满");
 				},
@@ -230,7 +288,7 @@ export async function runCloudCleanupSuite(mod) {
 						return true;
 					},
 				},
-				index: () => ({ remove: () => true }),
+				index: () => ({ remove: () => true, forgetUploaded: () => true, get: () => undefined }),
 				persistIndex: async () => {
 					throw new Error("不该落盘");
 				},

@@ -21,6 +21,8 @@ console.log(
 		"referenced ones, off-site caches and unrecognisable shapes all stay; sizes are summed honestly; " +
 		"URL-to-key mapping uses the very same derivation the renderer uses; pagination stops at the page " +
 		"cap and says so instead of pretending the list is complete; a 404 counts as already done (not a " +
-		"failure) and still drops the index record; one failure never stops the batch, the index is persisted " +
-		"once per run, and a failed save is reported)."
+		"failure) and still drops the index record; one failure never stops the batch, both the index record " +
+		"and the upload-ledger entry are dropped only when the object is really gone, the change is persisted " +
+		"even when the ledger was the only thing that moved - which is exactly the 'no local copy' setting - " +
+		"and a failed save is reported)."
 );

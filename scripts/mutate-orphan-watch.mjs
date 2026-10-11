@@ -32,12 +32,12 @@ await runMutations({
 			expect: "绝不能报成孤儿",
 		},
 		{
-			// 后果：对**不是我们上传的**对象也弹"要不要删云端" ⇒
+			// 后果：对**不是我们经手过的**对象也弹"要不要删云端" ⇒
 			// 用户可能真的删掉一个他手写的、指向同一存储的对象（我们没有任何处置权）。
-			name: "★ 不筛「是不是我们上传的」（对别人的对象也弹删除询问）",
-			from: "\t\tif (!context.hasEntry(key)) {\n\t\t\tskipped.push({ key, reason: \"not-ours\" });\n\t\t\tcontinue;\n\t\t}",
+			name: "★ 不筛「是不是我们经手过的」（对别人的对象也弹删除询问）",
+			from: "\t\tif (!context.isOurs(key)) {\n\t\t\tskipped.push({ key, reason: \"not-ours\" });\n\t\t\tcontinue;\n\t\t}",
 			to: "\t\tif (false) {\n\t\t\tskipped.push({ key, reason: \"not-ours\" });\n\t\t\tcontinue;\n\t\t}",
-			expect: "只留下我们上传过",
+			expect: "只留下我们经手过",
 		},
 		{
 			// 后果：问过一次还问 ⇒ 用户整理笔记时被反复打扰，直到手滑点一次删除。

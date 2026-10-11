@@ -33,14 +33,14 @@ import { normalizePath } from "obsidian";
  *   旧组合 `cacheEnabled: true + localFileAction: "cache"` 的效果。
  */
 
-import { EXTERNAL_IMAGE_DEFAULTS, LOCAL_COPY_ACTIONS, isExternalImageDefault, isLocalCopyAction } from "./types";
-import type { ExternalImageDefault, LocalCopyAction, PluginSettings, S3Config } from "./types";
+import { EXTERNAL_IMAGE_DEFAULTS, LOCAL_COPY_ACTIONS, ORPHAN_ASK_MODES, isExternalImageDefault, isLocalCopyAction, isOrphanAskMode } from "./types";
+import type { ExternalImageDefault, LocalCopyAction, OrphanAskMode, PluginSettings, S3Config } from "./types";
 import { CACHE_LIMIT_MB_MAX } from "./types";
 import { isPlainRecord } from "./records";
 
 // 枚举类型守卫定义在 types.ts（与枚举本身同处一地，避免两个模块各存一份）。
 // 这里转出去，让"读设置的模块"同时就是"拿守卫的模块"。
-export { isExternalImageDefault, isLocalCopyAction };
+export { isExternalImageDefault, isLocalCopyAction, isOrphanAskMode };
 
 // ─────────────────────────── 字段表 ───────────────────────────
 //
@@ -148,6 +148,10 @@ const FACTORY_SETTINGS = {
 	// ① 自动淘汰是"后台删文件"，用户没要求就不该发生；
 	// ② 它默认关着，"离线可用"这个主承诺就不会被悄悄打折。
 	cacheLimitMb: 0,
+	// ⚠️ 默认**照旧弹窗**（那个询问是需求 R17 的主场景）。但用户必须能拒绝它 ——
+	// 它是**自动出现**的模态框，而默认动作是"保留"（什么都不做）⇒ 最常见的结局是
+	// "什么都没发生，但用户被打断了一次"。所以这一项的存在本身就是"能关掉"这件事。
+	orphanAsk: "always" as OrphanAskMode,
 } as const;
 
 /**
@@ -170,6 +174,7 @@ const SETTINGS_SPEC: {
 	externalImageCache: boolValue(),
 	externalImageDefault: oneOfValue(EXTERNAL_IMAGE_DEFAULTS),
 	cacheLimitMb: numberValue({ min: 0, max: CACHE_LIMIT_MB_MAX }),
+	orphanAsk: oneOfValue(ORPHAN_ASK_MODES),
 };
 
 const S3_FALLBACKS: S3Config = {

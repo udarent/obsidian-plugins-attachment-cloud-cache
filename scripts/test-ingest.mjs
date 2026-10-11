@@ -33,7 +33,9 @@ await withLoadedTs(
 				"beats the host's own setting, migrating an attachment that already lives in the " +
 				"vault leaves no stray staging copy behind and moves it into the cache folder " +
 				"(a move, not a second copy), nested keys " +
-				"create folders, and a corrupt index degrades to empty instead of throwing)."
+				"create folders, the upload ledger records every successful upload no matter where " +
+				"the local copy went (that is what keeps cloud cleanup working in the " +
+				"'keep no local copy' setting), and a corrupt index degrades to empty instead of throwing)."
 		);
 	}
 );

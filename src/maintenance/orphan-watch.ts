@@ -192,7 +192,7 @@ export function createOrphanWatcher(deps: OrphanWatchDeps): OrphanWatcher {
 
 /** 一个孤儿候选为什么不该拿去问用户。 */
 export type OrphanSkipReason =
-	/** 索引里没有它的记录 ⇒ 不是本插件上传的，我们不该动它。 */
+	/** 不是我们经手过的对象 ⇒ 我们不该动它。 */
 	| "not-ours"
 	/** 这个会话里已经问过它了（用户做过选择，别再追着问）。 */
 	| "already-asked";
@@ -206,9 +206,15 @@ export interface OrphanAskSelection {
 /**
  * 从"刚变成孤儿的 key"里挑出**值得问用户**的那几个（纯函数）。
  *
- * ⚠️ 为什么要筛"是不是我们上传的"：孤儿判据是"本库不再引用它"，而那个集合里
+ * ⚠️ 为什么要筛"是不是我们经手过的"：孤儿判据是"本库不再引用它"，而那个集合里
  * 完全可能出现**我们没见过的东西**（例如用户手写的、指向同一个存储的另一条 URL）。
- * 对不是我们上传的对象，我们**没有任何处置权** —— 不问，也不删。
+ * 对不属于我们的对象，我们**没有任何处置权** —— 不问，也不删。
+ *
+ * ⚠️⚠️ `isOurs` **必须**接"上传台账"（`CacheIndex.wasUploaded`），
+ * **不能**接"索引里有没有条目"（`index.get`）。后者只管"本地副本在哪"，
+ * 而「不留副本」那一档**没有副本 ⇒ 没有条目** ⇒ 拿它当判据会让该档的对象
+ * **全员被判 `not-ours`**，这个询问在那个档位**一次都不会出现**
+ * （2026-10-11 查出的 N11；与 P8 同一形状：某个档位下自动入口静默失效）。
  *
  * ⚠️ 冷却放在这里是刻意的：**问过一次就不再问**是"不打扰"的底线。
  * 用户回答"保留"之后，同一个对象在同一个会话里不该再弹（他可能还在整理笔记，
@@ -217,8 +223,8 @@ export interface OrphanAskSelection {
 export function selectOrphanAsks(
 	candidates: readonly string[],
 	context: {
-		/** 索引里有没有这个 key 的记录（= 本插件上传过它）。 */
-		hasEntry: (key: string) => boolean;
+		/** 这个 key 是不是我们经手过的（上传台账 —— 见上面那条警告）。 */
+		isOurs: (key: string) => boolean;
 		/** 这个 key 在本会话里是否已经问过。 */
 		hasAsked: (key: string) => boolean;
 	}
@@ -229,14 +235,14 @@ export function selectOrphanAsks(
 
 	for (const key of candidates ?? []) {
 		// ⚠️ 空串**与纯空白**都要挡掉：空白不是合法的对象 key，
-		// 而它会一路走到 `hasEntry` 去（那一步的答案是"没有"⇒ 被当成 not-ours 静默丢掉，
+		// 而它会一路走到 `isOurs` 去（那一步的答案是"不是"⇒ 被当成 not-ours 静默丢掉，
 		// 但调用方看不到"这个候选根本没被看"这件事）。
 		if (typeof key !== "string" || key.trim() === "") continue;
 		// 同一次调用里重复出现的候选只算一次（调用方攒批时可能重复喂进来）
 		if (seen.has(key)) continue;
 		seen.add(key);
 
-		if (!context.hasEntry(key)) {
+		if (!context.isOurs(key)) {
 			skipped.push({ key, reason: "not-ours" });
 			continue;
 		}

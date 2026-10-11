@@ -55,6 +55,8 @@ import { askOrphanCloudDelete } from "./ui/cloud-delete-modal";
 import { createOrphanWatcher, planOrphanLocalRemoval, selectOrphanAsks } from "./maintenance/orphan-watch";
 import type { NoteKind, OrphanLocalTarget, OrphanWatcher } from "./maintenance/orphan-watch";
 import { removeOrphanCopies } from "./maintenance/orphan-removal";
+import { deleteLogPath, recordDeletions } from "./maintenance/delete-log";
+import type { DeletedObjectRecord } from "./maintenance/delete-log";
 
 import type { ExternalCandidate, NoteTextLike } from "./maintenance/batch";
 import { ingestAttachment } from "./core/ingest";
@@ -680,9 +682,19 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		this.orphanPending.clear();
 		if (pending.length === 0) return;
 
+		// ⭐ 用户可以直接说"别主动告诉我"。这一档在**筛选之前**就返回：
+		// 连扫一遍都省了，而且**没有任何信息丢失** —— 「清理云端未使用对象…」
+		// 那条命令随时都能列出候选（它算的是"本库看不见引用的对象"，与这里无关）。
+		const mode = this.settings.orphanAsk;
+		if (mode === "never") return;
+
 		const index = this.currentIndex();
 		const selection = selectOrphanAsks(pending, {
-			hasEntry: (key) => Boolean(index.get(key)),
+			// ⭐ 判"是不是我们的"必须查**上传台账**，不能查"索引里有没有条目"：
+			// 条目只管"本地副本在哪"，而「不留副本」那一档没有副本、按纪律不写条目
+			// ⇒ 问条目会在那一档对**所有**对象答"不是我们的"，这个询问于是永不出现
+			// （N11，与 P8 同一形状）。台账不看副本，三档都答得对。
+			isOurs: (key) => index.wasUploaded(key),
 			hasAsked: (key) => this.orphanAsked.has(key),
 		});
 		if (selection.asks.length === 0) return;
@@ -690,6 +702,18 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		// ⭐ 问过就记住，**无论用户怎么回答** —— 这是"不打扰"的底线
 		//（他可能还在整理笔记，同一条引用被删掉的原因有很多种）
 		for (const key of selection.asks) this.orphanAsked.add(key);
+
+		// ⭐ `notice` 档：不弹窗，只给一条**不阻塞**的通知（并指路到命令）。
+		// 它同样吃冷却 —— 通知反复冒出来，与弹窗一样烦人。
+		if (mode === "notice") {
+			new Notice(
+				this.t("orphanNotice", {
+					count: selection.asks.length,
+					command: this.t("cmdCleanupCloud"),
+				})
+			);
+			return;
+		}
 
 		// 存储没配好就**不问了**：这个弹窗的三个选项里有两个以"云端"为前提，
 		// 而只有一个能成立时，问法本身是误导（"只删本地"另有 `clean-cache` 负责）。
@@ -726,6 +750,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 
 		// 先删云端（不可恢复的那一半先做：失败时下面那句提示会如实说明"云端对象未动"）
 		let cloud: CloudCleanupResult | null = null;
+		const logRecords: DeletedObjectRecord[] = [];
 		if (choice === "both") {
 			try {
 				cloud = await runCloudCleanup(
@@ -735,6 +760,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 						persistIndex: () => this.hostContext().persistIndex(),
 						notify: (message) => new Notice(message),
 						t: (key, params) => this.t(key, params),
+						onRemoved: (record) => logRecords.push({ ...record, scope: "orphan" }),
 					},
 					selection.asks
 				);
@@ -742,6 +768,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				new Notice(this.t("cloudDeleteFailed", { error: describeError(error) }));
 			}
 		}
+		// 留痕：这条询问是**自动出现**的，而删除不可恢复 ⇒ 至少要让"删过什么"事后可查
+		await this.writeDeleteLog(logRecords);
 
 		const removed = await this.removeOrphanCopies(localTargets);
 
@@ -778,6 +806,48 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				console.error(`[attachment-cloud-cache] 删除孤儿的本地副本失败（${path}）`, error);
 			},
 		});
+	}
+
+	/**
+	 * 删除留痕：把这一批**云端删除**追加写到插件目录下的日志里。
+	 *
+	 * ## 为什么要留痕
+	 *
+	 * 删云端对象是**不可恢复**的，而这条询问自 2026-10-11 起是**自动出现**的。
+	 * 「自动触发」+「不可恢复」+「不留痕迹」三件事叠在一起，是本产品风险最集中的一处 ——
+	 * 至少要让"删了什么、什么时候删的、走哪条入口"事后查得到。
+	 *
+	 * ## 两条刻意的选择
+	 *
+	 * ① **写在插件目录，不写缓存目录**：缓存目录是承诺过"可以整体删除"的
+	 *   （那是"离线副本可再生"这条承诺的一部分）—— 留痕写在那里，用户跑一次
+	 *   `clean-cache` 就把证据一起抹掉了，等于白留。
+	 * ② **写失败绝不抛错**：见 `maintenance/delete-log.ts`。为一个附属功能
+	 *   炸断一条不可恢复的主流程，代价完全不成比例。
+	 *
+	 * ⚠️ 它**不是回收站**：日志里的对象恢复不了。真正的宽限期是另一件事（尚未做）。
+	 */
+	private async writeDeleteLog(records: readonly DeletedObjectRecord[]): Promise<void> {
+		if (records.length === 0) return;
+		const adapter = this.app.vault.adapter;
+		const path = deleteLogPath(this.manifest.dir ?? "");
+		await recordDeletions(
+			{
+				append: async (text) => {
+					// ⚠️ 不依赖 `append` 的"文件不存在就创建"这条约定：先看一眼，
+					// 没有就 `write`。多一次 `exists` 换掉一个宿主行为假设，划算 ——
+					// 假设不成立时这条链会**静默**什么都不写。
+					if (await adapter.exists(path)) await adapter.append(path, text);
+					else await adapter.write(path, text);
+				},
+				onError: (error) => {
+					// 只说给开发者看（控制台）：用户此刻刚看到"已删除 N 个"，
+					// 再弹一条"日志写不进去"只会让人以为删除失败了。
+					console.error("[attachment-cloud-cache] 写删除日志失败", error);
+				},
+			},
+			records
+		);
 	}
 
 	/**
@@ -866,6 +936,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			return;
 		}
 
+		const records: DeletedObjectRecord[] = [];
 		const result = await runCloudCleanup(
 			{
 				client,
@@ -875,9 +946,11 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				// ⚠️ 必须用箭头函数包一层：直接写 `t: this.t` 会把方法从实例上"摘下来"，
 				// 调用时 `this` 就不再是插件实例（lint 的 unbound-method 正是在拦这个）。
 				t: (key, params) => this.t(key, params),
+				onRemoved: (record) => records.push({ ...record, scope: "command" }),
 			},
 			selection.candidates.map((object) => object.key)
 		);
+		await this.writeDeleteLog(records);
 
 		new Notice(
 			this.t("cloudCleanupDone", {

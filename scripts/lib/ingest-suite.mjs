@@ -467,7 +467,7 @@ export async function runIngestSuite(mod) {
 	});
 
 	// ============================================================
-	// 7. localCopy = trash → 不留本地副本，也不登记索引
+	// 7. localCopy = trash → 不留本地副本；**但台账照记**
 	// ============================================================
 	await withHarness(mod, { settings: { localCopy: "trash" } }, async (h) => {
 		const result = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "temp.png", mime: "image/png" });
@@ -478,6 +478,17 @@ export async function runIngestSuite(mod) {
 			h.index.get(result.key),
 			undefined,
 			"没有本地副本时不该登记索引（索引的用途是「按 URL 找本地副本」）"
+		);
+		// ⭐⭐ 这一档**必须**写上传台账 —— 它就是 N11 的现场。
+		//
+		// 云端清理的自动入口靠"这个 key 是我们经手过的吗"认领对象，而它原先借的是
+		// **索引条目**；这一档没有副本 ⇒ 没有条目 ⇒ 借条目的判据在这一档对**所有**对象
+		// 答"不是我们的" ⇒ 那个询问在该档**一次都不出现**（而这一档正是"只当图床用"
+		// 的人，云端只增不减，最需要它）。台账与副本无关，所以它必须在这里被写上。
+		assert.equal(
+			h.index.wasUploaded(result.key),
+			true,
+			"⭐ 不留副本这一档也要记台账 —— 否则云端清理的自动入口在该档永不出现（N11）"
 		);
 	});
 

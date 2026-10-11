@@ -27,6 +27,7 @@ export function runSettingsUiSuite(mod) {
 		publicLinkKey,
 		publicLinkTone,
 		externalImageDefaultOptions,
+		orphanAskOptions,
 		ensureSecretSlot,
 		SECRET_SLOT_PREFIX,
 		// settings-bindings
@@ -405,6 +406,30 @@ export function runSettingsUiSuite(mod) {
 			Object.keys(externalImageDefaultOptions((value) => value))[0],
 			"skip",
 			"★ 下拉第一项必须是出厂值「什么都不做」"
+		);
+	}
+
+	// ============================================================
+	// 3c. 「附件没人引用时」那一档的选项（`orphanAskOptions`）
+	//
+	// 同一条纪律：**由类型清单生成**。三档必须都能选到 —— 少一档的后果很具体：
+	// 用户关不掉那个**自动弹出**的询问（而这一项存在的全部意义就是"能关掉它"）。
+	// ============================================================
+	{
+		const askOptions = orphanAskOptions((value) => `label:${value}`);
+		assert.deepEqual(
+			Object.keys(askOptions).sort(),
+			["always", "never", "notice"],
+			"选项集合必须与 ORPHAN_ASK_MODES 完全一致（不多不少）"
+		);
+		assert.equal(askOptions.always, "label:always", "每个取值都要有文案");
+		assert.equal(askOptions.notice, "label:notice", "同上");
+		assert.equal(askOptions.never, "label:never", "★ 关不掉那个自动询问是最要紧的一档 —— 它必须有文案");
+		// ⭐ 第一项是出厂值：与历史行为一致（弹窗），改它要同时改文档、类型清单与出厂表。
+		assert.equal(
+			Object.keys(orphanAskOptions((value) => value))[0],
+			"always",
+			"★ 下拉第一项必须是出厂值「弹窗问我」"
 		);
 	}
 

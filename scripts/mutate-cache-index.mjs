@@ -107,9 +107,44 @@ await runMutations({
 		},
 		{
 			name: "落盘结构不再带版本号（将来无法判断要不要迁移）",
-			from: "return { version: CACHE_INDEX_VERSION, entries: this.toArray() };",
-			to: "return { entries: this.toArray() };",
+			from: "return { version: CACHE_INDEX_VERSION, entries: this.toArray(), uploaded: this.uploadedKeys() };",
+			to: "return { entries: this.toArray(), uploaded: this.uploadedKeys() };",
 			expect: "带版本号",
+		},
+		{
+			// 后果：重复记同一个 key 也报"变了" ⇒ 调用方每次都落盘（写盘放大），
+			// 且"台账有没有变化"这件事再也答不准。
+			name: "★ 台账不去重（每次重复记都算变化 ⇒ 无谓落盘）",
+			from: "\t\tif (!clean || this.uploaded.has(clean)) return false;\n\t\tthis.uploaded.add(clean);\n\t\treturn true;",
+			to: "\t\tif (!clean) return false;\n\t\tthis.uploaded.add(clean);\n\t\treturn true;",
+			expect: "重复记不产生变化",
+		},
+		{
+			// 后果：条目不再并进台账 ⇒ ① 老索引文件（没有 uploaded 字段）升级后
+			// **所有已上传对象都不再被认领**；② 不变量 `条目 ⊆ 台账` 破掉，
+			// 会出现"有本地副本却不认领"这种自相矛盾的状态。
+			// ⚠️ 由构造函数统一负责那条并集（只有一处定义）。
+			name: "★★ 条目不再并进台账（老文件升级后所有对象失去认领 + 不变量破掉）",
+			from: "\t\t\tthis.uploaded.add(entry.key);",
+			to: "\t\t\t// 变异：不回填台账",
+			expect: "有条目 ⇒ 台账里必须有它",
+		},
+		{
+			// 后果：key 带空白就认不出 ⇒ 同一个对象在"记"与"查"两侧得到相反答案，
+			// 表现为"明明上传过却当成别人的"（云端清理于是不问它）。
+			name: "★ 查台账时不 trim（带空白的 key 认不出来）",
+			from: "\t\treturn typeof key === \"string\" && this.uploaded.has(key.trim());",
+			to: "\t\treturn typeof key === \"string\" && this.uploaded.has(key);",
+			expect: "查的时候要去空白",
+		},
+		{
+			// 后果：删本地副本那条路（`clean-cache`）顺手把台账也抹了 ⇒
+			// 云端对象还在，R17 却再也不认领它 —— 表现为"云端有东西，插件说不是它的"。
+			// ⚠️ 只有**云端删除**才该忘台账（`maintenance/cloud-cleanup.ts`）。
+			name: "★★ 删条目时连台账一起忘（云端还在的对象失去认领）",
+			from: "\t\tthis.entries.delete(key);\n\t\tconst url = normalizeUrl(existing.remoteUrl);",
+			to: "\t\tthis.entries.delete(key);\n\t\tthis.uploaded.delete(key);\n\t\tconst url = normalizeUrl(existing.remoteUrl);",
+			expect: "条目没了、台账仍在",
 		},
 		{
 			// 后果：坏时间戳（字符串 / 负数 / NaN）原样流进索引 ⇒ 缓存轮换按"最久没用过"

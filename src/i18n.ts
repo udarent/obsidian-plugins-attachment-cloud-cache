@@ -21,6 +21,7 @@ export const I18N: Record<string, Locale> = {
 		sectionStorage: "Storage connection",
 		sectionUpload: "Upload",
 		sectionOffline: "Offline copies",
+		sectionCleanup: "Cloud cleanup",
 		sectionAdvanced: "Advanced",
 
 		// ── 存储连接 ──
@@ -159,6 +160,8 @@ export const I18N: Record<string, Locale> = {
 		orphanLocalDeleted: "Removed {removed} local copy(ies). Your storage was left untouched.",
 		orphanDeletedBoth:
 			"Removed {removed} local copy(ies). Storage: {deleted} deleted, {alreadyGone} already gone, {failed} failed.",
+		orphanNotice:
+			"{count} uploaded attachment(s) are no longer linked from any note or canvas. Run “{command}” to review and clean up.",
 		cloudDeleteFailed: "Could not delete the object: {error}",
 		cmdAuditCache: "Show cache usage",
 		cmdRepairIndex: "Repair the local-copy index",
@@ -250,11 +253,20 @@ export const I18N: Record<string, Locale> = {
 			"Cache is over its limit: deleted {count} least recently used copies ({mb} MB). They will be downloaded again when you view them.",
 		cacheEvictedPartial:
 			"Cache is over its limit: deleted {count} copies ({mb} MB), still {overMb} MB over the limit.",
+
+		// ── 无人引用的附件：怎么告诉你 ──
+		orphanAsk: "When an attachment is no longer linked",
+		orphanAskDesc:
+			"Once an uploaded file loses its last link from any note or canvas, this is what the plugin does. Cleaning up always needs your explicit confirmation — this only decides whether you are told about it, and how.",
+		orphanAsk_always: "Ask me (keep / drop the local copy / drop both)",
+		orphanAsk_notice: "Just show a notice",
+		orphanAsk_never: "Do nothing",
 	},
 	zh: {
 		sectionStorage: "存储连接",
 		sectionUpload: "上传",
 		sectionOffline: "离线副本",
+		sectionCleanup: "云端清理",
 		sectionAdvanced: "高级",
 
 		s3Endpoint: "服务地址",
@@ -372,6 +384,8 @@ export const I18N: Record<string, Locale> = {
 		orphanLocalDeleted: "已删掉 {removed} 个本地副本；云端对象未动。",
 		orphanDeletedBoth:
 			"已删掉 {removed} 个本地副本；云端：删除 {deleted} 个、本来就不存在 {alreadyGone} 个、失败 {failed} 个。",
+		orphanNotice:
+			"有 {count} 个已上传的附件不再被任何笔记或画布引用。运行「{command}」可以查看并清理。",
 		cloudDeleteFailed: "删除对象失败：{error}",
 		cmdAuditCache: "查看缓存占用",
 		cmdRepairIndex: "自检并修复本地副本索引",
@@ -459,6 +473,14 @@ export const I18N: Record<string, Locale> = {
 		cacheEvicted:
 			"缓存超出上限：已删除 {count} 份最久没用过的副本（{mb} MB）。下次看到它们时会自动重新下载。",
 		cacheEvictedPartial: "缓存超出上限：已删除 {count} 份（{mb} MB），仍超出上限 {overMb} MB。",
+
+		// ── 无人引用的附件：怎么告诉你 ──
+		orphanAsk: "附件没人引用时",
+		orphanAskDesc:
+			"某个已上传的附件失去了笔记或画布里的最后一条引用之后，插件怎么做。清理永远需要你明确确认 —— 这一项只决定要不要告诉你、以及用哪种方式告诉你。",
+		orphanAsk_always: "弹窗问我（保留 / 只删本地副本 / 一起删）",
+		orphanAsk_notice: "只给一条通知",
+		orphanAsk_never: "什么都不做",
 	},
 };
 

@@ -50,16 +50,48 @@ await runMutations({
 		},
 		{
 			// 后果：服务端回 404（对象本来就不在桶里）被记成"删除失败" ⇒ 提示语撒谎
-			//（用户看到"有一个没删掉"，其实早就没了），而那条指向 404 的记录会被
-			// audit / 淘汰当成**有效记录**（症状："明明删了，占用统计还在涨"）。
+			//（用户看到"有一个没删掉"，其实早就没了）。
 			// ⚠️ 这也是两个入口对同一个返回值给出**相反解释**的那一半（审计 P2）。
-			name: "★ 404 被记成失败（提示语撒谎 + 留下指向空对象的有效记录）",
-			from: "\t\t\tif (ok) {\n\t\t\t\tresult.deleted += 1;\n\t\t\t} else {\n\t\t\t\t// 404 ⇒ 本来就不存在 ⇒ 目标状态已达成（见上面那段说明）\n\t\t\t\tresult.alreadyGone += 1;\n\t\t\t}\n\t\t\tif (deps.index().remove(key)) removed.push(key);",
-			to: "\t\t\tif (!ok) {\n\t\t\t\tresult.failed += 1;\n\t\t\t\tcontinue;\n\t\t\t}\n\t\t\tresult.deleted += 1;\n\t\t\tif (deps.index().remove(key)) removed.push(key);",
-			// ⚠️ 这条变异会同时破坏三件事（`alreadyGone` 计数、`failed` 的归因、索引摘除），
-			// 而套件是"第一条失败断言决定报错" ⇒ 它红在**最先**那条（`alreadyGone` 计数）上。
-			// 按纪律把 expect 如实写成那一条（不是"随便红了就算抓住"）。
+			// ⚠️ 变异锚点只能削到"计数写错"这一层：把 `if (ok)` 反过来写会**同时**
+			// 破坏第 5 节（成功数恒 0），而套件是"第一条失败断言决定报错" ⇒
+			// 那样红在"成功数要如实统计"上，归因就不是这一条了。
+			name: "★ 404 被记成失败（提示语撒谎：本来就没有的东西说成没删掉）",
+			from: "\t\t\t} else {\n\t\t\t\t// 404 ⇒ 本来就不存在 ⇒ 目标状态已达成（见上面那段说明）\n\t\t\t\tresult.alreadyGone += 1;",
+			to: "\t\t\t} else {\n\t\t\t\t// 404 ⇒ 本来就不存在 ⇒ 目标状态已达成（见上面那段说明）\n\t\t\t\tresult.failed += 1;",
 			expect: "要单独计数",
+		},
+		{
+			// 后果：删除**失败**时也把台账忘掉 ⇒ 对象还在云端，插件却不再认领它，
+			// 下一次孤儿判定会把它当成"不是我们的" —— 从"少问一次"变成"彻底管不了它"。
+			name: "★★ 删除失败也忘台账（对象还在云端却不再被认领）",
+			from: "\t\t\tresult.failed += 1;\n\t\t\tvoid error;",
+			to: "\t\t\tresult.failed += 1;\n\t\t\tdeps.index().forgetUploaded(key);\n\t\t\tvoid error;",
+			expect: "上传台账同样只在删成功时忘掉",
+		},
+		{
+			// 后果：落盘条件只看"摘掉了条目" ⇒ 「不留副本」那一档**只有台账变化**
+			// （没有副本 ⇒ 没有条目）⇒ 它的云端删除永远不落盘，
+			// 下次启动台账又把那些对象认回来（表现为"删了，重启后又被问一遍"）。
+			name: "★★ 台账变化不落盘（「不留副本」档的删除下次启动被忘掉）",
+			from: "\tif (removed.length > 0 || forgotLedger) {",
+			to: "\tif (removed.length > 0) {",
+			expect: "台账变了也必须落盘",
+		},
+		{
+			// 后果：留痕把**删除失败**的对象也记进去 ⇒ 事后翻日志看到"删了这一个"，
+			// 而它其实还在桶里 —— 留痕的全部价值就是"说的与事实一致"。
+			name: "★ 删除失败的对象也被留痕（日志说删了，其实还在桶里）",
+			from: "\t\t\tresult.failed += 1;\n\t\t\tvoid error;",
+			to: '\t\t\tresult.failed += 1;\n\t\t\tdeps.onRemoved?.({ key, name: "", outcome: "deleted" });\n\t\t\tvoid error;',
+			expect: "留痕只记真的不在桶里的对象",
+		},
+		{
+			// 后果：名字在摘索引**之后**才读 ⇒ 永远读到空串（记录已经没了），
+			// 留痕里只剩一串十六进制 key —— "删了哪些文件"变得不可读。
+			name: "★ 留痕的名字在摘记录之后才读（日志里只剩一串 key）",
+			from: "\t\t\tconst name = store.get(key)?.sourceName ?? \"\";\n\t\t\tif (store.remove(key)) removed.push(key);",
+			to: "\t\t\tif (store.remove(key)) removed.push(key);\n\t\t\tconst name = store.get(key)?.sourceName ?? \"\";",
+			expect: "名字要在摘记录**之前**读到",
 		},
 	],
 });

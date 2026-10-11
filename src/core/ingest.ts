@@ -460,7 +460,7 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 		localPath = moved;
 	}
 
-	// ── 6. 登记索引 ──
+	// ── 6. 登记索引 + 上传台账 ──
 	const entry: CacheEntry = {
 		key,
 		cachePath: localPath,
@@ -475,26 +475,29 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 		sourceName: fileName,
 		...(deps.origin === "external" ? { origin: "external" as const } : {}),
 	};
-	// `trash` 处置时本地没有副本：仍登记，但 cachePath 记空串会被 normalizeEntry 丢弃 → 
-	// 改为不登记。理由：索引的用途是"按 URL 找本地副本"，没有副本就没有可记的事实
-	// （"远端有这么个对象"这件事本身由笔记里的 URL 承载）。
+
+	// ⭐ 台账与条目是**两件事**，判据不同、去处也不同：
+	// - 条目 = 「本地副本在哪」⇒ 只在真有副本时记（`trash` 档记空路径没有用途，
+	//   `normalizeEntry` 也会把它丢掉 —— 那是刻意的，见 `cache/index.ts`）；
+	// - 台账 = 「我们上传过它」⇒ **不分档位一律记**。R17 的自动入口靠它认领对象，
+	//   而「不留副本」档正是没有条目那一档 —— 少记这一笔，那个入口在该档就永不出现。
+	let dirty = index.markUploaded(key);
+
 	if (localPath) {
 		index.set(entry);
+		dirty = true;
+	} else if (index.remove(key)) {
+		// 即便不留本地副本，也把旧记录清掉，否则会指向一个已被删除的文件
+		dirty = true;
+	}
+
+	if (dirty) {
 		try {
 			await deps.persistIndex();
 		} catch (error) {
 			// 索引落盘失败不该让上传算失败（URL 已经能用）。
 			// 但要**说出来** —— 否则用户会在下次重启后发现缓存"不被认识"而莫名其妙。
 			deps.notify?.(`缓存索引保存失败：${describeError(error)}`);
-		}
-	} else {
-		// 即便不留本地副本，也把旧记录清掉，否则会指向一个已被删除的文件
-		if (index.remove(key)) {
-			try {
-				await deps.persistIndex();
-			} catch {
-				// 同上，非致命
-			}
 		}
 	}
 

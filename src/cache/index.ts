@@ -27,6 +27,24 @@
  *
  * 附件数量会持续增长。`data.json` 每次加载/保存都要整体读写，
  * 把索引混进设置里会让"读设置"这件事随附件数变慢 —— 而设置是启动路径上的东西。
+ *
+ * ## 为什么索引里还有一份「上传台账」（`uploaded`）
+ *
+ * 因为有一个问题**不能**用上面的条目来回答：「**这个对象是我们上传过的吗？**」
+ * （云端清理要问它 —— 不是我们上传的对象，我们没有处置权。）
+ *
+ * 条目记的是"本地副本在哪"，而「不留副本」那一档**没有副本** ⇒ 按纪律不写条目
+ * （见 `core/ingest.ts` 第 6 步）。于是拿条目去回答上面那个问题，会在该档
+ * **全员答"不是我们的"** —— 云端清理的自动入口因此静默失效（2026-10-11 查出的 N11）。
+ *
+ * 所以另记一份**只管"经手过"**的 key 集合：与"本地有没有副本"完全无关。
+ * 它和条目放在同一个文件里（不新增要迁移、要忽略的文件），但**两者互不派生**：
+ * - 条目可以消失（`clean-cache` 删掉副本）而台账仍在 —— 云端对象还在；
+ * - 只有**云端删除**才同时摘条目与台账（见 `maintenance/cloud-cleanup.ts`）。
+ *
+ * ⚠️ 老索引文件里没有这个字段 ⇒ 加载时按条目里的 key **回填**（见 `fromJSON`）。
+ * 回填救不了「不留副本」档的历史对象（那一档本来就没写过条目）——
+ * 它们要等下次被引用时重新上传才进台账。这条边界写在维护手册里。
  */
 
 import { isPlainRecord } from "../records";
@@ -106,6 +124,23 @@ export interface SkippedEntry {
 	raw: unknown;
 }
 
+/**
+ * 读一份"上传台账"的原始值。
+ *
+ * 与条目一样容错：非数组、混进非字符串、空白项一律丢掉并**计数**（计数并入 `skipped`）
+ * —— 台账少一条的后果是"那个对象不再被当成我们的"，与条目少一条同类。
+ */
+function readUploadedKeys(raw: unknown): string[] {
+	if (!Array.isArray(raw)) return [];
+	const out: string[] = [];
+	for (const item of raw) {
+		if (typeof item !== "string") continue;
+		const key = item.trim();
+		if (key) out.push(key);
+	}
+	return out;
+}
+
 export interface CacheIndexLoadResult {
 	index: CacheIndex;
 	skipped: SkippedEntry[];
@@ -174,13 +209,29 @@ export class CacheIndex {
 	 */
 	private readonly byUrl: Map<string, CacheEntry>;
 
-	constructor(entries: Iterable<CacheEntry> = []) {
+	/**
+	 * **上传台账**：我们上传过的对象 key（与"本地有没有副本"无关，见模块头注释）。
+	 *
+	 * 用 `Set` 而不是数组：查"是不是我们上传的"在孤儿判定里会被逐个候选调用。
+	 */
+	private readonly uploaded: Set<string>;
+
+	constructor(entries: Iterable<CacheEntry> = [], uploadedKeys: Iterable<string> = []) {
 		this.entries = new Map();
 		this.byUrl = new Map();
+		this.uploaded = new Set();
+		for (const key of uploadedKeys) {
+			const clean = typeof key === "string" ? key.trim() : "";
+			if (clean) this.uploaded.add(clean);
+		}
 		for (const entry of entries) {
 			// 构造时也走去重：后写的覆盖先写的（与 `set` 一致），
 			// 否则"同一 key 两条记录"会让行为取决于遍历顺序。
 			this.write(entry);
+			// ⭐ 不变量 `条目 ⊆ 台账`：有本地副本的 key 必然是我们经手过的。
+			// 放在构造函数里 = 只有一处定义 —— 否则"用条目构造出来的索引"会带着一个空台账，
+			// 而它的行为与"从文件读回来的同一份内容"不一致（重启就变，本项目反复消除的一类问题）。
+			this.uploaded.add(entry.key);
 		}
 	}
 
@@ -231,6 +282,40 @@ export class CacheIndex {
 
 	keys(): string[] {
 		return [...this.entries.keys()];
+	}
+
+	/**
+	 * 记下"我们上传过这个对象"。返回**是否新增了**（供调用方决定要不要落盘）。
+	 *
+	 * ⚠️ 上传成功就记，**不分 `localCopy` 档位** —— 这正是这份台账存在的理由：
+	 * 条目只覆盖"有本地副本"的那两档，而云端清理要认领的对象可能来自任何一档。
+	 */
+	markUploaded(key: string): boolean {
+		const clean = typeof key === "string" ? key.trim() : "";
+		if (!clean || this.uploaded.has(clean)) return false;
+		this.uploaded.add(clean);
+		return true;
+	}
+
+	/** 这个对象是我们上传过的吗（云端清理判"有没有处置权"的**唯一**依据）。 */
+	wasUploaded(key: string): boolean {
+		return typeof key === "string" && this.uploaded.has(key.trim());
+	}
+
+	/**
+	 * 忘掉一条台账。返回是否真的删掉了。
+	 *
+	 * ⚠️ **只在云端对象确实被删掉时调用**（`maintenance/cloud-cleanup.ts`）。
+	 * 绝不能跟着 `remove()`（删本地副本那条路）一起做 —— 那样 `clean-cache`
+	 * 会把"云端还在、只是本地副本没了"的对象也从台账里抹掉。
+	 */
+	forgetUploaded(key: string): boolean {
+		return typeof key === "string" && this.uploaded.delete(key.trim());
+	}
+
+	/** 落盘用的稳定顺序（与 `toArray` 同一条纪律：顺序稳定才不会有 diff 噪音）。 */
+	uploadedKeys(): string[] {
+		return [...this.uploaded].sort();
 	}
 
 	/**
@@ -320,8 +405,8 @@ export class CacheIndex {
 	}
 
 	/** 落盘用的稳定结构。 */
-	toJSON(): { version: number; entries: CacheEntry[] } {
-		return { version: CACHE_INDEX_VERSION, entries: this.toArray() };
+	toJSON(): { version: number; entries: CacheEntry[]; uploaded: string[] } {
+		return { version: CACHE_INDEX_VERSION, entries: this.toArray(), uploaded: this.uploadedKeys() };
 	}
 
 	/**
@@ -332,15 +417,24 @@ export class CacheIndex {
 	 * 而让插件在启动时抛错会让用户完全用不了（连设置页都进不去）。
 	 *
 	 * 同时接受两种形状：带 `entries` 的对象，或一个裸数组（便于手工修复）。
+	 *
+	 * ⚠️ 台账（`uploaded`）的读法与条目**不同**：条目"坏一条丢一条"，
+	 * 台账则是「**声明值 ∪ 条目里的 key**」。取并集有两个理由：
+	 * ① 老文件里根本没有这个字段 ⇒ 必须靠条目回填，否则升级后所有对象都不再被认领；
+	 * ② 并集让不变量 `条目 ⊆ 台账` 恒成立 —— 台账不可能因为文件被手改而**少于**条目，
+	 *    那会让"明明有副本却不认领"这种自相矛盾的状态出现。
+	 * ⚠️ 代价如实记：手改文件**删不掉**台账条目（要删得靠云端删除那条路）。
 	 */
 	static fromJSON(value: unknown): CacheIndexLoadResult {
 		const skipped: SkippedEntry[] = [];
 
 		let rawEntries: unknown;
+		let rawUploaded: unknown;
 		if (Array.isArray(value)) {
 			rawEntries = value;
 		} else if (isPlainRecord(value) && Array.isArray(value.entries)) {
 			rawEntries = value.entries;
+			rawUploaded = value.uploaded;
 		} else if (value === null || value === undefined) {
 			// 没有索引文件是正常状态（首次运行），不算"跳过"
 			return { index: new CacheIndex(), skipped };
@@ -369,7 +463,12 @@ export class CacheIndex {
 			accepted.push(entry);
 		}
 
-		return { index: new CacheIndex(accepted), skipped };
+		const declared = readUploadedKeys(rawUploaded);
+		if (rawUploaded !== undefined && !Array.isArray(rawUploaded)) {
+			skipped.push({ reason: "uploaded 不是数组（已按条目回填）", raw: rawUploaded });
+		}
+		// 「声明值 ∪ 条目 key」这条并集在**构造函数**里做（那条不变量的唯一出处）
+		return { index: new CacheIndex(accepted, declared), skipped };
 	}
 }
 

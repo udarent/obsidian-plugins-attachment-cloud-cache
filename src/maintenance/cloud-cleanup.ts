@@ -5,8 +5,13 @@
  *
  * | 入口 | 什么时候 | 用户要做什么 |
  * |---|---|---|
- * | **A：删除附件时询问** | 用户删掉一个"已上传过"的本地文件之后 | 选「仅删本地」（默认）/「连同云端一起删」/「取消」 |
+ * | **A：孤儿出现时询问** | 某个已上传对象**失去最后一个引用**之后（触发在 `maintenance/orphan-watch.ts`） | 选「保留」（默认）/「只删本地副本」/「云端和本地一起删」 |
  * | **B：清理云端未使用对象…** | 用户主动跑命令 | 看清单、确认、执行 |
+ *
+ * ⚠️ 本模块只管**云端那一半**。入口 A 的触发、三档询问与本地副本的删除分别落在
+ * `maintenance/orphan-watch.ts`（判定）、`ui/cloud-delete-modal.ts`（询问）、
+ * `maintenance/orphan-removal.ts`（本地副本）。
+ * （历史提醒：入口 A 原先挂在"删除本地文件"上，那个动作选错了 —— 见详细设计 §13.1。）
  *
  * 两者都要挡住同一件事：**删掉一个还在被用的对象**。
  *
@@ -168,6 +173,13 @@ export interface CloudCleanupDeps {
 	persistIndex: () => Promise<void>;
 	notify: (message: string) => void;
 	t: (key: string, params?: Record<string, unknown>) => string;
+	/**
+	 * 每**确实删掉**（或服务端回 404）一个对象时回调一次 —— 供接线层**留痕**。
+	 *
+	 * ⚠️ 只在"对象真的不在了"时回调：删除失败的不算（它还在桶里，日志里写它
+	 * 会让事后排查以为"那个已经删了"）。见 `maintenance/delete-log.ts`。
+	 */
+	onRemoved?: (record: { key: string; name: string; outcome: "deleted" | "alreadyGone" }) => void;
 }
 
 export interface CloudCleanupResult {
@@ -217,6 +229,8 @@ export async function runCloudCleanup(
 ): Promise<CloudCleanupResult> {
 	const result: CloudCleanupResult = { deleted: 0, alreadyGone: 0, failed: 0, unindexed: 0 };
 	const removed: string[] = [];
+	/** 台账有没有被改动（与 `removed` 分开记：两者会不一致，见下面那段说明）。 */
+	let forgotLedger = false;
 
 	for (const key of keys ?? []) {
 		if (typeof key !== "string" || key === "") continue;
@@ -228,7 +242,17 @@ export async function runCloudCleanup(
 				// 404 ⇒ 本来就不存在 ⇒ 目标状态已达成（见上面那段说明）
 				result.alreadyGone += 1;
 			}
-			if (deps.index().remove(key)) removed.push(key);
+			// ⭐ 云端对象没了 ⇒ **上传台账也要忘掉它**（台账的语义是
+			// "我们经手过、且它还在云端"；对象没了就没什么可认领的了）。
+			//
+			// ⚠️ 只在**这一支**里忘：删除失败时对象还在云端，忘掉它会让下一次
+			// 孤儿判定把它当成"不是我们的"—— 那就从"少问一次"变成了"管不了它"。
+			const store = deps.index();
+			// ⚠️ 名字要在**摘记录之前**读（摘掉之后就没地方取了），留痕要用它
+			const name = store.get(key)?.sourceName ?? "";
+			if (store.remove(key)) removed.push(key);
+			if (store.forgetUploaded(key)) forgotLedger = true;
+			deps.onRemoved?.({ key, name, outcome: ok ? "deleted" : "alreadyGone" });
 		} catch (error) {
 			// 单个对象失败不能中断整批（用户要的是"把能清的清掉"），但必须计数
 			result.failed += 1;
@@ -236,7 +260,9 @@ export async function runCloudCleanup(
 		}
 	}
 
-	if (removed.length > 0) {
+	// 条目与台账的改动都要落盘：它们平时同进同退（有副本才有条目），
+	// 但「不留副本」档只会有台账改动 ⇒ 只判 `removed` 会漏掉落盘。
+	if (removed.length > 0 || forgotLedger) {
 		result.unindexed = removed.length;
 		try {
 			await deps.persistIndex();

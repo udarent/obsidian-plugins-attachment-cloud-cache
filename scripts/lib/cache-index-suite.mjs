@@ -202,6 +202,79 @@ export function runCacheIndexSuite(mod) {
 	assert.equal(serialized.version, CACHE_INDEX_VERSION, "落盘结构应带版本号（将来迁移要用）");
 	assert.deepEqual(serialized.entries, [SAMPLE], "entries 应是排序后的数组，且内容不变");
 	assert.equal(CACHE_INDEX_VERSION, 1, "结构版本变了就该在这里改，并想清楚迁移");
+	// ⭐ 不变量：有本地副本的 key 必然在台账里（见第 7b 节）
+	assert.deepEqual(serialized.uploaded, [SAMPLE.key], "有条目 ⇒ 台账里必须有它（`条目 ⊆ 台账`）");
+
+	// ============================================================
+	// 7b. ⭐⭐ 上传台账（"这个 key 是我们经手过的吗"）
+	//
+	// 台账必须与条目**无关**：条目只管「本地副本在哪」，而「不留副本」那一档
+	// 上传后本地文件就被移走了 ⇒ 按纪律不写条目。云端清理的自动入口若把判据
+	// 接在条目上，在那一档就会对所有对象答「不是我们的」⇒ 询问永不出现
+	// （2026-10-11 查出的 N11）。下面每一格都对着那一处。
+	// ============================================================
+	{
+		const index = new CacheIndex();
+		assert.equal(index.wasUploaded("a.png"), false, "空索引里没有谁是经手过的");
+		assert.equal(index.markUploaded("a.png"), true, "第一次记 ⇒ 新增");
+		assert.equal(index.markUploaded("a.png"), false, "★ 重复记不产生变化（调用方据此决定要不要落盘）");
+		assert.equal(index.wasUploaded("a.png"), true);
+		assert.equal(index.wasUploaded("  a.png  "), true, "★ 查的时候要去空白（key 可能从正文/文件名来）");
+		assert.equal(index.markUploaded("   "), false, "空白不是合法 key，不该记进去");
+		assert.equal(index.wasUploaded("b.png"), false, "没记过的就是没有");
+
+		// ⭐ 台账与条目**互不派生**：删掉本地副本（`clean-cache` 那条路）**不该**忘掉台账 ——
+		// 云端对象还在，R17 以后还要认领它。
+		const both = new CacheIndex([{ ...SAMPLE, key: "k1.png" }]);
+		both.markUploaded("k2.png");
+		assert.equal(both.wasUploaded("k1.png"), true, "有条目 ⇒ 台账自动有它（构造时就并进去）");
+		assert.equal(both.remove("k1.png"), true, "删条目");
+		assert.equal(both.wasUploaded("k1.png"), true, "★ 条目没了、台账仍在（云端对象还在）");
+
+		// `forgetUploaded` 是**云端删除**那条路的出口，单独可调
+		assert.equal(both.forgetUploaded("k1.png"), true);
+		assert.equal(both.forgetUploaded("k1.png"), false, "已经忘掉的再忘一次不算变化");
+		assert.equal(both.wasUploaded("k1.png"), false);
+	}
+
+	// 7c. 台账的落盘与回填
+	{
+		const index = new CacheIndex();
+		index.markUploaded("z.png");
+		index.markUploaded("a.png");
+		assert.deepEqual(
+			index.toJSON().uploaded,
+			["a.png", "z.png"],
+			"★ 台账要排序后落盘（顺序稳定才不会有 diff 噪音）"
+		);
+
+		// ⭐ 老索引文件（还没有 uploaded 字段）⇒ 必须按条目里的 key 回填
+		const legacy = CacheIndex.fromJSON({ version: 1, entries: [{ ...SAMPLE, key: "old.png" }] });
+		assert.equal(
+			legacy.index.wasUploaded("old.png"),
+			true,
+			"★ 缺 uploaded 字段时按条目回填 —— 否则升级后所有已上传对象都不再被认领"
+		);
+		assert.equal(legacy.skipped.length, 0, "缺 uploaded 是**已知的旧格式**，不该记成坏数据");
+
+		// ⭐ 不变量：条目 ⊆ 台账（即使文件被手改掉一段，也不能出现「有副本却不认领」）
+		const handEdited = CacheIndex.fromJSON({
+			version: 1,
+			entries: [{ ...SAMPLE, key: "e.png" }],
+			uploaded: [],
+		});
+		assert.equal(handEdited.index.wasUploaded("e.png"), true, "★ 台账取并集，不变量恒成立");
+
+		// 坏值：uploaded 不是数组 ⇒ 按条目回填 + 记账（绝不抛错）
+		const bad = CacheIndex.fromJSON({ version: 1, entries: [SAMPLE], uploaded: "nope" });
+		assert.equal(bad.index.size, 1, "条目照常读进来");
+		assert.equal(bad.index.wasUploaded(SAMPLE.key), true, "坏掉的 uploaded 用条目回填");
+		assert.equal(bad.skipped.length, 1, "坏掉的 uploaded 要记账，让人看得见");
+
+		// 混进非字符串/空白/重复项 ⇒ 丢掉并去重，不抛错
+		const messy = CacheIndex.fromJSON({ entries: [], uploaded: ["ok.png", 42, null, "  ", "ok.png"] });
+		assert.deepEqual(messy.index.uploadedKeys(), ["ok.png"], "★ 只留下合法且去重后的 key");
+	}
 
 	// ============================================================
 	// 8. ⭐ 容错加载
@@ -417,5 +490,7 @@ export function runCacheIndexSuite(mod) {
 		);
 	}
 
-	return { urlCases: 12, entryCases: 20 };
+	// ⚠️ 这三个数字只是"人读的简报"，没有任何断言依赖它们 ——
+	// 但也不能不更新：它们与下面那些分节一一对应，虚报了就等于简报在撒谎。
+	return { urlCases: 12, entryCases: 20, ledgerCases: 22 };
 }
