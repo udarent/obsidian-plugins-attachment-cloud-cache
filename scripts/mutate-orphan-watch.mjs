@@ -46,5 +46,32 @@ await runMutations({
 			to: "\t\tif (false) {\n\t\t\tskipped.push({ key, reason: \"already-asked\" });\n\t\t\tcontinue;\n\t\t}",
 			expect: "没问过的",
 		},
+		{
+			// 后果：**用户自己的附件**被当成缓存副本 ⇒ 上层走 `vault.delete`
+			//（不经回收站、空间立刻释放那条路）⇒ **永久删掉用户的文件，不可恢复**。
+			// `localCopy: "keep"` 时索引里的 `cachePath` 就在附件目录里，这是常态而不是边角。
+			name: "★★ 本地副本一律当成缓存文件（用户附件被永久删除，不进回收站）",
+			from: "\t\ttargets.push({ key, path, isUserFile: !isUnderCacheFolder(path, context.cacheFolder) });",
+			to: "\t\ttargets.push({ key, path, isUserFile: false });",
+			expect: "用户自己的附件",
+		},
+		{
+			// 后果：只有空格的路径也交给宿主去解析 ⇒ 是在赌它怎么处理这种输入，
+			// 而我们为这种输入冒的是"删错文件"的风险。
+			// ⚠️ 变异只削 `trim()`（保留空串那一半）：两个判断都在守同一件事，
+			// 削掉整行会先在"空串"那条断言上红 —— 那记的是另一个原因。
+			name: "★ 只挡空串、不挡纯空白（把空白路径交给宿主）",
+			from: "\t\tif (typeof raw !== \"string\" || raw.trim() === \"\") continue;",
+			to: "\t\tif (typeof raw !== \"string\" || raw === \"\") continue;",
+			expect: "纯空白",
+		},
+		{
+			// 后果：同一次里重复的候选产出多份 ⇒ 提示语里的数量与实际删除数对不上，
+			// 而这一层的数量是用户判断"删了什么"的唯一依据。
+			name: "★ 不去重（同一份副本被算两次）",
+			from: "\t\tif (seen.has(path)) continue;\n\t\tseen.add(path);",
+			to: "\t\tseen.add(path);",
+			expect: "同一路径只产出一次",
+		},
 	],
 });

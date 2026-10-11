@@ -47,12 +47,14 @@ import {
 	selectUploadCandidates,
 } from "./maintenance/batch";
 import { listAllObjects, runCloudCleanup, selectCleanupCandidates } from "./maintenance/cloud-cleanup";
+import type { CloudCleanupResult } from "./maintenance/cloud-cleanup";
 import { externalKeysOf, referencedKeysFromUrls } from "./maintenance/cloud-cleanup";
 import { createAttachWatcher, createSelfWriteLedger } from "./maintenance/attach-watch";
 import type { AttachWatcher } from "./maintenance/attach-watch";
 import { askOrphanCloudDelete } from "./ui/cloud-delete-modal";
-import { createOrphanWatcher, selectOrphanAsks } from "./maintenance/orphan-watch";
-import type { NoteKind, OrphanWatcher } from "./maintenance/orphan-watch";
+import { createOrphanWatcher, planOrphanLocalRemoval, selectOrphanAsks } from "./maintenance/orphan-watch";
+import type { NoteKind, OrphanLocalTarget, OrphanWatcher } from "./maintenance/orphan-watch";
+import { removeOrphanCopies } from "./maintenance/orphan-removal";
 
 import type { ExternalCandidate, NoteTextLike } from "./maintenance/batch";
 import { ingestAttachment } from "./core/ingest";
@@ -211,11 +213,16 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	/** 待询问的孤儿（一次编辑可能删掉好几条引用 ⇒ 攒成一批只问一次）。 */
 	private orphanPending = new Set<string>();
 
-	/** 引用重算的防抖（编辑途中，宿主的自动保存会反复触发 `modify`）。 */
-	private orphanCheckTimer: ReturnType<typeof setTimeout> | null = null;
+	/**
+	 * 引用重算的防抖（编辑途中，宿主的自动保存会反复触发 `modify`）。
+	 *
+	 * ⚠️ 类型是 `number` 而不是 `ReturnType<typeof setTimeout>`：这里排的定时器一律走
+	 * `window.setTimeout`（弹出窗口里裸 `setTimeout` 不是同一个），而浏览器侧的返回值是数字。
+	 */
+	private orphanCheckTimer: number | null = null;
 
-	/** 询问的防抖（把同一小段时间里出现的孤儿攒到一起）。 */
-	private orphanAskTimer: ReturnType<typeof setTimeout> | null = null;
+	/** 询问的防抖（把同一小段时间里出现的孤儿攒到一起）。理由同上。 */
+	private orphanAskTimer: number | null = null;
 
 	/**
 	 * 我们自己刚落盘的中转文件（`stageLocally` 上报，见 `SelfWriteLedger`）。
@@ -592,8 +599,10 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 顺手按回车的代价在两个方向上并不对等。
 	 */
 	private scheduleOrphanCheck(path: string, kind: NoteKind): void {
-		if (this.orphanCheckTimer) clearTimeout(this.orphanCheckTimer);
-		this.orphanCheckTimer = setTimeout(() => {
+		// ⚠️ 一律用 `window.setTimeout`（弹出窗口里裸 `setTimeout` 不是同一个定时器 ——
+		// 与 `core/external-cache.ts`、`host/runtime.ts` 同一条理由，别处漏写会被 lint 报出来）。
+		if (this.orphanCheckTimer) window.clearTimeout(this.orphanCheckTimer);
+		this.orphanCheckTimer = window.setTimeout(() => {
 			this.orphanCheckTimer = null;
 			void this.checkOrphans(path, kind);
 		}, ORPHAN_CHECK_DEBOUNCE_MS);
@@ -650,14 +659,22 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	private collectOrphans(keys: readonly string[]): void {
 		if (keys.length === 0) return;
 		for (const key of keys) this.orphanPending.add(key);
-		if (this.orphanAskTimer) clearTimeout(this.orphanAskTimer);
-		this.orphanAskTimer = setTimeout(() => {
+		if (this.orphanAskTimer) window.clearTimeout(this.orphanAskTimer);
+		this.orphanAskTimer = window.setTimeout(() => {
 			this.orphanAskTimer = null;
 			void this.askAboutOrphans();
 		}, ORPHAN_ASK_DEBOUNCE_MS);
 	}
 
-	/** 把攒下的孤儿筛一遍、问用户一次；选了删就复用批量那条执行链。 */
+	/**
+	 * 把攒下的孤儿筛一遍、问用户一次。
+	 *
+	 * ## ⭐ 一个孤儿占**两份**资源，所以询问是三档而不是"删 / 不删"
+	 *
+	 * 云端对象（删了**找不回来**）+ 本地副本（删掉只是"以后重新下载一次"）。
+	 * 用户答"只删本地"时**一次网络写都不做** —— 这条路径存在的意义就是
+	 * "让库小一点，但别动我的源文件"。
+	 */
 	private async askAboutOrphans(): Promise<void> {
 		const pending = [...this.orphanPending];
 		this.orphanPending.clear();
@@ -674,6 +691,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		//（他可能还在整理笔记，同一条引用被删掉的原因有很多种）
 		for (const key of selection.asks) this.orphanAsked.add(key);
 
+		// 存储没配好就**不问了**：这个弹窗的三个选项里有两个以"云端"为前提，
+		// 而只有一个能成立时，问法本身是误导（"只删本地"另有 `clean-cache` 负责）。
 		const client = this.buildClient();
 		if (!client) return;
 
@@ -686,36 +705,79 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				...(names.length > ORPHAN_LIST_MAX
 					? [this.t("orphanMore", { count: names.length - ORPHAN_LIST_MAX })]
 					: []),
-				// ⚠️ 显著位置：这两句是"不可恢复"与"多设备盲区"的如实告知
-				this.t("cloudCleanupCannotUndo"),
+				// ⚠️ 显著位置，两句缺一不可：
+				// ① 各档的**可恢复性**（本地能回来、云端不能）—— 这是三个按钮的差别所在；
+				// ② 多设备盲区（只能看到本设备的引用）。
+				this.t("orphanLocalNote"),
 				this.t("cloudCleanupDeviceBlindSpot"),
 			],
 			keepCta: this.t("orphanKeep"),
-			deleteCta: this.t("orphanDelete"),
+			localCta: this.t("orphanLocalOnly"),
+			bothCta: this.t("orphanBoth"),
 		});
-		if (choice !== "delete") return;
+		if (choice === "keep") return;
 
-		try {
-			const result = await runCloudCleanup(
-				{
-					client,
-					index: () => this.currentIndex(),
-					persistIndex: () => this.hostContext().persistIndex(),
-					notify: (message) => new Notice(message),
-					t: (key, params) => this.t(key, params),
-				},
-				selection.asks
-			);
-			new Notice(
-				this.t("orphanDeleted", {
-					deleted: result.deleted,
-					alreadyGone: result.alreadyGone,
-					failed: result.failed,
-				})
-			);
-		} catch (error) {
-			new Notice(this.t("cloudDeleteFailed", { error: describeError(error) }));
+		// ⚠️ 清单按**索引当时的记录**算（`planOrphanLocalRemoval` 是纯函数，
+		// 分类规则与 `clean-cache` 共用同一个 `isUnderCacheFolder`）。
+		const localTargets = planOrphanLocalRemoval(selection.asks, {
+			cachePathOf: (key) => this.currentIndex().get(key)?.cachePath,
+			cacheFolder: this.settings.cacheFolder,
+		});
+
+		// 先删云端（不可恢复的那一半先做：失败时下面那句提示会如实说明"云端对象未动"）
+		let cloud: CloudCleanupResult | null = null;
+		if (choice === "both") {
+			try {
+				cloud = await runCloudCleanup(
+					{
+						client,
+						index: () => this.currentIndex(),
+						persistIndex: () => this.hostContext().persistIndex(),
+						notify: (message) => new Notice(message),
+						t: (key, params) => this.t(key, params),
+					},
+					selection.asks
+				);
+			} catch (error) {
+				new Notice(this.t("cloudDeleteFailed", { error: describeError(error) }));
+			}
 		}
+
+		const removed = await this.removeOrphanCopies(localTargets);
+
+		new Notice(
+			cloud
+				? this.t("orphanDeletedBoth", {
+						removed,
+						deleted: cloud.deleted,
+						alreadyGone: cloud.alreadyGone,
+						failed: cloud.failed,
+					})
+				: this.t("orphanLocalDeleted", { removed })
+		);
+	}
+
+	/**
+	 * 删掉孤儿对象在本地的副本（用户答"连本地一起清"之后）。
+	 *
+	 * ⚠️ 判定与执行都不在这里：分类由 `planOrphanLocalRemoval`（纯函数，套件与变异锚点都在）
+	 * 给出，删除顺序与两类文件的分工在 `maintenance/orphan-removal.ts`。
+	 * 这一层只负责把两条依赖接上去 —— 本项目的教训是"接线层里的几行"最容易
+	 * 悄悄长出没人验的分支（弹窗那层就出过一次）。
+	 */
+	private removeOrphanCopies(targets: readonly OrphanLocalTarget[]): Promise<number> {
+		return removeOrphanCopies(targets, {
+			app: this.app,
+			forget: (key) => this.currentIndex().remove(key),
+			persist: () => this.hostContext().persistIndex(),
+			onPersistError: (error) => {
+				// 与批量清理同一条纪律：索引存不下去必须说出来，不能静默
+				new Notice(this.t("cloudCleanupPersistFailed", { error: describeError(error) }));
+			},
+			onDeleteError: (error, path) => {
+				console.error(`[attachment-cloud-cache] 删除孤儿的本地副本失败（${path}）`, error);
+			},
+		});
 	}
 
 	/**
@@ -1246,8 +1308,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		this.attachWatch = null;
 		// ⚠️ 孤儿监视排了两个定时器（重算与询问），同样**必须显式取消**：
 		// 留着的话插件卸载后还会弹一次"要不要删云端"—— 而那时插件已经卸载了。
-		if (this.orphanCheckTimer) clearTimeout(this.orphanCheckTimer);
-		if (this.orphanAskTimer) clearTimeout(this.orphanAskTimer);
+		if (this.orphanCheckTimer) window.clearTimeout(this.orphanCheckTimer);
+		if (this.orphanAskTimer) window.clearTimeout(this.orphanAskTimer);
 		this.orphanCheckTimer = null;
 		this.orphanAskTimer = null;
 		this.orphanWatch = null;

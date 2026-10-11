@@ -20,6 +20,7 @@ import { runRemoveSuite } from "./lib/remove-suite.mjs";
  * 加一个分支不会有任何行为断言变红。所以直接在源码文本上钉：
  *
  * - 缓存维护层（`run.ts` / `rotation.ts` / `remove.ts`）里**不许出现** `trashFile`；
+ *   而 `trashFile` 的**允许位置**列成白名单（只该出现在删"用户自己的文件"的地方）；
  * - 全 `src/` 里 `vault.delete(` **恰好一处**（就是 `remove.ts`）；
  * - 「删除方式」这个设置项与它的文案键**不存在**；
  * - ⭐ 反过来：**不许扫到不该扫的东西** —— `localCopy: "trash"`（上传后不留本地副本，
@@ -66,6 +67,26 @@ for (const file of CACHE_MAINTENANCE) {
 			`与「空间有限」的动机直接矛盾，那个备选已按需求去掉）`
 	);
 }
+
+// ⚠️ **反向的那一半**：`trashFile` 本身是合法的宿主 API —— 删**用户自己的文件**时
+// 正该走它（回收站尊重用户在 Obsidian 里设的「删除即进回收站」）。
+// 所以这里不禁止它，而是把**允许出现的位置**列成白名单：
+// 多一处就要人来确认它删的是"用户的文件"还是"我们的副本"。
+// 这正是上面那组守卫没能覆盖的方向 —— 只按文件名排除，新增一个文件就绕过去了。
+//
+// 两处各自的理由：
+//   · `src/core/ingest.ts` —— `localCopy: "trash"`（上传后不留本地副本）删的是用户的原始附件；
+//   · `src/maintenance/orphan-removal.ts` —— 孤儿询问里"连本地一起清"，
+//     删的可能是 `localCopy: "keep"` 时附件目录里那份**用户自己的附件**。
+// ⚠️ 匹配**真的调用**（带括号），不匹配注释里的提及 —— 与下面 `adapter.remove(` 同一条理由：
+// 静态守卫最容易犯的错是"扫过头"，而"把守卫写得过宽"的代价是后来的人为了让它变绿去改注释。
+const trashSites = listSourceFiles().filter((file) => read(file).includes("trashFile("));
+assert.deepEqual(
+	trashSites,
+	["src/core/ingest.ts", "src/maintenance/orphan-removal.ts"],
+	`★ \`trashFile\` 只允许出现在删**用户自己的文件**的地方（实际：${JSON.stringify(trashSites)}）。` +
+		`新出现的地点要先确认它删的不是"我们的可再生副本"—— 那些必须直接删（回收站不释放空间）`
+);
 
 // ============================================================
 // 静态守卫 ②：全 src/ 只有**一处**真正删文件

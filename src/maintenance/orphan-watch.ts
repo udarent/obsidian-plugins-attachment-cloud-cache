@@ -38,7 +38,15 @@
  * - **不知道"引用变少"的原因**：用户可能只是把那张图挪到另一篇笔记（先删、后加）。
  *   防抖挡得掉编辑中途的状态，挡不掉"先删、过一会儿再加" ⇒ 那种情况会问一次，
  *   用户答"保留"即可（接线层有会话内冷却，不会追着问）。
+ *
+ * ## 一个孤儿占用的是**两份**资源，所以"清掉它"不是一个动作
+ *
+ * 云端对象 + 本地副本。两者的**可恢复性完全不同**（云端删了就没了；本地删掉只是
+ * 以后重新下载一次），所以询问必须把这两层分开给用户选 —— 把两句话揉成一个开关，
+ * 用户就没法"只做他能接受的那一半"（见 `planOrphanLocalRemoval`）。
  */
+
+import { isUnderCacheFolder } from "../cache-path";
 
 /** 监视对象的类型。画布的引用藏在 JSON 字符串里，提取方式与笔记不同。 */
 export type NoteKind = "md" | "canvas";
@@ -240,4 +248,79 @@ export function selectOrphanAsks(
 	}
 
 	return { asks, skipped };
+}
+
+/** 一个孤儿对象在**本地**那份副本的处置目标。 */
+export interface OrphanLocalTarget {
+	/** 对象 key —— 文件删掉之后要按它摘索引记录。 */
+	key: string;
+	/** 本地副本的 vault 相对路径（索引里记的那条）。 */
+	path: string;
+	/**
+	 * `true` = 这份副本在**缓存目录之外**（`localCopy: "keep"` 时就是用户自己的附件）
+	 * ⇒ 走**回收站**；`false` = 缓存副本 ⇒ 直接删、空间立刻释放。
+	 */
+	isUserFile: boolean;
+}
+
+/**
+ * 把"用户决定连本地副本一起清掉"翻译成**待删清单**（纯函数）。
+ *
+ * ## ⚠️ 为什么必须分两类，而不是一律 `vault.delete`
+ *
+ * 索引里的 `cachePath` **不保证**在缓存目录里：`localCopy: "keep"` 时它就是
+ * 用户附件目录里的那份**原件**。两者"能不能重新拿到"不一样，删除方式因此也不一样：
+ *
+ * | 位置 | 是什么 | 删除方式 | 理由 |
+ * |---|---|---|---|
+ * | 缓存目录内 | 我们落的可再生副本 | `vault.delete` | 空间立刻释放；回收站不释放 |
+ * | 缓存目录外 | **用户自己的附件** | `fileManager.trashFile` | 尊重用户的「删除即进回收站」设置 |
+ *
+ * 判错的后果**不对称**：把用户文件当成缓存文件 ⇒ 绕过回收站**永久删除用户的图**；
+ * 反过来只是"空间没立刻释放"。所以分类用的是 `isUnderCacheFolder`（按**路径段**判断、
+ * 拒绝 `..`），而不是字符串前缀。
+ *
+ * ## 为什么"没有记录"就什么都不做
+ *
+ * `cachePathOf` 给不出路径有两种情况，都不该动文件：
+ * ① 索引里没有这个 key（不是我们上传的，或用户手写的另一条 URL）——
+ *    对不属于我们的东西没有处置权（与 `selectOrphanAsks` 同一条纪律）；
+ * ② `localCopy: "trash"` 档根本没留副本 —— 没有可删的本地文件。
+ *
+ * ## 边界（如实写下来）
+ *
+ * 这里只处理**索引登记过**的副本。一份**从未上传成功**的本地附件（笔记里是
+ * `![[x.png]]` 这种库内链接 ⇒ 提取不出对象 key）变成孤儿时，这个入口**看不见它** ——
+ * 那是另一类问题（本插件的职责是"围绕已上传对象"，不是通用的附件管家），
+ * 见 `requirements.md` R17 的边界说明。
+ */
+export function planOrphanLocalRemoval(
+	keys: readonly string[],
+	context: {
+		/** 索引里这个 key 的本地副本路径（没有记录就返回空）。 */
+		cachePathOf: (key: string) => string | null | undefined;
+		/** 缓存目录（vault 相对路径）。 */
+		cacheFolder: string;
+	}
+): OrphanLocalTarget[] {
+	const targets: OrphanLocalTarget[] = [];
+	/** 同一个路径只删一次（两个 key 不该指向同一份，但清单来自外部，不假设它干净）。 */
+	const seen = new Set<string>();
+
+	for (const key of keys ?? []) {
+		if (typeof key !== "string" || key.trim() === "") continue;
+
+		const raw = context.cachePathOf(key);
+		// 空串**与纯空白**都要挡：一个只有空格的路径交给 `getAbstractFileByPath` 是
+		// 在赌宿主怎么处理它，而我们没有任何理由为这种输入冒删错文件的风险。
+		if (typeof raw !== "string" || raw.trim() === "") continue;
+
+		const path = raw.trim();
+		if (seen.has(path)) continue;
+		seen.add(path);
+
+		targets.push({ key, path, isUserFile: !isUnderCacheFolder(path, context.cacheFolder) });
+	}
+
+	return targets;
 }

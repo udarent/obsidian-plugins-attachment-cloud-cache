@@ -10,12 +10,16 @@
  *
  * 断言用**假事件序列**驱动（`noteChanged` / `noteRemoved` / `noteRenamed`），
  * 不需要时钟 —— 这一层刻意**不含定时器**（防抖与攒批在接线层，见模块头注释）。
+ *
+ * 第 9 节守的是另一半：用户答"连本地一起删"之后的**处置清单怎么算**。
+ * 那里分类错了的后果是"绕过回收站永久删掉用户自己的附件"，
+ * 所以它按类别归属来钉（`isUserFile` 落在哪一侧）。
  */
 
 import assert from "node:assert/strict";
 
 export async function runOrphanWatchSuite(mod) {
-	const { createOrphanWatcher, selectOrphanAsks } = mod;
+	const { createOrphanWatcher, planOrphanLocalRemoval, selectOrphanAsks } = mod;
 
 	/**
 	 * 造一个可注入的监视器。
@@ -202,5 +206,87 @@ export async function runOrphanWatchSuite(mod) {
 		assert.deepEqual(selectOrphanAsks(["", "  "], context).asks, [], "空串/空白要被跳过");
 	}
 
-	return { cases: 8 };
+	// ============================================================
+	// 9. ⭐⭐ 本地副本的处置清单：**分类错了会永久删掉用户的图**
+	//
+	// 用户答"连本地一起删"之后，删的可能是两种完全不同的东西：
+	// 缓存目录里的可再生副本（直接删，空间立刻释放），或 `localCopy: "keep"` 时
+	// **用户附件目录里的原件**（必须走回收站）。
+	// 把后者当成前者 ⇒ 绕过回收站**不可逆地删掉用户自己的文件**。
+	// 所以这里按"效果"钉：分类结果落在哪一个桶里。
+	// ============================================================
+	{
+		const cacheFolder = "_attachment-cache";
+		const withPaths = (map) => ({
+			cachePathOf: (key) => map[key],
+			cacheFolder,
+		});
+
+		// ⭐ 缓存目录内 ⇒ 可直接删
+		assert.deepEqual(
+			planOrphanLocalRemoval(["a.png"], withPaths({ "a.png": "_attachment-cache/a.png" })),
+			[{ key: "a.png", path: "_attachment-cache/a.png", isUserFile: false }],
+			"缓存目录里的副本 ⇒ 直接删（回收站不释放空间）"
+		);
+
+		// ⭐⭐ 附件目录里（缓存目录外）⇒ **用户自己的原件**，必须走回收站
+		assert.deepEqual(
+			planOrphanLocalRemoval(["a.png"], withPaths({ "a.png": "attachments/a.png" })),
+			[{ key: "a.png", path: "attachments/a.png", isUserFile: true }],
+			"★ 缓存目录**外**的副本是用户自己的附件 ⇒ 必须标成 isUserFile（走回收站）——" +
+				"标错就是绕过回收站永久删除用户的图"
+		);
+
+		// ⚠️ 反向钉子：**前缀相同但不是缓存目录**（`_attachment-cache-other/`）——
+		// 按字符串前缀判会误判成缓存文件 ⇒ 又变成"永久删用户文件"。
+		assert.equal(
+			planOrphanLocalRemoval(["a.png"], withPaths({ "a.png": "_attachment-cache-other/a.png" }))[0].isUserFile,
+			true,
+			"★ 路径按**段**判：`_attachment-cache-other/x.png` 不是缓存文件 ⇒ 当用户文件处理"
+		);
+		// 含 `..` 的路径同样按"用户文件"处理（保守一侧：回收站而不是永久删）
+		assert.equal(
+			planOrphanLocalRemoval(["a.png"], withPaths({ "a.png": "attachments/../a.png" }))[0].isUserFile,
+			true,
+			"含穿越的路径一律按用户文件处理（保守：宁可进回收站）"
+		);
+
+		// 没有索引记录 ⇒ 本地无可处置（不是我们上传的，或 `localCopy: "trash"` 档没留副本）
+		assert.deepEqual(
+			planOrphanLocalRemoval(["a.png"], withPaths({})),
+			[],
+			"★ 索引里没有记录 ⇒ 一个文件都不给删（对不属于我们的东西没有处置权）"
+		);
+		assert.deepEqual(
+			planOrphanLocalRemoval(["a.png"], withPaths({ "a.png": "" })),
+			[],
+			"记录里路径是空串 ⇒ 不产出（没有可以删的路径）"
+		);
+		assert.deepEqual(
+			planOrphanLocalRemoval(["a.png"], withPaths({ "a.png": "   " })),
+			[],
+			"★ 纯空白的路径也要挡掉 —— 交给宿主去解析一个只有空格的路径是在赌它怎么处理"
+		);
+		assert.deepEqual(
+			planOrphanLocalRemoval(["  ", "a.png"], withPaths({ "a.png": "attachments/a.png" })),
+			[{ key: "a.png", path: "attachments/a.png", isUserFile: true }],
+			"空/空白的 key 要跳过（不是合法的对象 key）"
+		);
+
+		// 同一个路径只删一次；顺序保持输入顺序（提示语里的数量要对得上）
+		assert.deepEqual(
+			planOrphanLocalRemoval(
+				["b.png", "a.png", "c.png"],
+				withPaths({
+					"b.png": "attachments/same.png",
+					"a.png": "attachments/same.png",
+					"c.png": "attachments/other.png",
+				})
+			).map((target) => target.path),
+			["attachments/same.png", "attachments/other.png"],
+			"同一路径只产出一次（清单来自外部，不假设它干净）"
+		);
+	}
+
+	return { cases: 9 };
 }
