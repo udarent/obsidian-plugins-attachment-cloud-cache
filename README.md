@@ -95,7 +95,7 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 | **Cache files from other sites** | Off by default; while it is off, nothing off-site is touched. |
 | **When a note links to a file on another site** | `Leave it alone` (default) or `Cache straight away`. |
 | **Pick specific files** | Tick individual off-site files; only those are fetched. |
-| **Attachments folder override · Object key template · Compatibility mode** | Advanced: override Obsidian's attachment folder; change the key template (`{hash}`, `{ext}`, `{filename}`, `{date}`); use path-style addressing (keep on for R2 and MinIO). |
+| **Attachments folder override · Compatibility mode** | Advanced: override Obsidian's attachment folder; use path-style addressing (keep on for R2 and MinIO). |
 
 ## Commands
 
