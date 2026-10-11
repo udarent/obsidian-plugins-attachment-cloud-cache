@@ -87,3 +87,55 @@
 	background-color: var(--background-modifier-hover);
 	color: var(--text-normal);
 }
+
+/* ─────────────────────────────────────────────
+   确认框里的文件清单（缩略图 + 名字）
+
+   起因（用户口径）：确认框里列的是一串对象 key（`<sha256>.<扩展名>`），
+   用户**认不出那是哪张图**，而这是他按下不可恢复的按钮前唯一能核对的东西。
+
+   ⚠️ 尺寸写死在这一处：图与类型标记**共用同一个方框**，否则两种行的高度不同、
+   清单看起来是歪的（而"歪"会被读成"有些行缺了东西"）。
+   颜色一律用主题变量 —— 与设置页那批类同样的理由：不写死颜色，用户换主题时跟着变。
+   ───────────────────────────────────────────── */
+.acc-file-card {
+	display: flex;
+	align-items: center;
+	gap: 0.6em;
+	padding: 0.2em 0;
+}
+
+/* 方框：缩略图与类型标记都装在这里面 —— 两种行因此一样高 */
+.acc-file-thumb {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 2.4em;
+	height: 2.4em;
+	overflow: hidden;
+	border-radius: var(--radius-s);
+	background-color: var(--background-secondary);
+}
+
+.acc-file-thumb-img {
+	width: 100%;
+	height: 100%;
+	/* 铺满方框但不拉伸：长图与宽图都要认得出内容 */
+	object-fit: cover;
+}
+
+/* 类型标记（PDF / MP3 / ZIP…）。非图片不给缩略图 —— 破图图标比"没有图"更像故障 */
+.acc-file-badge {
+	font-size: var(--font-ui-smaller);
+	font-weight: 600;
+	color: var(--text-muted);
+	letter-spacing: 0.02em;
+}
+
+/* 名字可能很长（原始文件名）⇒ 让它换行，不许把弹窗撑出去 */
+.acc-file-name {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}

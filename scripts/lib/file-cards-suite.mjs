@@ -1,0 +1,191 @@
+import assert from "node:assert/strict";
+
+/**
+ * 确认框里那张「文件清单」的断言（`src/ui/file-cards.ts`）。
+ *
+ * ## 为什么值得有套件
+ *
+ * 判定的产物决定用户在**不可恢复**的按钮前看到什么：一串 sha256 还是"能认出来的图 + 名字"。
+ * 而这一层原先根本没有 —— 两处确认框直接 `map(key)` 就把 key 当清单列出来了。
+ *
+ * ## ⚠️ 结构：**一节一件事**
+ *
+ * 套件是"第一条失败断言决定报错"，而变异脚本要求每条变异因**自己的原因**失败。
+ * 所以每一节只依赖一条规则（见下面的编号），互不掩盖。
+ *
+ * 渲染那一节用一个**记账替身**（结构化，不需要宿主 DOM）—— 它顺便钉住一件很要紧的事：
+ * `src` 必须走 `attr`（= `setAttribute`），**不许**赋 `img.src` ——
+ * 渲染钩子改写了 `HTMLImageElement.prototype.src` 的 setter，而那一层在"缺本地副本"时会
+ * **去下载那个对象**：这个对话框问的正是"要不要删掉它"。
+ */
+export function runFileCardsSuite(mod) {
+	const { planFileCards, renderFileCards } = mod;
+	assert.ok(typeof planFileCards === "function", "应当导出清单判定");
+	assert.ok(typeof renderFileCards === "function", "应当导出清单渲染");
+
+	/** 替身：`missing/` 开头的路径"本地拿不到"，`nourl.png` 推不出远端地址。 */
+	const deps = {
+		resourceUrl: (path) => (path.startsWith("missing/") ? null : `app://vault/${path}`),
+		remoteUrl: (key) => (key === "nourl.png" ? null : `https://cdn.example.com/${key}`),
+	};
+
+	// ============================================================
+	// ① 名字：有原始文件名就用它；没有才退化成 id
+	// ============================================================
+	{
+		const cards = planFileCards(
+			[
+				{ id: "a1b2.png", name: "报告截图.png" },
+				{ id: "a1b2.png" },
+			],
+			deps
+		);
+		assert.equal(cards[0].label, "报告截图.png", "★ 有原始文件名就该显示它");
+		assert.equal(cards[1].label, "a1b2.png", "没有名字时退化成 id（那是唯一还能说的事实）");
+	}
+
+	// ============================================================
+	// ② ⭐ 本地副本**优先**：有副本时缩略图不联网
+	// ============================================================
+	{
+		const [card] = planFileCards(
+			[{ id: "a1b2.png", localPath: "attachments-cache/a1b2.png", remoteKey: "a1b2.png" }],
+			deps
+		);
+		assert.equal(card.thumbUrl, "app://vault/attachments-cache/a1b2.png", "★ 本地副本优先（零网络）");
+		assert.equal(card.fromLocalCopy, true, "要说清这张图是不是来自本地副本");
+	}
+
+	// ============================================================
+	// ③ 本地拿不到（文件已被删 / 不在宿主索引里）才退到远端地址
+	// ============================================================
+	{
+		const [card] = planFileCards(
+			[{ id: "a1b2.png", localPath: "missing/a1b2.png", remoteKey: "a1b2.png" }],
+			deps
+		);
+		assert.equal(card.thumbUrl, "https://cdn.example.com/a1b2.png", "本地拿不到时退到远端地址");
+		assert.equal(card.fromLocalCopy, false, "远端地址不是本地副本");
+	}
+
+	// ============================================================
+	// ④ ⭐ 缩略图**只给图片**：别的类型给标记，不给破图
+	// ============================================================
+	{
+		const [pdf, zip] = planFileCards(
+			[
+				{ id: "b7c8.pdf", localPath: "attachments-cache/b7c8.pdf", remoteKey: "b7c8.pdf" },
+				{ id: "c9d0.zip", localPath: "attachments-cache/c9d0.zip" },
+			],
+			deps
+		);
+		assert.equal(pdf.thumbUrl, null, "★ PDF 塞进 img 只会得到破图 ⇒ 不给缩略图");
+		assert.equal(pdf.badge, "PDF", "要给类型标记，让用户知道它是什么");
+		assert.equal(zip.thumbUrl, null, "未知类型同理");
+		assert.equal(zip.badge, "ZIP", "扩展名认不出来时也要如实显示它");
+	}
+
+	// ============================================================
+	// ⑤ 两个来源都拿不到 ⇒ **不给图**（不是给一个空地址或半截地址）
+	// ============================================================
+	{
+		const [noRemote, noLocal, unconfigured] = planFileCards(
+			[
+				{ id: "nourl.png", remoteKey: "nourl.png" },
+				{ id: "d1e2.png", localPath: "missing/d1e2.png" },
+				{ id: "f3a4.png" },
+			],
+			deps
+		);
+		assert.equal(noRemote.thumbUrl, null, "★ 推不出远端地址 ⇒ null，不给空串");
+		assert.equal(noLocal.thumbUrl, null, "本地拿不到、又没有 key ⇒ null");
+		assert.equal(unconfigured.thumbUrl, null, "什么都没给 ⇒ null（不抛错）");
+	}
+
+	// ============================================================
+	// ⑥ 脏输入：空项 / 空白 id 跳过，缺字段不抛错
+	// ============================================================
+	{
+		const cards = planFileCards([null, undefined, { id: "   " }, { id: " e5f6.png " }], deps);
+		assert.equal(cards.length, 1, "空项与空白 id 都要跳过（它们画不出一行有意义的东西）");
+		assert.equal(cards[0].id, "e5f6.png", "id 要 trim（它还要用来回查要删什么）");
+		assert.deepEqual(planFileCards([], deps), [], "空清单不产出");
+	}
+
+	// ============================================================
+	// ⑦ 渲染：`src` 走 `attr`（setAttribute），且加载失败要降级成标记
+	// ============================================================
+	{
+		const calls = [];
+		/** 记账替身：只记录"被怎么用"，不需要真 DOM。 */
+		const makeEl = (tag) => {
+			const el = {
+				tag,
+				attrs: {},
+				classes: [],
+				text: "",
+				children: [],
+				createDiv: (options = {}) => {
+					const child = makeEl("div");
+					child.cls = options.cls;
+					child.text = options.text ?? "";
+					el.children.push(child);
+					return child;
+				},
+				createSpan: (options = {}) => {
+					const child = makeEl("span");
+					child.cls = options.cls;
+					child.text = options.text ?? "";
+					el.children.push(child);
+					return child;
+				},
+				createEl: (childTag, options = {}) => {
+					const child = makeEl(childTag);
+					child.cls = options.cls;
+					child.text = options.text ?? "";
+					child.attrs = options.attr ?? {};
+					calls.push({ tag: childTag, attr: options.attr ?? {} });
+					el.children.push(child);
+					return child;
+				},
+				addClass: (cls) => el.classes.push(cls),
+				setText: (text) => {
+					el.text = text;
+				},
+				remove: () => {
+					el.removed = true;
+				},
+			};
+			return el;
+		};
+
+		const root = makeEl("root");
+		renderFileCards(root, [{ id: "a1b2.png", label: "报告.png", badge: "PNG", thumbUrl: "https://cdn.example.com/a1b2.png" }]);
+
+		const row = root.children[0];
+		assert.ok(row, "每一行都要有个容器（否则两行会并在一起）");
+		const img = row.children[0].children[0];
+		assert.equal(img.tag, "img", "图片行要真的渲染一个 img");
+		// ⭐ 最要紧的一条：地址走 **attr**（setAttribute），不走被渲染钩子改写的 `img.src`
+		assert.equal(
+			calls[0]?.attr?.src,
+			"https://cdn.example.com/a1b2.png",
+			"★ 缩略图地址必须通过 attr 写（走 img.src 会被渲染钩子接走 → 缺副本时触发下载）"
+		);
+		assert.equal(img.src, undefined, "不许直接给元素赋 src 属性");
+		assert.equal(row.children[1].text, "报告.png", "名字要显示出来（那是核对的主要依据）");
+
+		// 加载失败 ⇒ 降级成类型标记，不留破图
+		row.children[0].children[0].onerror?.();
+		assert.ok(row.children[0].classes.includes("acc-file-badge"), "★ 图加载不出来要降级成标记");
+		assert.equal(row.children[0].text, "PNG", "降级后显示类型标记");
+
+		// 非图片：直接就是标记，没有 img
+		const root2 = makeEl("root");
+		renderFileCards(root2, [{ id: "b7c8.pdf", label: "报告.pdf", badge: "PDF", thumbUrl: null }]);
+		assert.equal(root2.children[0].children[0].children.length, 0, "没有缩略图时不渲染 img");
+		assert.equal(root2.children[0].children[0].text, "PDF", "非图片显示类型标记");
+	}
+
+	return { cases: 11 };
+}

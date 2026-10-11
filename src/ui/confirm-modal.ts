@@ -19,10 +19,20 @@
 import { Modal, Setting } from "obsidian";
 import type { App } from "obsidian";
 
+import { renderFileCards } from "./file-cards";
+import type { FileCard } from "./file-cards";
+
 export interface ConfirmOptions {
 	title: string;
 	/** 正文行（逐行列出会做什么）。 */
 	lines: string[];
+	/**
+	 * 清单里的文件（**缩略图 + 名字**）。给了就渲染在 `lines` 之后。
+	 *
+	 * ⚠️ 只在"要删的东西是文件"时给：`clean-cache` 列的是缓存路径（末段是对象 key，
+	 * 一串 sha256 —— 用户认不出那是哪张图），而清单是他按下不可逆按钮前唯一能核对的东西。
+	 */
+	cards?: readonly FileCard[];
 	/** 确认按钮文字。 */
 	cta: string;
 	/** 是否把确认按钮标成破坏性（宿主会把它染成警示色）。 */
@@ -46,6 +56,8 @@ export function confirmWithModal(app: App, options: ConfirmOptions): Promise<boo
 		for (const line of options.lines) {
 			modal.contentEl?.createDiv?.({ text: line });
 		}
+		// 清单放在正文之后、按钮之前：读起来是"背景 → 具体是哪些 → 你要怎么做"
+		if (options.cards && options.cards.length > 0) renderFileCards(modal.contentEl, options.cards);
 
 		new Setting(modal.contentEl)
 			.addButton((button) => {

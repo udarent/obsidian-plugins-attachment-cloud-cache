@@ -1,0 +1,57 @@
+import { runMutations } from "./lib/mutate.mjs";
+import { runFileCardsSuite } from "./lib/file-cards-suite.mjs";
+
+/**
+ * 变异验证：确认框里的文件清单（`src/ui/file-cards.ts`）。
+ *
+ * 这一层的产物决定用户在**不可恢复**的按钮前看到什么。它坏掉不会报错 ——
+ * 只会让清单回到"一串 sha256"，或者让对话框**去下载**那个正被问"要不要删掉"的对象。
+ */
+await runMutations({
+	source: "src/ui/file-cards.ts",
+	entries: ["src/ui/file-cards"],
+	suite: runFileCardsSuite,
+	mutations: [
+		{
+			// 后果：明明有本地副本却不用它 ⇒ 每一行都去**联网**取图。
+			// 在"库里有几百张、网络又慢"的时候，这个对话框会卡着不出图，
+			// 而它本来可以零网络（副本就在磁盘上）。
+			name: "★ 跳过本地副本（缩略图一律联网取）",
+			from: "\t\t\tconst localUrl = local ? deps.resourceUrl(local) : null;",
+			to: "\t\t\tconst localUrl = null;",
+			expect: "本地副本优先",
+		},
+		{
+			// 后果：名字被丢掉，一律显示 id ⇒ 回到"用户认不出这是哪张图"的原始问题，
+			// 而这是不可恢复的动作：清单是他唯一的核对依据。
+			name: "★ 丢掉原始文件名（清单变回一串 key）",
+			from: "\t\tconst label = name || id;",
+			to: "\t\tconst label = id;",
+			expect: "原始文件名",
+		},
+		{
+			// 后果：PDF / 压缩包也去当图片显示 ⇒ 用户看到的是一堆破图图标，
+			// 而"破图"会被读成"这些文件坏了"，不是"这个格式没有缩略图"。
+			name: "★ 非图片也给缩略图（用户看到一堆破图）",
+			from: '\t\tif (embedKindFor(ext) === "image") {',
+			to: "\t\tif (true) {",
+			expect: "不给缩略图",
+		},
+		{
+			// 后果：拿不到地址时给一个空串/半截地址 ⇒ 界面拿它去加载，得到一次必然失败的请求，
+			// 且失败的表现与"这张图真的加载不出来"分不开（事后没法判断是数据问题还是网络问题）。
+			name: "★ 拿不到地址也给一个（空地址也是一次注定失败的请求）",
+			from: "\t\t\t\tthumbUrl = key ? deps.remoteUrl(key) : null;",
+			to: '\t\t\t\tthumbUrl = deps.remoteUrl(key) ?? "";',
+			expect: "不给空串",
+		},
+		{
+			// 后果：图片加载失败时什么都不做 ⇒ 界面上留一个破图图标。
+			// 而它最常见的成因（桶私有 / 匿名读没开）**不是故障** —— 显示得像故障就会把人引去查错的东西。
+			name: "★ 图加载失败时不降级（界面留一个破图）",
+			from: "\t\t\timage.onerror = () => {\n\t\t\t\timage.remove();\n\t\t\t\tthumb.addClass(\"acc-file-badge\");\n\t\t\t\tthumb.setText(card.badge);\n\t\t\t};",
+			to: "\t\t\tvoid image;",
+			expect: "降级成标记",
+		},
+	],
+});

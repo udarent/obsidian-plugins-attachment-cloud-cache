@@ -43,13 +43,23 @@
 import { Modal, Setting } from "obsidian";
 import type { App } from "obsidian";
 
+import { renderFileCards } from "./file-cards";
+import type { FileCard } from "./file-cards";
+
 /** 用户的选择。**关掉弹窗与 `keep` 同义**（不动作永远是最安全的那一侧）。 */
 export type OrphanCloudChoice = "keep" | "local" | "both";
 
 export interface OrphanCloudPrompt {
 	title: string;
-	/** 正文行：先列对象，再写风险（各档的可恢复性 + 多设备盲区）。 */
+	/** 正文行：先写概况，最后写风险（各档的可恢复性 + 多设备盲区）。 */
 	lines: string[];
+	/**
+	 * 清单里的文件（**缩略图 + 名字**）。
+	 *
+	 * ⚠️ 这是"要不要删掉这个"这个问题**唯一可核对**的部分：对象 key 是一串
+	 * sha256，光看它谁也认不出是哪张图。渲染在 `lines` 之后、按钮之前。
+	 */
+	cards?: readonly FileCard[];
 	/** 保守项（**主按钮**）：什么都不做。 */
 	keepCta: string;
 	/** 只删本地副本（可恢复：以后会重新下载）。 */
@@ -75,6 +85,8 @@ export function askOrphanCloudDelete(app: App, options: OrphanCloudPrompt): Prom
 		for (const line of options.lines) {
 			modal.contentEl?.createDiv?.({ text: line });
 		}
+		// ⚠️ 清单放在正文**之后**、按钮之前：读起来是"背景 → 具体是哪些 → 你要怎么做"。
+		if (options.cards && options.cards.length > 0) renderFileCards(modal.contentEl, options.cards);
 
 		new Setting(modal.contentEl)
 			// ⭐ 主按钮是**保守**那一档（理由见文件头注释）

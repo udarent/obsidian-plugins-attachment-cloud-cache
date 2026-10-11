@@ -148,6 +148,58 @@ export function fakeComponent() {
 	return component;
 }
 
+/**
+ * DOM 元素替身：**可链式**（`createDiv(...).createSpan(...)` 要能一直走下去）。
+ *
+ * ⚠️ 为什么要有它：原先 `Modal.contentEl` 的 `createDiv` 只返回一个裸 `{}` ⇒
+ * 任何"在弹窗里再建一层"的代码在套件里会直接抛 `... is not a function`，
+ * 而它在真机上完全正常。那种失败读起来像产品缺陷，实际只是替身不够像
+ * （本项目的老教训：**替身要能反映真实形状**）。
+ */
+export function fakeDomElement(tag = "div") {
+	const element = {
+		tag,
+		children: [],
+		attrs: {},
+		classes: [],
+		textContent: "",
+		onerror: null,
+		addClass: (cls) => {
+			element.classes.push(cls);
+			return element;
+		},
+		setText: (text) => {
+			element.textContent = text;
+			return element;
+		},
+		setAttribute: (name, value) => {
+			element.attrs[name] = value;
+			return element;
+		},
+		appendChild: (child) => {
+			element.children.push(child);
+			return child;
+		},
+		addEventListener: () => {},
+		remove: () => {},
+		empty: () => {
+			element.children.length = 0;
+		},
+	};
+	element.createEl = (childTag, options = {}) => {
+		const child = fakeDomElement(childTag);
+		child.cls = options.cls;
+		child.textContent = options.text ?? "";
+		if (options.attr) Object.assign(child.attrs, options.attr);
+		if (options.cls) child.classes.push(options.cls);
+		element.children.push(child);
+		return child;
+	};
+	element.createDiv = (options = {}) => element.createEl("div", options);
+	element.createSpan = (options = {}) => element.createEl("span", options);
+	return element;
+}
+
 export class Setting {
 	constructor(containerEl) {
 		this.containerEl = containerEl;
@@ -160,14 +212,10 @@ export class Setting {
 export class Modal {
 	constructor(app) {
 		this.app = app;
-		this.contentEl = {
-			empty: () => {},
-			createEl: () => ({ setText: () => {}, addClass: () => {} }),
-			createDiv: () => ({}),
-			textContent: "",
-		};
-		this.titleEl = { setText: () => {} };
-		this.modalEl = { addClass: () => {} };
+		// ⚠️ 可链式的 DOM 替身（见 `fakeDomElement`）：弹窗里建嵌套元素是常态
+		this.contentEl = fakeDomElement("div");
+		this.titleEl = fakeDomElement("h2");
+		this.modalEl = fakeDomElement("div");
 		this.scope = { register: () => {} };
 	}
 	open() {
@@ -690,6 +738,17 @@ export function createAppMock(rootDir, opts = {}) {
 			const abs = toAbs(rootDir, p);
 			if (!existsSync(abs)) return null;
 			return p.includes(".") ? new TFile(p, vault) : new TFolder(p, vault);
+		},
+		/**
+		 * 宿主给 `TFile` 造一个可直接放进 `img[src]` 的地址（桌面是 `app://…`）。
+		 *
+		 * ⚠️ 替身必须有它：确认框里的缩略图走的就是这条路（`resourceUrlFor`）。
+		 * 少了它，那一处在套件里**永远**退回"没有图" —— 于是"本地副本优先"这条规则
+		 * 在测试里根本跑不到，真机上才是第一次执行（本项目的老教训：替身要能反映真实形状）。
+		 */
+		getResourcePath(file) {
+			const path = typeof file === "string" ? file : (file?.path ?? "");
+			return `app://local/${path}`;
 		},
 		async create(path, data) {
 			calls.writes.push(path);

@@ -64,8 +64,10 @@ import type { ExternalCandidate, NoteTextLike } from "./maintenance/batch";
 import { ingestAttachment } from "./core/ingest";
 import { confirmWithModal } from "./ui/confirm-modal";
 import type { ConfirmOptions } from "./ui/confirm-modal";
+import { planFileCards } from "./ui/file-cards";
+import type { FileCard, FileCardInput } from "./ui/file-cards";
 import { keyFromUrl } from "./render/render-target";
-import { createS3Client } from "./s3/client";
+import { createS3Client, publicUrlFor } from "./s3/client";
 import type { S3Client } from "./s3/client";
 import { connectionReadiness, parseCredentialFile } from "./s3/credentials";
 import type { CredentialFileProblem } from "./s3/credentials";
@@ -123,8 +125,16 @@ const ORPHAN_CHECK_DEBOUNCE_MS = 1500;
  */
 const ORPHAN_ASK_DEBOUNCE_MS = 4000;
 
-/** 询问框里最多列出几个对象的文件名（再多就只报数量）。 */
+/**
+ * 询问框里最多列出几个对象（再多就只报数量）。
+ *
+ * ⚠️ 上限影响的是**展示**，不是判定：判定永远跑完整份清单。
+ * 每一行现在都带一张缩略图，所以这个数也是"最多同时加载几张图"。
+ */
 const ORPHAN_LIST_MAX = 8;
+
+/** 同上，给「清理云端未使用对象」那条命令的确认框用（对象可能很多，列少一点）。 */
+const CLOUD_CLEANUP_LIST_MAX = 10;
 
 /**
  * 这篇文件是不是"引用的来源"（只监视笔记与画布）。
@@ -744,14 +754,24 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		const client = this.buildClient();
 		if (!client) return;
 
-		const names = selection.asks.map((key) => index.get(key)?.sourceName || key);
+		// ⭐ 清单给的是**图 + 名字**，不是一串 key：对象 key 是 `<sha256>.<扩展名>`，
+		// 用户看它认不出是哪张图，而这是不可恢复动作前**唯一能核对**的东西。
+		// ⚠️ 这里的名字可能缺（「不留副本」档没有条目）—— 那就退化成 key，
+		// 而图仍然是可核对的（有副本用副本，没有就用存储里的地址）。
+		const cards = this.fileCards(
+			selection.asks.map((key) => {
+				const entry = index.get(key);
+				return { id: key, name: entry?.sourceName, localPath: entry?.cachePath, remoteKey: key };
+			}),
+			ORPHAN_LIST_MAX
+		);
+
 		const choice = await askOrphanCloudDelete(this.app, {
 			title: this.t("orphanTitle"),
 			lines: [
 				this.t("orphanBody", { count: selection.asks.length }),
-				...names.slice(0, ORPHAN_LIST_MAX).map((name) => `· ${name}`),
-				...(names.length > ORPHAN_LIST_MAX
-					? [this.t("orphanMore", { count: names.length - ORPHAN_LIST_MAX })]
+				...(selection.asks.length > ORPHAN_LIST_MAX
+					? [this.t("orphanMore", { count: selection.asks.length - ORPHAN_LIST_MAX })]
 					: []),
 				// ⚠️ 显著位置，两句缺一不可：
 				// ① 各档的**可恢复性**（本地能回来、云端不能）—— 这是三个按钮的差别所在；
@@ -759,6 +779,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				this.t("orphanLocalNote"),
 				this.t("cloudCleanupDeviceBlindSpot"),
 			],
+			cards,
 			keepCta: this.t("orphanKeep"),
 			localCta: this.t("orphanLocalOnly"),
 			bothCta: this.t("orphanBoth"),
@@ -940,14 +961,26 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			return;
 		}
 
+		const index = this.currentIndex();
+		const cards = this.fileCards(
+			selection.candidates.map((object) => {
+				const entry = index.get(object.key);
+				return { id: object.key, name: entry?.sourceName, localPath: entry?.cachePath, remoteKey: object.key };
+			}),
+			CLOUD_CLEANUP_LIST_MAX
+		);
+
 		const lines = [
 			this.t("cloudCleanupSummary", {
 				count: selection.candidates.length,
 				mb: Math.max(1, Math.round(selection.bytes / (1024 * 1024))),
 			}),
-			...selection.candidates.slice(0, 10).map((object) => object.key),
-			...(selection.candidates.length > 10
-				? [this.t("maintainCleanMore", { count: selection.candidates.length - 10 })]
+			...(selection.candidates.length > CLOUD_CLEANUP_LIST_MAX
+				? [
+						this.t("maintainCleanMore", {
+							count: selection.candidates.length - CLOUD_CLEANUP_LIST_MAX,
+						}),
+					]
 				: []),
 			// ⚠️ 显著位置：这两句是"多设备盲区"与"不可恢复"的如实告知
 			this.t("cloudCleanupDeviceBlindSpot"),
@@ -958,6 +991,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		const confirmed = await this.confirmMaintenance({
 			title: this.t("cloudCleanupTitle"),
 			lines,
+			cards,
 			cta: this.t("cloudCleanupCta"),
 			destructive: true,
 		});
@@ -1092,6 +1126,36 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		return keyFromUrl(url, this.settings.s3);
 	}
 
+	/**
+	 * key → 它在存储里的地址（`keyOfUrl` 的逆运算）。
+	 *
+	 * 只用于**确认框里的缩略图**：清单上只有一串 sha256 时，用户没法核对
+	 * "这到底是不是我要删的那张图"。推不出来（端点没配好 / key 形状不对）就返回 `null`
+	 * —— 宁可那一行没有图，也不给一个半截地址（那会让用户以为自己看到的就是存储里的东西）。
+	 */
+	private remoteUrlForKey(key: string): string | null {
+		try {
+			return publicUrlFor(this.settings.s3, key);
+		} catch (error) {
+			console.error("[attachment-cloud-cache] 推导对象地址失败，该行不给缩略图", error);
+			return null;
+		}
+	}
+
+	/**
+	 * 把清单里的项算成"怎么展示"（缩略图 + 名字 + 类型标记）。
+	 *
+	 * 三处确认框共用：孤儿询问、清理云端未使用对象、clean-cache。
+	 * 判定本身在 `ui/file-cards.ts`（纯函数，可穷举），这里只负责接上宿主的两件事
+	 * —— 本地文件地址与远端地址。
+	 */
+	private fileCards(items: readonly FileCardInput[], limit: number): FileCard[] {
+		return planFileCards(items.slice(0, Math.max(0, limit)), {
+			resourceUrl: (path) => this.resourceUrlFor(path),
+			remoteUrl: (key) => this.remoteUrlForKey(key),
+		});
+	}
+
 	/** 查看缓存占用（只读，不动任何文件）。 */
 	private async reportCacheUsage(): Promise<void> {
 		const deps = this.maintenanceDeps();
@@ -1206,16 +1270,31 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		}
 
 		const mb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1);
+		// ⭐ 列出来的每一行给一张缩略图 + 名字：`plan.preview` 是**缓存路径**，
+		// 末段就是对象 key（一串 sha256）—— 用户看它认不出是哪张图，
+		// 而这是按下不可逆按钮前唯一能核对的东西。
+		// ⚠️ 这条路列的**就是磁盘上的文件**（`clean-cache` 只清缓存目录）⇒ 缩略图零网络：
+		// 直接显示本地那一份，不需要也不该去推远端地址。
+		const indexByPath = new Map(this.currentIndex().toArray().map((entry) => [entry.cachePath, entry]));
+		const cards = this.fileCards(
+			plan.preview.map((path) => ({
+				id: path,
+				name: indexByPath.get(path)?.sourceName,
+				localPath: path,
+			})),
+			plan.preview.length
+		);
+
 		// ⚠️ 确认框里那句话是用户按下**不可逆**按钮前唯一读到的安全信息：
 		// 它必须说清"删了没法撤销、空间立刻释放"，否则用户会以为还能找回。
 		const confirmed = await this.confirmMaintenance({
 			title: this.t("maintainCleanTitle"),
 			lines: [
 				this.t("maintainCleanSummary", { count: plan.all.length, mb: mb(plan.bytes) }),
-				...plan.preview,
 				...(plan.hidden > 0 ? [this.t("maintainCleanMore", { count: plan.hidden })] : []),
 				this.t("maintainCleanSafety"),
 			],
+			cards,
 			cta: this.t("maintainCleanCta"),
 			destructive: true,
 		});
