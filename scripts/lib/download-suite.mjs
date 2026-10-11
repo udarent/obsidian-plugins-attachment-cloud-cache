@@ -133,6 +133,9 @@ export async function runDownloadSuite(mod) {
 				persistCount += 1;
 			},
 			notify: (message) => notices.push(message),
+			// ⚠️ 文案键在这层选、文字由接线层给（见 `src/notify-user.ts`）。这里把键名当文案，
+			// 断言于是**与语言无关** —— 原先断言里那半句中文，正是核心层硬编码兜底留下的痕迹。
+			t: (key) => key,
 			now: () => NOW,
 		});
 
@@ -362,7 +365,7 @@ export async function runDownloadSuite(mod) {
 			assert.equal(outcome.status, "failed", "推不出缓存路径时应失败");
 			assert.equal(h.server.countByMethod("GET"), 0, "路径都推不出来时不该先发请求");
 			assert.equal(h.notices.length, 1, "应给出明确提示（用户需要知道去设置里补缓存目录）");
-			assert.match(h.notices[0], /缓存目录/, "提示要指向真正的原因");
+			assert.equal(h.notices[0], "fallbackNoCacheFolder", "提示要指向真正的原因（缓存目录没配）");
 		} finally {
 			await h.close();
 		}

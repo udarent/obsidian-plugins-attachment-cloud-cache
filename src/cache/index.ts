@@ -12,7 +12,9 @@
  *   前者该回退下载，后者说明这张图本来就不属于我们的存储。
  *
  * 所以索引记的是**事实**，不是可推导的量。这也是它必须能容错加载的原因：
- * 它是"从磁盘重建"的产物（见 `pruneMissing`），坏掉时应当降级而不是让插件打不开。
+ * 它是**派生数据** —— 条目随时可能失效（副本被删、同步漏了一个文件），
+ * 失效由 `maintenance/self-heal.ts` 逐条摘除；而"摘除"永远只改这份账本、不碰文件。
+ * 一个坏掉的索引顶多让缓存重建一次，让插件在启动时抛错却会让用户完全用不了。
  *
  * ## 为什么索引不放 vault 里，而放插件目录
  *
@@ -382,26 +384,6 @@ export class CacheIndex {
 		// 就地改：`lastUsedAt` 不参与 `byUrl` 的键，所以不需要走 `write()`
 		entry.lastUsedAt = at;
 		return true;
-	}
-
-	/**
-	 * 丢弃本地副本已不存在的条目，返回被丢弃的 key。
-	 *
-	 * 存在的理由：缓存目录随时可能被用户删掉（这是承诺过的："缓存目录可随时整体删除"），
-	 * 而索引留在插件目录里不会跟着消失。若不清掉，索引会持续指向一批不存在的文件，
-	 * 于是"该回退下载"会被误判成"本地已有"。
-	 *
-	 * ⚠️ 这是**自愈**而非清理：它只改索引，不碰任何文件。
-	 */
-	pruneMissing(exists: (cachePath: string) => boolean): string[] {
-		const removed: string[] = [];
-		for (const entry of this.toArray()) {
-			if (!exists(entry.cachePath)) {
-				this.erase(entry.key);
-				removed.push(entry.key);
-			}
-		}
-		return removed;
 	}
 
 	/** 落盘用的稳定结构。 */

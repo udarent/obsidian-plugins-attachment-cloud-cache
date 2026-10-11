@@ -17,6 +17,16 @@ await runMutations({
 	suite: runDeleteLogSuite,
 	mutations: [
 		{
+			// 后果：插件目录未知时给一个兜底文件名 ⇒ 日志落到 **vault 根**
+			//（`.deleted-objects.log`）—— 一个我们没打算放、用户没要求放、
+			// 还会跟着 vault 同步出去的文件。而这恰恰发生在我们**最不确定**
+			// 自己处在什么环境的时候（开发 / 探针 / 宿主还没挂上插件目录）。
+			name: "★ 插件目录未知时兜底到 vault 根（凭空在库里落一个文件）",
+			from: "return clean ? `${clean}/${DELETE_LOG_FILE}` : null;",
+			to: "return `${clean}/${DELETE_LOG_FILE}`;",
+			expect: "不许兜底到 vault 根",
+		},
+		{
 			// 后果：写日志失败把异常抛出去 ⇒ 一次**已经确认过的**删除变成失败，
 			// 而用户看到的只是一句"删除失败"，删了什么、删到哪一步全不知道。
 			name: "★★ 写日志失败抛出异常（把一次已确认的删除炸成失败）",

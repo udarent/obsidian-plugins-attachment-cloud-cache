@@ -27,33 +27,37 @@ function collector(options = {}) {
 }
 
 export async function runDeleteLogSuite(mod) {
-	const { DELETE_LOG_FILE, deleteLogPath, formatDeleteLogEntry, recordDeletions } = mod;
+	const { DELETE_LOG_FILE, deleteLogTargetPath, formatDeleteLogEntry, recordDeletions } = mod;
 	assert.ok(DELETE_LOG_FILE && typeof DELETE_LOG_FILE === "string", "应当导出日志文件名");
-	assert.ok(typeof deleteLogPath === "function", "应当导出路径推导");
+	assert.ok(typeof deleteLogTargetPath === "function", "应当导出路径推导");
 	assert.ok(typeof formatDeleteLogEntry === "function", "应当导出单行格式化");
 	assert.ok(typeof recordDeletions === "function", "应当导出写入函数");
 
 	// ============================================================
-	// 1. 路径：插件目录 → 日志文件的 vault 相对路径
+	// 1. 路径：插件目录 → 日志文件的 vault 相对路径；**未知目录 → null**
 	// ============================================================
 	{
 		assert.equal(
-			deleteLogPath(".obsidian/plugins/attachment-cloud-cache"),
+			deleteLogTargetPath(".obsidian/plugins/attachment-cloud-cache"),
 			`.obsidian/plugins/attachment-cloud-cache/${DELETE_LOG_FILE}`,
 			"正常路径"
 		);
 		assert.equal(
-			deleteLogPath("C:\\vault\\.obsidian\\plugins\\acc"),
+			deleteLogTargetPath("C:\\vault\\.obsidian\\plugins\\acc"),
 			`C:/vault/.obsidian/plugins/acc/${DELETE_LOG_FILE}`,
 			"★ Windows 反斜杠要归一（不归一会生成一个宿主根本不认识的路径）"
 		);
 		assert.equal(
-			deleteLogPath(".obsidian/plugins/acc/"),
+			deleteLogTargetPath(".obsidian/plugins/acc/"),
 			`.obsidian/plugins/acc/${DELETE_LOG_FILE}`,
 			"尾部斜杠不该生成双斜杠"
 		);
-		assert.equal(deleteLogPath(""), DELETE_LOG_FILE, "空目录也要给出一个可用的相对路径（不抛错）");
-		assert.equal(deleteLogPath(null), DELETE_LOG_FILE, "非字符串同样不抛错");
+		// ⭐ 反向：说不出来的时候必须说"不知道"，**不许给兜底文件名** ——
+		// 兜底名会落到 vault 根（`.deleted-objects.log`），那是个我们没打算放、
+		// 用户也没要求放、还会跟着 vault 同步出去的文件。
+		assert.equal(deleteLogTargetPath(""), null, "★ 插件目录未知 ⇒ null（不许兜底到 vault 根）");
+		assert.equal(deleteLogTargetPath("   "), null, "纯空白同样算未知");
+		assert.equal(deleteLogTargetPath(null), null, "非字符串同样不抛错，且返回 null");
 	}
 
 	// ============================================================

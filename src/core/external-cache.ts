@@ -44,6 +44,8 @@ import { keyFromUrl } from "../render/render-target";
 import { hostOf, isBlockedHost } from "../render/external-decide";
 import { resolveExtension } from "../vault-files";
 import { describeError } from "../error-text";
+import { notifyUser } from "../notify-user";
+import type { NotifySink } from "../notify-user";
 
 /**
  * 单张站外图的大小上限。
@@ -340,7 +342,7 @@ export async function fetchExternalImage(
 
 // ─────────────────────────── 执行 ───────────────────────────
 
-export interface ExternalCacherDeps {
+export interface ExternalCacherDeps extends NotifySink {
 	app: App;
 	/** 现取设置（用户可能在询问与执行之间改了）。 */
 	settings: () => PluginSettings;
@@ -348,8 +350,6 @@ export interface ExternalCacherDeps {
 	client: () => S3Client | null;
 	index: () => CacheIndex;
 	persistIndex: () => Promise<void>;
-	notify?: (message: string) => void;
-	t?: (key: string, params?: Record<string, unknown>) => string;
 	request?: (options: RequestUrlParam) => Promise<RequestUrlResponse>;
 	/**
 	 * 安全拦截（回环 / 链路本地）。默认 {@link isBlockedHost}。
@@ -423,14 +423,12 @@ export function createExternalCacher(deps: ExternalCacherDeps): ExternalCacher {
 		const host = hostOf(url);
 		const base = { url, host, key: "", remoteUrl: "", localPath: "" };
 
+		// 文案键在这一层选、文字由接线层给（与 ingest / download 共用同一个出口）。
+		// 这里只多做一件事：把**状态码**翻译成文案键（`no-note` → `externalNoNote` …）。
 		const say = (status: ExternalCacheStatus, params: Record<string, unknown> = {}): void => {
 			const key = messageKeyFor(status);
-			if (!key || !deps.notify) return;
-			if (!deps.t) {
-				deps.notify(key);
-				return;
-			}
-			deps.notify(deps.t(key, params));
+			if (!key) return;
+			notifyUser(deps, key, params);
 		};
 
 		// ── 1. 复核同意（防线不止一道；用户可能在询问与执行之间关掉了功能） ──
@@ -494,6 +492,8 @@ export function createExternalCacher(deps: ExternalCacherDeps): ExternalCacher {
 				index: deps.index(),
 				persistIndex: deps.persistIndex,
 				notify: deps.notify,
+				// ⚠️ 一并转交文案解析：少了它，那条链里的"降级提示"会退化成键名
+				t: deps.t,
 				hashBytes: deps.hashBytes,
 				now: deps.now,
 				// ⭐ 标记来源：云端清理据此把站外缓存整体排除（见 CacheEntry.origin）

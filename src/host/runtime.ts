@@ -244,6 +244,8 @@ export async function runTransfer(host: HostContext, request: TransferRequest): 
 				index: host.index(),
 				persistIndex: host.persistIndex,
 				notify: host.notify,
+				// ⚠️ 文案由宿主编排层给（见 `IngestDeps.t`）
+				t: host.t,
 				// 中转文件的标记（见 `HostContext.onStaged`）：没有它，自动接管那条链
 				// 会把自己刚落下、还要用它上传的中转文件当成用户新加的附件再传一遍。
 				onStaged: host.onStaged,

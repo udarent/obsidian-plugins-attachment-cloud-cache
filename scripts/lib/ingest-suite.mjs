@@ -107,6 +107,10 @@ async function makeHarness(mod, options = {}) {
 			if (persistError) throw persistError;
 		},
 		notify: (message) => notices.push(message),
+		// ⚠️ 文案键在这层选、文字由接线层给（见 `IngestDeps.t`）。这里把**键名**当文案，
+		// 于是断言可以**与语言无关**地钉住"到底说没说那一句" ——
+		// 原先断言里那半句中文，正是核心层硬编码文案留下的痕迹。
+		t: (key) => key,
 		now: () => FIXED_NOW,
 	};
 
@@ -610,7 +614,7 @@ export async function runIngestSuite(mod) {
 		assert.equal(h.server.countByMethod("PUT"), 1);
 		assert.ok(await h.exists(result.localPath), "缓存副本仍然应落盘");
 		assert.ok(
-			h.notices.some((message) => message.includes("索引")),
+			h.notices.some((message) => message === "ingestIndexPersistFailed"),
 			`索引保存失败必须让用户知道，实际提示：${JSON.stringify(h.notices)}`
 		);
 	});

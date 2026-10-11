@@ -42,12 +42,25 @@ export interface DeletedObjectRecord {
 	scope: "orphan" | "command";
 }
 
-/** 日志文件在插件目录下的 vault 相对路径（与 `indexFilePath` 同一条规则）。 */
-export function deleteLogPath(pluginDir: string): string {
+/**
+ * 日志文件该写在哪（vault 相对路径）；**插件目录未知时返回 `null`**。
+ *
+ * 与 `indexFilePath` 同一条清洗规则（反斜杠归一、掐掉首尾斜杠）。
+ *
+ * ⚠️ 为什么"未知"要返回 `null` 而不是给一个兜底文件名：正常的宿主环境里
+ * `manifest.dir` 一定有值，没有值说明插件目录**还没被挂上**（开发/探针环境）。
+ * 那种时候给兜底名，日志就落到 **vault 根**（`.deleted-objects.log`）——
+ * 一个我们没打算放、用户也没要求放的文件，还会跟着 vault 同步出去。
+ * 说不出来就不写，比"写到一个猜出来的地方"安全（删云端本身照常进行）。
+ */
+export function deleteLogTargetPath(pluginDir: string | null | undefined): string | null {
 	const clean = String(pluginDir ?? "")
+		// 纯空白等于没有目录名 —— 不 trim 的话会拼出 `"   /.deleted-objects.log"`
+		// 这种路径，而它同样会落到 vault 根附近（宿主对它的解释不可预测）
+		.trim()
 		.replace(/\\/g, "/")
 		.replace(/^\/+|\/+$/g, "");
-	return clean ? `${clean}/${DELETE_LOG_FILE}` : DELETE_LOG_FILE;
+	return clean ? `${clean}/${DELETE_LOG_FILE}` : null;
 }
 
 /**

@@ -41,6 +41,8 @@ import type { S3Client } from "../s3/client";
 import { sha256Hex } from "../s3/hash";
 import type { LocalCopyAction, PluginSettings } from "../types";
 import { describeError } from "../error-text";
+import { notifyUser } from "../notify-user";
+import type { NotifySink } from "../notify-user";
 import {
 	fallbackFileName,
 	normalizeVaultPath,
@@ -151,15 +153,13 @@ export interface IngestRequest {
 	existingPath?: string;
 }
 
-export interface IngestDeps {
+export interface IngestDeps extends NotifySink {
 	app: App;
 	settings: PluginSettings;
 	client: S3Client;
 	index: CacheIndex;
 	/** 索引变更后落盘。抽成回调是为了让测试与批处理控制时机。 */
 	persistIndex: () => Promise<void>;
-	/** 用户可见的提示（失败/警告）。 */
-	notify?: (message: string) => void;
 	/**
 	 * 这份对象**从哪来**（只区分"站外缓存"这一种，见 `CacheEntry.origin`）。
 	 *
@@ -497,7 +497,7 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 		} catch (error) {
 			// 索引落盘失败不该让上传算失败（URL 已经能用）。
 			// 但要**说出来** —— 否则用户会在下次重启后发现缓存"不被认识"而莫名其妙。
-			deps.notify?.(`缓存索引保存失败：${describeError(error)}`);
+			notifyUser(deps, "ingestIndexPersistFailed", { error: describeError(error) });
 		}
 	}
 
@@ -525,7 +525,7 @@ async function moveIntoCache(deps: IngestDeps, fromPath: string, cachePath: stri
 	try {
 		target = await uniqueVaultPath(cachePath, makeExists(app));
 	} catch (error) {
-		deps.notify?.(`缓存目录里的目标路径不可用：${describeError(error)}`);
+		notifyUser(deps, "ingestCacheTargetUnusable", { error: describeError(error) });
 		return fromPath;
 	}
 
@@ -537,7 +537,7 @@ async function moveIntoCache(deps: IngestDeps, fromPath: string, cachePath: stri
 			await app.vault.adapter.rename(fromPath, target);
 			return target;
 		} catch (error) {
-			deps.notify?.(`缓存副本搬移失败：${describeError(error)}`);
+			notifyUser(deps, "ingestCopyMoveFailed", { error: describeError(error) });
 			return fromPath;
 		}
 	}
@@ -548,7 +548,7 @@ async function moveIntoCache(deps: IngestDeps, fromPath: string, cachePath: stri
 		await app.fileManager.renameFile(file, target);
 		return target;
 	} catch (error) {
-		deps.notify?.(`缓存副本搬移失败：${describeError(error)}`);
+		notifyUser(deps, "ingestCopyMoveFailed", { error: describeError(error) });
 		return fromPath;
 	}
 }

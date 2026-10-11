@@ -63,12 +63,6 @@ await runMutations({
 			expect: "重复删除应返回 false",
 		},
 		{
-			name: "pruneMissing 不再真的删除（索引持续指向不存在的文件）",
-			from: "\t\t\t\tthis.erase(entry.key);\n\t\t\t\tremoved.push(entry.key);",
-			to: "\t\t\t\tremoved.push(entry.key);",
-			expect: "留下的应是本地确实存在的那条",
-		},
-		{
 			name: "URL 比较退回逐字相等（尾斜杠/域名大小写一变就找不到缓存）",
 			// ⚠️  现在走 O(1) 的派生映射（渲染路径上每张图都会调它）。
 			from: "\t\treturn this.byUrl.get(target);",

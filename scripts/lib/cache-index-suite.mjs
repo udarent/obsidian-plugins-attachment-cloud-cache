@@ -176,37 +176,17 @@ export function runCacheIndexSuite(mod) {
 	);
 
 	// ============================================================
-	// 6. pruneMissing —— 自愈（只改索引，不碰文件）
-	// ============================================================
-	const stale = new CacheIndex([
-		{ ...SAMPLE, key: "present.png", cachePath: "c/present.png" },
-		{ ...SAMPLE, key: "gone.png", cachePath: "c/gone.png" },
-	]);
-	const removed = stale.pruneMissing((path) => path === "c/present.png");
-	assert.deepEqual(removed, ["gone.png"], "应只丢弃本地副本不存在的条目，并返回被丢弃的 key");
-	assert.equal(stale.size, 1, "留下的应是本地确实存在的那条");
-	assert.ok(stale.get("present.png"), "存在的条目应保留");
-	assert.equal(stale.get("gone.png"), undefined, "不存在的条目应被清掉");
-
-	// 全部存在时不该误删
-	const healthy = new CacheIndex([SAMPLE]);
-	assert.deepEqual(healthy.pruneMissing(() => true), [], "全部存在时不该丢弃任何条目");
-	// 全部不存在时清空（缓存目录被用户删掉的情形）
-	const emptied = new CacheIndex([SAMPLE]);
-	assert.equal(emptied.pruneMissing(() => false).length, 1, "全部不存在时应全部丢弃");
-
-	// ============================================================
-	// 7. 落盘结构
+	// 6. 落盘结构
 	// ============================================================
 	const serialized = new CacheIndex([SAMPLE]).toJSON();
 	assert.equal(serialized.version, CACHE_INDEX_VERSION, "落盘结构应带版本号（将来迁移要用）");
 	assert.deepEqual(serialized.entries, [SAMPLE], "entries 应是排序后的数组，且内容不变");
 	assert.equal(CACHE_INDEX_VERSION, 1, "结构版本变了就该在这里改，并想清楚迁移");
-	// ⭐ 不变量：有本地副本的 key 必然在台账里（见第 7b 节）
+	// ⭐ 不变量：有本地副本的 key 必然在台账里（见第 6b 节）
 	assert.deepEqual(serialized.uploaded, [SAMPLE.key], "有条目 ⇒ 台账里必须有它（`条目 ⊆ 台账`）");
 
 	// ============================================================
-	// 7b. ⭐⭐ 上传台账（"这个 key 是我们经手过的吗"）
+	// 6b. ⭐⭐ 上传台账（"这个 key 是我们经手过的吗"）
 	//
 	// 台账必须与条目**无关**：条目只管「本地副本在哪」，而「不留副本」那一档
 	// 上传后本地文件就被移走了 ⇒ 按纪律不写条目。云端清理的自动入口若把判据
@@ -237,7 +217,7 @@ export function runCacheIndexSuite(mod) {
 		assert.equal(both.wasUploaded("k1.png"), false);
 	}
 
-	// 7c. 台账的落盘与回填
+	// 6c. 台账的落盘与回填
 	{
 		const index = new CacheIndex();
 		index.markUploaded("z.png");
@@ -277,16 +257,16 @@ export function runCacheIndexSuite(mod) {
 	}
 
 	// ============================================================
-	// 8. ⭐ 容错加载
+	// 7. ⭐ 容错加载
 	// ============================================================
-	// 8a. 首次运行（没有索引文件）——正常状态，不是错误
+	// 7a. 首次运行（没有索引文件）——正常状态，不是错误
 	for (const nothing of [null, undefined]) {
 		const result = CacheIndex.fromJSON(nothing);
 		assert.equal(result.index.size, 0, `${nothing} 应得到空索引`);
 		assert.deepEqual(result.skipped, [], `${nothing} 不该被记成"丢弃了条目"（首次运行是正常的）`);
 	}
 
-	// 8b. 两种形状都接受：裸数组（便于手工修复）与带 entries 的对象
+	// 7b. 两种形状都接受：裸数组（便于手工修复）与带 entries 的对象
 	for (const [label, value] of [
 		["裸数组", [SAMPLE]],
 		["带 entries 的对象", { version: 1, entries: [SAMPLE] }],
@@ -296,7 +276,7 @@ export function runCacheIndexSuite(mod) {
 		assert.deepEqual(result.index.get(SAMPLE.key), SAMPLE, `${label} 形状的条目应完整读回`);
 	}
 
-	// 8c. 顶层结构完全不对 → 空索引 + 记一条，绝不抛错
+	// 7c. 顶层结构完全不对 → 空索引 + 记一条，绝不抛错
 	//
 	// ⚠️ 这里**必须自己 try/catch 并断言**，不能让异常直接冒出去：
 	// 若只是"调用它"，实现一旦抛错，测试会以那个错误失败，
@@ -317,7 +297,7 @@ export function runCacheIndexSuite(mod) {
 		assert.ok(result.skipped[0].reason.length > 0, "被丢弃的记录必须带原因");
 	}
 
-	// 8d. 逐条校验：坏条目丢弃并计数，好条目保留
+	// 7d. 逐条校验：坏条目丢弃并计数，好条目保留
 	const mixed = CacheIndex.fromJSON({
 		version: 1,
 		entries: [
@@ -342,7 +322,7 @@ export function runCacheIndexSuite(mod) {
 		"应保留原始内容，便于排查与手工修复"
 	);
 
-	// 8e. 重复 key：保留**先出现**的那条并记账，而不是静默覆盖
+	// 7e. 重复 key：保留**先出现**的那条并记账，而不是静默覆盖
 	const duplicated = CacheIndex.fromJSON({
 		entries: [
 			{ key: "dup.png", cachePath: "c/first.png" },
@@ -357,7 +337,7 @@ export function runCacheIndexSuite(mod) {
 	);
 	assert.equal(duplicated.skipped.length, 1, "被跳过的重复项应记账");
 
-	// 8f. 往返：写出去再读回来必须完全一致
+	// 7f. 往返：写出去再读回来必须完全一致
 	const original = new CacheIndex([
 		{ ...SAMPLE, key: "b.png", cachePath: "c/b.png" },
 		{ ...SAMPLE, key: "a.png", cachePath: "c/a.png" },
@@ -367,7 +347,7 @@ export function runCacheIndexSuite(mod) {
 	assert.deepEqual(roundTripped.index.toArray(), original.toArray(), "往返后应逐条一致（含顺序）");
 
 	// ============================================================
-	// 9. normalizeUrl
+	// 8. normalizeUrl
 	// ============================================================
 	assert.equal(normalizeUrl("https://IMG.Example.com/a/b.png"), "https://img.example.com/a/b.png", "协议与主机小写");
 	assert.equal(normalizeUrl("https://img.example.com/a/b.png/"), "https://img.example.com/a/b.png", "去尾斜杠");
@@ -384,7 +364,7 @@ export function runCacheIndexSuite(mod) {
 	assert.equal(normalizeUrl(42), "");
 
 	// ============================================================
-	// 10. ⭐ "最近被用到"的时间（缓存上限轮换的排序依据）
+	// 9. ⭐ "最近被用到"的时间（缓存上限轮换的排序依据）
 	//
 	// 它坏掉不会有任何报错：只是轮换会挑错人 —— 把用户天天在看的图淘汰掉，
 	// 而几个月没打开过的那份留着。所以要单独钉住。
@@ -492,5 +472,5 @@ export function runCacheIndexSuite(mod) {
 
 	// ⚠️ 这三个数字只是"人读的简报"，没有任何断言依赖它们 ——
 	// 但也不能不更新：它们与下面那些分节一一对应，虚报了就等于简报在撒谎。
-	return { urlCases: 12, entryCases: 20, ledgerCases: 22 };
+	return { urlCases: 12, entryCases: 17, ledgerCases: 22 };
 }

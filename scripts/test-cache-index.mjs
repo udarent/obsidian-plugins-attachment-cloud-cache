@@ -21,7 +21,7 @@ await withLoadedTs("src/cache/index", (mod) => {
 			`lookup cases, ${stats.ledgerCases} upload-ledger cases: only 2xx-like complete entries are kept, ` +
 			"missing fields get safe defaults, 'remove' reports whether it removed, iteration is stably key-sorted, " +
 			"lookups normalise host case and trailing slashes but never touch percent-encoding, a different host " +
-			"never matches, pruneMissing only edits the index, and every malformed input degrades to an " +
+			"never matches, and every malformed input degrades to an " +
 			"empty index with a recorded reason instead of throwing; the ledger remembers what we uploaded " +
 			"independently of whether a local copy exists - dropping a copy never drops the ledger, only a real " +
 			"cloud delete does, a legacy file with no ledger is backfilled from the entries, and the invariant " +

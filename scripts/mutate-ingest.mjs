@@ -103,8 +103,14 @@ await runMutations({
 			expect: "不该登记索引",
 		},
 		{
+			// 后果：文件其实**已经安全落盘**，只是索引没存上 —— 静默吞掉之后，
+			// 用户看到的是"上传成功"，而缓存其实不被插件认识、下次启动突然重新下载一遍。
+			// 他永远无从解释。
+			//
+			// ⚠️ 锚点钉的是**这一句具体的提示**（"要说话"这条通用纪律由
+			// `mutate-notify-user.mjs` 在共用助手上钉住 —— 三处提示共用它）。
 			name: "索引落盘失败被静默吞掉（用户永远不知道缓存不被认识）",
-			from: '\t\t\tdeps.notify?.(`缓存索引保存失败：${describeError(error)}`);',
+			from: '\t\t\tnotifyUser(deps, "ingestIndexPersistFailed", { error: describeError(error) });',
 			to: "\t\t\tvoid error;",
 			expect: "必须让用户知道",
 		},

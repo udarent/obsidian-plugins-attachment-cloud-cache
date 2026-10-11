@@ -55,7 +55,7 @@ import { askOrphanCloudDelete } from "./ui/cloud-delete-modal";
 import { createOrphanWatcher, planOrphanLocalRemoval, selectOrphanAsks } from "./maintenance/orphan-watch";
 import type { NoteKind, OrphanLocalTarget, OrphanWatcher } from "./maintenance/orphan-watch";
 import { removeOrphanCopies } from "./maintenance/orphan-removal";
-import { deleteLogPath, recordDeletions } from "./maintenance/delete-log";
+import { deleteLogTargetPath, recordDeletions } from "./maintenance/delete-log";
 import type { DeletedObjectRecord } from "./maintenance/delete-log";
 import { runSelfHeal } from "./maintenance/self-heal";
 import type { SelfHealResult } from "./maintenance/self-heal";
@@ -853,8 +853,14 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 */
 	private async writeDeleteLog(records: readonly DeletedObjectRecord[]): Promise<void> {
 		if (records.length === 0) return;
+		// ⚠️ 插件目录未知 ⇒ **不写**（见 `deleteLogTargetPath`：兜底名会落到 vault 根）。
+		// 这只在开发/探针环境发生，删除本身照常已经完成，所以只留一行开发者可见的说明。
+		const path = deleteLogTargetPath(this.manifest.dir);
+		if (!path) {
+			console.warn("[attachment-cloud-cache] 插件目录未知，跳过写删除日志", records.length);
+			return;
+		}
 		const adapter = this.app.vault.adapter;
-		const path = deleteLogPath(this.manifest.dir ?? "");
 		await recordDeletions(
 			{
 				append: async (text) => {
@@ -1042,6 +1048,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 						index: this.currentIndex(),
 						persistIndex: () => this.hostContext().persistIndex(),
 						notify: (message) => new Notice(message),
+						// ⚠️ 文案由这一层给：核心层只决定"说哪一句"（见 `IngestDeps.t`）
+						t: (key, params) => this.t(key, params),
 					},
 					request
 				);

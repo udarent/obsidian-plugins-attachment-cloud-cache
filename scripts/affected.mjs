@@ -164,7 +164,7 @@ if (FLAG.dryRun) {
 	process.exit(0);
 }
 
-// ── 阶段 1：静态门禁（永远全跑 —— 9 个一共 ~2s，且门禁脚本改动即时生效）──
+// ── 阶段 1：静态门禁（永远全跑 —— 10 个一共 ~2s，且门禁脚本改动即时生效）──
 const STATIC_GATES = [
 	"check-manifest",
 	"check-api-floor",
@@ -175,6 +175,7 @@ const STATIC_GATES = [
 	"check-no-dev-doc-refs",
 	"check-readme",
 	"check-i18n-keys",
+	"check-notice-i18n",
 ];
 for (const gate of STATIC_GATES) {
 	await runStep(process.execPath, [join("scripts", `${gate}.mjs`)], `静态门禁 ${gate}`);

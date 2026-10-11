@@ -46,6 +46,8 @@ import type { CacheIndex, CacheEntry } from "../cache/index";
 import { cachePathFor } from "../cache-path";
 import { parentFolderOf, uniqueVaultPath } from "../vault-files";
 import { keyFromUrl } from "../render/render-target";
+import { notifyUser } from "../notify-user";
+import type { NotifySink } from "../notify-user";
 import type { S3Client } from "../s3/client";
 import { describeError } from "../error-text";
 
@@ -80,15 +82,13 @@ export interface LocalCopyOutcome {
 	error?: unknown;
 }
 
-export interface LocalCopyDeps {
+export interface LocalCopyDeps extends NotifySink {
 	app: App;
 	settings: () => PluginSettings;
 	/** 当前的客户端；配置/凭据没齐时返回 `null`（见 `unavailable`）。 */
 	client: () => S3Client | null;
 	index: () => CacheIndex;
 	persistIndex: () => Promise<void>;
-	notify?: (message: string) => void;
-	t?: (key: string, params?: Record<string, unknown>) => string;
 	now?: () => Date;
 }
 
@@ -191,9 +191,7 @@ export function createLocalCopyEnsurer(deps: LocalCopyDeps) {
 		const target = cachePathFor(key, settings.cacheFolder);
 		if (!target) {
 			// 缓存目录为空会让路径推不出来 —— 那是设置问题，不是网络问题
-			deps.notify?.(
-				deps.t ? deps.t("fallbackNoCacheFolder", {}) : "缓存目录未设置，无法保存下载的副本"
-			);
+			notifyUser(deps, "fallbackNoCacheFolder");
 			return { status: "failed", key, localPath: "" };
 		}
 
@@ -202,11 +200,7 @@ export function createLocalCopyEnsurer(deps: LocalCopyDeps) {
 			downloaded = await client.getObject(key);
 		} catch (error) {
 			if (shouldReportDownloadFailure(error)) {
-				deps.notify?.(
-					deps.t
-						? deps.t("fallbackDownloadFailed", { error: describeError(error) })
-						: `下载缓存副本失败：${describeError(error)}`
-				);
+				notifyUser(deps, "fallbackDownloadFailed", { error: describeError(error) });
 			}
 			return { status: "failed", key, localPath: "", error };
 		}
@@ -246,19 +240,11 @@ export function createLocalCopyEnsurer(deps: LocalCopyDeps) {
 				await deps.persistIndex();
 			} catch (error) {
 				// 索引落盘失败不该让"图上能看了"这件事作废：文件已经在磁盘上
-				deps.notify?.(
-					deps.t
-						? deps.t("fallbackIndexPersistFailed", { error: describeError(error) })
-						: `缓存索引保存失败：${describeError(error)}`
-				);
+				notifyUser(deps, "fallbackIndexPersistFailed", { error: describeError(error) });
 			}
 			return { status: "downloaded", key, localPath: path };
 		} catch (error) {
-			deps.notify?.(
-				deps.t
-					? deps.t("fallbackWriteFailed", { error: describeError(error) })
-					: `下载的副本写入 vault 失败：${describeError(error)}`
-			);
+			notifyUser(deps, "fallbackWriteFailed", { error: describeError(error) });
 			return { status: "failed", key, localPath: "", error };
 		}
 	}
