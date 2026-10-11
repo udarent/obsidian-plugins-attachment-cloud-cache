@@ -15,6 +15,13 @@
  * **还没到时候**，而不是**不是候选** —— 后者会让这条入口彻底静默失效。
  * 下面 `retry` 的真值表就是钉这件事的。
  *
+ * ## ⭐ 1.3.0（D-17）：归属判据从"缓存目录"改成"三重簿记"
+ *
+ * 从前这里有一条物理闸门：新文件落在**缓存目录**里就一定是我们的副本。
+ * 缓存目录取消后，副本与用户的附件混在同一批目录里，判据换成三条可查的簿记
+ * （自写台账 / 索引里已有指向它的副本 / 内容哈希在上传台账里），
+ * 而"只差一个引用"的重试真值表**必须原样保留** —— 它是那条用户报的缺陷的正面判据。
+ *
  * ## 为什么用假时钟
  *
  * 退避重试是这个模块的核心行为（1.2s → 3s → 6s → 10s）。真等它，一次套件要 20 秒，
@@ -23,8 +30,6 @@
  */
 
 import assert from "node:assert/strict";
-
-const CACHE = "attachments-cache";
 
 /** 一条索引记录（形状照 `CacheEntry`）。 */
 function entry(key, cachePath) {
@@ -44,7 +49,6 @@ const SETTINGS = {
 	autoUpload: true,
 	attachmentFolder: "",
 	localCopy: "cache",
-	cacheFolder: CACHE,
 	fallbackDownload: true,
 	externalImageCache: false,
 	externalImageDefault: "ask",
@@ -81,12 +85,11 @@ export async function runAttachWatchSuite(mod) {
 
 	// ───────────────────────── 判定层（纯函数） ─────────────────────────
 
-	/** 判定夹具：默认"设置开着、不在缓存目录、不是自写、没有索引记录、没有任何引用"。 */
+	/** 判定夹具：默认"设置开着、不是自写、没有索引记录、内容不在云端、没有任何引用"。 */
 	const decide = (target, options = {}) =>
 		decideAdoptCreatedFile({
 			file: target,
 			autoUpload: true,
-			cacheFolder: CACHE,
 			isSelfWrite: false,
 			index: new CacheIndex([]),
 			settings: SETTINGS,
@@ -115,8 +118,11 @@ export async function runAttachWatchSuite(mod) {
 	//（表现为"一个文件挂在攒批里反复求引用集合，直到退避用尽"）。
 	const terminal = [
 		["自动上传关着", { autoUpload: false }],
-		["文件在缓存目录里", { file: file(`${CACHE}/abc.png`) }],
-		["是我们自己刚落下的中转文件", { isSelfWrite: true }],
+		["是我们自己刚写下的文件（中转/下载/迁移）", { isSelfWrite: true }],
+		[
+			"索引里已经有指向这个路径的副本",
+			{ index: new CacheIndex([entry("ours.png", "attachments/ours.png")]), file: file("attachments/ours.png") },
+		],
 		["是笔记/画布/数据库文件", { file: file("notes/a.md") }],
 		["是空文件（同步中的占位）", { file: file("attachments/empty.png", 0) }],
 		[
@@ -140,14 +146,52 @@ export async function runAttachWatchSuite(mod) {
 	}
 	cases.decision += 1;
 
-	// ⑤ 缓存目录要按**路径段**认：名字相近的目录不是缓存目录（前缀判断会把它误杀，
-	//    于是用户放在 `attachments-cache-notes/` 里的真附件永远不上传）
+	// ⑤ ⭐ 同步到达的副本：内容已在上传台账里 ⇒ **终局跳过**（不等引用）
+	//
+	// 它引用的是云端地址，所以"没有本地引用"是它**正常**的状态；
+	// 若当成"还没到时候"去退避重试，每台设备都会为同一份同步文件白跑 10 秒。
+	//
+	// ⚠️ 顺序要紧：**只差一个引用**才轮得到这一条 —— 被引用的文件本来就该接管
+	// （那是 F16 的正路：把本地链接改写成云端链接）。
+	assert.deepEqual(
+		decide(file("attachments/synced.png"), { knownCloudCopy: true }),
+		{ adopt: false, reason: "内容是云端已有的（同步到达的副本）", retry: false },
+		"内容是云端已有的副本 ⇒ 终局跳过，不进退避重试"
+	);
 	assert.equal(
-		decide(file("attachments-cache-other/abc.png"), {
-			referencedPaths: new Set(["attachments-cache-other/abc.png"]),
-		}).adopt,
+		decide(file("attachments/synced.png"), { knownCloudCopy: true, referencedPaths: new Set(["attachments/synced.png"]) })
+			.adopt,
 		true,
-		"名字相近但不是缓存目录 ⇒ 仍然要接管"
+		"★ 但如果它**被本地引用着**，仍然要接管（把引用改写成云端地址）—— 与上面那条互为守护"
+	);
+	cases.decision += 1;
+
+	// ⑤b ⭐ 反向守护：**只差引用**的文件必须 retry（这是用户报的那条缺陷的判据），
+	//     而"不只是差引用"的一律终局 —— 两者的分界不能因为簿记改动而挪位。
+	assert.equal(
+		decide(file("attachments/fresh.png")).retry,
+		true,
+		"★ 只差引用的普通候选必须 retry —— 这是那条用户缺陷的判据，改动簿记时最容易碰坏它"
+	);
+	assert.equal(
+		decide(file("notes/another.md")).retry,
+		false,
+		"笔记文件不属于「只差引用」⇒ 终局（不必等满退避窗口）"
+	);
+	assert.equal(
+		decide(file("attachments/empty.png", 0)).retry,
+		false,
+		"空文件（同步中的占位）也不属于「只差引用」⇒ 终局"
+	);
+	// ⭐ 索引里已有指向它的副本 ⇒ 终局（**即使它还没被引用**）。
+	// 这是"我们自己的副本"在 1.3.0 之后的主要认亲方式（缓存目录那道物理边界没了），
+	// 少了它，从别的设备同步过来的副本会挂在攒批里等满退避窗口。
+	assert.deepEqual(
+		decide(file("attachments/ours.png"), {
+			index: new CacheIndex([entry("ours.png", "attachments/ours.png")]),
+		}),
+		{ adopt: false, reason: "已经是索引里登记的本地副本", retry: false },
+		"索引里已有的副本必须终局跳过（未引用时也不进退避重试）"
 	);
 	cases.decision += 1;
 
@@ -222,8 +266,9 @@ export async function runAttachWatchSuite(mod) {
 		const index = overrides.index ?? new CacheIndex([]);
 		const watcher = createAttachWatcher({
 			autoUpload: () => overrides.autoUpload ?? true,
-			cacheFolder: () => CACHE,
 			isSelfWrite: (path) => overrides.selfWrites?.has(path) ?? false,
+			// ③ 内容是否已在上传台账里（同步到达的副本）。默认"不知道"。
+			isKnownCloudCopy: overrides.isKnownCloudCopy,
 			index: () => index,
 			settings: () => SETTINGS,
 			lookup: (path) => files.get(path) ?? null,
@@ -377,6 +422,41 @@ export async function runAttachWatchSuite(mod) {
 	);
 	await f8.advance();
 	assert.equal(f8.watcher.pending(), 0, "退避用尽后丢弃");
+	cases.scheduling += 1;
+
+	// S9 ⭐ 同步到达的副本：探针说"内容已在云端" ⇒ **第一轮就跳过**，不进重试
+	//
+	// 这是 1.3.0 三重簿记里的第 ③ 条。它省钱的地方在于：内容哈希只要算一次
+	//（按"路径 + 大小"记忆），而判定不必等满四档退避（约 10 秒）。
+	const f9 = makeWatcher({ isKnownCloudCopy: async () => true });
+	f9.files.set("attachments/synced.png", file("attachments/synced.png"));
+	f9.watcher.onCreated({ path: "attachments/synced.png" });
+	await f9.advance();
+	assert.equal(f9.adoptCalls.length, 0, "同步到达的副本不该被当成新附件上传（否则每台设备互相传一遍）");
+	assert.equal(f9.watcher.pending(), 0, "★ 一轮就该丢掉它，不该挂在攒批里等满退避窗口");
+	assert.ok(
+		f9.logs.some((message) => message.includes("同步到达")),
+		"跳过要留下日志（诊断时能看出为什么没动它）"
+	);
+	cases.scheduling += 1;
+
+	// S10 探针抛错 ⇒ 当作"不知道"（回到"再等引用"的老路），绝不因此接管
+	const f10 = makeWatcher({
+		retryDelaysMs: [10, 20],
+		isKnownCloudCopy: async () => {
+			throw new Error("台账读不出来");
+		},
+	});
+	f10.files.set("attachments/x.png", file("attachments/x.png"));
+	f10.watcher.onCreated({ path: "attachments/x.png" });
+	await f10.advance();
+	assert.equal(f10.adoptCalls.length, 0, "★ 探针出错时不许接管（失败的代价不对称：误接管会反复惊动用户）");
+	assert.ok(
+		f10.logs.some((message) => message.includes("云端")),
+		"探针出错要留下日志"
+	);
+	await f10.advance();
+	assert.equal(f10.watcher.pending(), 0, "退避用尽后照旧丢弃");
 	cases.scheduling += 1;
 
 	return cases;

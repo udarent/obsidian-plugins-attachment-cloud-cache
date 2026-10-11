@@ -14,7 +14,8 @@ import { runObjectKeySuite } from "./lib/object-key-suite.mjs";
 await withLoadedTs("src/object-key.ts", (mod) => {
 	runObjectKeySuite(mod);
 	console.log(
-		"Object-key tests passed (template rendering, unknown tokens preserved, " +
+		"Object-key tests passed (template rendering, unknown tokens preserved, the display name and the " +
+			"content hash are both parsed back out of a key, " +
 			"path traversal blocked, empty segments collapsed, non-ASCII kept, over-long names truncated)."
 	);
 });

@@ -26,15 +26,15 @@ await withLoadedTs(
 		const stats = await runIngestSuite(mod);
 		console.log(
 			`Ingest tests passed (${stats.scenarios} scenarios, real disk + real HTTP: ` +
-				"byte-identical upload and cache copy, exactly 1 PUT and 0 GETs, the local file is " +
-				"moved (not copied) into the cache, a repeat paste of the same image costs zero " +
+				"byte-identical upload and a byte-identical local copy, exactly 1 PUT and 0 GETs, " +
+				"the local file stays exactly where the user's attachment folder put it (no cache " +
+				"folder is ever created), a repeat paste of the same image costs zero " +
 				"requests, upload failure keeps the bytes in the attachment folder and registers " +
 				"nothing, same-name files are never overwritten, an attachment-folder override " +
 				"beats the host's own setting, migrating an attachment that already lives in the " +
-				"vault leaves no stray staging copy behind and moves it into the cache folder " +
-				"(a move, not a second copy), nested keys " +
-				"create folders, the upload ledger records every successful upload no matter where " +
-				"the local copy went (that is what keeps cloud cleanup working in the " +
+				"vault leaves no stray staging copy behind and does not move the user's file, " +
+				"the upload ledger records every successful upload no matter whether a local copy " +
+				"was kept (that is what keeps cloud cleanup working in the " +
 				"'keep no local copy' setting), and a corrupt index degrades to empty instead of throwing)."
 		);
 	}

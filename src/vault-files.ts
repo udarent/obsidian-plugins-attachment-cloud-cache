@@ -408,3 +408,81 @@ export async function uniqueVaultPath(
 	// 从而走"保留本地 + 报错"的分支，而不是丢数据。
 	throw new Error(`无法为 ${clean} 找到可用路径（已尝试 ${MAX_UNIQUE_ATTEMPTS} 次）`);
 }
+
+/**
+ * 归一一个目录设置：统一分隔符、去掉首尾斜杠。空串 = **没填**（而不是"根目录"）。
+ *
+ * ⚠️ 非字符串一律当"没填"：`data.json` 是被逐字段校验过的，但这条函数也会被
+ * 别处复用，而 `String(某个对象)` 会得到 `[object Object]` ——
+ * 那会变成一个真实存在（却毫无意义）的目录名，且**不报错**。
+ */
+export function cleanFolderPath(value: unknown): string {
+	if (typeof value !== "string") return "";
+	return value
+		.trim()
+		.replace(/\\/g, "/")
+		.replace(/^\/+|\/+$/g, "");
+}
+
+/**
+ * 读宿主自己的「新附件的默认位置」，返回 vault 相对目录（无法确定时返回空串 = 根目录）。
+ *
+ * ⚠️ `Vault.getConfig` **不在钉住的公开类型里**（`obsidian.d.ts` 搜不到它），
+ * 但真机实测它存在且可用：`getConfig("attachmentFolderPath")` 返回的就是
+ * Obsidian 设置界面里那一栏的值。所以这里走鸭子类型 + 可选调用；
+ * 拿不到就如实退回根目录 —— 文件照样处理，只是落点普通，绝不因此让流程失败。
+ *
+ * 三种形态（Obsidian 自己就是这么存的）：
+ * - 空串 / `"/"` → vault 根目录（两个值表示同一件事）；
+ * - `"./"` → **与当前笔记同目录**：这是个相对写法，得用触发这次的笔记路径反推；
+ * - 其余 → 相对 vault 的目录（不存在时，调用方的建目录那一步会建出来）。
+ */
+export function hostAttachmentFolder(app: unknown, sourcePath?: string): string {
+	const vault = (app as { vault?: { getConfig?: (key: string) => unknown } } | null | undefined)?.vault;
+	if (typeof vault?.getConfig !== "function") return "";
+
+	let configured: unknown;
+	try {
+		configured = vault.getConfig("attachmentFolderPath");
+	} catch {
+		// 读配置失败不该让落盘失败：退回根目录，字节照样留下
+		return "";
+	}
+	if (typeof configured !== "string") return "";
+
+	// ⚠️ `"./"` 经 cleanFolderPath 会变成 `"."`（它剥掉尾部斜杠），所以判这个就够
+	const cleaned = cleanFolderPath(configured);
+	if (cleaned === ".") {
+		// "与笔记同目录"：拿不到笔记路径时退回根目录 —— 那正是"没有笔记"时的合理落点
+		return parentFolderOf(normalizeVaultPath(sourcePath));
+	}
+	return cleaned;
+}
+
+/**
+ * 这次落盘的**目录**（vault 相对）：用户的覆盖值 → 宿主自己的附件位置 → vault 根目录。
+ *
+ * ⭐ 上传（粘贴近场文件）与回退下载（补齐缺的副本）**共用这一处**，理由与模块头
+ * 那条一样：两条路各自实现"落在哪"，就会分叉成"下载的副本在上传时不再被认出来"，
+ * 而索引只认得其中一条路径。
+ *
+ * ## ⚠️ 这里换过一次实现，理由必须留着
+ *
+ * 早先问的是 `fileManager.getAvailablePathForAttachment`，而且是**按同步调用**的
+ * （`typeof 返回值 === "string"` 才采用）。在真机上实测，那两件事都是错的：
+ *
+ * 1. 它返回的是 **Promise**（实测 `[object Promise]` / `thenable=true`）
+ *    ⇒ 那个类型检查**永远为假**，宿主给的值从来没被采用过；
+ * 2. 就算 `await` 它，只要目标目录已经存在，它就抛 `Folder already exists.`
+ *    （真机复现，带不带 `sourcePath` 都一样）。
+ *
+ * 于是这条路上「跟随 Obsidian 的附件设置」**从未生效** —— 中转文件一直落在
+ * vault 根目录。而用户看到的现象正是"上传图片时根目录不停冒出新的图片文件"。
+ * 这个缺陷之所以能活这么久，是因为它**不报错、不丢数据**，只是落点与预期不符。
+ */
+export function attachmentFolderFor(app: unknown, override: unknown, sourcePath?: string): string {
+	// 用户显式填了覆盖目录 → 用它。"覆盖"这个词的直白含义就是"别再问别人"。
+	const clean = cleanFolderPath(override);
+	if (clean) return clean;
+	return hostAttachmentFolder(app, sourcePath);
+}

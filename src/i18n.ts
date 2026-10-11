@@ -124,7 +124,6 @@ export const I18N: Record<string, Locale> = {
 		// 只在"用户能采取行动"的失败上出现：配置/权限类。离线失败刻意不提示，
 		// 因为那正是用户此刻的状态，弹提示没有信息量。
 		fallbackDownloadFailed: "Could not fetch a missing local copy: {error}",
-		fallbackNoCacheFolder: "No cache folder is set, so a fetched copy has nowhere to go.",
 		fallbackWriteFailed: "Fetched a copy but could not save it into the vault: {error}",
 		fallbackIndexPersistFailed: "The copy was saved, but the local-copy index could not be written: {error}",
 
@@ -132,9 +131,6 @@ export const I18N: Record<string, Locale> = {
 		// 三条都出现在"字节已经安全落盘、只是后续某一步没走完"的情形 ——
 		// 共同点是**图不会丢**，所以措辞是"告知"，不是"报错"。
 		ingestIndexPersistFailed: "The file was uploaded, but the local-copy index could not be saved: {error}",
-		ingestCacheTargetUnusable:
-			"The cache folder could not take this file, so the copy stays where it is: {error}",
-		ingestCopyMoveFailed: "The copy could not be moved into the cache folder: {error}",
 
 		// ── 维护命令 ──
 		// ── 云端空间清理（F15）──
@@ -364,14 +360,11 @@ export const I18N: Record<string, Locale> = {
 		indexLoadFailed: "本地副本索引读取失败，离线副本将被重建：{error}",
 		indexSkipped: "本地副本索引里有 {count} 条记录无法使用，已丢弃。",
 		fallbackDownloadFailed: "补齐本地副本失败：{error}",
-		fallbackNoCacheFolder: "没有设置缓存目录，取回的副本无处可放。",
 		fallbackWriteFailed: "副本已取回，但写入 vault 失败：{error}",
 		fallbackIndexPersistFailed: "副本已保存，但本地副本索引写入失败：{error}",
 
 		// ── 上传（粘贴 / 拖拽 / 批量迁移）──
 		ingestIndexPersistFailed: "文件已上传，但本地副本索引保存失败：{error}",
-		ingestCacheTargetUnusable: "缓存目录里放不下这个文件，副本留在原处：{error}",
-		ingestCopyMoveFailed: "缓存副本搬移失败：{error}",
 
 		// ── 云端空间清理（F15）──
 		cmdCleanupCloud: "清理云端未使用对象…",

@@ -14,7 +14,7 @@ import { runVaultFilesSuite } from "./lib/vault-files-suite.mjs";
 await withLoadedTs("src/vault-files", async (mod) => {
 	const stats = await runVaultFilesSuite(mod);
 	console.log(
-		`Vault-file tests passed (${stats.extensionCases} extension/type cases: extension from name ` +
+		`Vault-file tests passed (${stats.extensionCases} extension/type cases + ${stats.placementCases} attachment-placement cases: the landing folder follows the user override, then the host's own attachment setting, then the vault root — and the host's \"./\" means \"next to the note\", not a folder literally named \".\"; extension from name ` +
 			"first and MIME second so both screenshot pastes and downloader drags work, a leading dot " +
 			"is not an extension, and an extension has to *look* like one — the token a CDN leaves " +
 			"after the last dot in a URL is not a type, so it falls back to the MIME (otherwise the " +

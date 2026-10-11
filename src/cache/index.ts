@@ -50,6 +50,7 @@
  */
 
 import { isPlainRecord } from "../records";
+import { hashFromKey } from "../object-key";
 
 /** 索引文件的结构版本。将来改结构时用它决定要不要做迁移。 */
 export const CACHE_INDEX_VERSION = 1;
@@ -302,6 +303,25 @@ export class CacheIndex {
 	/** 这个对象是我们上传过的吗（云端清理判"有没有处置权"的**唯一**依据）。 */
 	wasUploaded(key: string): boolean {
 		return typeof key === "string" && this.uploaded.has(key.trim());
+	}
+
+	/**
+	 * **这份内容**我们传过吗（按内容哈希问，而不是按 key）。
+	 *
+	 * 用途只有一个：库外冒出来的文件（同步到达的副本、从别处拷进来的同一份内容）
+	 * 判断"它的内容是不是已经在云端了"（见 `maintenance/attach-watch.ts` 的第三道闸门）。
+	 *
+	 * ⚠️ 与 `wasUploaded` 的区别就是**必须经 `hashFromKey`**：C2 之后 key 里有名字，
+	 * 直接拿文件哈希去比台账会**永远不相等**（那种"判据恒假"的形状本项目吃过多次亏，
+	 * 例如 N11）。取不到哈希的 key（自定义模板）不参与比较 —— 不能猜。
+	 */
+	wasContentUploaded(contentHash: string): boolean {
+		const target = typeof contentHash === "string" ? contentHash.trim().toLowerCase() : "";
+		if (!target) return false;
+		for (const key of this.uploaded) {
+			if (hashFromKey(key) === target) return true;
+		}
+		return false;
 	}
 
 	/**

@@ -32,25 +32,35 @@ await runMutations({
 			// 所以"现在还没有引用"必须被当成"还没到时候"。
 			// 改成终局判定 ⇒ 首次判定之后彻底静默，症状与用户报的那条完全一致。
 			name: "★ 「还没被引用」不再重试（首次判定即终局 ⇒ 手机上加了图仍然什么都不发生）",
-			from: "return { adopt: false, reason, retry: !input.referencedPaths.has(path) };",
-			to: "return { adopt: false, reason, retry: false };",
-			expect: "「还没被引用」只是还没到时候 ⇒ retry 必须为真",
+			from: "\tif (!onlyMissingReference) return { adopt: false, reason, retry: false };",
+			to: "\tif (false) return { adopt: false, reason, retry: false };",
+			// 最先红的其实是**终局清单**里那条（笔记文件不该重试）—— 它排在重试真值表之前。
+			expect: "这是终局判定，再等也不会变",
 		},
 		{
 			// 粘贴那条路的"先落盘再上传"也会触发 create。少了这道闸门，
 			// 自动接管会把它当成用户新加的附件再传一遍（并且跟那条路抢同一个文件）。
-			name: "★ 自写护栏失效（粘贴落下的中转文件被重复接管）",
-			from: '\tif (input.isSelfWrite) return { adopt: false, reason: "是我们自己刚落盘的中转文件", retry: false };',
-			to: '\tif (false) return { adopt: false, reason: "是我们自己刚落盘的中转文件", retry: false };',
-			expect: "是我们自己刚落下的中转文件：不该接管",
+			name: "★ 自写护栏失效（我们写下的副本被重复接管）",
+			from: '\tif (input.isSelfWrite) return { adopt: false, reason: "是我们自己刚写下的文件", retry: false };',
+			to: '\tif (false) return { adopt: false, reason: "是我们自己刚写下的文件", retry: false };',
+			expect: "是我们自己刚写下的文件（中转/下载/迁移）：不该接管",
 		},
 		{
-			// 缓存副本（回退下载写的、别的设备同步来的）不是用户新加的附件。
-			// 少了这道闸门，一次同步就能让每台设备把同一份内容互相传一遍。
-			name: "★ 缓存目录护栏失效（缓存副本被当成用户新附件上传）",
-			from: "\tif (isUnderCacheFolder(path, input.cacheFolder)) {",
+			// 1.3.0 起缓存目录取消了，改由"索引里有没有指向它的副本"来认亲。
+			// 少了这道闸门，从别的设备同步过来的副本会被当成用户新附件再传一遍。
+			name: "★ 索引副本护栏失效（我们自己的副本被当成用户新附件）",
+			from: "\tif (input.index.findByCachePath(path)) {",
 			to: "\tif (false) {",
-			expect: "文件在缓存目录里：不该接管",
+			expect: "索引里已有的副本必须终局跳过",
+		},
+		{
+			// 后果：每台设备都为同一份同步下来的文件白跑满退避窗口（约 10 秒），
+			// 而且日志里会反复出现"等引用"的噪音 —— 引用它的笔记写的是**云端地址**，
+			// 所以永远不会有本地引用出现。
+			name: "★ 「内容已在云端」护栏失效（同步到达的副本白等满退避窗口）",
+			from: "\tif (input.knownCloudCopy) {",
+			to: "\tif (false) {",
+			expect: "内容是云端已有的副本",
 		},
 		{
 			// 开关关掉之后这条入口必须一步都不碰（与粘贴那条路的语义一致）。

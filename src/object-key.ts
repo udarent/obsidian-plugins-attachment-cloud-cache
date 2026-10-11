@@ -204,3 +204,33 @@ export function displayNameForKey(key: unknown): string {
 	if (!match) return "";
 	return `${match[1]}${match[3] ?? ""}`;
 }
+
+/** 老格式（纯内容寻址）key 的形状：`<64 位小写十六进制>[.<扩展名>]`。 */
+const PURE_HASH_PATTERN = /^([0-9a-f]{64})(\.[^./\\]{1,16})?$/;
+
+/**
+ * 从对象 key 里取出**内容哈希**（两代命名都能取）；取不到返回 `null`。
+ *
+ * 存在的理由：key 是"同一份内容"在云端的身份，而按内容判"这个文件是不是我们
+ * 已经传过的"必须能**从 key 反推出哈希** —— 但 C2 之后哈希不再独占整个 key
+ * （`报告-<哈希>.pdf`），于是这件事需要一处明确定义，而不是各处自己 slice。
+ *
+ * - C2 形状（`<名字>-<64 位哈希>[.<扩展名>]`）⇒ 取哈希段；
+ * - 老形状（`<64 位哈希>[.<扩展名>]`）⇒ 整个基名就是哈希；
+ * - 用户自定义模板（不含 `{hash}`，如 `{filename}.{ext}`）⇒ `null`。
+ *   ⚠️ **这是刻意的"取不到"**：那种 key 与内容没有可推导关系，调用方必须
+ *   按"无法判断"处理（不能猜、不能拿名字当哈希）。
+ *
+ * ⚠️ 与 `displayNameForKey` 同一条纪律：**只用于判定"内容是否已知"这类事实比较，
+ * 绝不用于反推文件归属** —— 归属永远查上传台账。
+ */
+export function hashFromKey(key: unknown): string | null {
+	const raw = typeof key === "string" ? key.trim() : "";
+	if (!raw) return null;
+	const segment = raw.split(/[\\/]/).pop() ?? "";
+	const c2 = HASH_TAIL_PATTERN.exec(segment);
+	if (c2) return c2[2];
+	const pure = PURE_HASH_PATTERN.exec(segment);
+	if (pure) return pure[1];
+	return null;
+}

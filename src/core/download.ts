@@ -17,6 +17,13 @@
  * 于是不为任何图取回副本 —— 判定见 `types.ts` 的 `isCacheDisabled`。
  * 已经存在的副本不受影响（那由渲染判定使用，与"要不要写"是两件事）。
  *
+ * ## 落点（1.3.0 / D-17：不再有缓存目录）
+ *
+ * 补回来的副本落在**附件目录**，文件名取**原始文件名**（三层兜底与撞名规则见
+ * `download-target.ts`）—— 用户能认出它是哪张图，也能参与检索。
+ * 写入**之前**要把它登记进「自写台账」：那份文件同样会触发宿主的 `create` 事件，
+ * 而"新增附件自动接管"那条链必须认得出"这是我们自己刚写下去的"。
+ *
  * ## 三条硬边界
  *
  * 1. **只下载属于本存储的 URL。** 判定侧已经用前缀/索引筛过一遍，这里**再验一次**
@@ -27,8 +34,9 @@
  *    （同一张图被多篇笔记引用），而渲染钩子会对**每一个** `<img>` 各调用一次。
  *    不去重的话一屏就能发出 N 个重复的 GET —— 在移动端尤其明显。
  *    ⚠️ 去重表按 **key** 而不是 URL：同一对象的 URL 可能有多种写法。
- * 3. **绝不覆盖。** 目标路径已被占用时另取序号（与上传路径同一条纪律）：
- *    模板被用户改成 `{filename}` 时，"同路径"不再等于"同内容"。
+ * 3. **绝不覆盖。** 目标路径已被占用时：内容相同 ⇒ 复用那一份；内容不同 ⇒
+ *    另取序号（`名字-2.ext`）。判据与实现见 `download-target.ts` ——
+ *    "同路径 = 同内容"只在模板含 `{hash}` 时成立，所以不敢据此覆盖。
  *
  * ## 失败时该不该打扰用户
  *
@@ -43,8 +51,9 @@ import type { App } from "obsidian";
 import type { PluginSettings } from "../types";
 import { isCacheDisabled } from "../types";
 import type { CacheIndex, CacheEntry } from "../cache/index";
-import { cachePathFor } from "../cache-path";
-import { parentFolderOf, uniqueVaultPath } from "../vault-files";
+import { attachmentFolderFor, parentFolderOf } from "../vault-files";
+import { planDownloadTarget } from "../download-target";
+import { sha256Hex } from "../s3/hash";
 import { keyFromUrl } from "../render/render-target";
 import { notifyUser } from "../notify-user";
 import type { NotifySink } from "../notify-user";
@@ -90,6 +99,13 @@ export interface LocalCopyDeps extends NotifySink {
 	index: () => CacheIndex;
 	persistIndex: () => Promise<void>;
 	now?: () => Date;
+	/**
+	 * ⭐ 刚刚往 vault 里写下了一份副本（落盘**之前**调用）。
+	 *
+	 * 与上传路径的 `IngestDeps.onStaged` 是**同一本台账**：那份文件也会触发
+	 * 宿主的 `create` 事件，而自动接管那条链必须认得出"这是我们自己写的"。
+	 */
+	onStaged?: (path: string) => void;
 }
 
 /**
@@ -125,6 +141,39 @@ export function shouldReportDownloadFailure(error: unknown): boolean {
 
 
 /**
+ * 造一条索引记录（下载这条路的两处登记共用：新落盘的、复用已有文件的）。
+ *
+ * 抽出来是为了**字段不会漂移**：两处各自拼一份 `CacheEntry`，早晚会有一处忘了
+ * 跟着改（此前"下载来的副本 `sourceName` 留空"就是这样写了两遍）。
+ *
+ * ⭐ `sourceName` 现在**有值可填**（`known?.sourceName`）—— 它是确认框与桶内
+ * 可辨认度的来源，能填就填；真没有（老对象且无条目）时留空，显示层会退化成 key。
+ */
+function makeEntry(
+	key: string,
+	cachePath: string,
+	remoteUrl: string,
+	size: number,
+	sourceName: string,
+	contentType = "",
+	etag = "",
+	now = new Date()
+): CacheEntry {
+	return {
+		key,
+		cachePath,
+		remoteUrl,
+		size,
+		contentType,
+		etag,
+		uploadedAt: now.toISOString(),
+		// 刚下载/刚复用的副本就是"刚被用到"的（这次渲染正是在等它）
+		lastUsedAt: now.getTime(),
+		sourceName,
+	};
+}
+
+/**
  * 造一个"补齐器"。返回的函数可以长期持有 —— **并发去重表挂在它内部**，
  * 于是去重范围正好是"同一个插件实例"，不多也不少。
  */
@@ -152,7 +201,17 @@ export function createLocalCopyEnsurer(deps: LocalCopyDeps) {
 		}
 	}
 
-	async function run(key: string, remoteUrl: string): Promise<LocalCopyOutcome> {
+	/** 读一个已存在文件的 sha256（读不到返回 `null` ⇒ 调用方按"内容不同"处理）。 */
+	async function hashOf(path: string): Promise<string | null> {
+		try {
+			const buffer = await deps.app.vault.adapter.readBinary(path);
+			return await sha256Hex(new Uint8Array(buffer));
+		} catch {
+			return null;
+		}
+	}
+
+	async function run(key: string, remoteUrl: string, sourcePath?: string | null): Promise<LocalCopyOutcome> {
 		const settings = deps.settings();
 
 		// 判定的顺序是刻意的，五步都由不同的原因拒绝，且**都不发请求**：
@@ -188,12 +247,35 @@ export function createLocalCopyEnsurer(deps: LocalCopyDeps) {
 			return { status: "reused", key, localPath: known.cachePath };
 		}
 
-		const target = cachePathFor(key, settings.cacheFolder);
-		if (!target) {
-			// 缓存目录为空会让路径推不出来 —— 那是设置问题，不是网络问题
-			notifyUser(deps, "fallbackNoCacheFolder");
-			return { status: "failed", key, localPath: "" };
+		// ⭐ 1.3.0（D-17）：落点 = **附件目录 + 原始文件名**（不再有缓存目录）。
+		//
+		// 取名靠三级兜底（条目 `sourceName` → key 反推 → key 本身），撞名先比内容哈希、
+		// 再走序号 —— 全部在 `download-target.ts` 里，这里只负责给它两个探针。
+		// ⚠️ 那个"没配缓存目录所以推不出路径"的失败分支（`fallbackNoCacheFolder`）随之消失：
+		// 附件目录任何时候都能确定（用户覆盖值 → 宿主配置 → vault 根），这条路径不再有
+		// "设置没填所以下载不了"的形态。
+		const plan = await planDownloadTarget({
+			key,
+			sourceName: known?.sourceName,
+			folder: attachmentFolderFor(deps.app, settings.attachmentFolder, sourcePath ?? undefined),
+			exists,
+			hashOf,
+		});
+
+		// 内容相同 ⇒ 那一份就是我们要的副本：登记进索引（否则每次渲染都要重走一遍判定）
+		if (plan.kind === "reuse") {
+			const store = deps.index();
+			store.set(makeEntry(key, plan.path, remoteUrl, 0, known?.sourceName ?? ""));
+			store.markUploaded(key);
+			try {
+				await deps.persistIndex();
+			} catch (error) {
+				notifyUser(deps, "fallbackIndexPersistFailed", { error: describeError(error) });
+			}
+			return { status: "reused", key, localPath: plan.path };
 		}
+
+		const target = plan.path;
 
 		let downloaded;
 		try {
@@ -207,26 +289,27 @@ export function createLocalCopyEnsurer(deps: LocalCopyDeps) {
 
 		try {
 			await ensureFolder(target);
-			const path = await uniqueVaultPath(target, exists);
+			// ⚠️ 落盘**之前**登记自写台账：这条路写下的文件同样会触发宿主的 `create`，
+			// 而自动接管那条链全靠这本台账/索引认出"这是我们自己写的"（见 `attach-watch`）。
+			deps.onStaged?.(target);
+
 			const bytes = downloaded.data;
 			await deps.app.vault.createBinary(
-				path,
+				target,
 				bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
 			);
 
-			const entry: CacheEntry = {
+			const path = target;
+			const entry: CacheEntry = makeEntry(
 				key,
-				cachePath: path,
+				path,
 				remoteUrl,
-				size: bytes.length,
-				contentType: downloaded.contentType,
-				etag: downloaded.etag,
-				uploadedAt: (deps.now?.() ?? new Date()).toISOString(),
-				// 刚下载的副本就是"刚被用到"的（这次渲染正是在等它）
-				lastUsedAt: (deps.now?.() ?? new Date()).getTime(),
-				// 下载来的副本没有"原始文件名"这个概念，留空（字段本身只用于报告可读性）
-				sourceName: "",
-			};
+				bytes.length,
+				known?.sourceName ?? "",
+				downloaded.contentType,
+				downloaded.etag,
+				deps.now?.() ?? new Date()
+			);
 			const store = deps.index();
 			store.set(entry);
 			// ⭐ 顺带记进**上传台账**（"这个 key 在我们的系统里"）。
@@ -249,7 +332,11 @@ export function createLocalCopyEnsurer(deps: LocalCopyDeps) {
 		}
 	}
 
-	return function ensureLocalCopy(key: unknown, remoteUrl: unknown): Promise<LocalCopyOutcome> {
+	return function ensureLocalCopy(
+		key: unknown,
+		remoteUrl: unknown,
+		sourcePath?: string | null
+	): Promise<LocalCopyOutcome> {
 		const cleanKey = typeof key === "string" ? key.trim() : "";
 		const cleanUrl = typeof remoteUrl === "string" ? remoteUrl.trim() : "";
 		if (!cleanKey || !cleanUrl) {
@@ -262,7 +349,7 @@ export function createLocalCopyEnsurer(deps: LocalCopyDeps) {
 		const existing = inflight.get(cleanKey);
 		if (existing) return existing;
 
-		const task = run(cleanKey, cleanUrl).finally(() => {
+		const task = run(cleanKey, cleanUrl, sourcePath).finally(() => {
 			inflight.delete(cleanKey);
 		});
 		inflight.set(cleanKey, task);

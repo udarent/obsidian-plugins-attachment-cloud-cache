@@ -31,17 +31,26 @@ await runMutations({
 			// 后果：一次失败就让这个 key **永远**被判为"正在下载"，
 			// 表现是"这张图再也下载不了了"，且不报错。
 			name: "★ 去重表在失败时不摘除（一次失败之后这个 key 再也下载不了）",
-			from: "\t\tconst task = run(cleanKey, cleanUrl).finally(() => {\n\t\t\tinflight.delete(cleanKey);\n\t\t});",
-			to: "\t\tconst task = run(cleanKey, cleanUrl).then((result) => {\n\t\t\tif (result.status === \"downloaded\") inflight.delete(cleanKey);\n\t\t\treturn result;\n\t\t});",
+			from: "\t\tconst task = run(cleanKey, cleanUrl, sourcePath).finally(() => {\n\t\t\tinflight.delete(cleanKey);\n\t\t});",
+			to: "\t\tconst task = run(cleanKey, cleanUrl, sourcePath).then((result) => {\n\t\t\tif (result.status === \"downloaded\") inflight.delete(cleanKey);\n\t\t\treturn result;\n\t\t});",
 			expect: "失败后必须能重试",
 		},
 		{
-			// 后果：静默抹掉一个同名、且可能没有其它副本的文件 ——
-			// 这是本项目里唯一会造成不可逆数据损失的操作。
-			name: "★ 直接写到目标路径（覆盖用户同名的文件）",
-			from: "\t\t\tconst path = await uniqueVaultPath(target, exists);",
-			to: "\t\t\tconst path = target;",
-			expect: "不得写到已占用的路径",
+			// 后果：那份副本会被"新增附件自动接管"当成用户新加的附件再上传一遍
+			//（1.3.0 取消了缓存目录这个物理边界，全靠这本台账认亲）。
+			name: "★ 下载落盘前不登记自写台账（副本被当成新附件再传一遍）",
+			from: "\t\t\tdeps.onStaged?.(target);",
+			to: "\t\t\t// 变异：不登记",
+			expect: "下载落盘前必须登记自写台账",
+		},
+		{
+			// 后果：每次渲染这张图都会重新走一遍落点判定（甚至多写一份），
+			// 因为没有把"复用"的结果登记进索引 ⇒ 下一次又走"本地没有"的分支。
+			name: "★ 复用已有副本后不登记索引（每次都重走一遍落点判定）",
+			from: "\t\tif (plan.kind === \"reuse\") {",
+			to: "\t\tif (false) {",
+			// 红的其实是**下一句**（复用那条路上又发了一次 GET）—— 因为不复用就会落地重下。
+			expect: "复用那条路上不该再发 GET",
 		},
 		{
 			// 后果：用户明确关掉了回退下载，插件还是偷偷联网 —— 这是对设置的违背。

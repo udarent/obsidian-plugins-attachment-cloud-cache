@@ -32,8 +32,10 @@ await withLoadedTs(
 				`${stats.scheduling} scheduling scenarios: a file that just landed in the vault is adopted only ` +
 				"once some note references it — the host writes the link *after* creating the file, so an " +
 				"unreferenced file is retried on a backoff instead of being written off, and only that one " +
-				"reason is retryable (every other skip — auto-upload off, inside the cache folder, our own " +
-				"staging file, note-like files, empty sync placeholders, already-indexed copies — is final). " +
+				"reason is retryable (every other skip — auto-upload off, our own written file, " +
+				"index-registered copies, note-like files, empty sync placeholders, content that is " +
+				"already in the cloud — is final; a synced copy of our own upload is dropped on the " +
+				"first round instead of riding out the backoff). " +
 				"Hits are batched so three files created together mean one upload run and one notice, a file " +
 				"that disappeared is dropped, files reported during a flush are never swept up with the batch " +
 				"that gave up, unload cancels the pending timer, and a failing reference lookup or upload " +

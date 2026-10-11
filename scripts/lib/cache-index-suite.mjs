@@ -217,6 +217,32 @@ export function runCacheIndexSuite(mod) {
 		assert.equal(both.wasUploaded("k1.png"), false);
 	}
 
+	// 6b2. ⭐ `wasContentUploaded`：按**内容哈希**问"这份内容我们传过吗"
+	//
+	// 用途只有一处（1.3.0 的 attach-watch 第 ③ 条闸门）：同步到达的副本
+	// 要靠它一眼认出"内容早就在云端了"。判据必须**经 `hashFromKey`** ——
+	// C2 之后 key 是 `名字-<哈希>.ext`，直接拿文件哈希去比 key 会永远不相等
+	//（判据恒假正是 N11 的形状）。
+	const H = "b".repeat(64);
+	{
+		const index = new CacheIndex();
+		index.markUploaded(`${H}.png`); // 老形状
+		assert.equal(index.wasContentUploaded(H), true, "老 key（纯哈希）能按内容哈希认出来");
+		assert.equal(index.wasContentUploaded(H.toUpperCase()), true, "查的时候归一大小写（哈希大小写同义）");
+		assert.equal(index.wasContentUploaded("c".repeat(64)), false, "没传过的内容就是没有");
+
+		const c2 = new CacheIndex();
+		c2.markUploaded(`报告-${H}.pdf`);
+		assert.equal(c2.wasContentUploaded(H), true, "★ C2 key（名字 + 哈希尾）同样要能认出来");
+		assert.equal(c2.wasContentUploaded("报告"), false, "名字不是哈希 ⇒ 不该被误认");
+
+		// 自定义模板（key 里没有哈希）：**只能答"不知道"**，绝不能猜
+		const custom = new CacheIndex();
+		custom.markUploaded("report.pdf");
+		assert.equal(custom.wasContentUploaded(H), false, "取不到哈希的 key 不参与比较（宁可不认，不可错认）");
+		assert.equal(custom.wasContentUploaded(""), false, "空哈希返回 false（脏输入不匹配任何东西）");
+	}
+
 	// 6c. 台账的落盘与回填
 	{
 		const index = new CacheIndex();

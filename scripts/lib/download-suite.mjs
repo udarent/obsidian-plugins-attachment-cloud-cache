@@ -13,11 +13,19 @@
  *
  * 这一层是**唯一**会把远端字节写进用户 vault 的地方。所以除了"能下载"，
  * 还要断言：站外图**拒绝**、并发只下一次、同名不覆盖、离线失败不打扰用户。
+ *
+ * ## ⭐ 1.3.0（D-17）：落点从"缓存目录 / key 镜像"改成"附件目录 / 原始文件名"
+ *
+ * 从前下载的目标是 `cachePathFor(key)`（缓存目录 + key），于是断言里到处是
+ * `_attachment-cache/<key>`。缓存目录取消之后，副本落在**附件目录**、
+ * 名字取**原始文件名**（三级兜底见 `download-target.ts`），撞名先比内容哈希、
+ * 再按 `名字 1.ext` 加序号 —— 断言因此整体换了形状。
  */
 
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, stat, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -121,6 +129,9 @@ export async function runDownloadSuite(mod) {
 
 		const index = new CacheIndex();
 		const notices = [];
+		const staged = [];
+		/** 登记自写台账那一刻，目标文件**是否已经存在**（用来钉住"写之前登记"）。 */
+		let existedWhenStaged = null;
 		let persistCount = 0;
 
 		const ensure = createLocalCopyEnsurer({
@@ -137,6 +148,13 @@ export async function runDownloadSuite(mod) {
 			// 断言于是**与语言无关** —— 原先断言里那半句中文，正是核心层硬编码兜底留下的痕迹。
 			t: (key) => key,
 			now: () => NOW,
+			onStaged: (path) => {
+				staged.push(path);
+				// ⭐ 顺序判据：登记这一刻文件还**不该**存在（写之前登记）——
+				// 反过来的话，宿主的 create 事件会先于台账到达，自动接管那条链就会
+				// 把这份副本当成"用户新加的附件"再上传一遍。
+				existedWhenStaged = existsSync(join(root, ...path.split("/")));
+			},
 		});
 
 		return {
@@ -150,6 +168,8 @@ export async function runDownloadSuite(mod) {
 			notices,
 			ensure,
 			persistCount: () => persistCount,
+			staged,
+			existedWhenStaged: () => existedWhenStaged,
 			urlFor: (key) => `${settings.s3.publicUrlBase}/${key}`,
 			/** 往 mock 服务端放一个对象（模拟"远端已经有这张图"）。 */
 			putObject: (key, bytes, contentType = "image/png") => {
@@ -172,12 +192,15 @@ export async function runDownloadSuite(mod) {
 	{
 		const h = await makeHarness();
 		try {
-			const key = "obj-a.png";
+			// C2 形状的 key：名字 + 完整哈希尾 ⇒ 反推得出原始文件名
+			const key = `obj-a-${sha256Hex(HOSTILE_BYTES)}.png`;
 			h.putObject(key, HOSTILE_BYTES, "image/png");
 
 			const outcome = await h.ensure(key, h.urlFor(key));
 			assert.equal(outcome.status, "downloaded", "应下载成功");
-			assert.equal(outcome.localPath, `_attachment-cache/${key}`, "应落在缓存目录、路径与 key 一致");
+			// ⭐ 1.3.0：落点是**附件目录**（这里宿主没配 ⇒ vault 根），
+			// 名字由 `displayNameForKey` 从 key 反推 = `obj-a.png`
+			assert.equal(outcome.localPath, "obj-a.png", "副本应落在附件目录，并用 key 里携带的原始文件名");
 
 			const onDisk = await readFile(join(h.root, outcome.localPath));
 			assert.deepEqual(
@@ -194,6 +217,30 @@ export async function runDownloadSuite(mod) {
 			assert.equal(h.persistCount(), 1, "索引改动后应落盘一次");
 			assert.equal(h.notices.length, 0, "成功时不该打扰用户");
 			assert.equal(h.server.countByMethod("GET"), 1, "应恰好 1 次 GET");
+			// ⭐ 落盘前必须登记进**自写台账**（与粘贴那条路共用）：那份文件同样会触发
+			// 宿主的 create 事件，而自动接管那条链靠这本台账认出"这是我们自己写的"。
+			assert.deepEqual(h.staged, ["obj-a.png"], "下载落盘前必须登记自写台账（否则副本会被当成新附件再传一遍）");
+			assert.equal(h.existedWhenStaged(), false, "台账要在**写之前**登记（顺序反了等于没登记）");
+		} finally {
+			await h.close();
+		}
+	}
+
+	// ============================================================
+	// 1b. C2 之前的老对象（key 是纯哈希）→ 第三级兜底：名字就是 key 本身
+	//
+	// 那种 key 里**没有**名字可反推，而"绝不硬猜"是刻意的：与其编一个名字，
+	// 不如如实用哈希名 —— 用户至少能靠它在云端/本地一一对应。
+	// ============================================================
+	{
+		const h = await makeHarness();
+		try {
+			const key = `${sha256Hex(HOSTILE_BYTES)}.png`;
+			h.putObject(key, HOSTILE_BYTES, "image/png");
+
+			const outcome = await h.ensure(key, h.urlFor(key));
+			assert.equal(outcome.status, "downloaded", "老 key 也要能补回副本");
+			assert.equal(outcome.localPath, key, "没有名字可反推时应如实用 key 当文件名（绝不硬猜）");
 		} finally {
 			await h.close();
 		}
@@ -208,7 +255,7 @@ export async function runDownloadSuite(mod) {
 	{
 		const h = await makeHarness();
 		try {
-			const key = "concurrent.png";
+			const key = `concurrent-${sha256Hex(HOSTILE_BYTES)}.png`;
 			h.putObject(key, HOSTILE_BYTES, "image/png");
 
 			const results = await Promise.all([
@@ -221,7 +268,7 @@ export async function runDownloadSuite(mod) {
 			assert.equal(h.server.countByMethod("GET"), 1, "★ 并发只该发 1 次 GET（4 张图共用一份字节）");
 			for (const result of results) {
 				assert.equal(result.status, "downloaded", "四次调用都该拿到成功结果");
-				assert.equal(result.localPath, `_attachment-cache/${key}`, "四次都该指向同一个副本");
+				assert.equal(result.localPath, "concurrent.png", "四次都该指向同一个副本");
 			}
 			assert.equal(h.index.size, 1, "索引里只该有一条");
 
@@ -325,19 +372,21 @@ export async function runDownloadSuite(mod) {
 	{
 		const h = await makeHarness();
 		try {
-			const key = "occupied.png";
+			const key = `occupied-${sha256Hex(HOSTILE_BYTES)}.png`;
 			h.putObject(key, HOSTILE_BYTES, "image/png");
 
-			// 预先在目标路径放一个**内容不同**的文件
-			await mkdir(join(h.root, "_attachment-cache"), { recursive: true });
+			// 预先在**落点**（反推出来的原名）放一个内容不同的同名文件
+			const occupiedPath = "occupied.png";
 			const precious = Buffer.from("这是用户自己的文件，绝不能被覆盖");
-			await writeFile(join(h.root, "_attachment-cache", key), precious);
+			await writeFile(join(h.root, occupiedPath), precious);
 
 			const outcome = await h.ensure(key, h.urlFor(key));
 			assert.equal(outcome.status, "downloaded", "仍应下载成功");
-			assert.notEqual(outcome.localPath, `_attachment-cache/${key}`, "★ 不得写到已占用的路径上");
+			assert.notEqual(outcome.localPath, occupiedPath, "★ 不得写到已占用的路径上");
+			// 序号约定与粘贴落盘那条路一致（`uniqueVaultPath` 用 `名字 1.ext`）
+			assert.equal(outcome.localPath, "occupied 1.png", "撞名应另取序号（与粘贴同款约定）");
 
-			const preserved = await readFile(join(h.root, "_attachment-cache", key));
+			const preserved = await readFile(join(h.root, occupiedPath));
 			assert.deepEqual(
 				new Uint8Array(preserved),
 				new Uint8Array(precious),
@@ -348,13 +397,22 @@ export async function runDownloadSuite(mod) {
 				HOSTILE_BYTES,
 				"下载的内容要落在新序号路径上"
 			);
+			// ⭐ 再下载一次：这次目标仍是 `occupied.png`（被占），而 `occupied 1.png`
+			// 已经**是这份内容** ⇒ 复用它，不该再堆一个 `occupied 2.png`
+			h.index.remove(key); // 清掉索引，逼它重新走一遍落点判定
+			const again = await h.ensure(key, h.urlFor(key));
+			assert.equal(again.localPath, "occupied 1.png", "内容相同的那一份应被复用，而不是继续堆序号");
+			assert.equal(h.server.countByMethod("GET"), 1, "★ 复用那条路上不该再发 GET");
 		} finally {
 			await h.close();
 		}
 	}
 
 	// ============================================================
-	// 7. 缓存目录为空 → 路径推不出来 → 明确提示（这是设置问题，不是网络问题）
+	// 7. 老设置 `cacheFolder` 为空/残留值 → 行为**不受任何影响**
+	//
+	// 1.3.0 之前这是一个真实分支（"缓存目录没配 ⇒ 推不出路径 ⇒ 失败 + 提示"）。
+	// 缓存目录取消后，落点由附件设置决定，与它无关 —— 这条用例钉住"旧字段不再参与"。
 	// ============================================================
 	{
 		const h = await makeHarness({ settings: { cacheFolder: "" } });
@@ -362,10 +420,9 @@ export async function runDownloadSuite(mod) {
 			const key = "nocache.png";
 			h.putObject(key, HOSTILE_BYTES, "image/png");
 			const outcome = await h.ensure(key, h.urlFor(key));
-			assert.equal(outcome.status, "failed", "推不出缓存路径时应失败");
-			assert.equal(h.server.countByMethod("GET"), 0, "路径都推不出来时不该先发请求");
-			assert.equal(h.notices.length, 1, "应给出明确提示（用户需要知道去设置里补缓存目录）");
-			assert.equal(h.notices[0], "fallbackNoCacheFolder", "提示要指向真正的原因（缓存目录没配）");
+			assert.equal(outcome.status, "downloaded", "旧字段为空也该照常下载（它已不参与落点计算）");
+			assert.equal(outcome.localPath, key, "落点仍在附件目录");
+			assert.equal(h.notices.length, 0, "成功时不该有任何提示");
 		} finally {
 			await h.close();
 		}
@@ -383,9 +440,9 @@ export async function runDownloadSuite(mod) {
 			const outcome = await h.ensure("offline.png", h.urlFor("offline.png"));
 			assert.equal(outcome.status, "failed", "断网时应失败");
 			assert.equal(h.notices.length, 0, "★ 离线失败不该弹提示（那是离线的正常表现）");
-			// 也不该留下任何半个文件
+			// 也不该留下任何半个文件（落点现在是附件目录 = vault 根）
 			await assert.rejects(
-				() => stat(join(h.root, "_attachment-cache/offline.png")),
+				() => stat(join(h.root, "offline.png")),
 				"失败时不该留下半个文件"
 			);
 		} finally {
@@ -469,10 +526,10 @@ export async function runDownloadSuite(mod) {
 			const key = "pruned.png";
 			h.putObject(key, HOSTILE_BYTES, "image/png");
 
-			// 索引说本地有，但文件其实不在（用户删了缓存目录）
+			// 索引说本地有，但文件其实不在（用户删掉了那份副本）
 			h.index.set({
 				key,
-				cachePath: "_attachment-cache/pruned.png",
+				cachePath: "pruned-elsewhere.png",
 				remoteUrl: h.urlFor(key),
 				size: 999,
 				contentType: "image/png",

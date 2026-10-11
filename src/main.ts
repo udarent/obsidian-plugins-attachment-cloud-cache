@@ -49,6 +49,7 @@ import {
 import { listAllObjects, runCloudCleanup, selectCleanupCandidates } from "./maintenance/cloud-cleanup";
 import type { CloudCleanupResult } from "./maintenance/cloud-cleanup";
 import { externalKeysOf, referencedKeysFromUrls } from "./maintenance/cloud-cleanup";
+import { sha256Hex } from "./s3/hash";
 import { createAttachWatcher, createSelfWriteLedger } from "./maintenance/attach-watch";
 import type { AttachWatcher } from "./maintenance/attach-watch";
 import { askOrphanCloudDelete } from "./ui/cloud-delete-modal";
@@ -186,8 +187,15 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	/**
 	 * 补齐器（回退下载）。**必须是稳定的一份**：它的并发去重表挂在闭包里，
 	 * 每次新建就等于没有去重 —— 一屏里同一张图会被下载 N 次。
+	 *
+	 * `sourcePath` = 触发这次渲染的笔记；用来推"附件落在哪个目录"
+	 * （宿主的 `attachmentFolderPath` 取 `./` 时 = 与那篇笔记同目录）。
 	 */
-	private ensureLocalCopy: (key: string, remoteUrl: string) => Promise<LocalCopyOutcome> = async () => ({
+	private ensureLocalCopy: (
+		key: string,
+		remoteUrl: string,
+		sourcePath?: string | null
+	) => Promise<LocalCopyOutcome> = async () => ({
 		status: "failed",
 		key: "",
 		localPath: "",
@@ -315,13 +323,17 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		// 是**全平台同一份实现**，所以"库内出现了一个新文件"是与平台无关的观察点，
 		// 顺带把分享菜单、桌面把文件拷进库这些入口一起覆盖了（附录 A：不做平台分支）。
 		//
-		// ⚠️ 接管有硬前提：**文件必须已经被某篇笔记引用**。上传成功后原文件会被搬进缓存目录，
-		// 而"引用会被同一趟改写成远端地址"正是"搬走不留死链"的前提 —— 所以这里不能立刻动手
-		// （那一刻链接还没写进笔记），退避重试与攒批都在 `attach-watch` 里。
+		// ⚠️ 接管有硬前提：**文件必须已经被某篇笔记引用**（引用会被同一趟改写成远端地址）。
+		// 而宿主的链接是文件落盘**之后**才插进笔记的，所以这里不能立刻动手 ——
+		// 退避重试与攒批都在 `attach-watch` 里。
+		//
+		// ⭐ 1.3.0（D-17）：判"这个新文件是不是我们自己的副本"不再靠**缓存目录**
+		// （那层目录取消了），改由三重簿记：自写台账 → 索引路径 → 内容哈希在台账里。
 		this.attachWatch = createAttachWatcher({
 			autoUpload: () => this.settings.autoUpload,
-			cacheFolder: () => this.settings.cacheFolder,
 			isSelfWrite: (path) => this.stagedPaths.has(path),
+			// ③ 内容哈希 ∈ 上传台账 —— 同步到达的副本靠它一眼认出（不必等满退避窗口）
+			isKnownCloudCopy: (path) => this.isKnownCloudCopy(path),
 			index: () => this.currentIndex(),
 			settings: () => this.settings,
 			// 每次现查（文件可能已经被别的流程搬走/删掉）—— 与 `TFile` 的形状解耦
@@ -357,6 +369,9 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		this.ensureLocalCopy = createLocalCopyEnsurer({
 			app: this.app,
 			settings: () => this.settings,
+			// ⚠️ 回退下载写下的文件同样会触发 `create`：写**之前**登记同一本自写台账，
+			// 否则自动接管那条链会把它当成"用户新加的附件"再上传一遍。
+			onStaged: (path) => this.stagedPaths.note(path),
 			// 每次现造：用户可能刚在设置页改完/选好密钥，抓快照会让"改了不生效"
 			// 以最难查的形式出现。拿不到客户端时返回 null（未配置 → 静默不下载）。
 			client: () => this.buildClient(),
@@ -467,10 +482,10 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		this.registerMarkdownPostProcessor((element, ctx) => {
 			// ⚠️ 这里**同步**完成，不 await —— 一旦 await，元素可能已连上 DOM
 			// 并开始加载远端图片，"零请求"就不成立了。理由见 render-hook 的头注释。
-			processImages(element, this.renderDeps());
+			processImages(element, this.renderDeps(ctx.sourcePath));
 			// 非图片的可预览附件（音频/视频/PDF）：宿主把它们渲染成了 `<img>`，
 			// 改 `src` 救不了，只能重建节点（见 render/embed-rebuild.ts）。
-			processEmbeds(element, this.embedDeps(), ctx.sourcePath, this.embedQueue());
+			processEmbeds(element, this.embedDeps(ctx.sourcePath), ctx.sourcePath, this.embedQueue());
 			// 站外图：判定是同步的，真正的下载/上传是 fire-and-forget。
 			this.externalHook?.process(element, ctx);
 		});
@@ -1526,6 +1541,26 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 *   （取证点 E-1c），少了它"只被画布文本引用的附件"会永远不被处理。
 	 *   多出来的候选由后续判据兜底，**少掉的那些才是真缺陷**。
 	 */
+	/**
+	 * 这个文件的**内容**是不是我们早就传过的（同步到达的副本判定，见 `attach-watch` ③）。
+	 *
+	 * 实现只有两步：读字节 → 算 sha256 → 问上传台账（`wasContentUploaded` 会按
+	 * `hashFromKey` 把 key 里的哈希段取出来比较 —— C2 之后 key 里还有名字，
+	 * 直接拿文件哈希去比 key 会**永远不相等**）。
+	 *
+	 * ⚠️ 任何一步出错都返回 `false`（= 不知道）。方向是刻意的：这一条只用来"提前
+	 * 认出自家副本"，答不上来时退回原来的行为（等引用），既不误判也不会卡住流程。
+	 */
+	private async isKnownCloudCopy(path: string): Promise<boolean> {
+		try {
+			const buffer = await this.app.vault.adapter.readBinary(path);
+			const hash = await sha256Hex(new Uint8Array(buffer));
+			return this.currentIndex().wasContentUploaded(hash);
+		} catch {
+			return false;
+		}
+	}
+
 	private async referencedVaultPaths(): Promise<ReadonlySet<string>> {
 		const referenced = new Set(referencedPathsFrom(this.app.metadataCache?.resolvedLinks));
 
@@ -1780,13 +1815,15 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 造不出来（文件不在、渲染器抛错）时返回 `null`：调用方**保留原元素**，
 	 * 绝不产出一个坏节点。
 	 */
-	private embedDeps(): EmbedRebuildDeps {
+	private embedDeps(sourcePath: string | null = null): EmbedRebuildDeps {
 		return {
 			settings: () => this.settings,
 			index: () => this.currentIndex(),
 			resourceUrlFor: (path) => this.resourceUrlFor(path),
 			ensureLocalCopy: async (key, remoteUrl) => {
-				const outcome = await this.ensureLocalCopy(key, remoteUrl);
+				// ⭐ `sourcePath` 在这里闭包捕获：回退下载的落点要靠它推"附件目录"
+				// （宿主的 `attachmentFolderPath` 取 `./` 时 = 与这篇笔记同目录）。
+				const outcome = await this.ensureLocalCopy(key, remoteUrl, sourcePath);
 				return outcome.localPath || null;
 			},
 			notePathFor: (element) => {
@@ -1825,7 +1862,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		};
 	}
 
-	private renderDeps(): RenderHookDeps {
+	private renderDeps(sourcePath: string | null = null): RenderHookDeps {
 		return {
 			settings: () => this.settings,
 			index: () => this.currentIndex(),
@@ -1833,7 +1870,9 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			// 渲染钩子只关心"补上了没有、在哪"，所以在这里把结果收敛成路径 ——
 			// 让渲染层不必知道下载层那套状态机（downloaded/reused/refused…）。
 			ensureLocalCopy: async (key, remoteUrl) => {
-				const outcome = await this.ensureLocalCopy(key, remoteUrl);
+				// ⭐ `sourcePath` 在这里闭包捕获：回退下载的落点要靠它推"附件目录"
+				// （宿主的 `attachmentFolderPath` 取 `./` 时 = 与这篇笔记同目录）。
+				const outcome = await this.ensureLocalCopy(key, remoteUrl, sourcePath);
 				return outcome.localPath || null;
 			},
 			onLocalCopyMissing: (key) => void this.forgetLocalCopy(key),

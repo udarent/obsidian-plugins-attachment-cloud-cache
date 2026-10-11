@@ -870,22 +870,21 @@ export async function runLoadAcceptance(options = {}) {
 			!noteText.includes("attachments/pic.png"),
 			`★ 两条本地链接都应被改写（短名与完整路径都要认）：${noteText}`
 		);
-		// ⭐ 设置的文案是「移入缓存目录」⇒ 上传成功后那份原文件**不在了**（移动、不是复制）。
+		// ⭐ 1.3.0（D-17）：上传成功后那份原文件**留在原地** —— 它本身就是本地副本，
+		// 没有缓存目录可搬（从前这里断言的是"原文件不在了"）。
 		assert.equal(
 			await existsOnDisk(root, attachmentPath),
-			false,
-			"★ 原文件应已被移入缓存目录（「移入」不是「另存一份」）"
+			true,
+			"★ 原文件应留在原地（副本就是它自己）"
 		);
-		// 搬到哪儿去了：缓存目录里应恰好出现一份**内容相同**的副本。
-		// ⚠️ 按**内容**找，不按"目录里有几个 .png"数 —— 前面几节自己也会往缓存目录写东西，
-		// 计数断言会被别的东西满足/破坏（这个套件已经踩过两次）。
-		const cacheDir = join(root, "_attachment-cache");
-		let movedMatches = 0;
-		for (const name of await readdir(cacheDir)) {
-			if (!name.endsWith(".png")) continue;
-			if (Buffer.compare(await readFile(join(cacheDir, name)), Buffer.from(BATCH_BYTES)) === 0) movedMatches += 1;
-		}
-		assert.equal(movedMatches, 1, `★ 缓存目录里应恰好有一份刚搬过来的副本（实测 ${movedMatches} 份）`);
+		assert.equal(
+			Buffer.compare(await readFile(join(root, attachmentPath)), Buffer.from(BATCH_BYTES)),
+			0,
+			"★ 留在原地的那份内容必须与原件逐字节一致"
+		);
+		// ⚠️ 这里**不**断言"缓存目录不存在"：本套件前面几节会主动往缓存目录里放东西
+		//（构造"缓存被清""轮换"这些场景），所以那个目录本来就存在。
+		// "不再建出缓存目录"由 ingest / download 两个套件在自己的干净环境里钉住。
 		// ⭐ 没有任何笔记引用的附件**一动不动**（既不传、也不搬、也不改名）
 		assert.ok(
 			await existsOnDisk(root, orphanPath),
@@ -1158,9 +1157,12 @@ export async function runLoadAcceptance(options = {}) {
 					return { entries: [] };
 				}
 			};
+			// ⭐ 1.3.0（D-17）：本地副本落在**附件目录**（本套件没配附件目录 ⇒ 就是 vault 根），
+			// 不再有缓存目录。这一节关心的是"本地副本有没有多出来"，所以列 vault 根下的**文件**。
 			const cacheFiles = async () => {
 				try {
-					return await readdir(join(root, cacheFolder));
+					const entries = await readdir(root, { withFileTypes: true });
+					return entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
 				} catch {
 					return [];
 				}
@@ -1224,7 +1226,7 @@ export async function runLoadAcceptance(options = {}) {
 			);
 			await waitFor(
 				async () => (await cacheFiles()).length > filesBefore.length,
-				"缓存目录里真的多了一个文件",
+				"vault 里真的多了一份本地副本",
 				5000,
 				() => `vault 里的文件：${treeOf()}`
 			);
@@ -1233,7 +1235,7 @@ export async function runLoadAcceptance(options = {}) {
 
 			const afterFiles = await cacheFiles();
 			const newFiles = afterFiles.filter((name) => !filesBefore.includes(name));
-			assert.equal(newFiles.length, 1, `★ 缓存目录应恰好多 1 个文件（实际 ${JSON.stringify(afterFiles)}）`);
+			assert.equal(newFiles.length, 1, `★ vault 里应恰好多 1 份本地副本（实际 ${JSON.stringify(afterFiles)}）`);
 
 			// 索引文件也要真的落盘 —— 只在内存里对，用户下次启动就会发现缓存"不被认识"
 			const afterIndex = await readIndex();
@@ -1258,7 +1260,7 @@ export async function runLoadAcceptance(options = {}) {
 			// ── 乙：同一份字节、另一个地址（= 这张图其实**已经在缓存里**了）──
 			//
 			// 内容寻址的必然结果：两个不同的外站 URL 只要字节相同就是**同一个 key**，
-			// 于是"缓存目录没有新文件"是**正确**行为 —— 本地副本早就在里面了。
+			// 于是"没有新的本地副本"是**正确**行为 —— 那份副本早就在了。
 			// 这一条必须钉住，因为用户看到的正是这一幕：它得是**可解释**的
 			//（"复用已有副本"），而不是看起来像什么都没做。
 			const sameBytesUrl = PICKER_REUSE_URL;
@@ -1286,7 +1288,7 @@ export async function runLoadAcceptance(options = {}) {
 			assert.deepEqual(
 				await cacheFiles(),
 				filesBeforeReuse,
-				"★ 已缓存过的图不该在缓存目录里多出文件（复用同一份副本，不是坏了）"
+				"★ 已缓存过的图不该多出本地副本（复用同一份，不是坏了）"
 			);
 			assert.equal(
 				(await readIndex()).entries.length,
@@ -1295,7 +1297,7 @@ export async function runLoadAcceptance(options = {}) {
 			);
 			// ⭐ 最要紧的一条：它改写成的地址应当**就是甲那条记录里的地址** ——
 			// 这才叫"复用了同一份副本"，而不是"碰巧也没写文件"。
-			// ⚠️ 用户看到的正是这一幕：说"已缓存"，而缓存目录没有新文件。
+			// ⚠️ 用户看到的正是这一幕：说"已缓存"，而没有新的本地副本出现。
 			// 那是**正确**行为（内容寻址：字节相同就是同一份），但它必须可解释 ——
 			// 所以这里把"指向的是同一份副本"钉死，好让将来改文案/加提示时有依据。
 			const reuseText = await readFile(join(root, reuseNote), "utf8");
@@ -1348,12 +1350,16 @@ export async function runLoadAcceptance(options = {}) {
 		}
 
 		// ============================================================
-		// 8c. 缓存上限：超过后自动淘汰「最久没用过」的副本
+		// 8c. 缓存上限：超过后自动淘汰「最久没用过」的**遗留**副本
 		//
-		// 这一轮验的是**入口有没有把这条链路接上**：设了上限之后，
-		// 后台轮换真的会去看一眼、真的会淘汰、并且真的只淘汰该淘汰的。
-		// 判定细节（挑谁、宽限期、腾不到目标怎么报）在 `test-rotation.mjs` 与
-		// `test-eviction.mjs` 里穷举。
+		// ⚠️ 1.3.0（D-17）之后这条链路**只对遗留缓存目录里的旧副本生效**：
+		// 新副本一律原地保留（附件就是副本），没有任何东西会再被写进缓存目录。
+		// 所以这一段直接**播下**一份遗留副本（模拟升级前的状态），而不是靠粘贴落进去
+		// ——粘贴已经不会落进缓存目录了。
+		//
+		// ⚠️ 轮换本体会在 **B2（产品面）**随「释放本地空间」命令一起退役，
+		// 那一段连同这一节一起删。判定细节（挑谁、宽限期、腾不到目标怎么报）
+		// 在 `test-rotation.mjs` 与 `test-eviction.mjs` 里穷举。
 		// ============================================================
 		{
 			// ⚠️ 先等"启动那一轮定时器"跑掉。它此刻**没有上限**、会立刻返回，
@@ -1364,41 +1370,29 @@ export async function runLoadAcceptance(options = {}) {
 				await new Promise((resolve) => setTimeout(resolve, STARTUP_WINDOW_MS - sinceLoad));
 			}
 
-			// 造一份够大的副本：1 MB 的上限之下必须**有东西可腾**，
-			// 而缓存目录里现有的那些都只有几十字节。
+			// 播一份够大的**遗留**副本：1 MB 的上限之下必须**有东西可腾**。
 			const bigBytes = new Uint8Array(2 * 1024 * 1024);
 			bigBytes.set(HOSTILE_BYTES);
-			const pastedBefore = editor.replaced.length;
-			app.workspace.trigger("editor-paste", makePasteEvent([makeFile("big.png", bigBytes)]), editor, {
-				file: { path: "notes/上限.md" },
-			});
-			await waitFor(() => editor.replaced.length > pastedBefore, "大图上传后链接被插入", 20000, diagnose);
-
-			// ⚠️ 必须让宿主的文件索引看到刚写下的缓存副本。
-			// 替身**刻意**让文件索引滞后于磁盘（那是真实行为：Obsidian 扫描有延迟），
-			// 而淘汰在"拿不到删除凭据"时会**跳过**（绝不退化为底层删除）——
-			// 不刷新的话，这一轮只会淘汰旧文件，刚上传的那份要等下一轮才轮得到。
+			const legacyKey = "legacy-big-1f.png";
+			const legacyPath = `${plugin.settings.cacheFolder}/${legacyKey}`;
+			await mkdir(join(root, plugin.settings.cacheFolder), { recursive: true });
+			await writeFile(join(root, legacyPath), Buffer.from(bigBytes));
 			await harness.refreshPathCache();
 
 			const index = plugin.indexStore.index;
-			const inserted = editor.replaced[pastedBefore] ?? "";
-			const uploadedUrl = /https?:\/\/[^\s)]+/.exec(inserted)?.[0] ?? "";
-			const entry = uploadedUrl ? index.findByRemoteUrl(uploadedUrl) : undefined;
-			assert.ok(entry, `★ 刚上传的图应登记进索引（插入的内容：${JSON.stringify(inserted)}）`);
-
-			// ⭐ 把全部条目的「最近使用」回拨两小时。
-			// 刚上传的副本落在宽限期内（10 分钟），轮换**故意**不动它们 —— 那是正确行为
-			//（避免"刚下载完就删掉"），但那样这条场景就永远只测到"什么都没发生"。
-			// 回拨等于告诉它"这些是两小时前用的"。
-			//
-			// ⚠️ 这里直接改字段，而不是走 `touch()`：`touch` 的语义是"刚被用到"，
-			// **有意**不允许把时间往回拨（试过 —— 回拨会被它拒掉，于是条目仍留在宽限期内，
-			// 整条场景变成"什么都没发生"）。测试要构造的正是"两小时前用过"这个状态。
-			const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
-			for (const key of index.keys()) {
-				const record = index.get(key);
-				if (record) record.lastUsedAt = twoHoursAgo;
-			}
+			index.set({
+				key: legacyKey,
+				cachePath: legacyPath,
+				remoteUrl: `${PUBLIC_BASE}/${legacyKey}`,
+				size: bigBytes.length,
+				contentType: "image/png",
+				etag: "",
+				uploadedAt: new Date().toISOString(),
+				// ⭐ 回拨两小时：刚写下的条目落在宽限期内，轮换**故意**不动它们
+				//（避免"刚下载完就删掉"），那样这条场景就永远只测到"什么都没发生"。
+				lastUsedAt: Date.now() - 2 * 60 * 60 * 1000,
+				sourceName: legacyKey,
+			});
 
 			const entriesBefore = index.size;
 			const deletedBefore = harness.calls.delete.length;
@@ -1409,14 +1403,14 @@ export async function runLoadAcceptance(options = {}) {
 			plugin.settings.cacheLimitMb = 1;
 			await plugin.saveSettings();
 
-			await waitFor(() => !index.has(entry.key), "超限后自动淘汰了最久没用过的副本", 20000, diagnose);
+			await waitFor(() => !index.has(legacyKey), "超限后自动淘汰了最久没用过的遗留副本", 20000, diagnose);
 
-			assert.equal(await existsOnDisk(root, entry.cachePath), false, "★ 被淘汰的副本要真的离开磁盘");
+			assert.equal(await existsOnDisk(root, legacyPath), false, "★ 被淘汰的副本要真的离开磁盘");
 			// ⭐ 缓存清理只有一种方式：`Vault.delete` ⇒ 磁盘空间**立刻**释放。
 			// 这条断言的意义就是"上限真的解决了空间问题"：走回收站的话文件会离开 vault，
 			// 但那份空间仍然占着，于是"设了上限，磁盘还是满的"。
 			assert.ok(
-				harness.calls.delete.includes(entry.cachePath),
+				harness.calls.delete.includes(legacyPath),
 				"★ 自动淘汰也必须用 Vault.delete（立刻释放空间才是设上限的目的）"
 			);
 			assert.equal(

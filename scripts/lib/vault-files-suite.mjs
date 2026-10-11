@@ -15,8 +15,18 @@
 
 import assert from "node:assert/strict";
 
+/** 假的宿主：`getConfig("attachmentFolderPath")` 返回给定的值（真机实测它存在且可用）。 */
+function hostApp(configured) {
+	return { vault: { getConfig: () => configured } };
+}
+
+const app = hostApp("attachments");
+const sameFolderApp = hostApp("./");
+
 export async function runVaultFilesSuite(mod) {
 	const {
+		attachmentFolderFor,
+		cleanFolderPath,
 		contentTypeForExtension,
 		DEFAULT_CONTENT_TYPE,
 		embedKindFor,
@@ -329,7 +339,35 @@ export async function runVaultFilesSuite(mod) {
 		assert.equal(isEmbeddable(ext), false, `isEmbeddable(${JSON.stringify(ext)}) 应为 false`);
 	}
 
+	// ============================================================
+	// 落点目录的解析（1.3.0 起从 ingest 搬到这一层：下载那条路也要用**同一个**答案）
+	//
+	// 顺序是硬要求：**用户的覆盖值 → 宿主自己的附件位置 → vault 根**。
+	// 这个顺序曾经写反过（先问宿主的 API、问不到才读设置值），而桌面版那个 API
+	// 一直存在 ⇒ 用户填的覆盖目录**永远轮不到**：界面能填、能保存、行为不对。
+	// ============================================================
+
+	// ① 覆盖值优先，且要归一
+	assert.equal(attachmentFolderFor(app, "myattach", "notes/a.md"), "myattach", "填了覆盖就用覆盖");
+	assert.equal(attachmentFolderFor(app, "\\my\\子目录\\", "notes/a.md"), "my/子目录", "覆盖值要归一（反斜杠/首尾斜杠）");
+	// ② 留空 ⇒ 跟随宿主（宿主没配就是 vault 根）
+	assert.equal(attachmentFolderFor(app, "", "notes/a.md"), "attachments", "留空时应继续跟随宿主的附件设置");
+	assert.equal(attachmentFolderFor({}, "", "notes/a.md"), "", "拿不到宿主配置时退回 vault 根（不是失败）");
+	// ⚠️ 这条排在"留空跟随"之后：它同样依赖宿主那一层（`/` 只是"没填"的另一种写法），
+	// 顺序颠倒会让"宿主被忽略"这个变异红在这一句上，而不是红在"跟随"那句上。
+	assert.equal(attachmentFolderFor(app, "/", "notes/a.md"), "attachments", "覆盖值是 `/` = 没填 ⇒ 跟随宿主");
+
+	// ③ 宿主的 `./` = 与笔记同目录（相对写法，必须按触发它的笔记反推）
+	assert.equal(attachmentFolderFor(sameFolderApp, "", "notes/子目录/a.md"), "notes/子目录", "`./` 应落在笔记旁边");
+	assert.equal(attachmentFolderFor(sameFolderApp, "", ""), "", "拿不到笔记路径时退回 vault 根");
+
+	// ④ 归一：`/` 与空串都表示"根"；非字符串当作"没填"
+	assert.equal(cleanFolderPath("/"), "", "`/` 表示没指定目录");
+	assert.equal(cleanFolderPath("/a/b/"), "a/b", "首尾斜杠要剥掉");
+	assert.equal(cleanFolderPath(42), "", "非字符串当作没填（`String(对象)` 会造出一个怪目录名）");
+
 	return {
 		extensionCases: 12 + 9 + 6 + 9 + 6,
+		placementCases: 10,
 	};
 }

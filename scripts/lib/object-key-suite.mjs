@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 
 export function runObjectKeySuite(mod) {
-	const { renderObjectKey, sanitizeFilename, sanitizeKey, displayNameForKey, DEFAULT_KEY_TOKENS, DEFAULT_OBJECT_KEY_TEMPLATE } = mod;
+	const { renderObjectKey, sanitizeFilename, sanitizeKey, displayNameForKey, hashFromKey, DEFAULT_KEY_TOKENS, DEFAULT_OBJECT_KEY_TEMPLATE } = mod;
 
 	const hash = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
 	const fullHash = "d472a4c9f0b8e1a2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef00123"; // 恰好 64 位
@@ -157,4 +157,24 @@ export function runObjectKeySuite(mod) {
 
 	// ---------- 15. displayNameForKey：无扩展名的 key 也能还原 ----------
 	assert.equal(displayNameForKey(`报告-${fullHash}`), "报告", "无扩展名时返回纯名字");
+
+	// ---------- 16. hashFromKey：C2 形状取哈希段 ----------
+	//
+	// 这一条是"这份内容我们传过吗"的判据基础（`CacheIndex.wasContentUploaded`）——
+	// C2 之后 key 里有名字，拿文件哈希直接比 key 会**永远不相等**，必须能取哈希段。
+	assert.equal(hashFromKey(`报告 扫描-${fullHash}.pdf`), fullHash, "C2 key 应取出哈希段（名字与扩展名都要剥掉）");
+
+	// ---------- 17. hashFromKey：老形状整个基名就是哈希 ----------
+	assert.equal(hashFromKey(`${fullHash}.png`), fullHash, "老 key 的基名就是哈希");
+	assert.equal(hashFromKey(fullHash), fullHash, "没有扩展名时也认");
+
+	// ---------- 18. hashFromKey：取不到一律 null（绝不猜）----------
+	assert.equal(hashFromKey("报告-a1b2c3d4.png"), null, "短十六进制尾不是哈希（放宽会把用户的名字当哈希）");
+	assert.equal(hashFromKey("report.pdf"), null, "自定义模板的 key 与内容无可推导关系 ⇒ 必须返回 null");
+	assert.equal(hashFromKey(""), null, "空 key 返回 null");
+	assert.equal(hashFromKey(null), null, "非字符串返回 null");
+
+	// ---------- 19. hashFromKey：路径入参只取末段、大小写归一 ----------
+	assert.equal(hashFromKey(`C:////cache////报告-${fullHash}.pdf`), fullHash, "Windows 路径应取末段");
+	assert.equal(hashFromKey(`报告-${fullHash.toUpperCase()}.pdf`), null, "大写十六进制不认（与 displayNameForKey 同一判据）");
 }

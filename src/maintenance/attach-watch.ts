@@ -40,6 +40,30 @@
  * "扫全库求引用集合 + 改笔记"重复 N 次，还会**并发改写同一篇笔记**。
  * 所以攒成一个批次：一次求引用、一次执行、一条通知。
  *
+ * ## ⭐ 1.3.0（D-17）：判据从"物理边界"改成"三重簿记"
+ *
+ * 从前这里有一道**物理**闸门：新文件落在缓存目录里就一定是我们自己的副本
+ * （回退下载写的、同步过来的）—— "少了这条，一次同步就能让每台设备互相传一遍"。
+ * 取消缓存目录之后，我们的副本与用户的附件**混在同一个目录里**，物理边界没有了，
+ * 于是这件事改由三条**可查的簿记**判定（任一命中即终局跳过）：
+ *
+ * ① **自写台账命中**（`isSelfWrite`）：插件往 vault 里写任何文件之前都会登记
+ *    （粘贴的中转文件、回退下载的副本、将来的迁移落点）；
+ * ② **索引里已有一条指向这个路径的副本**（`findByCachePath`）：我们自己的副本，
+ *    索引在就认得出来；
+ * ③ **文件内容在上传台账里**（`isKnownCloudCopy`）：同步到达的副本 —— 它的内容
+ *    我们早就传过（key 里带哈希，见 `CacheIndex.wasContentUploaded`），
+ *    而笔记里引用它的是**云端地址**，所以"没有本地引用"是正常状态、不是"还没到时候"。
+ *
+ * ⚠️ 这三条与 N11 那个教训（借**会缺档的**簿记判归属 ⇒ 判据在某一档恒假）
+ * 的区别在于：① 由我们自己在写之前登记、② 靠索引、③ 靠内容哈希，**都不依赖档位**；
+ * 而且万一判错也**不是静默失效**：误把自家副本当新附件，走到上传那一步会因为
+ * 内容寻址命中已有 key 而**零网络幂等**（见 `core/ingest.ts` 第 2 步）。
+ *
+ * ⚠️ ③ 只在"文件还没被任何笔记引用"时才问（被引用的文件本来就该接管），
+ * 而且失败方向是**不接管**：漏接管一个外部新文件是可恢复的（文件原地不动，
+ * 「上传已有的附件」命令随时可补），而误判的代价是让自家副本反复走接管流程。
+ *
  * ## 两类"不接管"的处置：静默 + 日志
  *
  * - **上传失败**：不重试。在手机上刷第二条失败通知解决不了问题，重试的正确入口是
@@ -49,7 +73,6 @@
  *   把正常操作报成错误比不报更糟。文件仍在库里，命令随时可补。
  */
 
-import { isUnderCacheFolder } from "../cache-path";
 import type { CacheIndex } from "../cache/index";
 import type { PluginSettings } from "../types";
 import { describeError } from "../error-text";
@@ -69,10 +92,15 @@ export interface AttachWatchDecisionInput {
 	file: VaultFileLike | null | undefined;
 	/** 设置项 `autoUpload`（关掉则这一步**一步都不碰**，与粘贴那条路一致）。 */
 	autoUpload: boolean;
-	/** 缓存目录（判断"这个新文件是不是我们自己的副本"）。 */
-	cacheFolder: string;
-	/** 这个路径是不是我们自己刚落盘的中转文件（见 `IngestDeps.onStaged`）。 */
+	/** 这个路径是不是我们自己刚写下的文件（见 `IngestDeps.onStaged` / `LocalCopyDeps.onStaged`）。 */
 	isSelfWrite: boolean;
+	/**
+	 * 这个文件的内容**已经在云端台账里**吗（同步到达的副本）。
+	 *
+	 * ⚠️ 由调用方**按需**算好（要读文件、算哈希），只在"它还没被引用"时才有意义 ——
+	 * 见模块头 ③。缺省 `false` = 当作不知道（那就走"再等引用"的老路）。
+	 */
+	knownCloudCopy?: boolean;
 	/** 索引（判断"是不是已经登记过的副本"）。 */
 	index: CacheIndex;
 	settings: PluginSettings;
@@ -112,15 +140,15 @@ export function decideAdoptCreatedFile(input: AttachWatchDecisionInput): AttachW
 
 	if (!input.autoUpload) return { adopt: false, reason: "自动上传已关闭", retry: false };
 
-	// 缓存目录里的新文件是**我们自己的副本**（回退下载写的、同步过来的），
-	// 不是用户新加的附件。少了这条，一次同步就能让每台设备互相传一遍。
-	if (isUnderCacheFolder(path, input.cacheFolder)) {
-		return { adopt: false, reason: "在缓存目录里（我们自己的副本）", retry: false };
-	}
+	// ① 我们自己刚写下的文件（粘贴的中转文件、回退下载的副本、将来的迁移落点）。
+	// 这条路自己会接管它，这里再管一次就是重复上传。
+	if (input.isSelfWrite) return { adopt: false, reason: "是我们自己刚写下的文件", retry: false };
 
-	// 粘贴那条路的"先落盘再上传"会先在附件目录里写一份中转文件。
-	// 它已经被那条路自己接管了（上传完就搬进缓存），这里再管一次就是重复上传。
-	if (input.isSelfWrite) return { adopt: false, reason: "是我们自己刚落盘的中转文件", retry: false };
+	// ② 索引里已经有一条指向这个路径的副本 ⇒ 它是我们的副本（老缓存目录里搬出来的、
+	// 或从别的设备同步过来的索引）。终局判定：再等也不会变。
+	if (input.index.findByCachePath(path)) {
+		return { adopt: false, reason: "已经是索引里登记的本地副本", retry: false };
+	}
 
 	const selection = selectUploadCandidates([input.file as VaultFileLike], {
 		settings: input.settings,
@@ -130,8 +158,30 @@ export function decideAdoptCreatedFile(input: AttachWatchDecisionInput): AttachW
 	if (selection.paths.length === 1) return { adopt: true, reason: "ok", retry: false };
 
 	const reason = selection.skipped[0]?.reason ?? "未知原因";
-	// ⭐ 只有"还没被引用"值得等一轮 —— 判据是**这个事实本身**，不是那句文案
-	return { adopt: false, reason, retry: !input.referencedPaths.has(path) };
+
+	// ⭐ 只有"**只差一个引用**"值得等一轮。
+	//
+	// 判法：把这条路径**假装成被引用**再筛一次 —— 它若通过，说明唯一的拦路条件就是
+	// "还没被引用"（宿主的链接是在文件落盘**之后**才插进笔记的，所以那是"还没到时候"）；
+	// 若仍被拒（笔记文件 / 空文件 / 已在索引……），那就是终局，再等也不会变。
+	//
+	// ⚠️ 刻意**不去认那句跳过的文案**：文案改了，认文案的判据会**静默失效**
+	// （本项目已经吃过这个形状的亏）。
+	const onlyMissingReference =
+		selectUploadCandidates([input.file as VaultFileLike], {
+			settings: input.settings,
+			index: input.index,
+			referencedPaths: new Set([path]),
+		}).paths.length === 1;
+	if (!onlyMissingReference) return { adopt: false, reason, retry: false };
+
+	// ③ 内容已经在云端（同步到达的副本）⇒ 终局跳过：引用它的是**云端地址**，
+	// 所以"没有本地引用"是它的正常状态，等下去也不会有引用出现。
+	if (input.knownCloudCopy) {
+		return { adopt: false, reason: "内容是云端已有的（同步到达的副本）", retry: false };
+	}
+
+	return { adopt: false, reason, retry: true };
 }
 
 /** 一次接管的执行结果（`runBatchUpload` 的返回值是这个形状的超集）。 */
@@ -206,8 +256,14 @@ export function createSelfWriteLedger(options: { ttlMs?: number; now?: () => num
 
 export interface AttachWatchDeps {
 	autoUpload: () => boolean;
-	cacheFolder: () => string;
 	isSelfWrite: (path: string) => boolean;
+	/**
+	 * 这个文件的内容是不是**我们早就传过的**（见 `CacheIndex.wasContentUploaded`）。
+	 *
+	 * 不接这条探针时退化为"当作不知道" —— 那种情况下同步到达的副本会走完
+	 * 退避重试（约 10 秒）后才被放弃，行为仍然正确，只是多做几轮无用功。
+	 */
+	isKnownCloudCopy?: (path: string) => Promise<boolean>;
 	index: () => CacheIndex;
 	settings: () => PluginSettings;
 	/** 现查文件（已经不在库里时返回 `null`）。 */
@@ -270,6 +326,33 @@ export function createAttachWatcher(deps: AttachWatchDeps): AttachWatcher {
 		}, delay);
 	};
 
+	/**
+	 * "这份内容我们早就传过吗"的**带记忆**探针。
+	 *
+	 * 记忆的键是 `路径 + 大小`：同一个文件在退避的几轮里会被问好几次，
+	 * 而每次都要读文件 + 算 sha256（手机上可能是几十 MB 的视频）。
+	 * 文件名相同但大小变了 ⇒ 当作另一个文件重算（同步正在写入时可能发生）。
+	 *
+	 * 探针失败/未接线一律返回 `false`（= 不知道）⇒ 回到"再等引用"的老路。
+	 */
+	const cloudCopyMemo = new Map<string, boolean>();
+	const readKnownCloudCopy = async (path: string, file: VaultFileLike): Promise<boolean> => {
+		const probe = deps.isKnownCloudCopy;
+		if (!probe) return false;
+		const cacheKey = `${path}\u0000${String(file.stat?.size ?? "")}`;
+		const remembered = cloudCopyMemo.get(cacheKey);
+		if (remembered !== undefined) return remembered;
+		let known = false;
+		try {
+			known = (await probe(path)) === true;
+		} catch (error) {
+			log(`判断"内容是否已在云端"失败，按"不知道"处理：${describeError(error)}`);
+			known = false;
+		}
+		cloudCopyMemo.set(cacheKey, known);
+		return known;
+	};
+
 	/** 求引用集合；失败时当作"空集"（= 都还没被引用 ⇒ 继续等，是保守的那一侧）。 */
 	const readReferenced = async (): Promise<ReadonlySet<string>> => {
 		try {
@@ -298,15 +381,16 @@ export function createAttachWatcher(deps: AttachWatchDeps): AttachWatcher {
 				continue;
 			}
 
-			const verdict = decideAdoptCreatedFile({
+			const base = {
 				file,
 				autoUpload: deps.autoUpload(),
-				cacheFolder: deps.cacheFolder(),
 				isSelfWrite: deps.isSelfWrite(path),
 				index: deps.index(),
 				settings: deps.settings(),
 				referencedPaths: referenced,
-			});
+			};
+
+			const verdict = decideAdoptCreatedFile(base);
 
 			if (verdict.adopt) {
 				adoptable.push(path);
@@ -314,6 +398,14 @@ export function createAttachWatcher(deps: AttachWatchDeps): AttachWatcher {
 				continue;
 			}
 			if (verdict.retry) {
+				// ⭐ 走到这里说明"只差一个引用"。再花一次哈希问：内容是不是**早就传过**的？
+				// （同步到达的副本就是这种：引用它的是云端地址，不会再有本地引用出现。）
+				const known = await readKnownCloudCopy(path, file);
+				if (known) {
+					log(`跳过（内容是云端已有的副本，同步到达）：${path}`);
+					pendingPaths.delete(path);
+					continue;
+				}
 				waiting.push(path);
 				continue;
 			}

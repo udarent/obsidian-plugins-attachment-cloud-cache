@@ -183,27 +183,25 @@ export async function runIngestSuite(mod) {
 	// ============================================================
 	// 1. planLocalCopy —— 纯函数，先穷举（它把"用户选了什么"翻译成"我们做什么"）
 	//
-	// ⚠️ 签名从 (action, cacheEnabled, cachePathUsable) 变成了 (action, cachePathUsable)。
-	// 旧签名里 `action: "cache"` + `cacheEnabled: false` 是一个**静默矛盾**组合：
-	// 用户选了"移入缓存"，实际得到"原地保留"，而界面上看不出任何异常。
-	// 合并成一个 LocalCopyAction 之后，这种状态在类型上就不存在了 ——
-	// 所以这里的用例少了一维，而每一维都唯一对应一个结果。
+	// ⚠️ 1.3.0（D-17）取消了缓存目录，"搬进缓存"这一态随之消失：
+	// 签名从 (action, cachePathUsable) → (action)，结果集从三个 → 两个。
+	//
+	// 历史留在这里（免得以后再绕回去）：
+	// ① `cacheEnabled` 与 `localFileAction` 不**正交**，二者能组成"选了移入缓存却得到
+	//    原地保留"的静默矛盾 ⇒ 先合并成单个 `LocalCopyAction`；
+	// ② 合并之后仍有 `cache` 这一档，而它的唯一含义就是"搬到缓存目录" ⇒
+	//    那条目录本身被取消后，这一档与 `keep` 同义，于是它也从结果集里消失了。
 	// ============================================================
-	assert.equal(planLocalCopy("trash", true), "trash", "选回收站就是回收站（不留本地副本 ⇒ 离线看不了）");
-	assert.equal(planLocalCopy("trash", false), "trash", "回收站与缓存路径能否推导无关");
-	assert.equal(planLocalCopy("cache", true), "move-to-cache", "默认组合应搬进缓存");
-	assert.equal(planLocalCopy("cache", false), "keep-in-place", "缓存路径不可推导时原地保留（宁可留文件，不丢图）");
-	assert.equal(planLocalCopy("keep", true), "keep-in-place", "原地保留就是原地保留");
-	// 「三个取值必须产生三个不同结果」这条曾经单独asserted过，现已删除：
-	// 上面五条已经逐一把每个取值钉到唯一的结果上，于是"互不相同"是被**蕴含**的，
-	// 任何破坏互不相同的改动都会先撞上其中某一条 —— 它永远轮不到自己失败。
-	// 一条永远不红的断言就是影子断言，留着只会让"变异全都抓住了"这句话变得不可信。
-	// （真正要防的"假选项"由 `isLocalCopyAction("ask") === false` 与选项集断言守着。）
-	// 反向守护：不能出现"任何输入都返回 move-to-cache"
-	assert.notEqual(planLocalCopy("keep", true), "move-to-cache", "keep 不得被当成 cache");
+	assert.equal(planLocalCopy("trash"), "trash", "选回收站就是回收站（不留本地副本 ⇒ 离线看不了）");
+	assert.equal(planLocalCopy("keep"), "keep-in-place", "原地保留就是原地保留");
+	// 老设置的 `"cache"`（1.2.0 之前的值）现在与 keep 同义 —— 副本**就是**附件本身，
+	// 没有第二个地方可去。这条同时钉住"不该有人偷偷搬文件"。
+	assert.equal(planLocalCopy("cache"), "keep-in-place", "老设置的 cache 已与原地保留同义（没有缓存目录可搬）");
+	// 反向守护：不能出现"任何输入都返回 trash"（那会把用户的图全丢进回收站）
+	assert.notEqual(planLocalCopy("keep"), "trash", "keep 不得被当成 trash");
 
 	// ============================================================
-	// 2. 正常路径：上传 → 搬进缓存 → 登记索引
+	// 2. 正常路径：上传 → **原地保留** → 登记索引（1.3.0：副本就是附件本身）
 	// ============================================================
 	await withHarness(mod, {}, async (h) => {
 		const result = await ingestAttachment(h.deps, {
@@ -222,11 +220,9 @@ export async function runIngestSuite(mod) {
 			`${h.endpoint}/${BUCKET}/${expectedKey}`,
 			"远端 URL 应是端点/桶/key（没配 publicUrlBase 时）"
 		);
-		assert.equal(
-			result.localPath,
-			`_attachment-cache/${expectedKey}`,
-			"默认布局是 mirror，缓存路径应与 key 一一对应"
-		);
+		// ⭐ 1.3.0（D-17）：副本 = 附件目录里那份原文件（**不再**按 key 镜像到缓存目录）。
+		// 落点由宿主的附件设置决定（这里宿主没配 ⇒ vault 根），名字用**原始文件名**。
+		assert.equal(result.localPath, "photo.png", "副本应原地保留在附件目录，且用原始文件名");
 
 		// ── 网络：恰好 1 次 PUT、0 次 GET ──
 		assert.equal(h.server.countByMethod("PUT"), 1, "上传应当**恰好** 1 次 PUT");
@@ -238,9 +234,9 @@ export async function runIngestSuite(mod) {
 			"应声明 Content-Type（否则浏览器里是下载而不是显示）"
 		);
 
-		// ── 磁盘：缓存文件真的存在，且字节与本地逐字节一致 ──
+		// ── 磁盘：那份副本真的存在，且字节与本地逐字节一致 ──
 		const cached = await h.read(result.localPath);
-		assert.ok(cached, `缓存文件必须真的落盘：${result.localPath}`);
+		assert.ok(cached, `副本必须真的落盘：${result.localPath}`);
 		assert.equal(Buffer.compare(cached, Buffer.from(HOSTILE_BYTES)), 0, "缓存副本必须与原始字节逐字节一致");
 		assert.equal(
 			Buffer.compare(h.server.stored(expectedKey), Buffer.from(HOSTILE_BYTES)),
@@ -248,12 +244,17 @@ export async function runIngestSuite(mod) {
 			"服务端收到的字节必须与原始字节逐字节一致"
 		);
 
-		// ── "移动"而不是"复制"：附件目录里不应留下副本 ──
+		// ── ⭐ 关键反转（1.3.0 / D-17）：文件**原地不动** ──
+		//
+		// 从前这里断言的是"原文件已被搬走、附件目录里不该留副本"。
+		// 现在恰好相反：那份文件**就是**本地副本，搬走它等于把用户的附件拿走。
+		assert.equal(await h.exists("photo.png"), true, "⭐ 上传后原文件必须**留在原地**（它本身就是本地副本）");
 		assert.equal(
-			await h.exists("photo.png"),
-			false,
-			"上传成功后原文件应被**移动**进缓存目录，附件目录里不该留副本"
+			Buffer.compare(await h.read("photo.png"), Buffer.from(HOSTILE_BYTES)),
+			0,
+			"留在原地的那份内容必须与粘贴的字节逐字节一致"
 		);
+		assert.equal(await h.exists("_attachment-cache"), false, "⭐ 不再有任何缓存目录被建出来");
 
 		// ── 索引登记 ──
 		const entry = h.index.get(expectedKey);
@@ -318,20 +319,20 @@ export async function runIngestSuite(mod) {
 		assert.equal(h.server.countByMethod("GET"), 0, "复用路径上不该有任何下载");
 	});
 
-	// ⚠️ 复用的前提是**索引里有记录**，而不是"缓存目录里恰好有个同名文件"。
+	// ⚠️ 复用的前提是**索引里有记录**，而不是"附件目录里恰好有个同名文件"。
 	// 那个文件可能是同步过来的、或用户手工放进去的 —— 我们并不确定它上传过。
 	//
-	// 这一条同时记录了一个**刻意的取舍**：目标路径已占用时，实现一律另取序号
+	// 这一条同时记录了一个**刻意的取舍**：目标路径已占用时，落盘一律另取序号
 	// （`… .png` → `… 1.png`），而**不是**判断"内容相同就直接复用"。
-	// 理由：只有当 key 完全由内容决定（模板含 `{hash}` 且不含 `{filename}`/`{date}`）时，
-	// "同路径 ⇒ 同内容"才成立；用户可以把模板改成 `{filename}`，那时同路径可能是**不同内容**，
+	// 理由：只有当 key 完全由内容决定（模板含 `{hash}`）时"同路径 ⇒ 同内容"才成立；
+	// 用户可以把模板改成 `{filename}`，那时同路径可能是**不同内容**，
 	// 直接复用就等于认错了文件。另取序号的代价只是"索引丢失后重贴同一张图会多一份副本"，
-	// 而多出来的那份会被 Phase 6 的"清理未使用缓存"收掉 —— 用一点可回收的空间
+	// 而那份副本用户随时可以在「释放本地空间」里收掉 —— 用一点可回收的空间
 	// 换"任何模板下都不会认错文件"，这个交换是划算的。
 	await withHarness(mod, {}, async (h) => {
 		const key = `${sha256Hex(HOSTILE_BYTES)}.png`;
-		const cachePath = `_attachment-cache/${key}`;
-		await h.write(cachePath, Buffer.from(HOSTILE_BYTES)); // 只放文件，不登记索引
+		const occupied = "photo.png";
+		await h.write(occupied, Buffer.from(HOSTILE_BYTES)); // 只放文件，不登记索引
 
 		const result = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "photo.png", mime: "image/png" });
 		assert.equal(result.status, "uploaded", "索引里没有记录时必须真的上传（不能只看文件在不在）");
@@ -339,16 +340,13 @@ export async function runIngestSuite(mod) {
 
 		// 已存在的那份**不得被改动**
 		assert.equal(
-			Buffer.compare(await h.read(cachePath), Buffer.from(HOSTILE_BYTES)),
+			Buffer.compare(await h.read(occupied), Buffer.from(HOSTILE_BYTES)),
 			0,
-			"已存在的缓存文件必须原封不动（它可能是同步来的、也可能是用户自己放的）"
+			"已存在的同名文件必须原封不动（它可能是同步来的、也可能是用户自己放的）"
 		);
-		// 新的副本落在缓存目录内的另一个名字下，且内容一致
-		assert.ok(
-			result.localPath.startsWith("_attachment-cache/"),
-			`新副本仍应落在缓存目录里，实际 ${result.localPath}`
-		);
-		assert.notEqual(result.localPath, cachePath, "目标已占用时应另取序号，绝不覆盖");
+		// 新的副本另取序号，且内容一致
+		assert.notEqual(result.localPath, occupied, "目标已占用时应另取序号，绝不覆盖");
+		assert.equal(result.localPath, "photo 1.png", "同名策略应是加序号");
 		assert.equal(
 			Buffer.compare(await h.read(result.localPath), Buffer.from(HOSTILE_BYTES)),
 			0,
@@ -470,7 +468,7 @@ export async function runIngestSuite(mod) {
 	});
 
 	// ============================================================
-	// 6. localCopy = keep → 副本留在附件目录，索引指向它
+	// 6. localCopy = keep → 副本留在附件目录，索引指向它（1.3.0 起这是**唯一**的保留形态）
 	// ============================================================
 	await withHarness(mod, { settings: { localCopy: "keep" } }, async (h) => {
 		const result = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "keep-me.png", mime: "image/png" });
@@ -538,12 +536,13 @@ export async function runIngestSuite(mod) {
 		assert.equal(result.status, "uploaded");
 		const expectedKey = `2026-10-06/${sha256Hex(HOSTILE_BYTES)}.png`;
 		assert.equal(result.key, expectedKey, "key 应按模板带上日期目录");
-		assert.equal(result.localPath, `_attachment-cache/${expectedKey}`, "mirror 布局下缓存路径应与 key 同构");
-		assert.ok(await h.exists(result.localPath), "嵌套的缓存文件必须真的落盘（中间目录要能自动建出）");
+		// ⭐ 1.3.0：key 里的目录**不再**映到本地路径（本地副本是附件本身，不是镜像目录树）。
+		assert.equal(result.localPath, "nested.png", "本地副本就是附件本身（key 的目录结构不再镜像到 vault）");
+		assert.ok(await h.exists(result.localPath), "副本必须真的落盘");
 		assert.equal(
 			Buffer.compare(await h.read(result.localPath), Buffer.from(HOSTILE_BYTES)),
 			0,
-			"嵌套路径下的缓存副本字节应一致"
+			"副本字节应一致"
 		);
 		// 服务端存的是带目录的 key
 		assert.ok(h.server.stored(expectedKey), "服务端应存下带目录的 key");
@@ -560,7 +559,32 @@ export async function runIngestSuite(mod) {
 			h.index.get(result.key)?.sourceName.includes("Pasted image"),
 			"无文件名时应造一个可读的名字，方便用户在附件目录里辨认"
 		);
-		assert.ok(await h.exists(result.localPath), "缓存副本应落盘");
+		assert.ok(await h.exists(result.localPath), "副本应落盘");
+	});
+
+	// ============================================================
+	// 10b. ⭐ 名字里那段"扩展名"不是真扩展名时，落盘名要补上真实类型
+	//
+	// 1.3.0（D-17）之后，**落地的那份名字就是最终名字**（不再有"按 key 重命名"那一步）。
+	// 而 Obsidian 按名字判断怎么显示一个附件：名字没有类型 ⇒ 缓存明明成功了，
+	// 用户却看不到图，以为"没缓存"。站外图片的 URL 尾巴正是这种名字
+	// （`OIP-C.sPb8lvTxu-zlEqgEmUgCTwAAAA`）。
+	// ============================================================
+	await withHarness(mod, {}, async (h) => {
+		const urlTail = "OIP-C.sPb8lvTxu-zlEqgEmUgCTwAAAA";
+		const result = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: urlTail, mime: "image/png" });
+
+		assert.equal(result.status, "uploaded");
+		assert.equal(result.localPath, "OIP-C.png", "名字里那段令牌不是扩展名 ⇒ 去掉它、换成真实类型");
+		assert.equal(await h.exists(result.localPath), true, "那份副本要真的落盘");
+		// ⚠️ 链接的显示名**保持原样**（用户认的是它，不该被我们改）
+		assert.equal(result.name, urlTail, "显示的原始文件名不该被改动（只有落盘名补类型）");
+	});
+
+	// 反向守护：名字本来就带正常扩展名 ⇒ **一个字符都不许动**
+	await withHarness(mod, {}, async (h) => {
+		const result = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "我的 照片.png", mime: "image/png" });
+		assert.equal(result.localPath, "我的 照片.png", "名字里的扩展名正常时不要动它（用户起的名字优先）");
 	});
 
 	// ============================================================
@@ -644,12 +668,15 @@ export async function runIngestSuite(mod) {
 	});
 
 	// ============================================================
-	// 14. 缓存路径不可推导（缓存目录配成空）→ 降级为原地保留，而不是崩
+	// 14. 老设置里 `cacheFolder` 为空/留着旧值时，行为**完全不受影响**
+	//
+	// 1.3.0 之前这是一个真实的分支（"缓存路径推不出来 ⇒ 降级为原地保留"）。
+	// 现在没有任何路径依赖它 —— 这条用例保留下来，钉住"残留的旧设置值不会改变行为"。
 	// ============================================================
 	await withHarness(mod, { settings: { cacheFolder: "" } }, async (h) => {
 		const result = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "c.png", mime: "image/png" });
-		assert.equal(result.status, "uploaded", "缓存路径推导不出来时也要能上传（用户的图不能因为配置怪就传不上去）");
-		assert.equal(result.localPath, "c.png", "退化为原地保留");
+		assert.equal(result.status, "uploaded", "旧设置值不该让上传失败");
+		assert.equal(result.localPath, "c.png", "副本仍落在附件目录");
 		assert.ok(await h.exists("c.png"), "文件应留在附件目录");
 	});
 
@@ -802,16 +829,15 @@ export async function runIngestSuite(mod) {
 	);
 
 	// ============================================================
-	// 18. ⭐⭐ 迁移已有附件（`existingPath`）：不落中转副本；上传成功后**移入**缓存目录
+	// 18. ⭐⭐ 迁移已有附件（`existingPath`）：不落中转副本；上传成功后**也不搬动它**
 	//
 	// 批量上传时调用方直接把"库里那个文件"指出来。此时若仍走"先落盘再上传"，
 	// 附件目录里就会凭空多出一个 `existing 1.png`（原文件占着名字 ⇒ 另取序号）。
 	//
-	// ⭐ 处置与粘贴路径**一致**（2026-10-09 用户定的）：`localCopy: "cache"` ⇒
-	// 上传成功后把那个文件**移动并重命名**进缓存目录 —— 这就是设置项
-	// 「移入缓存目录」的兑现方式。能这么做的前提在**调用方**：
-	// 它只把"确实被笔记引用着"的文件交进来（`selectUploadCandidates` 的
-	// `referencedPaths`），而那些引用会被同一条命令改写成远端地址 ⇒ 搬走不会留死链。
+	// ⭐ 1.3.0（D-17）：上传成功后那个文件**留在原处**，它本身就是本地副本 ——
+	// 索引按真实路径记下它。调用方仍然只把"确实被笔记引用着"的文件交进来
+	// （`selectUploadCandidates` 的 `referencedPaths`）：那些引用会被同一条命令
+	// 改写成远端地址，而文件留在原处正是我们要的结果。
 	// ============================================================
 	await withHarness(mod, {}, async (h) => {
 		await h.write("existing.png", Buffer.from(HOSTILE_BYTES));
@@ -824,7 +850,7 @@ export async function runIngestSuite(mod) {
 		});
 
 		assert.equal(result.status, "uploaded");
-		// ⚠️ 光看"最后有没有残留"不够：那份中转副本会被搬进缓存，
+		// ⚠️ 光看"最后有没有残留"不够：那份中转副本从前会被搬进缓存，
 		// 于是"凭空多一个文件"在最终状态里看不出来 —— 但它真的发生过
 		// （一次多余的整块写入、一次 create 事件、一次同步噪音，而用户看到的
 		//  正是"上传时附件目录不停冒出新文件"）。所以要直接查**写盘动作**。
@@ -833,25 +859,18 @@ export async function runIngestSuite(mod) {
 			false,
 			"⭐ 迁移模式不得在附件目录里写中转副本（哪怕只是短暂写一次）"
 		);
-		// ⚠️ 这条存在性断言**必须排在字节读取之前**：原件已被搬走时 `h.read` 返回 null，
+		// ⚠️ 这条存在性断言**必须排在字节读取之前**：文件万一不在了时 `h.read` 返回 null，
 		// 而 `Buffer.compare(null, …)` 抛的是一个与规则无关的 TypeError ——
 		// 变异验证会因此判成"原因不符"（红得对，但看不出为什么红）。
-		assert.equal(
-			await h.exists("existing.png"),
-			false,
-			"⭐ 「移入缓存目录」⇒ 附件目录里那份不在了（是移动，不是复制一份）"
-		);
+		assert.equal(await h.exists("existing.png"), true, "⭐ 迁移模式下那个文件留在原处（它就是本地副本）");
 		assert.equal(await h.exists("existing 1.png"), false, "⭐ 不得在附件目录里凭空多出一份中转副本");
-		assert.ok(
-			result.localPath.startsWith("_attachment-cache/"),
-			`缓存副本应落在缓存目录里，实际 ${result.localPath}`
-		);
+		assert.equal(result.localPath, "existing.png", "本地路径就是那个仍然存在的文件");
 		assert.equal(
 			Buffer.compare(await h.read(result.localPath), Buffer.from(HOSTILE_BYTES)),
 			0,
-			"搬过去的那份字节应与原件一致"
+			"那份文件的字节应与原件一致"
 		);
-		assert.equal(h.index.get(result.key)?.cachePath, result.localPath, "索引应指向缓存目录里那份（搬完的真实位置）");
+		assert.equal(h.index.get(result.key)?.cachePath, result.localPath, "索引应指向那份真实存在的文件");
 	});
 
 	// 18b. 迁移 + 「原地保留」→ 原文件本身就是本地副本，不该再写第二份
@@ -874,8 +893,8 @@ export async function runIngestSuite(mod) {
 	//
 	// `trash` 在这里被**降级为原地保留**：用户要求的是"别为我留副本"，
 	// 而那个文件不是我们的副本，是他的资产 —— 删它超出了他的授权范围。
-	// 索引仍登记它（那是一条**真实存在**的路径），审计会把它归入 `outsideCache`
-	// 那一类（既不删文件、也不摘记录），所以不会与清理类命令冲突。
+	// 索引仍登记它（那是一条**真实存在**的路径）—— 自愈只改索引、不碰文件，
+	// 所以不会与任何清理类动作冲突。
 	await withHarness(mod, { settings: { localCopy: "trash" } }, async (h) => {
 		await h.write("mine.png", Buffer.from(HOSTILE_BYTES));
 
@@ -908,7 +927,7 @@ export async function runIngestSuite(mod) {
 		assert.equal(result.status, "fallback");
 		assert.equal(result.localPath, "fail.png", "失败时本地路径应是那个**原本就存在**的文件");
 		assert.equal(await h.exists("fail.png"), true, "原文件当然还在");
-		assert.equal(await h.exists("fail 1.png"), false, "⭐ 失败时更不该留下中转文件");
+		assert.equal(await h.exists("fail 1.png"), false, "⭐ 迁移失败时更不该多出任何文件");
 		assert.equal(h.index.get(result.key), undefined, "上传失败不得登记索引");
 	});
 

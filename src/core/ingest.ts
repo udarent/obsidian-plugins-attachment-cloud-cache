@@ -10,7 +10,7 @@
  *
  * ```
  * 读字节 → 算出 key/路径 → 字节先写进附件目录（此时已安全）→ 上传
- *        ├─ 成功 → 按 localFileAction 搬进缓存 / 原地保留 / 回收站 → 登记索引
+ *        ├─ 成功 → 原地保留（副本就是它自己）/ 回收站 → 登记索引
  *        └─ 失败 → 字节就留在附件目录 → 返回本地路径（绝不丢图）
  * ```
  *
@@ -19,8 +19,9 @@
  * 我们就只剩一个远端 URL，而离线能力没了 —— 更糟的是若连远端也失败，
  * 字节就真的没了。先落盘的话，最坏情况也只是"图还在、只是没上传"。
  *
- * 这也顺带贴合 P0 的措辞「本地副本**移动**进缓存」：文件本来就是先在附件目录落地的，
- * 上传成功后**移动**（rename）到缓存路径 —— 不是复制、不是删除。
+ * ⭐ 1.3.0（D-17）之后这里**不再搬运**：上传成功时文件就留在附件目录原地，
+ * 那份文件本身就是本地副本（"缓冲区文件夹"整个取消了）。老用户缓存目录里的旧副本
+ * 由迁移命令搬回附件目录，见设计 §20.11。
  *
  * ## 为什么"命中缓存"要能跳过上传
  *
@@ -35,7 +36,6 @@
 
 import type { App } from "obsidian";
 import { CacheIndex, normalizeUrl, type CacheEntry } from "../cache/index";
-import { cachePathFor } from "../cache-path";
 import { renderObjectKey } from "../object-key";
 import type { S3Client } from "../s3/client";
 import { sha256Hex } from "../s3/hash";
@@ -44,6 +44,8 @@ import { describeError } from "../error-text";
 import { notifyUser } from "../notify-user";
 import type { NotifySink } from "../notify-user";
 import {
+	attachmentFolderFor,
+	extensionOfName,
 	fallbackFileName,
 	normalizeVaultPath,
 	parentFolderOf,
@@ -54,9 +56,7 @@ import {
 
 /** 上传成功后，本地那份副本怎么办。 */
 export type LocalCopyPlan =
-	/** 搬进缓存目录（默认；离线可用的前提）。 */
-	| "move-to-cache"
-	/** 就地留着（用户选「原地保留」，或缓存功能被关掉）。 */
+	/** 就地留着（**唯一**的保留形态：副本就是附件本身）。 */
 	| "keep-in-place"
 	/** 移入回收站（用户明确不要本地副本 → 离线不可用，这是他自己的选择）。 */
 	| "trash";
@@ -64,22 +64,24 @@ export type LocalCopyPlan =
 /**
  * 决定本地副本的处置方式（**纯函数**，便于穷举）。
  *
- * 抽成纯函数的理由与别名判定一样：这是"用户明确选了什么"与"我们实际做了什么"
- * 之间的翻译。翻错了不会有报错，只有"行为与设置不符"的长期困惑。
+ * ## 1.3.0（D-17）：这里曾经有一条"搬进缓存目录"，它被删掉了
  *
- * ⚠️ 这个函数曾经接收 `localFileAction` + `cacheEnabled` **两个**参数，
+ * 那时的计划是三态（`move-to-cache` / `keep-in-place` / `trash`），而
+ * `move-to-cache` 意味着"上传成功后把文件搬走、只在缓存目录里留一份"——
+ * 也就是"缓冲区文件夹"这个设计。取消缓存目录之后，**附件原地不动就是副本**，
+ * 于是这条计划没有存在的位置：搬运这一步整个消失（`moveIntoCache` 随之删除）。
+ *
+ * ⚠️ 老用户设置里仍可能写着 `"cache"`（1.2.0 之前的值）：它现在与 `"keep"`
+ * 同义 —— 已经有副本在缓存目录里的，渲染与索引照常按路径服务；新上传一律原地保留
+ * （老数据由迁移命令搬走，见设计 §20.11）。
+ *
+ * ⚠️ 这个函数曾接收 `localFileAction` + `cacheEnabled` **两个**参数，
  * 于是存在一类静默矛盾：用户选"移入缓存"但把缓存关掉 → 得到"原地保留"，
- * 而界面上看不出任何异常。两个字段合并成一个 `LocalCopyAction` 之后，
- * **矛盾状态在类型上就不存在了** —— 三个取值各自唯一对应一个结果。
- *
- * `cachePathUsable` 指缓存路径能否推导出来（缓存目录没配 / key 无法推导时为 false）。
- * 此时退回"原地保留"而不是报错 —— 用户的图能正常用，只是副本没进缓存目录，
- * 这比让上传直接失败好。
+ * 而界面上看不出任何异常。字段合并成一个 `LocalCopyAction` 之后，
+ * **矛盾状态在类型上就不存在了**。
  */
-export function planLocalCopy(action: LocalCopyAction, cachePathUsable: boolean): LocalCopyPlan {
-	if (action === "trash") return "trash";
-	if (action === "cache" && cachePathUsable) return "move-to-cache";
-	return "keep-in-place";
+export function planLocalCopy(action: LocalCopyAction): LocalCopyPlan {
+	return action === "trash" ? "trash" : "keep-in-place";
 }
 
 export type IngestStatus =
@@ -139,12 +141,11 @@ export interface IngestRequest {
 	 * 给了它就进入**迁移模式**，与粘贴路径有三处不同：
 	 * 1. **不再落盘** —— 字节已经在库里，"先落盘"这一步天然满足；
 	 *    照搬会在附件目录里凭空多出一个 `xxx 1.png`（原文件占着名字 ⇒ 另取序号）。
-	 * 2. **上传成功后照样按 `localCopy` 处置那个文件**（`move` 分支同样是
-	 *    **移动**、不是复制）—— 这就是「移入缓存目录」这条设置的兑现方式：
-	 *    命令跑完，附件目录里那份不在了，缓存目录里多一份改过名的。
-	 *    ⚠️ 前提是**调用方只把"确实被笔记引用着的"文件交进来**（见
-	 *    `selectUploadCandidates` 的 `referencedPaths`）：这样"搬走"不会让任何
-	 *    我们没认出来的引用变成死链。
+	 * 2. **上传成功后不搬动它**（1.3.0 起：没有缓存目录可搬）。那个文件从此
+	 *    既是用户的附件、也是插件认的本地副本 —— 索引把它按**真实路径**记下来。
+	 *    ⚠️ 调用方仍然只把"确实被笔记引用着的"文件交进来（见
+	 *    `selectUploadCandidates` 的 `referencedPaths`）：命令会把这些引用改写成
+	 *    远端地址，而那之后文件留在原处正是我们要的结果。
 	 * 3. 因此 `localCopy: "trash"` 在这个模式下**降级为原地保留** ——
 	 *    用户要的是"别为我留副本"，而那个文件不是我们的副本，删它超出授权范围。
 	 *
@@ -223,82 +224,40 @@ async function ensureFolder(app: App, folder: string): Promise<void> {
 }
 
 /**
- * 归一一个目录设置：统一分隔符、去掉首尾斜杠。空串 = **没填**（而不是"根目录"）。
- *
- * ⚠️ 非字符串一律当"没填"：`data.json` 是被逐字段校验过的，但这条函数也会被
- * 别处复用，而 `String(某个对象)` 会得到 `[object Object]` ——
- * 那会变成一个真实存在（却毫无意义）的目录名，且**不报错**。
- */
-function cleanFolderPath(value: unknown): string {
-	if (typeof value !== "string") return "";
-	return value
-		.trim()
-		.replace(/\\/g, "/")
-		.replace(/^\/+|\/+$/g, "");
-}
-
-/**
  * 决定这次落盘的路径：**用户的覆盖值 → 宿主自己的附件位置 → vault 根目录**。
  *
- * ## ⚠️ 这里换过一次实现，理由必须留着
- *
- * 早先问的是 `fileManager.getAvailablePathForAttachment`，而且是**按同步调用**的
- * （`typeof 返回值 === "string"` 才采用）。在真机上实测，那两件事都是错的：
- *
- * 1. 它返回的是 **Promise**（实测 `[object Promise]` / `thenable=true`）
- *    ⇒ 那个类型检查**永远为假**，宿主给的值从来没被采用过；
- * 2. 就算 `await` 它，只要目标目录已经存在，它就抛 `Folder already exists.`
- *    （真机复现，带不带 `sourcePath` 都一样）。
- *
- * 于是这条路上「跟随 Obsidian 的附件设置」**从未生效** —— 中转文件一直落在
- * vault 根目录。而用户看到的现象正是"上传图片时根目录不停冒出新的图片文件"。
- * 这个缺陷之所以能活这么久，是因为它**不报错、不丢数据**，只是落点与预期不符。
- *
- * 现在改成读宿主自己的配置（`attachmentFolderPath`，真机实测可用），
- * 并自己解释它的几种形态（见 `hostAttachmentFolder`）。
+ * ⚠️ 目录解析本身在 `vault-files.ts` 的 `attachmentFolderFor`（回退下载那条路
+ * 也要用同一个答案 —— 两条路各自实现一次就会分叉）。这里只做"目录 + 文件名"。
  */
 function suggestAttachmentPath(deps: IngestDeps, fileName: string, sourcePath?: string): string {
-	// 用户显式填了覆盖目录 → 用它。"覆盖"这个词的直白含义就是"别再问别人"。
-	const override = cleanFolderPath(deps.settings.attachmentFolder);
-	if (override) return `${override}/${fileName}`;
-
-	const hostFolder = hostAttachmentFolder(deps.app, sourcePath);
-	return hostFolder ? `${hostFolder}/${fileName}` : fileName;
+	const folder = attachmentFolderFor(deps.app, deps.settings.attachmentFolder, sourcePath);
+	return folder ? `${folder}/${fileName}` : fileName;
 }
 
 /**
- * 读宿主自己的「新附件的默认位置」，返回 vault 相对目录（无法确定时返回空串 = 根目录）。
+ * **落盘**用的文件名：必须带一个**真实的**扩展名。
  *
- * ⚠️ `Vault.getConfig` **不在钉住的公开类型里**（`obsidian.d.ts` 搜不到它），
- * 但真机实测它存在且可用：`getConfig("attachmentFolderPath")` 返回的就是
- * Obsidian 设置界面里那一栏的值。所以这里走鸭子类型 + 可选调用；
- * 拿不到就如实退回根目录 —— 文件照样上传，只是落点普通，绝不因此让粘贴失败。
+ * ⚠️ 这条看着多余，其实是一条不可逆缺陷的修复（1.3.0 / D-17 才暴露出来）：
+ * 从前本地副本会被搬进缓存目录、并按 key 重命名（key 一定带正确的扩展名），
+ * 所以"名字里没有可用扩展名"从来不影响显示。取消缓存目录之后**落地的那份名字就是最终名字**，
+ * 于是站外图片那种 URL 尾巴（`OIP-C.sPb8lvTxu-zlEqgEmUgCTwAAAA`）会变成一个
+ * **没有类型的文件** —— 而 Obsidian 按名字判断怎么显示它：
+ * 结果是缓存明明成功了，用户却看不到图，以为"没缓存"。
  *
- * 三种形态（Obsidian 自己就是这么存的）：
- * - 空串 / `"/"` → vault 根目录（两个值表示同一件事）；
- * - `"./"` → **与当前笔记同目录**：这是个相对写法，得用触发这次的笔记路径反推；
- * - 其余 → 相对 vault 的目录（不存在时，落盘前那一步的 `ensureFolder` 会建出来）。
+ * 判据用 `extensionOfName`（"最后一个点后面那段像不像扩展名"），不猜内容类型：
+ * 名字里那段不像扩展名（或压根没有）⇒ **去掉它**、改成真实类型 ——
+ * 站外图片的 URL 尾巴（`OIP-C.<23 位令牌>`）正是这种噪音，留着它等于给文件起了个
+ * Obsidian 不认识的名字。名字里的扩展名看起来正常时**一律不动**（用户起的名字优先）。
  */
-function hostAttachmentFolder(app: App, sourcePath?: string): string {
-	const vault = app.vault as unknown as { getConfig?: (key: string) => unknown };
-	if (typeof vault.getConfig !== "function") return "";
+function stagedFileName(name: string, ext: string): string {
+	const current = extensionOfName(name).toLowerCase();
+	if (current === ext) return name;
 
-	let configured: unknown;
-	try {
-		configured = vault.getConfig("attachmentFolderPath");
-	} catch {
-		// 读配置失败不该让粘贴失败：退回根目录，字节照样留下
-		return "";
-	}
-	if (typeof configured !== "string") return "";
-
-	// ⚠️ `"./"` 经 cleanFolderPath 会变成 `"."`（它剥掉尾部斜杠），所以判这个就够
-	const cleaned = cleanFolderPath(configured);
-	if (cleaned === ".") {
-		// "与笔记同目录"：拿不到笔记路径时退回根目录 —— 那正是"没有笔记"时的合理落点
-		return parentFolderOf(normalizeVaultPath(sourcePath));
-	}
-	return cleaned;
+	// 切掉"最后一个点之后"的那一段：它要么不是扩展名（令牌），要么与真实类型不符。
+	const dot = name.lastIndexOf(".");
+	const stem = dot > 0 ? name.slice(0, dot) : name;
+	const clean = stem.replace(/[.\s]+$/, "");
+	return clean ? `${clean}.${ext}` : `file.${ext}`;
 }
 
 /**
@@ -306,9 +265,14 @@ function hostAttachmentFolder(app: App, sourcePath?: string): string {
  *
  * **先落盘**是这一层安全性的来源：在这一步之后，字节已经不可能丢了。
  */
-async function stageLocally(deps: IngestDeps, request: IngestRequest, fileName: string): Promise<string> {
+async function stageLocally(
+	deps: IngestDeps,
+	request: IngestRequest,
+	fileName: string,
+	ext: string
+): Promise<string> {
 	const app = deps.app;
-	const desired = suggestAttachmentPath(deps, fileName, request.sourcePath);
+	const desired = suggestAttachmentPath(deps, stagedFileName(fileName, ext), request.sourcePath);
 
 	await ensureFolder(app, parentFolderOf(desired));
 	const path = await uniqueVaultPath(desired, makeExists(app));
@@ -368,7 +332,6 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 		};
 	}
 
-	const cachePath = cachePathFor(key, settings.cacheFolder);
 	const remoteUrlFor = safePublicUrl(client, key);
 	const contentType = resolveContentType(request.name, request.mime);
 
@@ -413,7 +376,7 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 		stagedPath = existingPath;
 	} else {
 		try {
-			stagedPath = await stageLocally(deps, { ...request, bytes }, fileName);
+			stagedPath = await stageLocally(deps, { ...request, bytes }, fileName, ext);
 		} catch (error) {
 			// 连本地都没能落成。调用方必须**大声报错** —— 此时用户粘贴的内容确实没留下，
 			// 而这正是"绝不丢图"要避免的极端情况。
@@ -434,30 +397,17 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 	}
 
 	// ── 5. 按设置处置本地副本 ──
-	const plan = planLocalCopy(settings.localCopy, Boolean(cachePath));
+	const plan = planLocalCopy(settings.localCopy);
 	let localPath = stagedPath;
 
-	if (isMigration) {
-		// ⭐ 迁移模式**也按 `localCopy` 处置那个文件**，而且同样是"移动"：
-		// 上传成功了，用户要的（「移入缓存目录」）就是"附件目录里别再留一份"。
-		//
-		// ⚠️ 这条能成立，靠的是**调用方只把被笔记引用着的文件交进来**
-		// （`selectUploadCandidates` 的 `referencedPaths`）：那些引用会被同一条命令
-		// 改写成远端地址，所以"搬走"不会留下死链。用户自己放在附件目录、没有任何
-		// 笔记引用的文件根本不会走到这里。
-		// ⚠️ 仍然不使用 `trash`：那种情况下用户要的是"别为我留副本"，而这个文件不是
-		// 我们落的副本，删它超出授权范围 —— 降级为原地保留。
-		if (plan === "move-to-cache" && cachePath) {
-			localPath = await moveIntoCache(deps, existingPath, cachePath);
-		}
-	} else if (plan === "trash") {
+	// ⭐ 1.3.0（D-17）：搬运分支已删除 —— 副本**就是**附件本身，原地不动。
+	//
+	// ⚠️ 唯一还会动文件的是「不留副本」那一档，而且**只对粘贴路径下我们自己刚落的
+	// 那份中转文件**生效：迁移模式下 `plan === "trash"` 不删任何东西（那个文件是
+	// **用户的资产**，删它超出授权范围 —— 用户要的是"别为我留副本"，不是"删我的文件"）。
+	if (!isMigration && plan === "trash") {
 		localPath = "";
 		await trashPath(deps.app, stagedPath);
-	} else if (plan === "move-to-cache" && cachePath) {
-		const moved = await moveIntoCache(deps, stagedPath, cachePath);
-		// 搬失败时**保留原地**并在索引里记下真实位置 ——
-		// 上传已经成功，没有必要因为一次 rename 失败而让整个操作变成失败。
-		localPath = moved;
 	}
 
 	// ── 6. 登记索引 + 上传台账 ──
@@ -502,55 +452,6 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 	}
 
 	return { status: "uploaded", key, ext, name: fileName, remoteUrl, localPath, etag };
-}
-
-/**
- * 把文件从 `fromPath` 搬进缓存目录，返回它**实际**所在的路径。
- *
- * 两条入口共用它：粘贴（源是**我们**刚落盘的临时副本）与迁移（源是**用户已有**的附件）。
- * 语义一样 —— 上传已经成功，这份字节从此归缓存目录管；搬失败时返回源路径，
- * 调用方照实登记（索引记的永远是**真实**位置，不是推导值）。
- *
- * ⚠️ 目标已占用时**另取序号，绝不覆盖**：
- * 只有当模板含 `{hash}`（内容寻址）时"同路径 = 同内容"才成立。
- * 用户完全可以把模板改成 `{filename}` —— 那时同一个路径可能对应**不同内容**，
- * 覆盖就等于静默丢掉旧的那份。另取序号在任何模板下都是安全的，
- * 而多出来的那点路径不确定性由索引兜住（索引记的是真实路径，不是推导值）。
- */
-async function moveIntoCache(deps: IngestDeps, fromPath: string, cachePath: string): Promise<string> {
-	const app = deps.app;
-	await ensureFolder(app, parentFolderOf(cachePath));
-
-	let target: string;
-	try {
-		target = await uniqueVaultPath(cachePath, makeExists(app));
-	} catch (error) {
-		notifyUser(deps, "ingestCacheTargetUnusable", { error: describeError(error) });
-		return fromPath;
-	}
-
-	const file = app.vault.getAbstractFileByPath(fromPath);
-	if (!file) {
-		// 宿主的索引还没看到刚写的文件（异步落盘的常见现象）→ 退回用适配器直接改名，
-		// 这样至少文件位置是对的，只是宿主需要自己重新索引。
-		try {
-			await app.vault.adapter.rename(fromPath, target);
-			return target;
-		} catch (error) {
-			notifyUser(deps, "ingestCopyMoveFailed", { error: describeError(error) });
-			return fromPath;
-		}
-	}
-
-	try {
-		// 用 fileManager 而不是 adapter：它会同步更新宿主的文件索引，
-		// 否则已打开的笔记里那条刚刚插入的链接会指向"不存在的文件"。
-		await app.fileManager.renameFile(file, target);
-		return target;
-	} catch (error) {
-		notifyUser(deps, "ingestCopyMoveFailed", { error: describeError(error) });
-		return fromPath;
-	}
 }
 
 /** 移入回收站（走宿主的 trash，尊重用户的"删除即进回收站"设置）。 */
