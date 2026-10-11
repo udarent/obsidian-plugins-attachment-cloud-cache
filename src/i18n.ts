@@ -170,7 +170,10 @@ export const I18N: Record<string, Locale> = {
 
 		maintainUsageReport:
 			"Cache: {totalMb} MB in {count} files. Reclaimable: {reclaimableMb} MB — {orphans} orphaned, {unused} unused, {missing} entries pointing at missing files. Limit: {limit}.",
-		maintainRepaired: "Index repaired: {healed} stale entries removed, {skipped} file(s) skipped.",
+		selfHealRepaired:
+			"Cache index repaired automatically: {count} record(s) pointed at files that are no longer there.",
+		repairIndexFound: "Index repaired: {count} stale record(s) dropped.",
+		repairIndexNothing: "Index is fine — no stale records.",
 		maintainNothingToClean: "Nothing to clean up. {healed} stale index entries were repaired.",
 		maintainCleanTitle: "Clean up cache files",
 		// 缓存清理只有一种方式：直接删除。所以文案不需要按模式分叉 ——
@@ -394,7 +397,9 @@ export const I18N: Record<string, Locale> = {
 
 		maintainUsageReport:
 			"缓存共 {count} 个文件、{totalMb} MB。其中可回收 {reclaimableMb} MB —— 孤儿 {orphans} 个、未引用 {unused} 个、索引指向的文件已不在 {missing} 条。上限：{limit}。",
-		maintainRepaired: "索引已修复：清理失效记录 {healed} 条，跳过文件 {skipped} 个。",
+		selfHealRepaired: "缓存索引已自动修复：{count} 条记录指向的本地副本已经不在了。",
+		repairIndexFound: "索引已修复：摘掉 {count} 条失效记录。",
+		repairIndexNothing: "索引没有失效记录，无需修复。",
 		maintainNothingToClean: "没有需要清理的内容。已修复失效索引记录 {healed} 条。",
 		maintainCleanTitle: "清理缓存文件",
 		// 缓存清理只有一种方式：直接删除。所以文案不需要按模式分叉 ——

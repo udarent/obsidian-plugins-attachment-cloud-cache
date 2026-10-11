@@ -57,6 +57,8 @@ import type { NoteKind, OrphanLocalTarget, OrphanWatcher } from "./maintenance/o
 import { removeOrphanCopies } from "./maintenance/orphan-removal";
 import { deleteLogPath, recordDeletions } from "./maintenance/delete-log";
 import type { DeletedObjectRecord } from "./maintenance/delete-log";
+import { runSelfHeal } from "./maintenance/self-heal";
+import type { SelfHealResult } from "./maintenance/self-heal";
 
 import type { ExternalCandidate, NoteTextLike } from "./maintenance/batch";
 import { ingestAttachment } from "./core/ingest";
@@ -100,6 +102,15 @@ const ROTATION_STARTUP_DELAY_MS = 3 * 1000;
  * 而且还有一层分钟级节流。
  */
 const ROTATION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
+
+/**
+ * 索引自愈的启动延迟。
+ *
+ * ⚠️ 比轮换那一次（3 秒）**更晚**：自愈不是"必须马上做"的事，而启动后那几百毫秒里
+ * 还有索引加载、渲染钩子挂载、引用快照建立等等要做完 —— 排它们后面，
+ * 免得抢同一段启动窗口。
+ */
+const SELF_HEAL_STARTUP_DELAY_MS = 8 * 1000;
 
 /** 引用重算的防抖窗口。编辑途中宿主的自动保存会反复触发 `modify`。 */
 const ORPHAN_CHECK_DEBOUNCE_MS = 1500;
@@ -418,6 +429,19 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			void this.rotation?.maybeRotate("interval");
 		}, ROTATION_CHECK_INTERVAL_MS);
 		this.register(() => window.clearInterval(intervalTimer));
+
+		// 触发 ③（2026-10-11 新增）：**索引自愈**，启动后延迟一次。
+		//
+		// 为什么要有它：索引是**派生数据**，它指向的副本随时可能消失（用户删了缓存目录、
+		// 同步漏了一个文件、`keep` 档下用户自己整理了附件）。留着一条指向不存在文件的记录，
+		// 会让**占用统计虚高**，并让渲染误判"本地已有"（于是既不显示也不去取）。
+		// 而"让用户手动跑一条命令来修插件自己的账本"，是把内部维护成本转嫁给用户。
+		//
+		// ⚠️ 它**只改索引，绝不碰任何文件**（见 `maintenance/self-heal.ts` 的三条纪律）。
+		const selfHealTimer = window.setTimeout(() => {
+			void this.runIndexSelfHeal();
+		}, SELF_HEAL_STARTUP_DELAY_MS);
+		this.register(() => window.clearTimeout(selfHealTimer));
 
 		// 重建节点时用的子 Component：挂进插件生命周期，卸载时一并清掉。
 		this.addChild(this.embedComponent);
@@ -1086,13 +1110,79 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		);
 	}
 
-	/** 自检并修复索引（只改索引，不碰任何文件）。 */
+	/**
+	 * 「自检并修复本地副本索引」命令。
+	 *
+	 * ⚠️ 它调的是**与后台自愈同一份实现**（`maintenance/self-heal.ts`）。
+	 * 早先这里走的是"列出缓存目录 + **扫全库笔记** → 分类 → 只摘失效记录" ——
+	 * 而自愈根本不需要扫笔记（那只影响"未引用 vs 健康"的区分），
+	 * 于是这条命令白付了一次全库读；更糟的是它按"文件是否在缓存目录的列表里"判存在，
+	 * 于是**`keep` 档（副本留在附件目录）的失效记录永远修不到**。
+	 *
+	 * 现在的判据是"逐条路径问一下在不在"：既便宜（宿主索引是内存查表），
+	 * 也不再有"只管缓存目录"这个盲区。
+	 */
 	private async repairIndex(): Promise<void> {
-		const deps = this.maintenanceDeps();
-		const { plan } = await auditForCleanup(deps, (url) => this.keyOfUrl(url));
-		const result = await runCleanup(deps, { ...plan, all: [] });
+		const result = await this.runIndexSelfHeal({ silent: true });
+		new Notice(
+			result.healed > 0
+				? this.t("repairIndexFound", { count: result.healed })
+				: this.t("repairIndexNothing")
+		);
+	}
 
-		new Notice(this.t("maintainRepaired", { healed: result.healed, skipped: result.skipped.length }));
+	/**
+	 * 跑一轮索引自愈。
+	 *
+	 * @param options.silent `true` = 给命令用（结果由调用方回话，这一层不出声）；
+	 *   `false`（默认）= 后台用，只在真的修了东西时通知（0 条不打扰）。
+	 */
+	private runIndexSelfHeal(options: { silent?: boolean } = {}): Promise<SelfHealResult> {
+		const silent = options.silent ?? false;
+		return runSelfHeal({
+			entries: () => this.currentIndex().toArray(),
+			exists: (path) => this.vaultPathExists(path),
+			forget: (key) => this.currentIndex().remove(key),
+			persist: () => this.hostContext().persistIndex(),
+			// ⚠️ `silent` 时把通知吞掉（命令自己会回话），而不是在这里分叉两套逻辑 ——
+			// 分叉过一次的路径，下一次改行为只会改到其中一边。
+			notify: (message) => {
+				if (!silent) new Notice(message);
+			},
+			t: (key, params) => this.t(key, params),
+			yieldNow: () => new Promise<void>((resolve) => window.setTimeout(resolve, 0)),
+			onError: (error) => console.error("[attachment-cloud-cache] 索引自愈出错", error),
+		});
+	}
+
+	/**
+	 * 一个 vault 相对路径**确实存在**吗（自愈判"记录是否失效"的唯一依据）。
+	 *
+	 * ## ⚠️ 这里的错误默认值，与 `core/download.ts` 的 `exists` **相反**
+	 *
+	 * 两处的 `false` 含义完全不同：
+	 * - 那边 `false` ⇒ "没有副本，去下载" —— **安全方向**（多下一次而已），所以查询出错返回 `false`；
+	 * - 这边 `false` ⇒ "记录失效了，摘掉它" —— **不安全方向**（那张图的离线可用性被悄悄拿掉），
+	 *   所以查询出错返回 `true`（宁可多留一条记录）。
+	 *
+	 * ⇒ **两处不能合并**：合并必然把其中一边的方向弄反，而两种弄反都不报错。
+	 * 这条判据由 `self-heal-suite` 与 `download-suite` 各自钉住。
+	 *
+	 * ## 为什么"两条路"都要问
+	 *
+	 * 宿主的文件索引是**内存快照**（快，但可能滞后于磁盘：刚同步进来的文件它还没收录）；
+	 * 适配器直接问文件系统（准，但慢）。任一条说"在"就算在 —— 只有两条都说不在才认失效。
+	 */
+	private async vaultPathExists(path: string): Promise<boolean> {
+		if (this.app.vault.getAbstractFileByPath(path)) return true;
+		try {
+			if (await this.app.vault.adapter.exists(path)) return true;
+		} catch (error) {
+			// ⚠️ 查询出错按"存在"处理（见上面那段：误摘的代价不对称）
+			console.error("[attachment-cloud-cache] 查询本地副本是否存在失败", error);
+			return true;
+		}
+		return false;
 	}
 
 	/** 清理未使用的缓存（**破坏性**：先确认，删除不可撤销）。 */

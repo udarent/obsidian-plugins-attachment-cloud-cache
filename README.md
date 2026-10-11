@@ -122,6 +122,10 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
   undone; only *this* device's references are visible.
 - **"Do not keep a local copy" turns caching off**, which is the plain-image-host behaviour: files are uploaded and
   the note's link is rewritten, but nothing is kept or fetched back, so nothing is available offline.
+- **The local-copy index repairs itself.** After startup the plugin drops index entries whose files are already
+  gone — it only ever edits the index and never touches a file. If you deleted the cache folder outside Obsidian,
+  or a file never made it across from another device, this is what puts the numbers straight. *Repair the
+  local-copy index* does the same thing on demand, and says how many stale entries it found.
 - **Moving to another device: copy the plugin folder, but delete `.cache-index.json` first** — it records where *this*
   device keeps its copies. The secret access key is not in the folder at all (it lives in Obsidian's keychain).
 
@@ -276,6 +280,9 @@ Obsidian version and which storage provider you use; the errors name the step th
   默认保留。相同内容只存一份，所以一个对象可能被多篇笔记、多台设备共用，而云端删除无法撤销；清理只能看到**本设备**的引用。
 - **「不留本地副本」这一档等于关闭缓存**，也就是普通图床的行为：文件照常上传、笔记里的链接照样改写，
   但不保留副本、也不把副本取回来，所以断网时什么都看不到。
+- **本地副本索引会自愈。** 启动之后，插件会摘掉那些指向「文件已经不在了」的索引记录 —— 它**只改索引，
+  绝不碰任何文件**。在 Obsidian 外面删过缓存目录、或某个文件没能从别的设备同步过来，靠的就是它把数字
+  理顺。「自检并修复本地副本索引」做的是同一件事，供你想立刻核一遍时用，并会告诉你查出多少条失效记录。
 - **换设备：把插件目录复制过去，但先删掉 `.cache-index.json`** —— 它记的是**这台设备**的副本在哪。秘密访问密钥
   根本不在目录里（它存在 Obsidian 的钥匙串中）。
 
