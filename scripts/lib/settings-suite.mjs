@@ -43,7 +43,7 @@ export function runSettingsSuite(mod) {
 		"「参与的文件类型」已被移除（任何类型都上传），它不得复活"
 	);
 
-	assert.equal(SETTINGS_DEFAULTS.s3.objectKeyTemplate, "{hash}.{ext}", "默认对象 key 为单段内容寻址");
+	assert.equal(SETTINGS_DEFAULTS.s3.objectKeyTemplate, "{name}-{hash}.{ext}", "默认对象 key = 名字 + 完整哈希尾（C2）");
 	// 缓存布局不再是设置项：单段 key 下 flat 与 mirror 结果相同，
 	// 提供一个不产生差异的开关比不提供更糟。见 cache-path.ts 的说明。
 	assert.ok(!("cacheLayout" in SETTINGS_DEFAULTS), "缓存布局不应再是用户可配项");

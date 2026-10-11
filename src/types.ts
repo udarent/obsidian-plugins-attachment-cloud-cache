@@ -193,7 +193,7 @@ export interface S3Config {
 	 * 属于高级设置，不该出现在主流程里。
 	 */
 	forcePathStyle: boolean;
-	/** 对象 key 模板，支持 `{hash} {ext} {hash2} {filename} {date}`。 */
+	/** 对象 key 模板，支持 `{hash} {hash2} {ext} {filename} {name} {date}`（默认见 object-key.ts）。 */
 	objectKeyTemplate: string;
 }
 

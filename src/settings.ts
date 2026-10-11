@@ -37,6 +37,7 @@ import { EXTERNAL_IMAGE_DEFAULTS, LOCAL_COPY_ACTIONS, ORPHAN_ASK_MODES, isExtern
 import type { ExternalImageDefault, LocalCopyAction, OrphanAskMode, PluginSettings, S3Config } from "./types";
 import { CACHE_LIMIT_MB_MAX } from "./types";
 import { isPlainRecord } from "./records";
+import { DEFAULT_OBJECT_KEY_TEMPLATE } from "./object-key";
 
 // 枚举类型守卫定义在 types.ts（与枚举本身同处一地，避免两个模块各存一份）。
 // 这里转出去，让"读设置的模块"同时就是"拿守卫的模块"。
@@ -188,8 +189,10 @@ const S3_FALLBACKS: S3Config = {
 	secretAccessKeyRef: "",
 	// path-style 默认开：R2 的 S3 端点不支持 virtual-host，而其余各家都接受 path-style
 	forcePathStyle: true,
-	// 内容寻址的单段模板：同一张图只存一份，且缓存路径与桶内结构一一对应
-	objectKeyTemplate: "{hash}.{ext}",
+	// 默认模板 = 名字 + 完整哈希尾（理由见 object-key.ts 的 DEFAULT_OBJECT_KEY_TEMPLATE）。
+	// ⚠️ 只影响**新装**：老用户的 data.json 里已持久化了模板值，不会被这里改掉 ——
+	// 这正是想要的：把文件名写进 key 意味着名字会进入服务商日志，得由用户自己选。
+	objectKeyTemplate: DEFAULT_OBJECT_KEY_TEMPLATE,
 };
 
 /** s3 子对象的字段表（同样由映射类型保证不漏字段）。 */

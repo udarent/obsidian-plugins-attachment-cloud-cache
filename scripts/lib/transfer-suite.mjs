@@ -127,7 +127,9 @@ async function makeHarness(mod, options = {}) {
 	const settings = {
 		...mod.SETTINGS_DEFAULTS,
 		...options.settings,
-		s3: { ...mod.SETTINGS_DEFAULTS.s3, ...options.settings?.s3 },
+		// ⚠️ 钉住旧模板：本套件断言的是传输行为，不是默认模板长什么样 ——
+		// 不钉就会随默认模板漂移（与 ingest-suite 同一处教训）。
+		s3: { ...mod.SETTINGS_DEFAULTS.s3, objectKeyTemplate: "{hash}.{ext}", ...options.settings?.s3 },
 	};
 	const index = new mod.CacheIndex();
 	const notices = makeNotices();

@@ -65,6 +65,7 @@ import { ingestAttachment } from "./core/ingest";
 import { confirmWithModal } from "./ui/confirm-modal";
 import type { ConfirmOptions } from "./ui/confirm-modal";
 import { planFileCards } from "./ui/file-cards";
+import { displayNameForKey } from "./object-key";
 import type { FileCard, FileCardInput } from "./ui/file-cards";
 import { keyFromUrl } from "./render/render-target";
 import { createS3Client, publicUrlFor } from "./s3/client";
@@ -754,14 +755,15 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		const client = this.buildClient();
 		if (!client) return;
 
-		// ⭐ 清单给的是**图 + 名字**，不是一串 key：对象 key 是 `<sha256>.<扩展名>`，
+		// ⭐ 清单给的是**图 + 名字**，不是一串 key：老 key 是 `<sha256>.<扩展名>`，
 		// 用户看它认不出是哪张图，而这是不可恢复动作前**唯一能核对**的东西。
-		// ⚠️ 这里的名字可能缺（「不留副本」档没有条目）—— 那就退化成 key，
-		// 而图仍然是可核对的（有副本用副本，没有就用存储里的地址）。
+		// ⚠️ 名字的三个来源按序兜底：条目 sourceName → 从 key 反推（C2 新模板的 key 自带名字）
+		// → 退化成 key 本身；图仍然是可核对的（有副本用副本，没有就用存储里的地址）。
 		const cards = this.fileCards(
 			selection.asks.map((key) => {
 				const entry = index.get(key);
-				return { id: key, name: entry?.sourceName, localPath: entry?.cachePath, remoteKey: key };
+				// 「不留副本」档没有条目 ⇒ 从 key 反推（C2：默认模板的 key 自带名字）
+				return { id: key, name: entry?.sourceName || displayNameForKey(key), localPath: entry?.cachePath, remoteKey: key };
 			}),
 			ORPHAN_LIST_MAX
 		);
@@ -965,7 +967,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		const cards = this.fileCards(
 			selection.candidates.map((object) => {
 				const entry = index.get(object.key);
-				return { id: object.key, name: entry?.sourceName, localPath: entry?.cachePath, remoteKey: object.key };
+				return { id: object.key, name: entry?.sourceName || displayNameForKey(object.key), localPath: entry?.cachePath, remoteKey: object.key };
 			}),
 			CLOUD_CLEANUP_LIST_MAX
 		);
@@ -1279,7 +1281,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		const cards = this.fileCards(
 			plan.preview.map((path) => ({
 				id: path,
-				name: indexByPath.get(path)?.sourceName,
+				// 条目缺名字时从缓存路径末段（就是对象 key）反推 —— 解析器认 Windows 分隔符
+				name: indexByPath.get(path)?.sourceName || displayNameForKey(path),
 				localPath: path,
 			})),
 			plan.preview.length

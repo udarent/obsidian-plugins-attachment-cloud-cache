@@ -100,7 +100,7 @@ export const I18N: Record<string, Locale> = {
 			"Leave empty to follow Obsidian's own attachment setting; a value here overrides it.",
 		objectKeyTemplate: "Object key template",
 		objectKeyTemplateDesc:
-			"Available: {hash}, {ext}, {filename}, {date}. Changing this affects new uploads only; existing links keep working.",
+			"Available: {name} (file name without extension), {filename} (with extension), {hash}, {hash2}, {ext}, {date}. Default {name}-{hash}.{ext}: objects stay recognizable by name in your storage, and delete confirmations can show the original file name; with a template containing neither, confirmations fall back to showing the key. Changing this affects new uploads only; existing links keep working.",
 		forcePathStyle: "Compatibility mode",
 		forcePathStyleDesc:
 			"Addresses objects as endpoint/bucket/key. Keep this on for Cloudflare R2, MinIO and most self-hosted services; turn it off only if your provider requires bucket subdomains.",
@@ -349,7 +349,7 @@ export const I18N: Record<string, Locale> = {
 		attachmentFolderDesc: "留空表示跟随 Obsidian 自己的附件设置；填写后将覆盖它。",
 		objectKeyTemplate: "对象 key 模板",
 		objectKeyTemplateDesc:
-			"可用占位符：{hash}、{ext}、{filename}、{date}。改动只影响之后的上传，已有链接不受影响。",
+			"可用占位符：{name}（文件名，不含扩展名）、{filename}（含扩展名）、{hash}、{hash2}、{ext}、{date}。默认 {name}-{hash}.{ext}：存储里能按名字认文件，删除确认框也能显示原始文件名；若改成两者都不含的模板，确认框将退化为只显示 key。改动只影响之后的上传，已有链接不受影响。",
 		forcePathStyle: "兼容模式",
 		forcePathStyleDesc:
 			"以「地址/桶/键」的方式寻址。Cloudflare R2、MinIO 与多数自建服务都需要开着；只有服务商要求用桶名做子域时才关掉。",

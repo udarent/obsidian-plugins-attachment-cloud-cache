@@ -8,9 +8,10 @@
 import assert from "node:assert/strict";
 
 export function runObjectKeySuite(mod) {
-	const { renderObjectKey, sanitizeFilename, sanitizeKey, DEFAULT_KEY_TOKENS } = mod;
+	const { renderObjectKey, sanitizeFilename, sanitizeKey, displayNameForKey, DEFAULT_KEY_TOKENS, DEFAULT_OBJECT_KEY_TEMPLATE } = mod;
 
 	const hash = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
+	const fullHash = "d472a4c9f0b8e1a2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef00123"; // 恰好 64 位
 	const ctx = { hash, ext: "png", filename: "photo.png", date: new Date(Date.UTC(2026, 9, 5)) };
 
 	// ---------- 1. 基本渲染 ----------
@@ -110,7 +111,50 @@ export function runObjectKeySuite(mod) {
 	// ---------- 7. token 清单与实现一致 ----------
 	assert.deepEqual(
 		[...DEFAULT_KEY_TOKENS].sort(),
-		["date", "ext", "filename", "hash", "hash2"],
+		["date", "ext", "filename", "hash", "hash2", "name"],
 		"支持的占位符清单应与实现一致（设置页的说明由它生成）"
 	);
+
+	// ---------- 8. `{name}` = 不含扩展名的文件名（且只去**最后一个**扩展名）----------
+	assert.equal(renderObjectKey("{name}.{ext}", ctx), "photo.png", "{name} 应去掉扩展名");
+	assert.equal(
+		renderObjectKey("{name}-{hash}.{ext}", { ...ctx, ext: "pdf", filename: "存档.v2.pdf" }),
+		`存档.v2-${hash}.pdf`,
+		"多点文件名只剥最后一个扩展名"
+	);
+
+	// ---------- 9. 默认模板 = 名字 + 完整哈希尾 ----------
+	assert.equal(DEFAULT_OBJECT_KEY_TEMPLATE, "{name}-{hash}.{ext}", "默认模板应自带文件名");
+	assert.equal(
+		renderObjectKey("", { ...ctx, hash: fullHash, ext: "pdf", filename: "报告 扫描.pdf" }),
+		`报告 扫描-${fullHash}.pdf`,
+		"空模板应回落到默认模板（名字 + 完整哈希尾）"
+	);
+
+	// ---------- 10. displayNameForKey：新格式还原 ----------
+	const rendered = renderObjectKey(DEFAULT_OBJECT_KEY_TEMPLATE, { ...ctx, hash: fullHash, ext: "pdf", filename: "报告 扫描.pdf" });
+	assert.equal(displayNameForKey(rendered), "报告 扫描.pdf", "新格式 key 应能解析回原始文件名");
+
+	// ---------- 11. displayNameForKey：老格式安全返回空（绝不能硬猜）----------
+	assert.equal(displayNameForKey(`${fullHash}.png`), "", "老格式纯哈希 key 应解析为空");
+
+	// ---------- 12. displayNameForKey：哈希尾必须恰好 64 位 ----------
+	assert.equal(displayNameForKey("报告-a1b2c3d4.png"), "", "短十六进制尾不应被当成哈希尾剥掉");
+
+	// ---------- 13. displayNameForKey：路径入参只取末段（含 Windows 分隔符）----------
+	assert.equal(
+		displayNameForKey(`C:\\cache\\报告-${fullHash}.pdf`),
+		"报告.pdf",
+		"Windows 路径应按分隔符取末段再解析"
+	);
+
+	// ---------- 14. displayNameForKey：文件名自带类哈希尾时只剥一段 ----------
+	assert.equal(
+		displayNameForKey(`数据-${"e".repeat(64)}-${fullHash}.pdf`),
+		`数据-${"e".repeat(64)}.pdf`,
+		"文件名以 64 位十六进制结尾时也只剥最右一段"
+	);
+
+	// ---------- 15. displayNameForKey：无扩展名的 key 也能还原 ----------
+	assert.equal(displayNameForKey(`报告-${fullHash}`), "报告", "无扩展名时返回纯名字");
 }

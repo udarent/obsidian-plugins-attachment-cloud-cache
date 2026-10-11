@@ -89,7 +89,10 @@ async function makeHarness(mod, options = {}) {
 	const settings = {
 		...mod.SETTINGS_DEFAULTS,
 		...options.settings,
-		s3: { ...mod.SETTINGS_DEFAULTS.s3, ...options.settings?.s3 },
+		// ⚠️ 钉住旧模板：本套件断言的是 ingest 行为，不是默认模板长什么样 ——
+		// 不钉就会随默认模板漂移（C2 把默认改成 `{name}-{hash}.{ext}` 时就红过一次）。
+		// 新默认模板的端到端覆盖在本文件 §2 末尾的专设用例 + object-key 套件。
+		s3: { ...mod.SETTINGS_DEFAULTS.s3, objectKeyTemplate: "{hash}.{ext}", ...options.settings?.s3 },
 	};
 
 	const index = new mod.CacheIndex();
@@ -269,6 +272,27 @@ export async function runIngestSuite(mod) {
 			reloaded.index.get(expectedKey),
 			entry,
 			"索引落盘再读回后，条目内容应完全一致"
+		);
+	});
+
+	// ============================================================
+	// 2b. 新默认模板（C2）：key = `{name}-{hash}.{ext}`，名字进 key、哈希尾仍是完整 64 位
+	// ============================================================
+	await withHarness(mod, { settings: { s3: { objectKeyTemplate: "{name}-{hash}.{ext}" } } }, async (h) => {
+		const result = await ingestAttachment(h.deps, {
+			bytes: HOSTILE_BYTES,
+			name: "报告 扫描.png",
+			mime: "image/png",
+		});
+
+		const expectedHash = sha256Hex(HOSTILE_BYTES);
+		assert.equal(result.status, "uploaded", `应上传成功，实际 ${result.status}`);
+		assert.equal(result.key, `报告 扫描-${expectedHash}.png`, "新默认模板的 key 应自带文件名（非 ASCII 不编码）");
+		assert.equal(h.server.countByMethod("PUT"), 1, "带名字的 key 也应一次 PUT 成功");
+		assert.equal(
+			Buffer.compare(h.server.stored(result.key), Buffer.from(HOSTILE_BYTES)),
+			0,
+			"服务端按带名字的 key 收到的字节必须逐字节一致"
 		);
 	});
 

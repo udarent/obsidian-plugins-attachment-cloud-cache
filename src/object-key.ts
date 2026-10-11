@@ -18,7 +18,27 @@
  */
 
 /** 模板支持的占位符。设置页的说明由它生成，避免文档与实现脱节。 */
-export const DEFAULT_KEY_TOKENS = ["hash", "hash2", "ext", "filename", "date"] as const;
+export const DEFAULT_KEY_TOKENS = ["hash", "hash2", "ext", "filename", "name", "date"] as const;
+
+/**
+ * 默认模板（C2）：`报告-d472a4…(完整哈希).pdf`。
+ *
+ * ## 为什么是「名字 + **完整**哈希尾」，而不是别的形状
+ *
+ * - **完整哈希 = 零新风险**：碰撞不可能（sha256），同名同内容 ⇒ 同 key
+ *   ⇒ 跨设备幂等、去重在同名内保留 —— 与纯哈希时代**逐字一致**的安全属性。
+ *   短哈希尾（8 位）则要引入"碰撞了怎么办"的新问题，而 S3 的「不覆盖」
+ *   条件写入在部分兼容服务商上根本不存在（Wasabi 直接忽略 `If-None-Match`）。
+ * - **名字在前**：桶里/控制台按前缀浏览、搜索都可用 —— 这是这模板存在的理由。
+ * - **老 key 不受牵连**：已上传的对象保持纯哈希 key，链接与索引照常。
+ *   两种命名会在桶里长期共存，解析（`displayNameForKey`）必须对老格式安全返回空。
+ *
+ * ## 配套纪律
+ *
+ * key 里有了名字，解析回名字就有了可能 —— 但解析结果**只用于展示，绝不参与判定**
+ * （与 `CacheEntry.sourceName` 同一条纪律）。判"是不是我们上传的"永远查台账。
+ */
+export const DEFAULT_OBJECT_KEY_TEMPLATE = "{name}-{hash}.{ext}";
 
 export interface ObjectKeyContext {
 	/** 内容哈希（十六进制）。 */
@@ -115,6 +135,17 @@ function formatDate(date: Date): string {
 }
 
 /**
+ * 去掉最后一个扩展名（`存档.v2.pdf` → `存档.v2`）。
+ *
+ * 点在**开头**不算扩展名（`.gitignore` 整体就是名字）—— 与 `sanitizeFilename`
+ * 的截断逻辑同一条判据（`dot > 0`），两处对"什么是扩展名"不能有分歧。
+ */
+function stripExtension(name: string): string {
+	const dot = name.lastIndexOf(".");
+	return dot > 0 ? name.slice(0, dot) : name;
+}
+
+/**
  * 按模板渲染对象 key。
  *
  * - 已知占位符被替换；**未知占位符保留原样**（`{nope}` 仍是 `{nope}`）——
@@ -123,13 +154,16 @@ function formatDate(date: Date): string {
  * - 结果统一过 {@link sanitizeKey}，所以模板写得不规范也不会产生危险 key。
  */
 export function renderObjectKey(template: unknown, context: ObjectKeyContext): string {
-	const tpl = typeof template === "string" && template.trim() !== "" ? template : "{hash}.{ext}";
+	const tpl = typeof template === "string" && template.trim() !== "" ? template : DEFAULT_OBJECT_KEY_TEMPLATE;
 
 	const values: Record<string, string> = {
 		hash: typeof context.hash === "string" ? context.hash : "",
 		hash2: typeof context.hash === "string" ? context.hash.slice(0, 2) : "",
 		ext: typeof context.ext === "string" ? context.ext.toLowerCase().replace(/^\./, "") : "",
 		filename: sanitizeFilename(context.filename),
+		// `{name}` = 不含扩展名的文件名 —— 默认模板 `{name}-{hash}.{ext}` 用它，
+		// 否则扩展名会出现两次（`报告.pdf-<hash>.pdf`）。
+		name: stripExtension(sanitizeFilename(context.filename)),
 		date: formatDate(context.date ?? new Date()),
 	};
 
@@ -138,4 +172,35 @@ export function renderObjectKey(template: unknown, context: ObjectKeyContext): s
 	);
 
 	return sanitizeKey(rendered);
+}
+
+/**
+ * 默认模板 key 的形状：`<名字>-<64 位小写十六进制哈希>[.<扩展名>]`。
+ *
+ * ⚠️ 必须钉死「恰好 64 位」：放宽了（如 `{1,64}`）会把用户自己起的、
+ * 以 `-deadbeef` 之类的短十六进制结尾的文件名**误剥**一截 —— 名字是展示层，
+ * 错了不会报错，只会"看着不对"，是最难发现的一类缺陷。
+ */
+const HASH_TAIL_PATTERN = /^(.+)-([0-9a-f]{64})(\.[^./\\]{1,16})?$/;
+
+/**
+ * 从对象 key（或缓存路径）反推**显示用**文件名；推不出来返回空串（调用方退化显示 key 本身）。
+ *
+ * - 只吃默认模板（`{name}-{hash}.{ext}`）产出的形状；**老格式纯哈希 key 安全返回空** ——
+ *   两种命名在桶里长期共存，这条解析对老 key 绝不能"硬猜"。
+ * - 从右往左只剥**一段**哈希尾：文件名自己以 `-<64 位十六进制>` 结尾时，
+ *   key 是 `…-<那一段>-<真哈希>.<ext>`，剥完恰好还原。
+ * - 入参可以是路径（Windows 反斜杠也认）—— 只取最后一段。
+ *
+ * ⚠️ 已知误报面（有意的取舍）：用户把模板改成 `{filename}.{ext}`、且文件名恰好
+ * 以 `-<64 位十六进制>` 结尾时，显示名会被多剥一截。只影响展示、不影响任何判定，
+ * 且要求"自定义模板 + 畸形文件名"同时成立 —— 接受它，换来解析器对模板配置零依赖。
+ */
+export function displayNameForKey(key: unknown): string {
+	const raw = typeof key === "string" ? key.trim() : "";
+	if (!raw) return "";
+	const segment = raw.split(/[\\/]/).pop() ?? "";
+	const match = HASH_TAIL_PATTERN.exec(segment);
+	if (!match) return "";
+	return `${match[1]}${match[3] ?? ""}`;
 }

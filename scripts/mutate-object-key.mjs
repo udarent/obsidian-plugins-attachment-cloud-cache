@@ -56,5 +56,35 @@ await runMutations({
 			to: "// 变异：去掉兜底",
 			expect: "应有兜底",
 		},
+		{
+			name: "{name} 不再去扩展名（渲染出 报告.pdf-<hash>.pdf 双扩展名）",
+			from: "return dot > 0 ? name.slice(0, dot) : name;",
+			to: "return name;",
+			expect: "{name} 应去掉扩展名",
+		},
+		{
+			name: "默认模板退回纯哈希（文件名不再进 key）",
+			from: 'const tpl = typeof template === "string" && template.trim() !== "" ? template : DEFAULT_OBJECT_KEY_TEMPLATE;',
+			to: 'const tpl = typeof template === "string" && template.trim() !== "" ? template : "{hash}.{ext}";',
+			expect: "空模板应回落到默认模板",
+		},
+		{
+			name: "哈希尾长度放宽（短十六进制尾被误剥一截）",
+			from: "([0-9a-f]{64})",
+			to: "([0-9a-f]{1,64})",
+			expect: "短十六进制尾不应被当成哈希尾剥掉",
+		},
+		{
+			name: "老格式 key 也硬猜名字（纯哈希 key 被错误解析）",
+			from: '\tif (!match) return "";\n\treturn `${match[1]}${match[3] ?? ""}`;',
+			to: '\tif (!match) return segment;\n\treturn `${match[1]}${match[3] ?? ""}`;',
+			expect: "老格式纯哈希 key 应解析为空",
+		},
+		{
+			name: "Windows 路径不按分隔符取末段（缓存路径解析失败）",
+			from: "raw.split(/[\\\\/]/)",
+			to: 'raw.split("/")',
+			expect: "Windows 路径应按分隔符取末段再解析",
+		},
 	],
 });
