@@ -36,14 +36,14 @@ await runMutations({
 			name: "字符串读取把非字符串透传（undefined 漏进设置）",
 			from: 'return (raw, fallback) => (typeof raw === "string" ? raw : fallback);',
 			to: "return (raw, fallback) => (raw === undefined ? fallback : raw);",
-			// ⚠️ 期望记的是**实测先红的那条**。原来这里是 `attachmentFolder`，
-			// 但那个字段已改用 `pathValue()`（它自己判类型），于是先红的是仍在用
-			// `textValue()` 的 s3 字段。变异本身没变，只是它现在照亮的断言换了。
+			// ⚠️ 期望记的是**实测先红的那条**。曾经先红的是 `attachmentFolder`，后来它改用
+			// `pathValue()`、又随 D-20 整个字段被删 ⇒ 如今先红的是仍在用 `textValue()`
+			// 的 s3 字段。变异本身没变，只是它照亮的断言换了。
 			expect: "s3.endpoint 收到类型不对的值",
 		},
 		{
-			// ⚠️ 同理：`cacheFolder` 已改用 `pathValue()`（归一后为空会回落默认），
-			// 所以这条变异现在照的是仍在用 `requiredTextValue()` 的 s3 字段 ——
+			// ⚠️ 同理：这条变异照的是仍在用 `requiredTextValue()` 的 s3 字段
+			//（`cacheFolder` 与 `attachmentFolder` 当年那两个用户都已随各自的字段消失）——
 			// 它守的性质（"为空会直接不可用的字段不接受空串"）没有变。
 			name: "非空字符串不再拒绝空串（会直接不可用的字段被清空）",
 			from: 'return (raw, fallback) => (typeof raw === "string" && raw.trim() !== "" ? raw : fallback);',
@@ -60,11 +60,12 @@ await runMutations({
 			// "非法枚举应回落默认"不再由这个变异照亮，先说话的换成了它。
 			expect: "类型应与默认值一致",
 		},
-		// ⚠️ 1.2.0（D-17）：这里原本有**三条**锚点，全部指向 `pathValue` ——
-		// 两条钉它的归一那一行（`cacheFolder` 与 `attachmentFolder` 当时共用这个读取器），
-		// 一条钉它的 `required` 分支。`cacheFolder` 随缓存目录被删、`required` 分支随之
-		// 没有调用方 ⇒ 前两条**收敛成一条**（见下面"用户填的路径"那条），后一条**删掉**。
-		// 留着锚在已删代码上的变异只会"找不到目标" —— 那是假绿。
+		// ⚠️ 这里原本有**三条**锚点，全部指向 `pathValue`：两条钉它的归一那一行
+		//（`cacheFolder` 与 `attachmentFolder` 当时共用这个读取器），一条钉它的 `required` 分支。
+		// `cacheFolder` 随缓存目录被删（D-17）、`required` 分支随之没有调用方 ⇒ 后一条删掉、
+		// 前两条收敛成一条；`attachmentFolder` 随后整个取消（D-20）⇒ 那一条也删。
+		// `pathValue` 至此没有任何调用方，读取器本身一并删掉 —— 留着锚在已删代码上的
+		// 变异只会"找不到目标"，那是假绿。
 
 		// ── ⭐ 字段被真的读进来（"存得进读不出"）──
 		{
@@ -165,14 +166,6 @@ await runMutations({
 			from: "return isPlainRecord(raw.s3) ? raw.s3 : {};",
 			to: "return {};",
 			expect: "s3.bucket 必须能往返",
-		},
-		{
-			// 后果：用户粘进来的反斜杠/双斜杠路径被**逐字**落进 data.json 并拼进 vault 路径 ⇒
-			// 生成 vault 里不存在的层级，症状是"文件不在预期的地方"，与那次粘贴看不出关系。
-			name: "★ 用户填的路径不再归一（反斜杠/双斜杠逐字落盘）",
-			from: "\t\treturn normalizePath(raw.trim());",
-			to: "\t\treturn raw.trim();",
-			expect: "附件目录要归一",
 		},
 	],
 });

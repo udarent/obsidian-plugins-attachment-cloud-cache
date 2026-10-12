@@ -98,7 +98,7 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 | **Which sites to handle** | `All sites` (default, no filter), `All except the ones listed`, or `Only the ones listed`. This filters the automatic handling above — picking files by hand is never restricted by it. |
 | **Site list** | One domain per line. `example.com` also matches `img.example.com`; write `example.com:8080` to match that exact host. With "Only the ones listed", an empty list means nothing is handled automatically. |
 | **Pick specific files** | Tick individual off-site files; only those are fetched. Works whether or not the switch above is on. |
-| **Attachments folder override · Compatibility mode** | Advanced: override Obsidian's attachment folder; use path-style addressing (keep on for R2 and MinIO). |
+| **Compatibility mode** | Advanced. Addresses objects as `endpoint/bucket/key`: keep it on for Cloudflare R2, MinIO and most self-hosted services. |
 
 ## Commands
 
@@ -271,7 +271,7 @@ Obsidian version and which storage provider you use; the errors name the step th
 | **处理哪些站点** | `所有站点`（默认，不过滤）、`除名单外的站点`、`仅名单内的站点`。它**只筛自动处理**；手动挑选不受它限制。 |
 | **站点名单** | 一行一个域名。写 `example.com` 也会命中 `img.example.com`；写 `example.com:8080` 则只匹配含那个端口的地址。选「仅名单内的站点」时，留空表示什么都不自动处理。 |
 | **挑选要缓存的文件** | 勾选具体的站外文件，只有勾中的会被取。开关关着也能用。 |
-| **附件目录覆盖 · 兼容模式** | 高级：覆盖 Obsidian 的附件目录；按「地址/桶/键」寻址（R2 与 MinIO 都要开着）。 |
+| **兼容模式** | 高级。按「地址/桶/键」寻址：Cloudflare R2、MinIO 与多数自建服务都要开着。 |
 
 ## 命令
 

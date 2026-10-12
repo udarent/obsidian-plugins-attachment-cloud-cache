@@ -4,8 +4,9 @@
  * ## 为什么单独一层，而且必须是**共用**的
  *
  * 同一张图会被两条不同的路径写进 vault：
- * - **粘贴/拖拽**：我们先把字节落到附件目录，上传成功后再搬进缓存；
- * - **上传已有附件**（P1 的批量迁移）：文件本来就在附件目录里，我们改的是笔记与索引。
+ * - **粘贴/拖拽**：我们先把字节落到附件目录 —— ⚠️ 1.2.0（D-17）起那份字节**原地就是**本地
+ *   副本，没有"上传成功后再搬进缓存"这一步了；
+ * - **上传已有附件**：文件本来就在附件目录里，我们改的是笔记与索引。
  *
  * 两条路如果各自实现"扩展名怎么推""重名怎么办"，就会**分叉**：
  * 同一张图的副本落在两个不同路径，索引只认得其中一个，另一个永远清不掉。
@@ -14,11 +15,11 @@
  * ## 为什么不复用 Obsidian 的 `getAvailablePathForAttachment`
  *
  * 那个 API 好用，但它**不保证返回值未被占用**（官方文档明说可能已存在），
- * 而且不同版本/移动端上行为有差异。我们已经必须自己判唯一性（因为缓存路径
- * 完全是我们自己算的），那就两条路都用同一套判据，别一半靠宿主一半靠自己。
+ * 而且不同版本/移动端上行为有差异。我们已经必须自己判唯一性，那就两条路都用
+ * 同一套判据，别一半靠宿主一半靠自己。
  *
  * ⚠️ 附件目录的**位置**也不再问那个 API 了：真机实测它返回 Promise，
- * 而且目标目录已存在时会抛 `Folder already exists.` —— 详见 `core/ingest.ts` 的
+ * 而且目标目录已存在时会抛 `Folder already exists.` —— 详见**本模块**的
  * `hostAttachmentFolder`（现在读的是宿主自己的 `attachmentFolderPath` 配置）。
  * 这里只负责"文件名唯一化"这一步。
  */
@@ -425,7 +426,30 @@ export function cleanFolderPath(value: unknown): string {
 }
 
 /**
- * 读宿主自己的「新附件的默认位置」，返回 vault 相对目录（无法确定时返回空串 = 根目录）。
+ * 本次落盘的**目录**（vault 相对）：宿主自己的附件位置 → vault 根目录。
+ *
+ * ⭐ 上传（粘贴近场文件）与回退下载（补齐缺的副本）**共用这一处**，理由与模块头
+ * 那条一样：两条路各自实现"落在哪"，就会分叉成"下载的副本在上传时不再被认出来"，
+ * 而索引只认得其中一条路径。
+ *
+ * ⚠️ 1.2.0 之前这里还有一层"用户的覆盖值"（设置项「附件目录覆盖」）。那个设置项是
+ * 围着已取消的缓存目录设的，已随它一并删除 —— 落点从此只有"跟随宿主"这一个答案。
+ *
+ * ## ⚠️ 这里换过一次实现，理由必须留着
+ *
+ * 早先问的是 `fileManager.getAvailablePathForAttachment`，而且是**按同步调用**的
+ * （`typeof 返回值 === "string"` 才采用）。在真机上实测，那两件事都是错的：
+ *
+ * 1. 它返回的是 **Promise**（实测 `[object Promise]` / `thenable=true`）
+ *    ⇒ 那个类型检查**永远为假**，宿主给的值从来没被采用过；
+ * 2. 就算 `await` 它，只要目标目录已经存在，它就抛 `Folder already exists.`
+ *    （真机复现，带不带 `sourcePath` 都一样）。
+ *
+ * 于是这条路上「跟随 Obsidian 的附件设置」**从未生效** —— 中转文件一直落在
+ * vault 根目录。而用户看到的现象正是"上传图片时根目录不停冒出新的图片文件"。
+ * 这个缺陷之所以能活这么久，是因为它**不报错、不丢数据**，只是落点与预期不符。
+ *
+ * ## 读取（`Vault.getConfig`）为什么走鸭子类型
  *
  * ⚠️ `Vault.getConfig` **不在钉住的公开类型里**（`obsidian.d.ts` 搜不到它），
  * 但真机实测它存在且可用：`getConfig("attachmentFolderPath")` 返回的就是
@@ -457,32 +481,4 @@ export function hostAttachmentFolder(app: unknown, sourcePath?: string): string 
 		return parentFolderOf(normalizeVaultPath(sourcePath));
 	}
 	return cleaned;
-}
-
-/**
- * 这次落盘的**目录**（vault 相对）：用户的覆盖值 → 宿主自己的附件位置 → vault 根目录。
- *
- * ⭐ 上传（粘贴近场文件）与回退下载（补齐缺的副本）**共用这一处**，理由与模块头
- * 那条一样：两条路各自实现"落在哪"，就会分叉成"下载的副本在上传时不再被认出来"，
- * 而索引只认得其中一条路径。
- *
- * ## ⚠️ 这里换过一次实现，理由必须留着
- *
- * 早先问的是 `fileManager.getAvailablePathForAttachment`，而且是**按同步调用**的
- * （`typeof 返回值 === "string"` 才采用）。在真机上实测，那两件事都是错的：
- *
- * 1. 它返回的是 **Promise**（实测 `[object Promise]` / `thenable=true`）
- *    ⇒ 那个类型检查**永远为假**，宿主给的值从来没被采用过；
- * 2. 就算 `await` 它，只要目标目录已经存在，它就抛 `Folder already exists.`
- *    （真机复现，带不带 `sourcePath` 都一样）。
- *
- * 于是这条路上「跟随 Obsidian 的附件设置」**从未生效** —— 中转文件一直落在
- * vault 根目录。而用户看到的现象正是"上传图片时根目录不停冒出新的图片文件"。
- * 这个缺陷之所以能活这么久，是因为它**不报错、不丢数据**，只是落点与预期不符。
- */
-export function attachmentFolderFor(app: unknown, override: unknown, sourcePath?: string): string {
-	// 用户显式填了覆盖目录 → 用它。"覆盖"这个词的直白含义就是"别再问别人"。
-	const clean = cleanFolderPath(override);
-	if (clean) return clean;
-	return hostAttachmentFolder(app, sourcePath);
 }

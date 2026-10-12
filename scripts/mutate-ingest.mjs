@@ -55,13 +55,13 @@ await runMutations({
 		},
 		// ── ⭐ 落点必须走**共用**的解析（1.2.0 起实现在 `vault-files.ts`）──
 		//
-		// 这条只钉"编排层确实用了那个共用函数"；解析内部的规则（覆盖优先 / 跟随宿主 /
-		// `./` = 与笔记同目录）由 `mutate-vault-files.mjs` 在同名套件上逐条钉住。
+		// 这条只钉"编排层确实用了那个共用函数"；解析内部的规则（跟随宿主 / `./` = 与笔记
+		// 同目录 / `/` = 没指定）由 `mutate-vault-files.mjs` 在同名套件上逐条钉住。
 		{
 			name: "★ 上传落点不再走共用解析（自建一套 ⇒ 与下载那条路分叉）",
-			from: "\tconst folder = attachmentFolderFor(deps.app, deps.settings.attachmentFolder, sourcePath);\n\treturn folder ? `${folder}/${fileName}` : fileName;",
+			from: "\tconst folder = hostAttachmentFolder(deps.app, sourcePath);\n\treturn folder ? `${folder}/${fileName}` : fileName;",
 			to: "\treturn fileName;",
-			expect: "⭐ 填了覆盖就应落在覆盖目录里",
+			expect: "应跟随宿主的附件设置",
 		},
 
 		// ── ⭐ 迁移已有附件：字节已在库里，别动那个文件 ──

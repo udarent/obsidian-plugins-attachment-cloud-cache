@@ -595,16 +595,6 @@ export class SettingsTab extends PluginSettingTab {
 	private advancedItems(): SettingGroupItem[] {
 		return [
 			{
-				name: this.t("attachmentFolder"),
-				desc: this.t("attachmentFolderDesc"),
-				aliases: ["attachment folder", "附件目录"],
-				control: {
-					type: "text",
-					key: "attachmentFolder",
-					placeholder: this.t("attachmentFolderPlaceholder"),
-				},
-			},
-			{
 				name: this.t("forcePathStyle"),
 				desc: this.t("forcePathStyleDesc"),
 				aliases: ["path-style", "virtual-host", "兼容", "寻址"],

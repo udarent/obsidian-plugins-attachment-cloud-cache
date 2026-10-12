@@ -1,5 +1,3 @@
-import { normalizePath } from "obsidian";
-
 /**
  * 设置：默认值、类型守卫、合并。
  *
@@ -62,7 +60,6 @@ function boolValue(): FieldReader<boolean> {
  * 字符串：**允许空串**。
  *
  * 空串在本插件里是有意义的值，不是"没填"：
- * - `attachmentFolder` 空 = 跟随宿主的附件设置；
  * - `accessKeyId` 空 = 尚未填写访问密钥 ID；
  * - `secretAccessKeyRef` 空 = 尚未在钥匙串里选密钥。
  * 后者尤其不能回落成某个写死的名字 —— 那会指向一个不存在的密钥，
@@ -91,26 +88,6 @@ function stringListValue(): FieldReader<string[]> {
 		const items = raw as unknown[];
 		if (!items.every((item) => typeof item === "string")) return [...fallback];
 		return (items as string[]).map((item) => item.trim()).filter((item) => item !== "");
-	};
-}
-
-/**
- * vault 路径：**读进来那一刻就归一**。
- *
- * ⚠️ 官方 guideline 要求：接受用户给的 vault 路径时必须过 normalizePath()。
- * 不归一的后果很具体：用户从别处粘一个反斜杠分隔或带双斜杠的路径（Windows 上很自然），
- * 会被**逐字**拼进 vault 路径 ⇒ 生成 vault 里根本不存在的层级，而症状是
- * 「文件不在预期的地方」，看不出与那次粘贴有关。
- *
- * ⚠️ 空 = **跟随宿主的附件设置**，是一个有意义的状态（所以归一后为空就返回 `""`，不回落默认）。
- * 1.2.0（D-17）之前这里还有第二档「必填」（`cacheFolder` 用：归一后为空回落默认目录）——
- * 那个字段随缓存目录一起没了，于是这一档也**删掉**：留着一个没有调用方的分支，
- * 只会让下一个人以为还有别的情况要考虑。
- */
-function pathValue(): FieldReader<string> {
-	return (raw, fallback) => {
-		if (typeof raw !== "string") return fallback;
-		return normalizePath(raw.trim());
 	};
 }
 
@@ -175,7 +152,6 @@ function numberValue(options: { min?: number; max?: number } = {}): FieldReader<
  */
 const FACTORY_SETTINGS = {
 	autoUpload: true,
-	attachmentFolder: "",
 	// ⚠️ 默认「留在附件目录」：本地副本是"离线可用"这个主承诺的前提，而 1.2.0（D-17）起
 	// 那份副本**就是附件本身**（不再有"搬进缓存目录"这一步）⇒ 这是唯一不牺牲离线的档。
 	// ⚠️ 1.2.0 之前这里写的是 `"cache"`；老用户存着的值由 `localCopyValue` 折成同一个结果。
@@ -210,7 +186,6 @@ const SETTINGS_SPEC: {
 	[K in keyof Omit<PluginSettings, "s3">]: FieldReader<Omit<PluginSettings, "s3">[K]>;
 } = {
 	autoUpload: boolValue(),
-	attachmentFolder: pathValue(),
 	localCopy: localCopyValue(),
 	fallbackDownload: boolValue(),
 	externalImageCache: boolValue(),

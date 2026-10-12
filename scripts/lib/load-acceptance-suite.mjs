@@ -433,7 +433,6 @@ export async function runLoadAcceptance(options = {}) {
 	plugin.loadData = async () => ({
 		autoUpload: true,
 		enabledExtensions: ["png", "jpg"],
-		attachmentFolder: "",
 		// ⚠️ 两个**故意的遗留值**：老用户的 data.json 里就是这样躺着。
 		// `"cache"` 是 D-17 取消掉的第三档（读设置时折成 `"keep"`）；
 		// `cacheFolder` 是随缓存目录一起删掉的字段（字段表直接丢掉，且**谁都不许再读它**）。

@@ -45,9 +45,9 @@ import { describeError } from "../error-text";
 import { notifyUser } from "../notify-user";
 import type { NotifySink } from "../notify-user";
 import {
-	attachmentFolderFor,
 	extensionOfName,
 	fallbackFileName,
+	hostAttachmentFolder,
 	normalizeVaultPath,
 	parentFolderOf,
 	resolveContentType,
@@ -225,13 +225,13 @@ async function ensureFolder(app: App, folder: string): Promise<void> {
 }
 
 /**
- * 决定这次落盘的路径：**用户的覆盖值 → 宿主自己的附件位置 → vault 根目录**。
+ * 决定这次落盘的路径：**宿主自己的附件位置 → vault 根目录**。
  *
- * ⚠️ 目录解析本身在 `vault-files.ts` 的 `attachmentFolderFor`（回退下载那条路
+ * ⚠️ 目录解析本身在 `vault-files.ts` 的 `hostAttachmentFolder`（回退下载那条路
  * 也要用同一个答案 —— 两条路各自实现一次就会分叉）。这里只做"目录 + 文件名"。
  */
 function suggestAttachmentPath(deps: IngestDeps, fileName: string, sourcePath?: string): string {
-	const folder = attachmentFolderFor(deps.app, deps.settings.attachmentFolder, sourcePath);
+	const folder = hostAttachmentFolder(deps.app, sourcePath);
 	return folder ? `${folder}/${fileName}` : fileName;
 }
 

@@ -236,11 +236,8 @@ export function runSettingsUiSuite(mod) {
 	// 它当时"不能为空"是因为空目录名会让缓存路径推导直接返回 null。
 	// ============================================================
 	assert.equal(isWritableValue("s3.region", ""), false, "区域不能为空");
-	assert.equal(
-		isWritableValue("attachmentFolder", ""),
-		true,
-		"★ 反过来：附件目录**允许**为空（空 = 跟随宿主设置），不能一并拦掉"
-	);
+	// ⚠️ 2026-10-12（D-20）：「附件目录覆盖」字段取消，它那条"允许为空"的反向断言
+	// 随之删除（那个字段改成"跟随宿主"一个答案后，空串不再是一个需要守护的状态）。
 	assert.equal(
 		isWritableValue("s3.accessKeyId", ""),
 		true,
@@ -339,7 +336,7 @@ export function runSettingsUiSuite(mod) {
 	// ============================================================
 	// 10. 连通性前置检查
 	// ============================================================
-	const base = { autoUpload: true, attachmentFolder: "", localCopy: "keep", fallbackDownload: true };
+	const base = { autoUpload: true, localCopy: "keep", fallbackDownload: true };
 	const s3Base = { endpoint: "https://s3.example.com", region: "auto", bucket: "b", publicUrlBase: "", accessKeyId: "AKIA", secretAccessKeyRef: "s", forcePathStyle: true };
 	const ready = connectionReadiness(readerWith({ s: "SECRET" }), { ...base, s3: s3Base });
 	assert.equal(ready.ready, true, "配置齐全时应就绪");

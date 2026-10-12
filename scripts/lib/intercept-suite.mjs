@@ -25,7 +25,6 @@ export function runInterceptSuite(mod) {
 	// 其余字段由类型保证存在即可（判定逻辑不碰它们）。
 	const baseSettings = {
 		autoUpload: true,
-		attachmentFolder: "",
 		localCopy: "cache",
 		fallbackDownload: true,
 		s3: {

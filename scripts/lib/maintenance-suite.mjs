@@ -535,7 +535,6 @@ export function runMaintenanceSuite(mod) {
 	const { CacheIndex } = mod;
 	const settings = {
 		autoUpload: true,
-		attachmentFolder: "",
 		localCopy: "cache",
 		fallbackDownload: true,
 		s3: {

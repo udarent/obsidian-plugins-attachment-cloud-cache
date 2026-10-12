@@ -52,7 +52,7 @@ import type { App } from "obsidian";
 import type { PluginSettings } from "../types";
 import { isCacheDisabled } from "../types";
 import type { CacheIndex, CacheEntry } from "../cache/index";
-import { attachmentFolderFor, parentFolderOf } from "../vault-files";
+import { hostAttachmentFolder, parentFolderOf } from "../vault-files";
 import { planDownloadTarget } from "../download-target";
 import { sha256Hex } from "../s3/hash";
 import { keyFromUrl } from "../render/render-target";
@@ -253,12 +253,12 @@ export function createLocalCopyEnsurer(deps: LocalCopyDeps) {
 		// 取名靠三级兜底（条目 `sourceName` → key 反推 → key 本身），撞名先比内容哈希、
 		// 再走序号 —— 全部在 `download-target.ts` 里，这里只负责给它两个探针。
 		// ⚠️ 那个"没配缓存目录所以推不出路径"的失败分支（`fallbackNoCacheFolder`）随之消失：
-		// 附件目录任何时候都能确定（用户覆盖值 → 宿主配置 → vault 根），这条路径不再有
+		// 附件目录任何时候都能确定（跟随宿主配置 → vault 根），这条路径不再有
 		// "设置没填所以下载不了"的形态。
 		const plan = await planDownloadTarget({
 			key,
 			sourceName: known?.sourceName,
-			folder: attachmentFolderFor(deps.app, settings.attachmentFolder, sourcePath ?? undefined),
+			folder: hostAttachmentFolder(deps.app, sourcePath ?? undefined),
 			exists,
 			hashOf,
 		});

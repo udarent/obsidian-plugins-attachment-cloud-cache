@@ -110,7 +110,6 @@ export async function runDownloadSuite(mod) {
 		const settings = {
 			autoUpload: true,
 			enabledExtensions: ["png"],
-			attachmentFolder: "",
 			localCopy: "cache",
 			fallbackDownload: true,
 			s3: {

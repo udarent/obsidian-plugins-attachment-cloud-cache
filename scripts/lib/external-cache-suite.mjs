@@ -362,7 +362,6 @@ export async function runExternalCacheSuite(mod) {
 		const settings = {
 			autoUpload: true,
 			enabledExtensions: ["png"],
-			attachmentFolder: "",
 			localCopy: "keep",
 			fallbackDownload: true,
 			externalImageCache: true,

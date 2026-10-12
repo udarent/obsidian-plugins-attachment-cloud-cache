@@ -30,7 +30,6 @@ export function runRenderTargetSuite(mod) {
 	const settingsWith = (s3) => ({
 		autoUpload: true,
 		enabledExtensions: ["png"],
-		attachmentFolder: "",
 		localCopy: "cache",
 		fallbackDownload: true,
 		s3,

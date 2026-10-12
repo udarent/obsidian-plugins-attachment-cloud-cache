@@ -90,10 +90,6 @@ export const I18N: Record<string, Locale> = {
 			"For files from this storage that have no local copy, such as ones synced from another device. Only objects in your own storage are handled. Not used when no local copy is kept, since caching is off then.",
 
 		// ── 高级 ──
-		attachmentFolder: "Attachments folder override",
-		attachmentFolderPlaceholder: "Follow Obsidian",
-		attachmentFolderDesc:
-			"Leave empty to follow Obsidian's own attachment setting; a value here overrides it.",
 		forcePathStyle: "Compatibility mode",
 		forcePathStyleDesc:
 			"Addresses objects as endpoint/bucket/key. Keep this on for Cloudflare R2, MinIO and most self-hosted services; turn it off only if your provider requires bucket subdomains.",
@@ -353,9 +349,6 @@ export const I18N: Record<string, Locale> = {
 		fallbackDownloadDesc:
 			"属于本存储、却没有本地副本的附件（例如从另一台设备同步来的）会自动下载。只处理你自己存储里的对象。选「不留副本」时不生效（那一档已关闭缓存）。",
 
-		attachmentFolder: "附件目录覆盖",
-		attachmentFolderPlaceholder: "跟随 Obsidian",
-		attachmentFolderDesc: "留空表示跟随 Obsidian 自己的附件设置；填写后将覆盖它。",
 		forcePathStyle: "兼容模式",
 		forcePathStyleDesc:
 			"以「地址/桶/键」的方式寻址。Cloudflare R2、MinIO 与多数自建服务都需要开着；只有服务商要求用桶名做子域时才关掉。",

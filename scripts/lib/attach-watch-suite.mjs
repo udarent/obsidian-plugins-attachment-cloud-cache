@@ -47,7 +47,6 @@ function entry(key, cachePath) {
 /** 一份可用的设置（`selectUploadCandidates` 会读它）。 */
 const SETTINGS = {
 	autoUpload: true,
-	attachmentFolder: "",
 	localCopy: "cache",
 	fallbackDownload: true,
 	externalImageCache: false,

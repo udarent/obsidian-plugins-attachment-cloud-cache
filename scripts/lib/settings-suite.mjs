@@ -55,7 +55,7 @@ export function runSettingsSuite(mod) {
 		"对象 key 模板不应再是可配项（形状固定，用户改不动）"
 	);
 	// 缓存布局不再是设置项：单段 key 下 flat 与 mirror 结果相同，
-	// 提供一个不产生差异的开关比不提供更糟。见 cache-path.ts 的说明。
+	// 提供一个不产生差异的开关比不提供更糟。
 	assert.ok(!("cacheLayout" in SETTINGS_DEFAULTS), "缓存布局不应再是用户可配项");
 	assert.ok(!("cacheDelaySeconds" in SETTINGS_DEFAULTS), "已删除的死字段不应回来");
 	assert.ok(!("enabled" in SETTINGS_DEFAULTS), "enabled 应已并入 autoUpload");
@@ -248,39 +248,12 @@ export function runSettingsSuite(mod) {
 
 	// ============================================================
 	// 4b. ⭐ 用户填的**路径**要在读进来那一刻就归一
-	// ============================================================
 	//
-	// 官方 guideline 明确要求：接受用户给的 vault 路径时必须过 `normalizePath()`。
-	//
-	// 不归一的具体后果：用户从别处粘一个反斜杠分隔、或带双斜杠的路径
-	//（Windows 上很自然），会被**逐字**拼进 vault 路径 —— 于是生成一个 vault 里
-	// 根本不存在的层级，而症状是"文件不在预期的地方"，看不出与那次粘贴有关。
-	//
-	// ⚠️ 1.2.0（D-17）：这里原先还有 `cacheFolder` 的三条断言（归一 / 幂等 /
-	// "必填、归一后为空回落默认"）。那个字段随缓存目录一起没了，于是它们连同
-	// `pathValue` 的 `required` 参数与对应的变异锚点**一并删除** ——
+	// ⚠️ 2026-10-12（D-20）：**整节已删**，连同上一条 `cacheFolder` 的说明。
+	// 设置里唯一的路径字段是「附件目录覆盖」，而它随缓存目录机制一并取消了 ——
+	// `pathValue()` 读取器已无调用方（一并删除）⇒ "路径归一"这件事在设置层不再存在。
 	// 留着一节测已删字段的断言，比没有测试更糟（会让人以为字段还在）。
-	{
-		const messy = mergePluginSettings(SETTINGS_DEFAULTS, {
-			...SETTINGS_DEFAULTS,
-			attachmentFolder: ".\\images//sub/",
-		});
-		assert.equal(messy.attachmentFolder, "images/sub", "★ 附件目录要归一（反斜杠、重复斜杠、前后斜杠）");
-
-		// 已归一的路径不该被再次改动（幂等）—— 否则每次读设置都会变一点
-		const again = mergePluginSettings(SETTINGS_DEFAULTS, {
-			...SETTINGS_DEFAULTS,
-			attachmentFolder: "images/sub",
-		});
-		assert.equal(again.attachmentFolder, "images/sub", "归一必须幂等");
-
-		// 附件目录是**可选**的：空 = 跟随宿主设置，是有意义的状态，不能回落成某个目录名
-		const emptyAttachment = mergePluginSettings(SETTINGS_DEFAULTS, {
-			...SETTINGS_DEFAULTS,
-			attachmentFolder: "/",
-		});
-		assert.equal(emptyAttachment.attachmentFolder, "", "附件目录归一后为空应保持为空（= 跟随宿主设置）");
-	}
+	// ============================================================
 
 	// ============================================================
 	// 4c. ⭐ 1.2.0（D-17）：老 data.json 里的 `"cache"` **静默折成** `"keep"`
@@ -401,15 +374,9 @@ export function runSettingsSuite(mod) {
 		assert.equal(merged.s3.region, SETTINGS_DEFAULTS.s3.region, `s3.region 为 ${label} 时应回落默认`);
 	}
 
-	// ⭐ 反向守护：`attachmentFolder` **允许**为空串 —— 它表示"跟随宿主的附件设置"，
-	// 把它一并回落成默认值会让"跟随宿主"这个选项失效（而且默认值恰好也是空串，
-	// 所以这条断言真正的价值在于：如果哪天有人把它改成 `requiredText`，
-	// 这里会立刻红，而不是等用户在真机上发现附件都堆到根目录）。
-	assert.equal(
-		mergePluginSettings(SETTINGS_DEFAULTS, { attachmentFolder: "" }).attachmentFolder,
-		"",
-		"attachmentFolder 允许为空串（空串 = 跟随宿主的附件设置），不应被回落"
-	);
+	// ⚠️ 2026-10-12（D-20）：这条反向守护（`attachmentFolder` **允许**为空串 ——
+	// 空 = 跟随宿主设置）随字段取消而删除。它当年守的是"别把'跟随宿主'这个选项改没"，
+	// 而现在落点**只有**"跟随宿主"一个答案，那个风险不存在了。
 
 	// ============================================================
 	// 9. ⭐ 逐个字段喂"类型肯定不对"的值 → 必须回落

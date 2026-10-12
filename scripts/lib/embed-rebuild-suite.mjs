@@ -46,7 +46,6 @@ function makeParent(replaced) {
 
 const SETTINGS = {
 	autoUpload: true,
-	attachmentFolder: "",
 	localCopy: "cache",
 	fallbackDownload: true,
 	externalImageCache: false,

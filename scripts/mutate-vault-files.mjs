@@ -123,20 +123,14 @@ await runMutations({
 
 		// ── ⭐ 落点目录的解析（1.2.0 起从 ingest 搬到这一层）──
 		//
-		// 这几条守的是"文件落在哪"。顺序写反过一次（先问宿主的 API、问不到才读设置值），
-		// 而桌面版那个 API 一直存在 ⇒ 用户填的覆盖目录**永远轮不到**：
-		// 界面能填、能保存、点了测试连接也通过，唯有行为不对。
-		{
-			name: "「附件目录覆盖」被宿主的设置盖过去（填了等于没填）",
-			from: '	const clean = cleanFolderPath(override);\n	if (clean) return clean;\n	return hostAttachmentFolder(app, sourcePath);',
-			to: "	return hostAttachmentFolder(app, sourcePath);",
-			expect: "填了覆盖就用覆盖",
-		},
+		// 这几条守的是"文件落在哪"。⚠️ 原本还有一条守"用户的覆盖值优先"（顺序曾经写反过，
+		// 而桌面版那个 API 一直存在 ⇒ 用户填的覆盖目录**永远轮不到**）—— 那层随
+		// 「附件目录覆盖」设置项一起取消（D-20），现在只有"跟随宿主"一个答案。
 		{
 			name: "宿主自己的附件位置被忽略（用户在 Obsidian 里设的那一栏白设了）",
-			from: "	return hostAttachmentFolder(app, sourcePath);",
+			from: "	return cleaned;",
 			to: '	return "";',
-			expect: "留空时应继续跟随宿主的附件设置",
+			expect: "应跟随宿主的附件设置",
 		},
 		{
 			name: "宿主的「与笔记同目录」被当成字面目录名（文件落进一个叫 `.` 的目录）",
@@ -148,7 +142,7 @@ await runMutations({
 			name: "目录不再归一（首尾斜杠留在路径里，`/` 被当成一个真目录）",
 			from: '		.replace(/\\\\/g, "/")\n		.replace(/^\\/+|\\/+$/g, "");',
 			to: '		.replace(/\\\\/g, "/");',
-			expect: "覆盖值要归一",
+			expect: "宿主填 `/` = 没指定目录",
 		},
 	],
 });

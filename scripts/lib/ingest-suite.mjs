@@ -789,37 +789,18 @@ export async function runIngestSuite(mod) {
 	assert.equal(mod.indexFilePath(""), ".cache-index.json", "目录为空时应退化到相对路径而不是抛错");
 
 	// ============================================================
-	// 17. ⭐⭐ 设置里的「附件目录覆盖」必须**真的覆盖**宿主
+	// 17. ⭐⭐ 落点：跟随**宿主自己**的附件位置
 	//
-	// 曾经的顺序是"先问宿主 `getAvailablePathForAttachment`，问不到才用设置值"，
-	// 而桌面版那个 API 一直存在 ⇒ 用户填的覆盖目录**永远轮不到**。
-	// 症状是最难查的一类：界面能填、能保存、点了「测试连接」也通过，唯有行为不对
-	// （文件还是落进 Obsidian 自己的附件目录）。
+	// ⚠️ 2026-10-12（D-20）：这一节原本守的是「设置里的『附件目录覆盖』必须**真的覆盖**宿主」。
+	// 那个设置项是围着已取消的缓存目录设的，随它一并删除 ⇒ 落点只剩"跟随宿主"一个答案。
+	// 保留的几条守的是"跟随"本身，含宿主的 `./`（与笔记同目录）与 `/`（= 没指定）两种写法。
 	// ============================================================
 	await withHarness(
 		mod,
-		{ settings: { attachmentFolder: "myattach", localCopy: "keep" }, hostAttachmentFolder: "host-attach" },
+		{ settings: { localCopy: "keep" }, hostAttachmentFolder: "host-attach" },
 		async (h) => {
 			const result = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "shot.png", mime: "image/png" });
-
-			assert.equal(result.status, "uploaded");
-			assert.equal(
-				result.localPath,
-				"myattach/shot.png",
-				"⭐ 填了覆盖就应落在覆盖目录里，而不是宿主的附件目录"
-			);
-			assert.equal(await h.exists("myattach/shot.png"), true, "覆盖目录里的文件应真的落盘");
-			assert.equal(await h.exists("host-attach/shot.png"), false, "不得落进宿主的附件目录");
-		}
-	);
-
-	// 反向守护：留空时**仍须跟随宿主** —— 否则这个改动会把"跟随"那条默认路径弄坏
-	await withHarness(
-		mod,
-		{ settings: { attachmentFolder: "", localCopy: "keep" }, hostAttachmentFolder: "host-attach" },
-		async (h) => {
-			const result = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "shot.png", mime: "image/png" });
-			assert.equal(result.localPath, "host-attach/shot.png", "留空时应继续跟随宿主的附件设置");
+			assert.equal(result.localPath, "host-attach/shot.png", "应跟随宿主的附件设置");
 		}
 	);
 
@@ -827,7 +808,7 @@ export async function runIngestSuite(mod) {
 	// 所以要按触发这次粘贴的笔记路径反推，而不是当成一个叫 `.` 的目录。
 	await withHarness(
 		mod,
-		{ settings: { attachmentFolder: "", localCopy: "keep" }, hostAttachmentFolder: "./" },
+		{ settings: { localCopy: "keep" }, hostAttachmentFolder: "./" },
 		async (h) => {
 			const result = await ingestAttachment(h.deps, {
 				bytes: HOSTILE_BYTES,
@@ -840,11 +821,11 @@ export async function runIngestSuite(mod) {
 	);
 
 	// 17d. 宿主设置是 `"/"` —— Obsidian 用它与空串表示同一件事（vault 根目录）。
-	// ⚠️ 这一条与使用者直接相关：插件设置里也允许填 `/`，它同样必须被理解成"没指定目录"，
+	// ⚠️ 这一条与使用者直接相关：那一栏填 `/` 同样必须被理解成"没指定目录"，
 	// 而不是一个叫 `/` 的目录。
 	await withHarness(
 		mod,
-		{ settings: { attachmentFolder: "", localCopy: "keep" }, hostAttachmentFolder: "/" },
+		{ settings: { localCopy: "keep" }, hostAttachmentFolder: "/" },
 		async (h) => {
 			const result = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "shot.png", mime: "image/png" });
 			assert.equal(result.localPath, "shot.png", "宿主设成根目录时应落在 vault 根目录");

@@ -34,7 +34,6 @@ export async function runExternalHookSuite(mod) {
 	const settingsWith = (overrides = {}) => ({
 		autoUpload: true,
 		enabledExtensions: ["png"],
-		attachmentFolder: "",
 		localCopy: "keep",
 		fallbackDownload: true,
 		externalImageCache: true,

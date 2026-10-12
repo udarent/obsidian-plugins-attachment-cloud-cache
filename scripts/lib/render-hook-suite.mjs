@@ -59,7 +59,6 @@ export async function runRenderHookSuite(mod) {
 	const settings = {
 		autoUpload: true,
 		enabledExtensions: ["png"],
-		attachmentFolder: "",
 		localCopy: "cache",
 		fallbackDownload: true,
 		s3: address,
