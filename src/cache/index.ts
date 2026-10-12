@@ -70,9 +70,9 @@ export interface CacheEntry {
 	/**
 	 * 本地副本的 vault 相对路径。
 	 *
-	 * 名字叫 cachePath 是历史原因，但它**不保证**在缓存目录里 ——
-	 * `localCopy: "keep"` 时它就是用户附件目录里的那份。
-	 * 判定"文件在不在缓存目录里"请用 `isUnderCacheFolder`，不要靠字段名猜。
+	 * 名字叫 cachePath 是历史原因（从前它是"缓存目录里的那份"），现在它记的就是
+	 * **副本此刻真实的落点**。⚠️ 别拿字段名去推"它在不在某个目录里" —— 没有"缓存目录"
+	 * 这个概念了；要判存在性请逐条问磁盘（见 `maintenance/self-heal.ts`）。
 	 */
 	cachePath: string;
 	/** 写进笔记、也用于反查的远端 URL。 */

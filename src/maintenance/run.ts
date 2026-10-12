@@ -452,13 +452,15 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 	const rules: RewriteRule[] = [];
 
 	/**
-	 * 路径 → **搬移后的缓存路径**：只给画布的 `file` 节点用。
+	 * 路径 → **改写后的路径**：只给画布的 `file` 节点用。
 	 *
 	 * ⚠️ 为什么不能拿上面那份 `rules` 顶上：那份的目标是远端 URL，
 	 * 而画布 `file` 字段**只能指向库内文件** —— 写成 URL 之后画布就找不到文件了
-	 * （宿主按库内路径取文件渲染）。所以 file 节点改的是"旧路径 → 新路径"，
-	 * 新路径＝附件被搬进缓存目录之后的那个位置（本设备直接显示，
-	 * 副本缺失时由回退下载补回，见 `render/render-hook.ts`）。
+	 * （宿主按库内路径取文件渲染）。
+	 *
+	 * ⚠️ 1.2.0（D-17）：文件**原地不动**（上传不再搬进任何缓存目录），所以这里
+	 * 事实上总是"旧路径 → 同一个路径"—— 保留这条规则是为了**与索引里记的落点对齐**
+	 * （副本缺失时由回退下载按同一个 `attachmentFolderFor` 规则补回，见 `render/render-hook.ts`）。
 	 */
 	const fileRules: RewriteRule[] = [];
 

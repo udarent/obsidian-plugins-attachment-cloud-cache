@@ -10,7 +10,7 @@
 
 **English** · [简体中文](#attachment-cloud-cache附件云端缓存) —— 中文版在本文下方
 
-> **中文摘要** —— 把笔记附件上传到**你自己的** S3 兼容存储，本地留一份**可丢弃的缓存副本**：断网、存储停机也能看。
+> **中文摘要** —— 把笔记附件上传到**你自己的** S3 兼容存储，本地留一份**可随时丢弃的副本**：断网、存储停机也能看。
 > 需要 Obsidian **1.13.0+**；界面跟随系统语言；**完整中文说明见下方「中文版」**。
 
 Upload your attachments to **your own** S3-compatible storage — Cloudflare R2, AWS S3, MinIO, Backblaze B2 or any other
@@ -58,7 +58,7 @@ once. This does both — the file goes to your bucket, and the copy that renders
 - **Cloud space cleanup** — lists the objects in your storage no note refers to, with the count and the size, and
   deletes only what you confirm.
 - **Two optional features, both off by default** — treating files from other sites like ordinary files (with a site
-  list to include or exclude hosts), and a cache size limit that trims least-recently-used copies in the background.
+  list to include or exclude hosts), and a local copy limit that trims least-recently-used copies in the background.
 
 ## Requirements
 
@@ -91,13 +91,15 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 | **Test connection** | One signed request, then one **credential-free** request to the address your links would use. |
 | **Import from a credentials file** | MinIO's "Download credentials" JSON fills in endpoint, key and addressing mode; no copy is kept. |
 | **Upload new attachments automatically** | On by default; off returns all of it to Obsidian, leaving files local only. |
-| **Where the local copy goes** | Keep the file where it is (default), or delete it after uploading. The file itself is the copy — nothing is moved into a separate folder. "Delete" turns caching off: the plugin uploads and rewrites links, and never fetches a copy back — so nothing works offline. Switching to "delete" asks once whether to also clear the copies already on disk. |
-| **Cache size limit (MB)** | Trims least-recently-used copies past this; `0` means no limit. Only copies the index knows about are counted. |
-| **Download missing copies** | Auto-downloads the objects in your own storage that have no local copy (for example after switching devices). Hidden when "none" is selected above, because caching is off then. |
+| **Where the local copy goes** | Keep the file where it is (default), or delete it after uploading. The file itself is the copy — nothing is moved into a separate folder. "Delete the local file" turns caching off: the plugin uploads and rewrites links, and never fetches a copy back — so nothing works offline. Switching to it asks once whether to also clear the copies already on disk. |
+| **Free up local space** | Appears only when "delete the local file" is selected: clears the copies of attachments that were uploaded earlier and are still linked from a note. Those files are deleted for good, not trashed, so the space comes back at once — a copy you remove is downloaded again next time a note shows it. |
+| **Local copy limit (MB)** | Trims least-recently-used copies past this; `0` means no limit. Only copies the index knows about are counted, and one is only deleted after confirming the object is still in your storage. |
+| **Download missing copies** | Auto-downloads the objects in your own storage that have no local copy (for example after switching devices). Hidden when "delete the local file" is selected above, because caching is off then. |
 | **Handle files from other sites like ordinary files** | On: an off-site file is downloaded, uploaded to your storage and the link rewritten — the same as pasting a local file, "where the local copy goes" included. Off by default; while it is off, nothing off-site is touched automatically. |
 | **Which sites to handle** | `All sites` (default, no filter), `All except the ones listed`, or `Only the ones listed`. This filters the automatic handling above — picking files by hand is never restricted by it. |
 | **Site list** | One domain per line. `example.com` also matches `img.example.com`; write `example.com:8080` to match that exact host. With "Only the ones listed", an empty list means nothing is handled automatically. |
 | **Pick specific files** | Tick individual off-site files; only those are fetched. Works whether or not the switch above is on. |
+| **When an attachment is no longer linked** | Once an uploaded file loses its last link from any note or canvas: ask (default) / just show a notice / do nothing. Cleaning up always needs your explicit confirmation — this only decides whether you are told, and how. |
 | **Compatibility mode** | Advanced. Addresses objects as `endpoint/bucket/key`: keep it on for Cloudflare R2, MinIO and most self-hosted services. |
 
 ## Commands
@@ -118,7 +120,7 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
   position. Deliberate.
 - **Links written before you change the storage URL are not recognised as "ours" on a new device** — they still work
   online, but never render offline and are never downloaded automatically.
-- **When a file you uploaded stops being linked from any note, the plugin asks once whether to clean it up** — keep
+- **When a file you uploaded stops being linked from any note or canvas, the plugin asks once whether to clean it up** — keep
   it, delete just the local copy, or delete it locally *and* from your storage. The default is to keep it. Uploading
   the same file twice stores one object, so it may be shared across notes and devices, and a storage deletion cannot
   be undone; only *this* device's references are visible.
@@ -129,8 +131,8 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
   Those files are deleted **for good, not moved to the trash**, so the space comes back at once; your storage
   objects and the note's links are untouched, and a copy you remove is downloaded again next time a note shows it.
   Each one is only deleted after confirming the object is still in your storage, and copies no note links to are left alone.
-- **The local-copy index repairs itself.** After startup the plugin drops index entries whose files are already
-  gone — it only ever edits the index and never touches a file. If you deleted a copy outside Obsidian,
+- **The local-copy index repairs itself.** Shortly after startup, and periodically afterwards, the plugin drops index
+  entries whose files are already gone — it only ever edits the index and never touches a file. If you deleted a copy outside Obsidian,
   or a file never made it across from another device, this is what puts the numbers straight. *Repair the
   local-copy index* does the same thing on demand, and says how many stale entries it found.
 - **Delete a local copy and it comes back when you next view the note** — the plugin keeps the remote address in
@@ -163,7 +165,7 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 
 ## How far it is verified
 
-- **Automated tests** cover signing, key and path derivation, settings merging, the cache index, the upload chain
+- **Automated tests** cover signing, key and path derivation, settings merging, the local-copy index, the upload chain
   (byte-identical, exactly one PUT, zero GETs), paste/drop decisions, canvas rewriting and cleanup safety — then a
   **mutation check** breaks each rule on purpose. An assertion that cannot fail is not an assertion.
 - **Real host, real storage:** the shipped build ran in real Obsidian against a real MinIO instance — eight file types
@@ -195,7 +197,7 @@ Obsidian version and which storage provider you use; the errors name the step th
 [English](#attachment-cloud-cache) · **简体中文**
 
 把笔记附件上传到**你自己的** S3 兼容存储 —— Cloudflare R2、AWS S3、MinIO、Backblaze B2 或任何 S3 端点 —— 同时在
-本地留一份**负责渲染的缓存副本**。粘贴一个文件就自动上传，笔记里留下一条可迁移、可分享的链接，而渲染走本地副本，
+本地留一份**负责渲染的副本**。粘贴一个文件就自动上传，笔记里留下一条可迁移、可分享的链接，而渲染走本地副本，
 **零远端请求**。
 
 [安装](#安装) · [版本发布](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases) · [反馈问题](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues) · 需要 Obsidian **1.13.0+**（[为什么](#环境要求)）
@@ -231,7 +233,7 @@ Obsidian version and which storage provider you use; the errors name the step th
 - **画布引用与笔记引用同等算数** —— 摆在画布上的文件同样会被上传，画布里的引用会继续有效。
 - **存量附件一条命令搬完** —— 只处理笔记引用着的文件，其余的绝不碰。
 - **云端空间清理** —— 列出你存储里「本库没有笔记引用」的对象（连同个数与体积），只删你确认过的那些。
-- **两个可选功能，默认都关** —— 站外文件按普通附件处理（可配站点名单：只处理、或跳过指定站点）；缓存大小上限（超限时后台按最近最少使用清理）。
+- **两个可选功能，默认都关** —— 站外文件按普通附件处理（可配站点名单：只处理、或跳过指定站点）；本地副本上限（超限时后台按最近最少使用清理）。
 
 ## 环境要求
 
@@ -264,13 +266,15 @@ Obsidian version and which storage provider you use; the errors name the step th
 | **测试连接** | 先发一次签名请求，再**不带凭据**请求一次「你笔记里会写的那条地址」。 |
 | **从凭据文件导入** | MinIO「下载凭据」的 JSON 会填好服务地址、密钥与寻址方式；不留副本。 |
 | **新增附件自动上传** | 默认开启；关闭后这些全交回 Obsidian，文件只存在本地。 |
-| **本地副本的处理** | 留在原处（默认）或上传后删除。**那份文件本身就是**本地副本，不会搬去别的目录。选「不留」等于关闭缓存：只上传并改写链接，也不会把副本补回来，所以离线不可用。切到「不留」时会问一次，要不要把盘上已有的副本也一起清掉。 |
-| **缓存大小上限（MB）** | 超过后按最近最少使用清理；`0` 表示不限制。只统计索引里记过的副本。 |
-| **缺本地副本时自动下载** | 只自动下载**你自己的存储**里没有本地副本的对象（例如从另一台设备同步来的）。上面选「不留」时这一项不显示（那一档已关闭缓存）。 |
+| **本地副本的处理** | 留在原处（默认）或上传后删除。**那份文件本身就是**本地副本，不会搬去别的目录。选「不留本地副本」等于关闭缓存：只上传并改写链接，也不会把副本补回来，所以离线不可用。切到它会问一次，要不要把盘上已有的副本也一起清掉。 |
+| **释放本地空间** | 只在选「不留本地副本」时显示：把此前已上传、且笔记里仍引用着云端地址的附件本地副本清掉。那些文件会被永久删除（不进回收站），所以空间立刻释放 —— 删掉的那份下次看图时会自动重新下载。 |
+| **本地副本上限（MB）** | 超过后按最近最少使用清理；`0` 表示不限制。只统计索引里记过的副本，且只有在确认你的存储里仍有那个对象之后才会删。 |
+| **缺本地副本时自动下载** | 只自动下载**你自己的存储**里没有本地副本的对象（例如从另一台设备同步来的）。上面选「不留本地副本」时这一项不显示（那一档已关闭缓存）。 |
 | **站外文件按普通附件处理** | 打开后，站外文件会被下载、上传到你的存储并改写链接 —— 与粘贴一张本地附件完全一样（连「本地副本的处理」那一档也一样适用）。默认关闭；关着时站外的东西一步都不会被自动碰。 |
 | **处理哪些站点** | `所有站点`（默认，不过滤）、`除名单外的站点`、`仅名单内的站点`。它**只筛自动处理**；手动挑选不受它限制。 |
 | **站点名单** | 一行一个域名。写 `example.com` 也会命中 `img.example.com`；写 `example.com:8080` 则只匹配含那个端口的地址。选「仅名单内的站点」时，留空表示什么都不自动处理。 |
 | **挑选要缓存的文件** | 勾选具体的站外文件，只有勾中的会被取。开关关着也能用。 |
+| **附件没人引用时** | 某个已上传的附件失去笔记或画布里的最后一条引用之后：弹窗问我（默认）/ 只给一条通知 / 什么都不做。清理永远需要你明确确认 —— 这一项只决定要不要告诉你、用哪种方式。 |
 | **兼容模式** | 高级。按「地址/桶/键」寻址：Cloudflare R2、MinIO 与多数自建服务都要开着。 |
 
 ## 命令
@@ -289,7 +293,7 @@ Obsidian version and which storage provider you use; the errors name the step th
   你的文件没被动；这一版变的只是链接形态。
 - **拖放文件的链接插在光标处，不是指针落点** —— 公开 API 里没有「指针坐标 → 编辑器位置」的映射。有意取舍。
 - **改了存储地址之后，「新设备」上认不出老链接** —— 那些链接照常在线显示，但离线不显示、也不会被自动下载。
-- **某个已上传的对象在本库不再被任何笔记引用时，会问你一次怎么处理** —— 保留、只删本地副本、或本地与云端一起删；
+- **某个已上传的对象在本库不再被任何笔记或画布引用时，会问你一次怎么处理**（默认如此，可在设置里改成只通知或什么都不做） —— 保留、只删本地副本、或本地与云端一起删；
   默认保留。同一个文件传两次只存一份，所以一个对象可能被多篇笔记、多台设备共用，而云端删除无法撤销；清理只能看到**本设备**的引用。
 - **「不留本地副本」这一档等于关闭缓存**，也就是普通图床的行为：文件照常上传、笔记里的链接照样改写，
   但不保留副本、也不把副本取回来，所以断网时什么都看不到。
@@ -297,7 +301,7 @@ Obsidian version and which storage provider you use; the errors name the step th
   引用着你存储地址**的那些附件本地副本，并告诉你能腾出多少空间。这些文件**会被永久删除，不进回收站**
   （所以空间立刻释放）；云端对象与笔记里的链接都不动，删掉的那份下次看图时会自动重新下载。每一份都是在
   确认云端仍然有它之后才会删；没有任何笔记引用的那些不归它管。
-- **本地副本索引会自愈。** 启动之后，插件会摘掉那些指向「文件已经不在了」的索引记录 —— 它**只改索引，
+- **本地副本索引会自愈。** 启动后不久、以及之后定期，插件会摘掉那些指向「文件已经不在了」的索引记录 —— 它**只改索引，
   绝不碰任何文件**。在 Obsidian 外面删过某份副本、或某个文件没能从别的设备同步过来，靠的就是它把数字
   理顺。「自检并修复本地副本索引」做的是同一件事，供你想立刻核一遍时用，并会告诉你查出多少条失效记录。
 - **删掉一份本地副本，下次打开笔记时它会自己补回来** —— 笔记里存的始终是云端地址，插件在渲染时发现副本
