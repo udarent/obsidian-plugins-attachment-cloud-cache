@@ -9,7 +9,7 @@
  *
  * 本脚本把「改了什么」翻译成「该跑什么」：
  *
- *   1. **静态门禁永远全跑**（9 个一共 ~2s，划不来圈 —— 而且改门禁脚本本身
+ *   1. **静态门禁永远全跑**（11 个一共 ~2s，划不来圈 —— 而且改门禁脚本本身
  *      就能被即时验证，这个性质值得保住）；
  *   2. **tsc 只要有 .ts 改动就跑**（类型错误是全局的，圈不得，反正 ~2s）；
  *   3. **eslint 只查改动的文件**（全量 ~5s，单文件亚秒）；
@@ -164,7 +164,7 @@ if (FLAG.dryRun) {
 	process.exit(0);
 }
 
-// ── 阶段 1：静态门禁（永远全跑 —— 10 个一共 ~2s，且门禁脚本改动即时生效）──
+// ── 阶段 1：静态门禁（永远全跑 —— 11 个一共 ~2s，且门禁脚本改动即时生效）──
 const STATIC_GATES = [
 	"check-manifest",
 	"check-api-floor",
@@ -174,6 +174,7 @@ const STATIC_GATES = [
 	"check-injected-snippets",
 	"check-no-dev-doc-refs",
 	"check-readme",
+	"check-readme-commands",
 	"check-i18n-keys",
 	"check-notice-i18n",
 ];
