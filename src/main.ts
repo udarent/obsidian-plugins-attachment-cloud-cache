@@ -24,7 +24,7 @@
  * 而"没配置就用"时粘贴会给出明确报错并指向设置页 —— 那条路径比一个图标更有用。
  */
 
-import { Component, MarkdownRenderer, Notice, Plugin, TFile, getLanguage } from "obsidian";
+import { Component, MarkdownRenderer, Notice, Plugin, TFile, TFolder, getLanguage } from "obsidian";
 
 import { SETTINGS_DEFAULTS, hasLegacyExternalImageDefault, hasLegacyObjectKeyTemplate, legacyAutoCacheEnabled, mergePluginSettings } from "./settings";
 import type { LocalCopyAction, PluginSettings } from "./types";
@@ -61,7 +61,7 @@ import type { NoteKind, OrphanLocalTarget, OrphanWatcher } from "./maintenance/o
 import { removeOrphanCopies } from "./maintenance/orphan-removal";
 import { deleteLogTargetPath, recordDeletions } from "./maintenance/delete-log";
 import type { DeletedObjectRecord } from "./maintenance/delete-log";
-import { runSelfHeal } from "./maintenance/self-heal";
+import { CONFIRM_IMMEDIATELY, createAbsenceConfirmer, runSelfHeal } from "./maintenance/self-heal";
 import type { SelfHealResult } from "./maintenance/self-heal";
 
 import type { ExternalCandidate, NoteTextLike } from "./maintenance/batch";
@@ -118,6 +118,16 @@ const ROTATION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
  * 免得抢同一段启动窗口。
  */
 const SELF_HEAL_STARTUP_DELAY_MS = 8 * 1000;
+
+/**
+ * 索引自愈的周期兜底间隔。
+ *
+ * ⚠️ 这一条是"**两轮确认**"能成立的前提（见 `createAbsenceConfirmer`）：
+ * 启动那轮只标记"这次不在"，要等到**下一轮**仍不在才摘。
+ * 间隔取 10 分钟与轮换同频 —— 一轮本身几乎零成本（常态下只是查宿主的内存索引），
+ * 而会话短于一个间隔时最多"晚一轮修"，不再有任何正确性代价。
+ */
+const SELF_HEAL_CHECK_INTERVAL_MS = 10 * 60 * 1000;
 
 /** 引用重算的防抖窗口。编辑途中宿主的自动保存会反复触发 `modify`。 */
 const ORPHAN_CHECK_DEBOUNCE_MS = 1500;
@@ -239,6 +249,14 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * "不同数据的写入互相插队"重新变成可能，而症状同样是难查的。
 	 */
 	private readonly serialize = makeSerializer();
+
+	/**
+	 * 后台自愈的"两轮确认"状态（见 `createAbsenceConfirmer`）。
+	 *
+	 * ⚠️ 必须是**稳定的一份**：它靠跨轮累积来判断"上一轮也不在"，每次现造就等于没有确认。
+	 * 状态在进程内 —— 重启即重置，代价只是"再确认一轮"（安全方向）。
+	 */
+	private readonly absenceConfirmer = createAbsenceConfirmer();
 
 	/** 站外缓存的编排。**必须是稳定的一份** —— 去重表挂在它的闭包里。 */
 	private externalHook: ExternalHook | null = null;
@@ -489,18 +507,29 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		}, ROTATION_CHECK_INTERVAL_MS);
 		this.register(() => window.clearInterval(intervalTimer));
 
-		// 触发 ③（2026-10-11 新增）：**索引自愈**，启动后延迟一次。
+		// 触发 ③（2026-10-11 新增、2026-10-12 扩成两条线）：**索引自愈**。
 		//
-		// 为什么要有它：索引是**派生数据**，它指向的副本随时可能消失（用户删了缓存目录、
-		// 同步漏了一个文件、`keep` 档下用户自己整理了附件）。留着一条指向不存在文件的记录，
-		// 会让**占用统计虚高**，并让渲染误判"本地已有"（于是既不显示也不去取）。
+		// 为什么要有它：索引是**派生数据**，它指向的副本随时可能消失（同步漏了一个文件、
+		// `keep` 档下用户自己整理了附件目录、外部工具先删后写）。留着一条指向不存在文件的
+		// 记录会让**占用统计偏高**，并让下次看到那张图时白下载一次。
 		// 而"让用户手动跑一条命令来修插件自己的账本"，是把内部维护成本转嫁给用户。
 		//
-		// ⚠️ 它**只改索引，绝不碰任何文件**（见 `maintenance/self-heal.ts` 的三条纪律）。
+		// ⚠️ 它**只改索引，绝不碰任何文件**（见 `maintenance/self-heal.ts` 的纪律）。
+		// ⚠️ 正确性**不**依赖它，别再把"必须在某时刻前修完"当成前提：
+		//    渲染遇到缺失副本会自己去取回并回写记录；而"统计偏高会导致多删"已由淘汰侧
+		//    只按**存在的**副本来求和兜住（`eviction.ts`）。
 		const selfHealTimer = window.setTimeout(() => {
 			void this.runIndexSelfHeal();
 		}, SELF_HEAL_STARTUP_DELAY_MS);
 		this.register(() => window.clearTimeout(selfHealTimer));
+
+		// 触发 ④：**周期性**兜底。这一条也是"两轮确认"能成立的前提 ——
+		// 启动那轮只标记"这次不在"，要等到下一轮仍不在才摘（见 `createAbsenceConfirmer`）。
+		// 一轮几乎零成本（常态下只是查宿主的内存索引），所以间隔短不心疼。
+		const selfHealIntervalTimer = window.setInterval(() => {
+			void this.runIndexSelfHeal();
+		}, SELF_HEAL_CHECK_INTERVAL_MS);
+		this.register(() => window.clearInterval(selfHealIntervalTimer));
 
 		// 重建节点时用的子 Component：挂进插件生命周期，卸载时一并清掉。
 		this.addChild(this.embedComponent);
@@ -599,6 +628,24 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			this.app.vault.on("rename", (file, oldPath) => {
 				// 快照跟着搬：改名不是"引用消失"，计数不变
 				this.orphanWatch?.noteRenamed(oldPath, file.path);
+				// ⭐ 索引也跟着搬（附件被移动 / 改名）。
+				//
+				// 不做会怎样：那份副本还在磁盘上，但索引指着旧路径 ⇒ 下次渲染判定"本地没有副本"
+				// ⇒ 按**笔记旁的原名**重新下载一份 ⇒ 用户库里多出一份重复文件。
+				// ⚠️ 宿主的 `rename` 给了 `旧 → 新`，所以这不是猜（与 `resolvedLinks` 那次不同）。
+				// ⚠️ **静默**：这不算"修好了什么"，只是把账本搬到新地址 —— 不打扰用户。
+				// ⚠️ 目录改名时子文件路径也要跟着搬（`includeDescendants`）。
+				const moved = this.currentIndex().moveCachePath(oldPath, file.path, {
+					includeDescendants: file instanceof TFolder,
+				});
+				if (moved > 0) {
+					void this.hostContext()
+						.persistIndex()
+						.catch((error) => {
+							// 落盘失败不阻塞：索引在内存里已经对了，下次任意一次保存会把它写下去。
+							console.error("[attachment-cloud-cache] 索引跟随改名落盘失败", error);
+						});
+				}
 			})
 		);
 		// 快照在布局就绪后建立（那时文件已可读），且**不阻塞启动**
@@ -1411,7 +1458,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 也不再有"只管缓存目录"这个盲区。
 	 */
 	private async repairIndex(): Promise<void> {
-		const result = await this.runIndexSelfHeal({ silent: true });
+		const result = await this.runIndexSelfHeal({ silent: true, immediate: true });
 		new Notice(
 			result.healed > 0
 				? this.t("repairIndexFound", { count: result.healed })
@@ -1424,14 +1471,20 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 *
 	 * @param options.silent `true` = 给命令用（结果由调用方回话，这一层不出声）；
 	 *   `false`（默认）= 后台用，只在真的修了东西时通知（0 条不打扰）。
+	 * @param options.immediate `true` = **单轮即摘**（只给命令用）。后台那条线走**两轮确认**：
+	 *   第一次判"不在"只标记，下一轮仍不在才摘 —— 否则换设备/同步进行中会把
+	 *   "还在路上"的记录一起摘掉（新设备上那可能是整份索引）。
 	 */
-	private runIndexSelfHeal(options: { silent?: boolean } = {}): Promise<SelfHealResult> {
+	private runIndexSelfHeal(options: { silent?: boolean; immediate?: boolean } = {}): Promise<SelfHealResult> {
 		const silent = options.silent ?? false;
 		return runSelfHeal({
 			entries: () => this.currentIndex().toArray(),
 			exists: (path) => this.vaultPathExists(path),
 			forget: (key) => this.currentIndex().remove(key),
 			persist: () => this.hostContext().persistIndex(),
+			// ⚠️ 命令走 `CONFIRM_IMMEDIATELY`：显式动作、用户正等着结果，让他按两次才是坏体验。
+			// 后台那份确认器的状态在**进程内**（见 `createAbsenceConfirmer` 的取舍）。
+			confirmAbsent: options.immediate ? CONFIRM_IMMEDIATELY : this.absenceConfirmer,
 			// ⚠️ `silent` 时把通知吞掉（命令自己会回话），而不是在这里分叉两套逻辑 ——
 			// 分叉过一次的路径，下一次改行为只会改到其中一边。
 			notify: (message) => {

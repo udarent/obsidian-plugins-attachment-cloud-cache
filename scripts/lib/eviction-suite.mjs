@@ -100,6 +100,11 @@ export function runEvictionSuite(mod) {
 		const byKey = new Map(candidates.map((c) => [c.key, c]));
 
 		assert.equal(selection.missing, 1, "★ 索引有、磁盘没有的要被数出来（没有可删的文件）");
+		assert.equal(
+			selection.presentBytes,
+			1024 + 4096,
+			"★ 存在着的字节和 = 只算磁盘上确实还在的那几份（幽灵记录不计入总量）"
+		);
 
 		// ⭐ 这是本次改造的核心行为变化：**附件目录里的副本也要进来**
 		assert.equal(
@@ -190,6 +195,54 @@ export function runEvictionSuite(mod) {
 			"★ 统计范围 = 索引里的全部本地副本（含附件目录），坏值按 0（绝不把 NaN 带进求和）"
 		);
 		assert.equal(sumOwnedBytes([]), 0, "空索引 = 0");
+	}
+
+	// ============================================================
+	// 2c. ⭐⭐ 幽灵记录**不得**抬高超出量（否则上限会多删真实副本）
+	//
+	// 索引里可能留着"文件已经不在了"的记录（用户删了、同步还没到、换设备）。
+	// 若总量用**索引原始和**、而候选只含磁盘上还在的那几份，两者就错位：
+	// 幽灵记录抬高超出量 ⇒ 淘汰多删，极端情况一份不剩 —— 而真实占用根本没超上限。
+	// ⇒ 判据：总量必须与候选**同源**（`presentBytes`）。
+	// ============================================================
+	{
+		const entries = [];
+		for (let i = 0; i < 10; i += 1) entries.push(entryFor(`p${i}.png`, { size: 10 * MB }));
+		// 只有前 4 份真的在磁盘上；后 6 份的文件已被用户删掉（索引还记着 = 幽灵记录）
+		const presentPaths = new Set(entries.slice(0, 4).map((e) => e.cachePath));
+		const present = (path) => presentPaths.has(path);
+
+		const selection = buildEvictionCandidates({ entries, present, referencedKeys: null });
+		assert.equal(selection.missing, 6, "6 份是幽灵记录（索引记着、磁盘上没有）");
+		assert.equal(selection.presentBytes, 40 * MB, "★★ 总量 = 磁盘上确实还在的那 4 份");
+		assert.equal(sumOwnedBytes(entries), 100 * MB, "（索引原始和是 100MB —— 它把幽灵记录也算进去了）");
+
+		const limit = 50 * MB;
+		const fixed = planEviction({
+			candidates: selection.candidates,
+			totalBytes: selection.presentBytes,
+			limitBytes: limit,
+			now: NOW,
+		});
+		assert.equal(
+			fixed.evict.length,
+			0,
+			"★★ 真实占用 40MB 没超 50MB ⇒ **一份都不该删**（幽灵记录不得抬高超出量）"
+		);
+
+		// 反例：把索引原始和当总量 —— 那正是修复前"4 份真副本被全删光"的成因。
+		// 这条断言钉住的是**调用方必须传 presentBytes**，不是 planEviction 自己的行为。
+		const broken = planEviction({
+			candidates: selection.candidates,
+			totalBytes: sumOwnedBytes(entries),
+			limitBytes: limit,
+			now: NOW,
+		});
+		assert.equal(
+			broken.evict.length,
+			4,
+			"★★ 总量若传索引原始和 ⇒ 4 份真副本全被删光（本次修掉的缺陷；调用方必须传 presentBytes）"
+		);
 	}
 
 	// ============================================================

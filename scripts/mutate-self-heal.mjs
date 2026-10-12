@@ -14,30 +14,39 @@ await runMutations({
 	suite: runSelfHealSuite,
 	mutations: [
 		{
+			// 后果：**单轮就摘** —— 文件只是"还在路上"（换设备、同步工具正在拉）也被当成失效。
+			// 新设备上这可能是**整份索引**：索引文件随 `.obsidian` 先到、附件还没到 ⇒ 全摘掉 ⇒
+			// 文件随后到了也认不出，要等一次回退下载才恢复。
+			name: "★★ 不等确认就摘（把「还在路上」的副本当成没了）",
+			from: "\t\t\t\tif (deps.confirmAbsent(target.path, true)) {",
+			to: "\t\t\t\tif (true) {",
+			expect: "第 1 轮：文件不在也",
+		},
+		{
 			// 后果：查询抛错被当成"文件不在" ⇒ 把仍在的副本从账本里抹掉 ——
 			// 而那些图在离线时就不显示了，有网时还会重新下载一次。
 			// 这正是"误摘"的方向，也是这一层最要紧的一条。
 			name: "★★ 查询出错当成「文件不在」（把仍在的副本误摘掉）",
 			from: "\t\t\t\tresult.failed += 1;\n\t\t\t\tdeps.onError?.(error);",
 			to: "\t\t\t\tstale.push(...target.keys);\n\t\t\t\tdeps.onError?.(error);",
-			expect: "不许**摘记录",
+			expect: "出错按「存在」处理",
 		},
 		{
 			// 后果：找不到文件时说"没事"⇒ 记录越积越多，占用统计一直虚高，
 			// 而"渲染时以为本地已有"这条误判也不会被修掉。
 			name: "★ 文件不在也不摘（记录越积越多、统计一直虚高）",
-			from: "\t\t\t\tstale.push(...target.keys);",
-			to: "\t\t\t\tvoid target;",
+			from: "\t\t\t\t\tstale.push(...target.keys);",
+			to: "\t\t\t\t\tvoid target;",
 			// ⚠️ 实测先红的是**计数**那条（"如实计数"）—— 记录没被摘掉这件事，
 			// 套件是从"摘了 0 条而预期 1 条"看出来的。按纪律如实写这一条。
-			expect: "如实计数",
+			expect: "第 2 轮仍不在",
 		},
 		{
 			// 后果：同一路径只摘第一条记录 ⇒ 下一轮又查出同名路径（另一条 key），
 			// 一轮修不干净；而提示里的数字也小于实际情况。
 			name: "★ 同一路径只摘一条记录（一轮修不干净）",
-			from: "\t\t\t\tstale.push(...target.keys);",
-			to: "\t\t\t\tstale.push(target.keys[0]);",
+			from: "\t\t\t\t\tstale.push(...target.keys);",
+			to: "\t\t\t\t\tstale.push(target.keys[0]);",
 			expect: "只检查 1 条路径，但摘掉 2 条记录",
 		},
 		{

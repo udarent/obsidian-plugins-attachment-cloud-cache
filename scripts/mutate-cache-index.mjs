@@ -15,6 +15,31 @@ await runMutations({
 	suite: runCacheIndexSuite,
 	mutations: [
 		{
+			// 后果：同一路径只搬**第一条**记录 ⇒ 另一条仍指着旧路径 ⇒
+			// 下次渲染判定"本地没有副本"又下载一份（落点还是笔记旁的原名）⇒ 库里多出重复文件，
+			// 而这条错误**不会再被修**（旧路径那份文件确实不在了，但新路径那份是好的）。
+			name: "★ 同一路径只搬一条记录（另一条继续指着旧路径 ⇒ 又下一份）",
+			from: "\t\t\tthis.write({ ...entry, cachePath: next });\n\t\t\tmoved += 1;",
+			to: "\t\t\tthis.write({ ...entry, cachePath: next });\n\t\t\treturn 1;",
+			expect: "同一路径上的**每条**记录都要搬",
+		},
+		{
+			// 后果：目录改名时子文件的记录不跟着搬 ⇒ 那批副本全变成"索引不认得的文件" ⇒
+			// 每张图下次被看到时都白下载一次（并在笔记旁落一份重复文件）。
+			name: "★ 目录改名时子文件不跟着搬（那批记录全指旧路径）",
+			from: "\t\t\telse if (options.includeDescendants && path.startsWith(prefix))",
+			to: "\t\t\telse if (false && path.startsWith(prefix))",
+			expect: "目录改名 ⇒ 前缀命中的记录一起搬",
+		},
+		{
+			// 后果：绕过 `write`（entries 与 byUrl 两个视图的唯一入口）⇒ URL 派生映射仍指向**旧**对象
+			// ⇒ 渲染按 URL 查到的是过期的 cachePath（文件明明搬走了，却以为旧路径还在）。
+			name: "★ 绕过 write 直接改条目（URL 派生映射指向幽灵）",
+			from: "\t\t\tthis.write({ ...entry, cachePath: next });",
+			to: "\t\t\tthis.entries.set(entry.key, { ...entry, cachePath: next });",
+			expect: "派生映射",
+		},
+		{
 			name: "缺少 key 的记录被当成有效（留下一条永远对不上远端的条目）",
 			from: '\tconst key = pickString(raw.key).trim();\n\tif (!key) return null;',
 			to: "\tconst key = pickString(raw.key).trim();",

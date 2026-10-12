@@ -357,6 +357,41 @@ export class CacheIndex {
 	}
 
 	/**
+	 * 附件被**改名 / 移动**之后，把指向旧路径的记录改指到新路径。返回改了几条。
+	 *
+	 * ## 为什么值得做（而不是"摘掉算了"）
+	 *
+	 * 摘掉之后那份文件还在磁盘上，但索引不认得它了 ⇒ 下次渲染会按"本地没有副本"重新下载一份
+	 *（落点是**笔记旁**的原名）⇒ 用户库里多出一份重复文件。
+	 * 而宿主已经告诉我们 `旧路径 → 新路径` —— 这**不是猜**
+	 *（对比 `metadataCache.resolvedLinks` 那次教训：那里没有任何可信来源，这里有一个）。
+	 *
+	 * ⚠️ 同一个路径可能挂着多条记录（同一个文件被两个远端地址引用过）⇒ **一起改**。
+	 * ⚠️ 新路径上可能已经有别的记录（用户把 A 覆盖成 B）：那是**两条不同的 key**，不冲突 ——
+	 * 索引允许两条记录指向同一个路径（`self-heal.ts` 的 `planSelfHeal` 也按这个前提写）。
+	 * ⚠️ 目录改名时子文件路径也要跟着搬，所以 `includeDescendants` 存在；
+	 * 两种情况都幂等 —— 宿主若为子文件各发一次事件，后续那次自然找不到旧路径。
+	 */
+	moveCachePath(from: string, to: string, options: { includeDescendants?: boolean } = {}): number {
+		const oldPath = typeof from === "string" ? from.trim() : "";
+		const newPath = typeof to === "string" ? to.trim() : "";
+		if (!oldPath || !newPath || oldPath === newPath) return 0;
+
+		const prefix = `${oldPath}/`;
+		let moved = 0;
+		for (const entry of this.toArray()) {
+			const path = entry.cachePath;
+			let next = "";
+			if (path === oldPath) next = newPath;
+			else if (options.includeDescendants && path.startsWith(prefix)) next = newPath + path.slice(oldPath.length);
+			if (!next || next === path) continue;
+			this.write({ ...entry, cachePath: next });
+			moved += 1;
+		}
+		return moved;
+	}
+
+	/**
 	 * 按远端 URL 反查 —— 渲染钩子的入口。
 	 *
 	 * ⚠️ 同一个 key 可能被记成不同形式的 URL（配了 `publicUrlBase` 与没配、

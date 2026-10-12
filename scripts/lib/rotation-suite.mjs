@@ -175,13 +175,41 @@ export async function runRotationSuite(mod) {
 		assert.equal(h.calls.evict, 0, "更不该动文件");
 	}
 
-	// 门槛与候选**同源**：过了门槛就一定有一份能算的总量（不再有"列目录量磁盘"那一步）
+	// 门槛用**索引和**（当前占用的上界），真正的总量在轮里用"存在着的字节和"算
 	{
 		const h = makeHarness({ ...overLimit });
 		const summary = await h.rotator.maybeRotate("growth");
 		assert.ok(summary, "超限 → 真的跑一轮");
-		assert.equal(summary.totalBytes, 2 * MB, "统计口径 = 索引里的字节之和（含附件目录里的副本）");
+		assert.equal(summary.totalBytes, 2 * MB, "总量 = **磁盘上确实还在**的副本字节和（与候选同源）");
 		assert.equal(h.calls.scan, 1, "真的超了才去扫笔记");
+	}
+
+	// ⭐⭐ 幽灵记录（索引记着、文件已经不在）**不得**抬高总量 —— 否则上限会多删真实副本
+	{
+		const entries = [
+			entryFor("real-a.png", { cachePath: "attachments/real-a.png", size: 3 * MB, lastUsedAt: NOW - 30 * HOUR }),
+			entryFor("real-b.png", { cachePath: "attachments/real-b.png", size: 3 * MB, lastUsedAt: NOW - 20 * HOUR }),
+			entryFor("real-c.png", { cachePath: "attachments/real-c.png", size: 3 * MB, lastUsedAt: NOW - 10 * HOUR }),
+			entryFor("gone-1.png", { cachePath: "attachments/gone-1.png", size: 3 * MB }),
+			entryFor("gone-2.png", { cachePath: "attachments/gone-2.png", size: 3 * MB }),
+			entryFor("gone-3.png", { cachePath: "attachments/gone-3.png", size: 3 * MB }),
+		];
+		const h = makeHarness({
+			...overLimit,
+			settings: settingsWith({ cacheLimitMb: 5 }),
+			entries,
+			// ⚠️ 只有 real-* 真的在磁盘上；gone-* 是幽灵记录
+			present: (path) => !path.includes("gone-"),
+		});
+		const summary = await h.rotator.maybeRotate("growth");
+		assert.ok(summary, "索引字节和 18MB 超过 5MB 门槛 → 跑一轮");
+		assert.equal(summary.totalBytes, 9 * MB, "★★ 总量 = 磁盘上确实还在的 9MB（幽灵记录那 9MB 不计入）");
+		assert.equal(
+			h.plans[0].evict.length,
+			2,
+			"★★ 真实占用 9MB、上限 5MB ⇒ 只需淘汰 2 份；若把幽灵算进去会变成「3 份全删光」"
+		);
+		assert.equal(summary.overBy, 0, "★ 幽灵记录不该造成「仍超出」的假象（真实占用已经腾到上限以内）");
 	}
 
 	// ⭐ 索引与磁盘不一致（索引记的比磁盘小）时**不再被发现** —— 把取舍写下来

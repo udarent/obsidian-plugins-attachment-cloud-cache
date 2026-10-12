@@ -133,6 +133,45 @@ export function runCacheIndexSuite(mod) {
 	assert.equal(byPath.findByCachePath("_attachment-cache/nope.png"), undefined, "查不到应返回 undefined");
 
 	// ============================================================
+	// 4b. ⭐ 跟随改名（附件被移动 / 改名后，记录改指新路径）
+	//
+	// 不跟随的后果：那份副本还在磁盘上，但索引指着旧路径 ⇒ 下次渲染判定"本地没有副本"
+	// ⇒ 按**笔记旁的原名**重新下载一份 ⇒ 用户库里多出一份重复文件。
+	// ============================================================
+	{
+		const moved = new CacheIndex([
+			{ ...SAMPLE, key: "a.png", cachePath: "attachments/a.png" },
+			{ ...SAMPLE, key: "b.png", cachePath: "attachments/b.png" },
+			// 同一个路径挂着两条记录（同一个文件被两个远端地址引用过）⇒ 两条都要搬
+			{ ...SAMPLE, key: "a2.png", cachePath: "attachments/a.png" },
+			{ ...SAMPLE, key: "other.png", cachePath: "notes/other.png" },
+		]);
+		assert.equal(moved.moveCachePath("attachments/a.png", "archive/a.png"), 2, "★ 同一路径上的**每条**记录都要搬");
+		assert.equal(moved.get("a.png").cachePath, "archive/a.png", "改指新路径");
+		assert.equal(moved.get("a2.png").cachePath, "archive/a.png", "同上（另一条记录）");
+		assert.equal(moved.get("b.png").cachePath, "attachments/b.png", "不相关的记录原样不动");
+		assert.equal(moved.get("other.png").cachePath, "notes/other.png", "别的目录里的记录也不动");
+		assert.equal(
+			moved.findByRemoteUrl(SAMPLE.remoteUrl)?.cachePath,
+			"archive/a.png",
+			"★ 派生映射（URL → 条目）要跟着指向同一条记录（否则渲染查到的还是旧的）"
+		);
+
+		// 目录改名：子文件路径也要跟着搬
+		assert.equal(
+			moved.moveCachePath("attachments", "moved", { includeDescendants: true }),
+			1,
+			"★ 目录改名 ⇒ 前缀命中的记录一起搬"
+		);
+		assert.equal(moved.get("b.png").cachePath, "moved/b.png", "子路径按前缀替换");
+
+		// 幂等 + 拒绝坏输入
+		assert.equal(moved.moveCachePath("attachments/a.png", "whatever/a.png"), 0, "旧路径已经不存在 ⇒ 一条也搬不动");
+		assert.equal(moved.moveCachePath("", "x") , 0, "空来源 ⇒ 不搬（否则会把整库路径都算成命中）");
+		assert.equal(moved.moveCachePath("moved", "moved"), 0, "新旧相同 ⇒ 不搬");
+	}
+
+	// ============================================================
 	// 5. ⭐ 按 URL 反查 —— 渲染钩子的入口
 	//
 	// 笔记里写的可能是当初那串文本的任意变体（用户改过域名、从旧配置迁移、
@@ -498,5 +537,5 @@ export function runCacheIndexSuite(mod) {
 
 	// ⚠️ 这三个数字只是"人读的简报"，没有任何断言依赖它们 ——
 	// 但也不能不更新：它们与下面那些分节一一对应，虚报了就等于简报在撒谎。
-	return { urlCases: 12, entryCases: 17, ledgerCases: 22 };
+	return { urlCases: 12, entryCases: 17, ledgerCases: 22, moveCases: 11 };
 }

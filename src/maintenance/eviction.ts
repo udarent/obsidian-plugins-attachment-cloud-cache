@@ -14,7 +14,7 @@
  *
  * | | 旧实现 | 新实现 |
  * |---|---|---|
- * | 候选与统计 | 列**缓存目录** + 逐个 stat | **一律来自索引**（一次内存求和） |
+ * | 候选与统计 | 列**缓存目录** + 逐个 stat | **索引 ∩ 磁盘存在**（复用同一次遍历：候选与总量同源） |
  * | 孤儿（目录里有、索引里没有） | 可删（那条目录承诺可整体清理） | **这一类消失** —— 索引里没有的文件一律不碰（那可能是用户的附件，不是我们的副本） |
  * | "云端还有它吗" | 不必问（缓存目录里的东西必然是刚传上去的） | ⭐ **执行层逐个 HEAD 复核**（见下） |
  *
@@ -43,6 +43,22 @@
  *    现在**没有任何目录**能提供这种保证，所以那一类被整条删掉了。
  * 2. **只淘汰"不新鲜"的**（`graceMs` 内刚用过的不动）：否则会出现"刚下载完就删掉"，
  *    把刚花掉的流量白扔，还会形成稳定的来回抖动。
+ *
+ * ## ⭐⭐ 统计必须与候选**同源**（否则幽灵记录会让上限**多删**）
+ *
+ * 索引里可能留着**文件已经不在了**的记录（用户删了、同步还没到、换设备看不到）。
+ * 若统计用"索引里的字节和"、而候选只含**磁盘上确实还在**的那几份，两者就错位了：
+ * 幽灵记录把超出量抬高 ⇒ 淘汰**多删真实副本**，极端情况一份不剩 ——
+ * 而真实占用其实根本没超上限。
+ *
+ * 反例：10 条 × 10MB，其中 6 条的文件已被删掉（真实占用 40MB），上限 50MB。
+ * 用索引求和 ⇒ 总量 100MB ⇒ 超出 50MB ⇒ 候选只有 40MB ⇒ **4 条全删光**；
+ * 而真相是**一条都不该删**。
+ *
+ * ⇒ 所以 `buildEvictionCandidates` 顺手把"存在着的字节和"（`presentBytes`）一并算出来
+ *   —— 它本来就要逐条判存在性，这一步零额外 I/O；`planEviction` 拿到的总量必须是**这一个**。
+ * ⚠️ 这与"索引不**全**时上限偏保守（宁可少删）"是**两个方向**，且都是"同源"才同时成立的：
+ * 少报（文件在、索引没记）⇒ 安全的一侧；多报（索引记了、文件没了）⇒ 不安全的一侧。
  */
 
 import type { CacheEntry } from "../cache/index";
@@ -143,6 +159,13 @@ export interface CandidateSelection {
 	candidates: EvictionCandidate[];
 	/** 索引里有记录、但磁盘上找不到那份文件的数量（没有可删的东西）。 */
 	missing: number;
+	/**
+	 * **磁盘上确实还在**的那些副本的字节和（`entry.size` 之和）。
+	 *
+	 * ⭐ 这才是上限判定该用的"当前占用"：它把幽灵记录排除在外，于是与候选**同源**。
+	 * 用索引的原始和会让幽灵记录抬高超出量 ⇒ 多删（见模块头注释那条反例）。
+	 */
+	presentBytes: number;
 }
 
 /**
@@ -151,10 +174,13 @@ export interface CandidateSelection {
  * ⚠️ 只有**索引里的**副本会进来。索引里没有的文件（用户自己的附件、别的插件放的东西）
  * 一律不碰 —— 旧实现里那条"目录里有、索引里没有 ⇒ 可删"的规则，
  * 依赖的是"缓存目录里的东西都是我们的"这个物理保证；那份保证随缓存目录一起消失了。
+ *
+ * ⭐ 顺带算出 `presentBytes`（存在着的字节和）—— 见模块头注释：上限判定必须用它。
  */
 export function buildEvictionCandidates(input: CandidateInput): CandidateSelection {
 	const candidates: EvictionCandidate[] = [];
 	let missing = 0;
+	let presentBytes = 0;
 
 	for (const entry of input.entries) {
 		const path = normalizeVaultPath(entry.cachePath);
@@ -164,6 +190,7 @@ export function buildEvictionCandidates(input: CandidateInput): CandidateSelecti
 			missing += 1;
 			continue;
 		}
+		presentBytes += Math.max(0, entry.size);
 
 		candidates.push({
 			key: entry.key,
@@ -177,12 +204,16 @@ export function buildEvictionCandidates(input: CandidateInput): CandidateSelecti
 		});
 	}
 
-	return { candidates, missing };
+	return { candidates, missing, presentBytes };
 }
 
 export interface EvictionInput {
 	candidates: readonly EvictionCandidate[];
-	/** 当前占用的总字节。 */
+	/**
+	 * 当前占用的总字节 —— ⚠️ **只含磁盘上确实还在的副本**（`presentBytes`）。
+	 *
+	 * 传"索引里所有条目的和"会让幽灵记录抬高超出量 ⇒ **多删真实副本**（见模块头注释那条反例）。
+	 */
 	totalBytes: number;
 	/** 上限（字节）。0 = 不限制。 */
 	limitBytes: number;
@@ -267,7 +298,9 @@ export function planEviction(input: EvictionInput): EvictionPlan {
 		reason = `仍超出 ${overBy} 字节：有 ${fresh} 份副本在宽限期内（刚用过），本轮不动`;
 	} else {
 		// 候选不够 —— 常见原因是索引里没有更多副本可淘汰了（例如多数目标都在云端确认不上、
-		// 或索引本身不全）。索引不全时上限偏保守，这是安全的那一侧。
+		// 或索引本身不全）。⚠️ 两个方向都靠"统计与候选同源"才成立：
+		// 索引不**全**（文件在、索引没记）⇒ 少报 ⇒ 少删（安全）；
+		// 有**幽灵**记录（索引记了、文件不在）⇒ 那些字节根本不进 `total` ⇒ 不多删。
 		reason = `仍超出 ${overBy} 字节：可淘汰的副本不够（索引里的副本已挑完）`;
 	}
 

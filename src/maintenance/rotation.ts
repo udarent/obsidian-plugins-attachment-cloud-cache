@@ -8,15 +8,19 @@
  * ③ 结果怎么报（什么时候提示、什么时候保持安静）。
  * 这些都塞进 `main.ts` 的接线里就没法测了。
  *
- * ## ⭐ 一道门槛：索引里的字节之和（1.2.0 起与候选**同源**）
+ * ## ⭐ 一道门槛：索引里的字节之和（它是"当前占用"的**上界**）
  *
  * 这条链上最贵的一步是**扫全库笔记**（判断哪些副本还被引用，见 `scanReferences`），
  * 所以先用一次内存求和挡住绝大多数轮次：没超上限就直接返回。
+ * ⚠️ 它是上界（索引 ⊇ 磁盘上还在的）⇒"上界都不超就一定不超"⇒ 在这里跳过是**安全**的；
+ * 但它**不是**"当前占用"本身 —— 真正的总量在 `rotate()` 里用 `presentBytes` 算。
  *
  * ⚠️ 从前还有第二道门槛（"列缓存目录 + 逐个 stat"），用来发现"索引记的比上限小、
  * 但磁盘上其实还多"。它随缓存目录一起**取消**了：那条目录的清单本身也来自索引，
  * 列不出索引之外的东西；而索引之外的文件现在**绝不能删**（那可能是用户的附件）。
  * 代价如实记：**索引不全时上限偏保守**（宁可少删），这是安全的那一侧。
+ * ⚠️ 反过来的那一侧（索引记着、文件已经不在的**幽灵记录**）不由这里兜 —— 它由
+ * **总量改用"存在着的字节和"**兜住（见 `eviction.ts` 的模块头注释）：两道关都靠它就同时成立。
  *
  * ## 触发（由接线层决定，这一层只管"该不该跑"）
  *
@@ -98,7 +102,7 @@ export interface CacheRotationDeps {
 /** 一轮**实际执行**的结果（没跑时 `maybeRotate` 返回 `null`）。 */
 export interface RotationSummary {
 	reason: RotationReason;
-	/** 量到的缓存占用。 */
+	/** 量到的缓存占用。⚠️ **只含磁盘上确实还在的副本**（与候选同源，见 `eviction.ts`）。 */
 	totalBytes: number;
 	limitBytes: number;
 	evicted: number;
@@ -156,15 +160,17 @@ export function createCacheRotator(deps: CacheRotationDeps): CacheRotator {
 
 	async function rotate(reason: RotationReason, limitBytes: number, at: number): Promise<RotationSummary> {
 		const entries = deps.index().toArray();
-		const totalBytes = sumOwnedBytes(entries);
 
 		const referencedKeys = await deps.scanReferencedKeys();
-		const { candidates } = buildEvictionCandidates({
+		const { candidates, presentBytes } = buildEvictionCandidates({
 			entries,
 			present: deps.isPresent,
 			referencedKeys,
 		});
-		const plan = planEviction({ candidates, totalBytes, limitBytes, now: at, graceMs: deps.graceMs });
+		// ⭐ 总量用 `presentBytes`（**磁盘上确实还在**的那些）—— 与候选同源。
+		// 用索引的原始和会让**幽灵记录**（索引记着、文件已经不在了）抬高超出量 ⇒ 多删真实副本。
+		// 详见 `eviction.ts` 的模块头注释（含那条反例）。
+		const plan = planEviction({ candidates, totalBytes: presentBytes, limitBytes, now: at, graceMs: deps.graceMs });
 
 		// 一份都挑不出来（例如全在宽限期内）→ 不动手，也不打扰
 		const outcome: EvictionOutcome =
@@ -173,12 +179,12 @@ export function createCacheRotator(deps: CacheRotationDeps): CacheRotator {
 		// ⚠️ "还超多少"要用**实际**回收量算，而不是计划里的数字：
 		// 执行时可能有文件被跳过（宿主索引滞后），那时真实的超出量更大。
 		// 报小了会让用户以为上限已经生效。
-		const overBy = Math.max(0, totalBytes - outcome.freed - limitBytes);
+		const overBy = Math.max(0, presentBytes - outcome.freed - limitBytes);
 		if (outcome.evicted > 0) announce(outcome, overBy);
 
 		return {
 			reason,
-			totalBytes,
+			totalBytes: presentBytes,
 			limitBytes,
 			evicted: outcome.evicted,
 			freed: outcome.freed,
@@ -199,7 +205,10 @@ export function createCacheRotator(deps: CacheRotationDeps): CacheRotator {
 				// 没设上限 → 什么都不做（连索引都不读）—— 默认就是这个状态
 				if (limitBytes <= 0) return null;
 
-				// 门槛（**便宜**）：索引里记的字节 —— 与候选**同源**，所以它同时是"该不该跑"与"总量是多少"。
+				// 门槛（**便宜**）：索引里记的字节之和。⚠️ 它是"存在着的字节和"的**上界**
+				// （索引 ⊇ 磁盘上还在的），所以"上界都不超 ⇒ 一定不超"⇒ 在这里跳过是安全的。
+				// 它只回答"要不要进去看"，**真正的总量**在 `rotate()` 里用 `presentBytes` 算
+				// —— 两者不能混：用原始和当总量会让幽灵记录造成多删。
 				if (sumOwnedBytes(deps.index().toArray()) <= limitBytes) return null;
 
 				const at = now();

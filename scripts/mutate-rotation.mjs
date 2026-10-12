@@ -33,10 +33,12 @@ await runMutations({
 		{
 			// 后果：候选与统计**不再是同一个口径** ⇒ 门槛放行后挑不出对应的人，
 			// 或者反过来：统计说没超、候选却有一堆（下面那条单测钉的就是这个同源关系）。
-			name: "★ 统计口径改成只算遗留缓存目录（与候选不再同源）",
-			from: "\t\tconst totalBytes = sumOwnedBytes(entries);",
-			to: "\t\tconst totalBytes = sumOwnedBytes(entries.filter((e) => e.cachePath.startsWith(\"_attachment-cache/\")));",
-			expect: "统计口径",
+			// 后果：总量改回"**索引里所有条目的和**"（含幽灵记录）⇒ 与候选不再同源 ⇒
+			// 超出量被抬高 ⇒ **多删真实副本**（真实占用没超上限也会删，极端情况一份不剩）。
+			name: "★★ 总量用「索引里所有条目的和」而不是「存在着的字节和」（幽灵记录导致多删）",
+			from: "\t\tconst plan = planEviction({ candidates, totalBytes: presentBytes, limitBytes, now: at, graceMs: deps.graceMs });",
+			to: "\t\tconst plan = planEviction({ candidates, totalBytes: sumOwnedBytes(entries), limitBytes, now: at, graceMs: deps.graceMs });",
+			expect: "只需淘汰 2 份",
 		},
 		{
 			// 后果：节流失效 ⇒ 连粘 20 张图触发 20 轮，每轮都量磁盘、扫笔记、删文件。
@@ -57,8 +59,8 @@ await runMutations({
 			// 后果：用**计划**里的数字算"还超多少"，而执行时可能有文件被跳过 ⇒
 			// 报出来的超出量偏小，用户以为上限已经生效。
 			name: "★ 「还超多少」用计划数字而不是实际回收量（报小了，让人以为上限生效了）",
-			from: "\t\tconst overBy = Math.max(0, totalBytes - outcome.freed - limitBytes);",
-			to: "\t\tconst overBy = Math.max(0, totalBytes - plan.reclaimable - limitBytes);",
+			from: "\t\tconst overBy = Math.max(0, presentBytes - outcome.freed - limitBytes);",
+			to: "\t\tconst overBy = Math.max(0, presentBytes - plan.reclaimable - limitBytes);",
 			expect: "实际",
 		},
 		{

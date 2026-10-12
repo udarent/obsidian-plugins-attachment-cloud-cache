@@ -55,6 +55,9 @@ function harness(options = {}) {
 		},
 		notify: (message) => notices.push(message),
 		t: (key, params) => `${key}:${JSON.stringify(params ?? {})}`,
+		// ⚠️ 默认 `() => true` = **单轮即摘**：这一套的大多数用例验的是"摘与落盘的机制"，
+		// 两轮确认另有专门一节（用真的 `createAbsenceConfirmer` 驱动）。
+		confirmAbsent: options.confirmAbsent ?? (() => true),
 		yieldNow: async () => {
 			yields += 1;
 		},
@@ -73,10 +76,12 @@ function harness(options = {}) {
 }
 
 export async function runSelfHealSuite(mod) {
-	const { planSelfHeal, runSelfHeal, SELF_HEAL_BATCH } = mod;
+	const { planSelfHeal, runSelfHeal, SELF_HEAL_BATCH, createAbsenceConfirmer, CONFIRM_IMMEDIATELY } = mod;
 	assert.ok(typeof planSelfHeal === "function", "应当导出 planSelfHeal");
 	assert.ok(typeof runSelfHeal === "function", "应当导出 runSelfHeal");
 	assert.ok(Number.isInteger(SELF_HEAL_BATCH) && SELF_HEAL_BATCH > 0, "应当导出一个正整数批大小");
+	assert.ok(typeof createAbsenceConfirmer === "function", "应当导出 createAbsenceConfirmer");
+	assert.equal(CONFIRM_IMMEDIATELY("_cache/a.png", true), true, "命令那条线的确认器：单轮即摘");
 
 	// ============================================================
 	// 1. planSelfHeal：按路径归组、去重、跳过空白
@@ -111,6 +116,75 @@ export async function runSelfHealSuite(mod) {
 		assert.deepEqual(h.removed, [], "没摘任何记录");
 		assert.equal(h.persisted.length, 0, "★ 没变化不落盘（否则每次启动都白写一次索引）");
 		assert.equal(h.notices.length, 0, "★ 0 条不通知（每轮报一句「没事」就是噪音）");
+	}
+
+	// ============================================================
+	// 2b. ⭐⭐ 两轮确认：第一次判"不在"只标记，下一轮仍不在才摘
+	//
+	// 为什么：「现在不在」有两种 —— 真的没了，和**还在路上**（换设备、同步工具正在拉）。
+	// 单轮就摘会把后者也当失效；而新设备上那可能是**整份索引**
+	//（索引文件随 `.obsidian` 先到、附件还没到）。⇒ 判据 = "上一轮也不在"。
+	// ============================================================
+	{
+		const confirmer = createAbsenceConfirmer();
+		assert.equal(confirmer("_cache/a.png", true), false, "★ 第一次判不在 ⇒ 只标记，不摘");
+		assert.equal(confirmer("_cache/a.png", true), true, "★ 第二次仍不在 ⇒ 才确认");
+
+		const back = createAbsenceConfirmer();
+		back("_cache/a.png", true);
+		assert.equal(back("_cache/a.png", false), false, "文件又出现了 ⇒ 不摘");
+		assert.equal(back("_cache/a.png", true), false, "★★ 痕迹被清掉 ⇒ 重新数两轮（不累计历史缺席）");
+
+		// 端到端：同一个依赖面、同一个确认器，跑**两轮**
+		{
+			const h = harness({
+				entries: [entry("a.png", "_cache/a.png")],
+				missing: ["_cache/a.png"],
+				confirmAbsent: createAbsenceConfirmer(),
+			});
+			const first = await runSelfHeal(h.deps);
+			assert.equal(first.healed, 0, "★★ 第 1 轮：文件不在也**不摘**（它可能还在路上）");
+			assert.deepEqual(h.removed, [], "★ 第 1 轮一条都不许摘");
+			assert.equal(h.persisted.length, 0, "★ 没改东西就不落盘");
+
+			const second = await runSelfHeal(h.deps);
+			assert.equal(second.healed, 1, "★★ 第 2 轮仍不在 ⇒ 摘掉");
+			assert.deepEqual(h.removed, ["a.png"], "摘的正是那条记录");
+			assert.equal(h.persisted.length, 1, "真改了才落盘（一次）");
+		}
+
+		// 反向：文件在第 2 轮之前到了 ⇒ 两轮都不摘（这正是换设备/同步中的场景）
+		{
+			const missing = new Set(["_cache/a.png"]);
+			const h = harness({ entries: [entry("a.png", "_cache/a.png")], confirmAbsent: createAbsenceConfirmer() });
+			h.deps.exists = async (path) => !missing.has(path);
+			await runSelfHeal(h.deps);
+			missing.clear();
+			const second = await runSelfHeal(h.deps);
+			assert.equal(second.healed, 0, "★★ 文件到了 ⇒ 一轮都不摘");
+			assert.deepEqual(h.removed, []);
+		}
+
+		// ⚠️ 查询**出错**那轮不该清掉已经攒下的确认（否则永远攒不满两轮）
+		{
+			const h = harness({
+				entries: [entry("a.png", "_cache/a.png")],
+				missing: ["_cache/a.png"],
+				confirmAbsent: createAbsenceConfirmer(),
+			});
+			const honest = h.deps.exists;
+			await runSelfHeal(h.deps); // 第 1 轮：标记
+			h.deps.exists = async () => {
+				throw new Error("适配器炸了");
+			};
+			const failedRound = await runSelfHeal(h.deps);
+			// ⚠️ 先断"不摘"再断计数：出错最要紧的是**别摘**（计数只是记账）。
+			assert.equal(failedRound.healed, 0, "出错按「存在」处理 ⇒ 不摘");
+			assert.equal(failedRound.failed, 1, "出错的路径记进 failed");
+			h.deps.exists = honest;
+			const fourth = await runSelfHeal(h.deps);
+			assert.equal(fourth.healed, 1, "★ 回到「不在」⇒ 仍能确认（出错那轮没把标记清掉）");
+		}
 	}
 
 	// ============================================================
@@ -231,10 +305,10 @@ export async function runSelfHealSuite(mod) {
 		await runSelfHeal(h.deps);
 		assert.deepEqual(
 			Object.keys(h.deps).filter((name) => typeof h.deps[name] === "function").sort(),
-			["entries", "exists", "forget", "notify", "onError", "persist", "t", "yieldNow"],
-			"★ 依赖面只有这 8 个：没有 delete / remove(file) / trashFile 之类的入口"
+			["confirmAbsent", "entries", "exists", "forget", "notify", "onError", "persist", "t", "yieldNow"],
+			"★ 依赖面只有这 9 个：没有 delete / remove(file) / trashFile 之类的入口"
 		);
 	}
 
-	return { cases: 12 };
+	return { cases: 13 };
 }

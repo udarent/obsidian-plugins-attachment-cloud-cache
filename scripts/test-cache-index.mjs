@@ -18,11 +18,14 @@ await withLoadedTs("src/cache/index", (mod) => {
 	const stats = runCacheIndexSuite(mod);
 	console.log(
 		`Cache-index tests passed (${stats.entryCases} entry-validation cases, ${stats.urlCases} URL ` +
-			`lookup cases, ${stats.ledgerCases} upload-ledger cases: only 2xx-like complete entries are kept, ` +
-			"missing fields get safe defaults, 'remove' reports whether it removed, iteration is stably key-sorted, " +
-			"lookups normalise host case and trailing slashes but never touch percent-encoding, a different host " +
-			"never matches, and every malformed input degrades to an " +
-			"empty index with a recorded reason instead of throwing; the ledger remembers what we uploaded " +
+			`lookup cases, ${stats.moveCases} follow-a-rename cases, ${stats.ledgerCases} upload-ledger cases: ` +
+			"only 2xx-like complete entries are kept, missing fields get safe defaults, 'remove' reports whether " +
+			"it removed, iteration is stably key-sorted, lookups normalise host case and trailing slashes but never " +
+			"touch percent-encoding, a different host never matches, and every malformed input degrades to an " +
+			"empty index with a recorded reason instead of throwing; when a file is moved or renamed every record " +
+			"pointing at the old path follows it (including a whole folder's worth) and the URL lookup keeps " +
+			"pointing at the same record, because re-downloading instead would leave a duplicate copy behind; " +
+			"the ledger remembers what we uploaded " +
 			"independently of whether a local copy exists - dropping a copy never drops the ledger, only a real " +
 			"cloud delete does, a legacy file with no ledger is backfilled from the entries, and the invariant " +
 			"'every entry's key is in the ledger' always holds)."

@@ -32,6 +32,40 @@
  * 与缓存轮换同一条纪律：它跑在插件生命周期里，异常没人接；而"每轮都报一句没事"
  * 就是噪音。0 条时不通知。
  *
+ * ### 4. **"这一轮不在"不算数，上一轮也不在才摘**（`createAbsenceConfirmer`）
+ *
+ * "文件现在不在"有两种：真的没了、**还在路上**（换设备、同步工具正在拉）。
+ * 单轮就摘会把后者也当成失效 —— 而新设备上这可能是**整份索引**：
+ * 索引文件随 `.obsidian` 先到、附件还没到 ⇒ 所有记录一次判"不在" ⇒ 全摘掉 ⇒
+ * 文件随后到了也认不出（要走一次回退下载才恢复）。
+ * ⇒ 两轮确认；文件一出现就清痕迹。命令那条线例外（**显式动作**，单轮即摘）。
+ *
+ * ## ⭐⭐ 它不是"正确性"的前提（别再把正确性押在它身上）
+ *
+ * 曾经的理由是"留着失效记录会让渲染误判'本地已有'，于是既不显示也不去取"。
+ * 那条**已经不成立了**：`render/render-hook.ts` 的 `deferLocalCopy` 在拿不到
+ * `app://` 地址时会先按远端显示、同时去把副本取回来（而且回退下载会**回写索引**：
+ * `core/download.ts` 的 `store.set(...)`）⇒ **只要那张图被看到，记录就被修好**。
+ *
+ * 另一条"统计虚高会让上限多删"也已由**淘汰侧**自己兜住（总量只算磁盘上还在的副本，
+ * 见 `eviction.ts`）—— 那才是正确性该待的地方：**消费侧免疫 > 指望账本及时**。
+ * ⇒ 自愈现在的定位是**卫生**：别让统计长期偏高、别让下次看到时白下一次。
+ * 这也决定了误摘的代价是"可恢复的浪费"而非数据问题 —— 两轮确认这种轻量防护就够。
+ *
+ * ## 触发线（三条，由接线层决定）
+ *
+ * | 触发 | 时机 | 作用 |
+ * |---|---|---|
+ * | 启动 | 布局就绪后 8 秒 | 覆盖"插件没运行时发生的消失"（换设备、同步带来的差异） |
+ * | 周期 | 每 10 分钟 | 兜底：运行中的消失（用户整理附件目录、外部工具先删后写） |
+ * | 命令 `repair-index` | 用户主动 | "我现在就想核一遍"，**唯一**单轮即摘的入口 |
+ *
+ * ⚠️ 刻意**没有**"挂 `vault.on("delete")` 立刻摘"：它的价值（统计准确）已被上面两条兜住，
+ * 而代价最高 —— 插件自己删文件（淘汰 / F18 / R17）走的是同一个事件，
+ * 要幂等、要节流、还要自辩"这次不是我删的"。周期线够用。
+ * ⚠️ 也刻意**没有**"渲染时就地摘"：渲染遇到缺失副本会去**重新下载并登记**，
+ * 在那里摘等于"摘了又加"，净多一次落盘。
+ *
  * ## 为什么**不设**"每轮最多查 N 条"的硬上限
  *
  * 一开始想设一个（怕后台扫太多）。想清楚之后不设，两个理由：
@@ -64,6 +98,50 @@ export interface SelfHealTarget {
 	path: string;
 	keys: string[];
 }
+
+/**
+ * 「这份副本确实不在」的确认器（**后台**用）。
+ *
+ * ## 为什么"现在不在"还不够
+ *
+ * 索引里记着文件在哪，而"现在不在"有两种：**真的没了**（用户删了）、
+ * **还在路上**（换设备、同步工具正在拉、外部工具先删后写）。单轮就摘会把后一种
+ * 也当成失效 —— 记录一摘，文件到了也认不出（要等一次回退下载才恢复），
+ * 而新设备上这可能是**整份索引**。
+ *
+ * ⇒ 判据改成"**上一轮也不在**"才算数；某一轮报告它在，痕迹立刻清掉。
+ *
+ * ## ⚠️ 状态在**进程内**，重启即重置
+ *
+ * 重置是**安全方向**：代价只是"再确认一轮"（记录多留一会儿 = 统计偏高，
+ * 而统计偏高已由淘汰侧"总量只算存在的副本"兜住，不会多删 —— 见 `eviction.ts`）。
+ * 反过来（把可疑名单持久化到索引里）会让"派生数据"多一份要维护的状态，
+ * 换来的只是"少等一轮"。不值。
+ *
+ * ⚠️ 也不记录时间戳：那需要持久化才跨得过重启，而一旦持久化就回到上面那个取舍。
+ * "两轮"这件事只需要一个集合。
+ */
+export function createAbsenceConfirmer(): (path: string, absent: boolean) => boolean {
+	const suspects = new Set<string>();
+	return (path, absent) => {
+		if (!absent) {
+			suspects.delete(path);
+			return false;
+		}
+		if (suspects.has(path)) return true;
+		suspects.add(path);
+		return false;
+	};
+}
+
+/**
+ * 命令那条线用的确认器：**单轮即摘**。
+ *
+ * 用户显式点「自检并修复」时他正等着结果，让他再点一次才是坏体验；
+ * 而那是**显式动作**，命令会如实报出修了几条（几秒前刚开同步的人自己看得见）。
+ * ⚠️ 它只会在"确实不在"时被问到，所以返回恒 `true` 是安全的。
+ */
+export const CONFIRM_IMMEDIATELY = (): boolean => true;
 
 /**
  * 把索引里**值得检查的路径**挑出来（纯函数）。
@@ -100,6 +178,16 @@ export interface SelfHealDeps {
 	exists: (path: string) => Promise<boolean>;
 	/** 摘掉一条记录；返回是否真的摘掉了（供如实计数）。 */
 	forget: (key: string) => boolean;
+	/**
+	 * "这份副本确实不在"的确认器 —— 见 {@link createAbsenceConfirmer}。
+	 *
+	 * - `absent: false`（这一轮它在）⇒ 清掉该路径的痕迹，返回值被忽略；
+	 * - `absent: true`（这一轮它不在）⇒ 返回 `true` 表示**上一轮也不在**，这才允许摘。
+	 *
+	 * ⚠️ 查询**出错**时既不问它、也不摘（按"存在"处理）：出错是"不知道"，
+	 * 而"不知道"不该消耗掉一次确认，也不该清掉已有的确认。
+	 */
+	confirmAbsent: (path: string, absent: boolean) => boolean;
 	persist: () => Promise<void>;
 	notify: (message: string) => void;
 	t: (key: string, params?: Record<string, unknown>) => string;
@@ -136,10 +224,17 @@ export async function runSelfHeal(deps: SelfHealDeps): Promise<SelfHealResult> {
 			const target = targets[i];
 			result.checked += 1;
 			try {
-				if (await deps.exists(target.path)) continue;
-				stale.push(...target.keys);
+				if (await deps.exists(target.path)) {
+					// 它还在（或又回来了）⇒ 清掉"可疑"痕迹：上次那次缺席只是暂时的
+					deps.confirmAbsent(target.path, false);
+					continue;
+				}
+				// ⭐ 只有**上一轮也不在**才算数 —— 否则会摘掉"还在路上"的记录（换设备/同步中）
+				if (deps.confirmAbsent(target.path, true)) {
+					stale.push(...target.keys);
+				}
 			} catch (error) {
-				// ⚠️ 出错按"存在"处理：宁可不摘（见模块头注释第 2 条）
+				// ⚠️ 出错按"存在"处理：宁可不摘，也**不消耗**已经攒下的那次确认（见 deps 说明）
 				result.failed += 1;
 				deps.onError?.(error);
 			}
