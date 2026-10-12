@@ -6,10 +6,10 @@
  * 拆成纯函数才能穷举，也才能在不用真实 Obsidian 的情况下验证。
  */
 
-import type { ExternalImageDefault, LocalCopyAction, OrphanAskMode } from "../types";
+import type { ExternalSiteMode, LocalCopyAction, OrphanAskMode } from "../types";
 import {
 	CACHE_LIMIT_MB_MAX,
-	EXTERNAL_IMAGE_DEFAULTS,
+	EXTERNAL_SITE_MODES,
 	LOCAL_COPY_ACTIONS,
 	ORPHAN_ASK_MODES,
 	isCacheDisabled,
@@ -83,12 +83,12 @@ export function localCopyOptions(labelOf: (value: LocalCopyAction) => string): R
 	return options;
 }
 
-/** 同上，给「遇到外链图片时」那一档用。 */
-export function externalImageDefaultOptions(
-	labelOf: (value: ExternalImageDefault) => string
+/** 同上，给「站点名单」那一档用。 */
+export function externalSiteModeOptions(
+	labelOf: (value: ExternalSiteMode) => string
 ): Record<string, string> {
 	const options: Record<string, string> = {};
-	for (const value of EXTERNAL_IMAGE_DEFAULTS) options[value] = labelOf(value);
+	for (const value of EXTERNAL_SITE_MODES) options[value] = labelOf(value);
 	return options;
 }
 
@@ -153,6 +153,17 @@ export function shouldShowCacheLimit(action: unknown): boolean {
  */
 export function shouldShowReleaseSpace(action: unknown): boolean {
 	return action === "trash";
+}
+
+/**
+ * 「站点名单」输入框要不要显示。
+ *
+ * ⚠️ 只在黑名单 / 白名单那两档显示：`off` 那一档下名单**根本不生效**，
+ * 显示一个不起作用的输入框比不显示更糟（与「缓存目录」那条同一个纪律）。
+ * 用户想填名单，会先把模式改过来 —— 那时框自然出现。
+ */
+export function shouldShowSiteList(mode: unknown): boolean {
+	return mode === "blocklist" || mode === "allowlist";
 }
 
 /**
@@ -236,6 +247,31 @@ function clampLimitMb(value: number): number {
 export function formatCacheLimitMb(value: unknown): string {
 	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "0";
 	return String(Math.trunc(value));
+}
+
+/** 名单（设置里的数组）→ 输入框里的文本：**一行一条**。 */
+export function formatSiteListText(stored: unknown): string {
+	if (!Array.isArray(stored)) return "";
+	return stored.filter((item) => typeof item === "string").join("\n");
+}
+
+/**
+ * 输入框里的文本 → 名单（设置里的数组）。
+ *
+ * ⭐ **宽松，但不改写**：按行切、去掉首尾空白与空行，**不做归一化**
+ *（大小写、去重、`*.` 通配、整条 URL 都留给判定层的 `normalizeSiteEntry`）。
+ * 这里的目标只是"把用户敲进去的东西存成一个干净的数组"，而不是替他整理 ——
+ * 在设置页悄悄改写用户填的内容，会让他下次打开时看到一个自己没写过的名单。
+ *
+ * ⚠️ 空文本 = **空数组**（不是"没填 → 保留原值"）：清空名单是一个明确动作。
+ * 它在白名单模式下的后果是"什么都不再自动处理" —— 那是诚实的，不是坏值。
+ */
+export function parseSiteListText(raw: unknown): string[] {
+	if (typeof raw !== "string") return [];
+	return raw
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line !== "");
 }
 
 export function connectionFailureKey(kind: ConnectionFailureKind): string {

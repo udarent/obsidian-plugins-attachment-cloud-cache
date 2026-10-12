@@ -189,6 +189,11 @@ export const I18N: Record<string, Locale> = {
 			"Cache index repaired automatically: {count} record(s) pointed at files that are no longer there.",
 		legacyKeyTemplateUpgraded:
 			"The object-key template setting is gone: new uploads are always named “original-name-content-hash.ext”, so files stay findable by name in your storage (the name therefore also reaches your storage provider). Existing links keep working; content you uploaded under the old naming is stored once more if you paste it again.",
+		legacyExternalDefaultMerged:
+			"Setting change: “When a note links to a file on another site” is gone — the switch above it (“Handle files from other sites like ordinary files”) is now the only control. Your earlier choice was carried over: {state}.",
+		legacyExternalKeptOn: "automatic handling stays on",
+		legacyExternalKeptOff:
+			"automatic handling stays off, because you had it set to do nothing automatically — you can still pick files one by one",
 		repairIndexFound: "Index repaired: {count} stale record(s) dropped.",
 		repairIndexNothing: "Index is fine — no stale records.",
 		maintainMoreItems: "…and {count} more",
@@ -218,30 +223,34 @@ export const I18N: Record<string, Locale> = {
 		maintainBatchDone:
 			"Uploaded {uploaded}, already there {reused}, failed {failed}. Rewrote {links} link(s) across {notes} note(s).",
 
-		// ── 站外图片 ──
-		externalImageCache: "Cache files from other sites",
+		// ── Files from other sites ──
+		externalImageCache: "Handle files from other sites like ordinary files",
 		externalImageCacheDesc:
-			"Whether the plugin may handle files that live on other sites at all. Off by default: while it is off those files are left completely alone.",
-		externalImageDefault: "When a note links to a file on another site",
-		externalImageDefaultDesc:
-			"What to do by default. \"Leave it alone\" never touches it; \"Cache straight away\" downloads it, uploads it to your storage and rewrites the link in the note. Either way you can pick individual files with the button below.",
-		externalDefault_skip: "Leave it alone",
-		externalDefault_cache: "Cache straight away",
+			"On: a note that links to a file on another site gets it downloaded, uploaded to your storage and the link rewritten — exactly like pasting a local file. Off by default; while it is off those files are left completely alone. Picking individual files is always available, with or without this switch.",
+		externalSiteMode: "Which sites to handle",
+		externalSiteModeDesc:
+			"Only affects the automatic handling above. \"All sites\" applies no filter; the other two use the list below — to skip those sites, or to handle only those. This filter never restricts picking individual files.",
+		externalSite_off: "All sites",
+		externalSite_blocklist: "All except the ones listed",
+		externalSite_allowlist: "Only the ones listed",
+		externalSiteList: "Site list",
+		externalSiteListDesc:
+			"One domain per line. example.com also matches img.example.com; write example.com:8080 to match that exact host. Under \"Only the ones listed\", an empty list means nothing is handled automatically.",
+		externalSiteListPlaceholder: "example.com\ncdn.example.com",
 		externalPickName: "Pick specific files",
 		externalPickDesc:
-			"Choose images from the current note or from the whole vault, and only those are cached. Picking one is the same as agreeing to it — the default above does not apply.",
+			"Choose files from the current note or from the whole vault, and only those are cached. Picking one is the same as agreeing to it — it works whether or not the switch above is on.",
 		externalPickButton: "Choose files…",
 		externalPickTitle: "Choose files to cache",
 		externalPickScope: "Where to look",
 		externalPickScopeNote: "Current note",
 		externalPickScopeVault: "Whole vault",
 		externalPickEmpty:
-			"No images to cache here (they may already be in your own storage, or the feature or the storage connection is not set up).",
+			"No files to cache here (they may already be in your own storage, or the storage connection is not set up).",
 		externalPickAll: "Select all",
 		externalPickNone: "Select none",
 		externalPickCta: "Cache the {count} selected",
 		externalPickCancel: "Cancel",
-		externalPickDisabled: "Turn on \"Cache files from other sites\" first.",
 		externalPickNothing: "No files were cached.",
 		externalPickDone:
 			"Cached {cached} file(s); {partial} were uploaded but their link could not be rewritten; {failed} failed.",
@@ -425,6 +434,11 @@ export const I18N: Record<string, Locale> = {
 		selfHealRepaired: "缓存索引已自动修复：{count} 条记录指向的本地副本已经不在了。",
 		legacyKeyTemplateUpgraded:
 			"「对象 key 模板」设置已取消：之后上传的对象固定命名为「原文件名-内容哈希.扩展名」，存储里可以按名字找到文件（文件名因此也会出现在你的存储服务商那边）。已有链接不受影响；按旧命名传过的内容若再贴一次，会在云端多存一份。",
+		legacyExternalDefaultMerged:
+			"设置改版：「遇到站外文件链接时」那一档已并入上面的开关「站外文件按普通附件处理」，你原来的选择已折算进去 —— {state}。",
+		legacyExternalKeptOn: "自动处理保持开启",
+		legacyExternalKeptOff:
+			"自动处理保持关闭（你原本选的是「什么都不做」）；「挑选要缓存的文件」仍然随时可用",
 		repairIndexFound: "索引已修复：摘掉 {count} 条失效记录。",
 		repairIndexNothing: "索引没有失效记录，无需修复。",
 		maintainMoreItems: "……还有 {count} 个",
@@ -452,30 +466,34 @@ export const I18N: Record<string, Locale> = {
 		maintainBatchDone:
 			"上传 {uploaded} 个、已存在 {reused} 个、失败 {failed} 个。在 {notes} 篇笔记里改写了 {links} 处链接。",
 
-		// ── 站外图片 ──
-		externalImageCache: "缓存站外文件",
+		// ── 站外文件 ──
+		externalImageCache: "站外文件按普通附件处理",
 		externalImageCacheDesc:
-			"是否允许插件处理别处的文件。默认关闭；关着时这类文件一步都不会被碰。",
-		externalImageDefault: "遇到站外文件链接时",
-		externalImageDefaultDesc:
-			"默认怎么做。「什么都不做」绝不碰它；「直接缓存」会下载、上传到你的存储、并改写笔记里的链接。两种情况都能用下面那颗按钮逐张挑。",
-		externalDefault_skip: "什么都不做",
-		externalDefault_cache: "直接缓存",
+			"打开后，笔记里指向别处的文件会被下载、上传到你的存储，并改写笔记里的链接 —— 与粘贴一张本地附件完全一样。默认关闭；关着时这类文件一步都不会被碰。「挑选要缓存的文件」始终可用，不受这个开关限制。",
+		externalSiteMode: "处理哪些站点",
+		externalSiteModeDesc:
+			"只影响上面的自动处理。「所有站点」不做过滤；后两档由下面的名单决定 —— 跳过名单里的站点，或只处理名单里的站点。这份名单不会限制手动挑选。",
+		externalSite_off: "所有站点",
+		externalSite_blocklist: "除名单外的站点",
+		externalSite_allowlist: "仅名单内的站点",
+		externalSiteList: "站点名单",
+		externalSiteListDesc:
+			"一行一个域名。写 example.com 也会命中 img.example.com；写 example.com:8080 则只匹配含那个端口的地址。选「仅名单内的站点」时，留空表示什么都不自动处理。",
+		externalSiteListPlaceholder: "example.com\ncdn.example.com",
 		externalPickName: "挑选要缓存的文件",
 		externalPickDesc:
-			"在「当前笔记」或「全库」里勾选图片，只处理你勾中的那些。勾选本身就是同意，与上面的默认设置无关。",
+			"在「当前笔记」或「全库」里勾选文件，只处理你勾中的那些。勾选本身就是同意，与上面的开关无关。",
 		externalPickButton: "选择文件…",
 		externalPickTitle: "选择要缓存的文件",
 		externalPickScope: "范围",
 		externalPickScopeNote: "当前笔记",
 		externalPickScopeVault: "全库",
 		externalPickEmpty:
-			"这个范围里没有可缓存的图片（可能已经在你自己的存储里，或者功能/存储连接还没配好）。",
+			"这个范围里没有可缓存的文件（可能已经在你自己的存储里，或者存储连接还没配好）。",
 		externalPickAll: "全选",
 		externalPickNone: "全不选",
-		externalPickCta: "缓存选中的 {count} 张",
+		externalPickCta: "缓存选中的 {count} 个",
 		externalPickCancel: "取消",
-		externalPickDisabled: "请先打开「缓存站外文件」。",
 		externalPickNothing: "没有缓存任何文件。",
 		externalPickDone: "已缓存 {cached} 张；{partial} 张已上传但没能改写链接；{failed} 张失败。",
 		cmdPickExternal: "缓存站外文件（可挑选）…",

@@ -98,33 +98,46 @@ export function isCacheDisabled(action: unknown): boolean {
 }
 
 /**
- * 遇到**站外**图片时**默认**怎么做。
+ * 「站点名单」的三种模式（1.2.0 新增）。
  *
- * ## 为什么这是一个显式设置，而不是"每次都问"
+ * ## 它取代了「遇到站外文件链接时：什么都不做 / 直接缓存」那一档
  *
- * 早先的行为是"首次遇到某个站点时弹通知问一次"。那个设计有两个问题：
- * - **打扰**：询问出现在**阅读**路径上，而"要不要把这张图搬进我的存储"并不是件紧急的事；
- * - **粒度太粗**：它记住的是**站点**，于是"这个站点别的图都要，就这一张不要"根本表达不出来。
+ * 旧设计把"要不要处理"拆成两个控件：一个总开关 + 一个**默认行为**（什么都不做 / 直接缓存）。
+ * 结果没有一个控件单独回答得了"站外文件到底会不会被自动处理"——用户要在两个控件之间
+ * 自己脑补组合。现在合成一个开关：**开 = 按普通附件处理，关 = 一步都不碰**。
+ * 而"只对某些站点这么做"由这份名单表达。
  *
- * 现在改成两件事的组合：
- * 1. 这个设置说**默认**怎么办（用户自己选的，不猜）；
- * 2. 想逐张控制时，用「选择要缓存的外链图片」那条命令/按钮**显式勾选** ——
- *    勾选本身就是同意，不受这里的"默认"影响。
+ * ⚠️ 更早还有过"首次遇到某个站点就弹通知问一次"（记进 `.site-decisions.json`）。
+ * 它被撤掉有两个原因，其中的教训仍然管用：询问出现在**阅读**路径上（不紧急的事不该打断），
+ * 而且它记的是**站点**、表达不出"这个站点别的图都要，就这一张不要"。
+ * 名单是**事前**配置的静态规则，不打断任何路径 —— 两者不是同一个东西。
  *
- * ⚠️ 出厂是 `skip`（**什么都不做**）：打开功能**不等于**同意去下载别人的图、
- * 更不等于同意改写自己的笔记。
+ * ## ⚠️ 为什么是"三选一"，而不是黑名单、白名单各一个开关
+ *
+ * 两者同时存在时，"白名单里的站点又被黑名单命中"算哪一边**没有自然的答案**：
+ * 让黑名单赢，白名单里写它就没意义；让白名单赢，黑名单就管不住这些站。
+ * 与其在文档里解释这条规则，不如让这种组合**根本表达不出来**。
+ *
+ * ## ⚠️ 名单只管"自动搬"那一路，**不是安全边界**
+ *
+ * 它决定**自动**遇到站外文件时访不访问那个站点。「挑选要缓存的文件」是一次显式勾选，
+ * **不受它约束**（判据见 `render/external-decide.ts` 的 `purpose`）。
+ * 真正拦得住的东西只有 `isBlockedHost`（回环 / 链路本地 / 云元数据），
+ * 那条是**无条件**的 —— 白名单越不过它。
  */
-export type ExternalImageDefault =
-	/** 遇到站外图时**什么都不做**（默认）。 */
-	| "skip"
-	/** 遇到站外图时直接下载 → 上传 → 改写链接。 */
-	| "cache";
+export type ExternalSiteMode =
+	/** 不过滤（出厂默认）：任何站点都按上面的开关处理。 */
+	| "off"
+	/** 黑名单：名单内的站点**不自动**处理，其余照常。 */
+	| "blocklist"
+	/** 白名单：**只**自动处理名单内的站点。⚠️ 名单为空 = 一个站点都不处理。 */
+	| "allowlist";
 
 /** 下拉里能选的值。**由它生成选项**，于是"界面能选的"与"类型允许的"只有一处定义。 */
-export const EXTERNAL_IMAGE_DEFAULTS: readonly ExternalImageDefault[] = ["skip", "cache"];
+export const EXTERNAL_SITE_MODES: readonly ExternalSiteMode[] = ["off", "blocklist", "allowlist"];
 
-export function isExternalImageDefault(value: unknown): value is ExternalImageDefault {
-	return typeof value === "string" && (EXTERNAL_IMAGE_DEFAULTS as readonly string[]).includes(value);
+export function isExternalSiteMode(value: unknown): value is ExternalSiteMode {
+	return typeof value === "string" && (EXTERNAL_SITE_MODES as readonly string[]).includes(value);
 }
 
 /**
@@ -237,21 +250,37 @@ export interface PluginSettings {
 	 */
 	fallbackDownload: boolean;
 	/**
-	 * 是否**启用**「处理站外图片」这条链路（默认**关**）。
+	 * 是否把**站外文件当普通附件处理**（默认**关**）。
 	 *
-	 * ⚠️ 关着时站外图**一步都不碰**（不下载、不改写、也不列进任何候选）：
-	 * 渲染路径会原样保留远端地址，行为与没装这个插件一致。
+	 * 打开 = 渲染时遇到站外文件就自动下载 → 上传到你的存储 → 改写笔记里的链接，
+	 * 与粘贴一张本地图走的是同一条链（连 {@link localCopy} 那一档也一样适用）。
+	 * 关着 = 站外文件**一步都不碰**，行为与没装这个插件的这一块一致。
 	 *
-	 * 打开本项目**不等于**同意去下载别人的图 —— 那件事由
-	 * {@link externalImageDefault} 与「选择要缓存的外链图片」那条命令显式表达。
+	 * ⚠️ 它只管**自动**那一路。想逐张控制，用「挑选要缓存的文件」——
+	 * 那条命令与按钮**不要求**打开这个开关（勾选本身就是同意）。
+	 *
+	 * ⚠️ 1.2.0 之前这里还配套一个「遇到站外文件链接时：什么都不做 / 直接缓存」。
+	 * 那一档已合并进这一个开关，老数据由载入流程里的一次性迁移折算
+	 *（`hasLegacyExternalImageDefault` / `legacyAutoCacheEnabled`）。
 	 */
 	externalImageCache: boolean;
 	/**
-	 * 遇到站外图片时**默认**怎么做：什么都不做（出厂）/ 直接缓存。
+	 * 站点名单的模式（`off` / `blocklist` / `allowlist`）。
 	 *
-	 * ⚠️ 只在 {@link externalImageCache} 打开时才有意义（设置页里也是这么显示的）。
+	 * ⚠️ 只在 {@link externalImageCache} 打开时才有意义 —— 关着时不自动处理任何站点。
+	 * 与 `off` 的差别是"自动处理哪些站点"，见 {@link ExternalSiteMode}。
 	 */
-	externalImageDefault: ExternalImageDefault;
+	externalSiteMode: ExternalSiteMode;
+	/**
+	 * 名单本身：一行一个域名（`example.com`、`cdn.example.com`）。
+	 *
+	 * 匹配按**域名后缀**：写 `example.com` 会命中 `img.example.com`；
+	 * 带端口（`example.com:8080`）则精确匹配含端口。
+	 *
+	 * 存成**数组**（一条一项）而不是一整段文本：解析与归一交给纯函数，
+	 * 设置里存的就是"用户填了哪些条目"本身。
+	 */
+	externalSiteList: string[];
 	/**
 	 * 缓存目录的大小上限（MB）。**0 = 不限制**（默认）。
 	 *

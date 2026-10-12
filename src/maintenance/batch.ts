@@ -39,7 +39,7 @@
 
 import type { PluginSettings } from "../types";
 import type { CacheIndex } from "../cache/index";
-import { decideExternalCache, isCacheableExternal } from "../render/external-decide";
+import { decideExternalCache } from "../render/external-decide";
 import { normalizeLinkTarget } from "./references";
 
 /** 库内文件的最小形状。 */
@@ -353,11 +353,13 @@ function isHttpUrl(value: string): boolean {
  * **同一个判定**。于是这些性质自动一致：功能关掉就不碰、自己的存储地址不当外链、
  * 回环/链路本地地址一律不碰、存储没配好时不出现在清单里。
  *
- * ## ⭐ `wait` 也算候选（这是"默认不缓存"那一档能用的前提）
+ * ## ⭐ 显式工具**不受功能开关与站点名单约束**（1.2.0）
  *
- * 候选的判据是 `isCacheableExternal`（"**能不能**搬"），**不是**"这次就该搬"。
- * 否则用户把默认设成「什么都不做」之后，这条命令与选择器会列出一份空清单 ——
- * 两个显式入口等于不存在。`wait` 的语义是"等你来挑"，不是"不许碰"。
+ * 判定走 `purpose: "manual"` —— 于是"能被挑中的那些"只受硬性判据约束
+ *（地址形态、本存储、回环地址、存储是否就绪），而**功能开关与站点名单都不管它**。
+ * 理由：点这个确认框、勾一个框，本身就是一次显式动作；而名单是"**自动搬**的准入"。
+ * ⚠️ 这条在 1.2.0 合并开关之后**必须**写下来：否则关掉那个开关会连带
+ * 关掉「挑选要缓存的文件」，那个入口就等于不存在了（本项目最警惕的那类回归）。
  *
  * ## 授权不在这里做
  *
@@ -389,12 +391,14 @@ export function selectExternalUploadCandidates(
 				src: url,
 				settings: options.settings,
 				configured: options.configured,
+				// ⭐ 显式工具：功能开关与站点名单都不约束它（见上面的小节）。
+				purpose: "manual",
 				blockedHost: options.blockedHost,
 			});
 
-			if (!isCacheableExternal(decision)) {
+			if (decision.action === "ignore") {
 				// 跳过的**原因**照实记下来（诊断用）。判定层给的就是那句原因，不需要我再猜。
-				if (decision.action === "ignore") bump(decision.reason);
+				bump(decision.reason);
 				continue;
 			}
 

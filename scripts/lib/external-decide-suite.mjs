@@ -1,5 +1,5 @@
 /**
- * 站外缓存判定（`src/render/external-decide.ts`）的断言套件。
+ * 站外文件判定（`src/render/external-decide.ts`）的断言套件。
  *
  * ## 这一层的判错方向不对称
  *
@@ -9,12 +9,31 @@
  *
  * 所以这里穷举的不是"能不能工作"，而是**每一种输入落在哪一档**，尤其是边界：
  * 自己的端点主机、局域网自建图床、回环地址、大小写、以及"主机相同但路径不同"。
+ *
+ * ## ⭐ 1.2.0 起多了"谁在问"这一维（`purpose`）
+ *
+ * 同一个地址，**自动**处理与**列候选**会得到不同答案：
+ * - `auto`：受功能开关与站点名单约束；
+ * - `manual`：两者都不管（勾选 / 点确认本身就是显式动作）。
+ *
+ * 所以下面每一组都点明"它在问哪一路"。少了这句话，"把开关（或名单）也套到
+ * 显式工具上"这类改动不会被任何断言抓住 —— 而它的后果正是**入口消失**：
+ * 关掉自动处理的人会连「挑选要缓存的文件」一起失去。
  */
 
 import assert from "node:assert/strict";
 
 export function runExternalDecideSuite(mod) {
-	const { decideExternalCache, hostOf, ownHosts, isBlockedHost, isCacheableExternal } = mod;
+	const {
+		decideExternalCache,
+		hostOf,
+		ownHosts,
+		isBlockedHost,
+		normalizeSiteEntry,
+		parseSiteList,
+		matchesSiteList,
+		siteListAllows,
+	} = mod;
 
 	const address = {
 		endpoint: "https://s3.example.com",
@@ -23,14 +42,16 @@ export function runExternalDecideSuite(mod) {
 		forcePathStyle: true,
 	};
 
-	/** 最简设置：判定只读 `externalImageCache` 与 `s3`。 */
+	/** 最简设置：判定读 `externalImageCache` / `externalSiteMode` / `externalSiteList` 与 `s3`。 */
 	const settingsWith = (overrides = {}) => ({
 		autoUpload: true,
 		enabledExtensions: ["png"],
 		attachmentFolder: "",
-		localCopy: "cache",
+		localCopy: "keep",
 		fallbackDownload: true,
 		externalImageCache: true,
+		externalSiteMode: "off",
+		externalSiteList: [],
 		s3: address,
 		...overrides,
 	});
@@ -40,28 +61,30 @@ export function runExternalDecideSuite(mod) {
 			src,
 			settings: settingsWith(options.settings),
 			configured: options.configured ?? true,
+			// 默认按**自动**那一路问；要问显式工具就显式传 `purpose: "manual"`。
+			purpose: options.purpose ?? "auto",
 			blockedHost: options.blockedHost,
 		});
 
 	// ============================================================
-	// 1. ⭐ 功能关着 → 一律 ignore（默认关，绝不能打扰）
+	// 1. ⭐ 功能关着 → **自动**那一路一律 ignore（默认关，绝不能打扰）
 	// ============================================================
-	const offSettings = settingsWith({ externalImageCache: false });
 	for (const src of ["https://third-party.example.net/x.png", "https://other.com/a.png"]) {
-		const d = decideExternalCache({
-			src,
-			settings: offSettings,
-			configured: true,
-		});
+		const d = decide(src, { settings: { externalImageCache: false } });
 		assert.equal(d.action, "ignore", `★ 功能关着时必须 ignore（${src}）—— 默认关，不能打扰`);
 	}
-	// 关着时**即使默认值设成了「直接缓存」**也不该动（用户关掉的是整个功能）
-	const offWithCacheDefault = decideExternalCache({
-		src: "https://third-party.example.net/x.png",
-		settings: settingsWith({ externalImageCache: false, externalImageDefault: "cache" }),
-		configured: true,
-	});
-	assert.equal(offWithCacheDefault.action, "ignore", "★ 开关优先于默认行为：关掉功能后，默认值不该有任何作用");
+
+	// ⭐⭐ 但**显式工具不受开关约束**（1.2.0）：关掉自动处理的人照样能用
+	// 「挑选要缓存的文件」手动挑。少了这条，"合并成一个开关"就会把那个入口一起关掉 ——
+	// 而"只想手动挑几张"恰恰是最常见的用法之一。
+	assert.equal(
+		decide("https://third-party.example.net/x.png", {
+			settings: { externalImageCache: false },
+			purpose: "manual",
+		}).action,
+		"cache",
+		"★★ 显式工具不受开关约束：关掉开关后「挑选要缓存的文件」仍要列得出候选"
+	);
 
 	// ============================================================
 	// 2. 不是可处理的地址 → ignore
@@ -85,7 +108,7 @@ export function runExternalDecideSuite(mod) {
 	assert.equal(decide("not a url").action, "ignore", "（不是 URL）应 ignore");
 
 	// ============================================================
-	// 3. ⭐ 自己的存储 → ignore（绝不问、绝不当站外）
+	// 3. ⭐ 自己的存储 → ignore（绝不当站外）
 	// ============================================================
 	// publicUrlBase 形式
 	assert.equal(decide("https://img.example.com/k1.png").action, "ignore", "★ 自己存储的链接（公网前缀）不该被当站外");
@@ -96,7 +119,7 @@ export function runExternalDecideSuite(mod) {
 		"★ 自己存储的链接（端点+桶）不该被当站外"
 	);
 	// ⭐ 主机相同但路径不匹配（换个桶）：keyFromUrl 认不出，必须靠**主机**拦住 ——
-	// 对着自己的 S3 端点弹"要不要缓存这张站外图"是荒谬的。
+	// 对着自己的 S3 端点问"要不要缓存这张站外图"是荒谬的。
 	assert.equal(
 		decide("https://s3.example.com/some-other-bucket/k.png").action,
 		"ignore",
@@ -118,11 +141,13 @@ export function runExternalDecideSuite(mod) {
 	]) {
 		assert.equal(decide(src).action, "ignore", `★ 回环/链路本地地址必须 ignore（${label}）—— 不能把内网探测发出去`);
 	}
-	// 回环地址即使设置里选了「直接缓存」也必须拦（安全优先于偏好）
+	// ⭐ 把回环地址写进**白名单**也不能放行：名单是"自动搬的准入"，`isBlockedHost` 才是安全边界。
 	assert.equal(
-		decide("http://127.0.0.1/x.png", { settings: { externalImageDefault: "cache" } }).action,
+		decide("http://127.0.0.1/x.png", {
+			settings: { externalSiteMode: "allowlist", externalSiteList: ["127.0.0.1"] },
+		}).action,
 		"ignore",
-		"★ 安全拦截优先于偏好：回环地址不该因为默认值设成「直接缓存」就被下载"
+		"★ 安全拦截优先于名单：回环地址写进白名单也**不是**可以下载的（名单越不过这道）"
 	);
 
 	// ⭐ 但**局域网**（RFC1918）不能拦 —— 家庭 NAS / 局域网自建图床是合法用法
@@ -131,56 +156,27 @@ export function runExternalDecideSuite(mod) {
 		["10.x", "http://10.0.0.5/x.png"],
 		["172.16-31.x", "http://172.20.3.4/x.png"],
 	]) {
-		assert.equal(decide(src).action, "wait", `★ 局域网地址照常算可搬的候选（${label}）—— 自建图床是合法用法`);
-		assert.equal(isCacheableExternal(decide(src)), true, `局域网地址要能进候选清单（${label}）`);
+		assert.equal(decide(src).action, "cache", `★ 局域网地址照常算可搬的（${label}）—— 自建图床是合法用法`);
 	}
 
 	// ============================================================
-	// 5. ⭐⭐ 默认行为：什么都不做（`wait`）/ 直接缓存（`cache`）
+	// 5. ⭐ 开关打开 + 不过滤 ⇒ **自动**那一路直接搬
 	//
-	// 这两个结果的区别是"**现在**动不动手"，不是"能不能搬" —— 后者由上面那些
-	// 安全与归属检查回答。分开是**必要的**：命令与选择器要用"能不能搬"
-	// （`isCacheableExternal`）来列候选，否则用户把默认设成「什么都不做」之后，
-	// 那两个显式入口会列出一份空清单 —— 等于功能不存在。
+	// 1.2.0 之前这里还有一档「什么都不做」（`wait`）。那一档已并进开关：
+	// 想让插件别自动动手，就把开关关掉（显式工具不受影响，见第 1 节）。
 	// ============================================================
 	assert.equal(
 		decide("https://third-party.example.net/x.png").action,
-		"wait",
-		"★ 出厂是「什么都不做」：打开功能**不等于**同意去下载别人的图、改写自己的笔记"
-	);
-	assert.equal(
-		decide("https://third-party.example.net/x.png", { settings: { externalImageDefault: "cache" } }).action,
 		"cache",
-		"★ 选了「直接缓存」就该直接搬，不再问任何问题"
+		"★ 开关打开 + 「所有站点」⇒ 自动处理直接搬，不再问任何问题"
 	);
 
-	// ⭐ `wait` 仍然算"可搬" —— 这正是两个显式入口能列出它的前提
-	assert.equal(isCacheableExternal(decide("https://third-party.example.net/x.png")), true, "★ wait 必须算候选");
+	// 两种用途的结果都要带主机名：命令的确认框要据此列出"即将访问哪些站点"（那就是它的披露）
+	assert.equal(decide("https://third-party.example.net/x.png").host, "third-party.example.net", "要带主机名");
 	assert.equal(
-		isCacheableExternal(decide("https://third-party.example.net/x.png", { settings: { externalImageDefault: "cache" } })),
-		true,
-		"cache 当然算候选"
-	);
-	assert.equal(isCacheableExternal(decide("http://127.0.0.1/x.png")), false, "被安全拦下的不算候选");
-
-	// 两个结果都要带主机名：命令的确认框要据此列出"即将访问哪些站点"（那就是它的披露）
-	assert.equal(decide("https://third-party.example.net/x.png").host, "third-party.example.net", "wait 要带主机名");
-	assert.equal(
-		decide("https://third-party.example.net/x.png", { settings: { externalImageDefault: "cache" } }).host,
+		decide("https://third-party.example.net/x.png", { purpose: "manual" }).host,
 		"third-party.example.net",
-		"cache 要带主机名"
-	);
-
-	// ⭐ 默认值**不能越过**安全与归属判断（偏好排在事实之后）
-	assert.equal(
-		decide("http://127.0.0.1/x.png", { settings: { externalImageDefault: "cache" } }).action,
-		"ignore",
-		"★ 选了「直接缓存」也不能去请求回环地址（安全优先于偏好）"
-	);
-	assert.equal(
-		decide("https://img.example.com/k1.png", { settings: { externalImageDefault: "cache" } }).action,
-		"ignore",
-		"★ 选了「直接缓存」也不会把自己的存储地址当站外图搬（那是无意义的一次往返）"
+		"显式工具那条路也要带主机名"
 	);
 
 	// 主机名照旧要归一（命令那份清单按它分组、按它披露）
@@ -192,34 +188,93 @@ export function runExternalDecideSuite(mod) {
 	);
 
 	// ============================================================
-	// 6. 未配置 → ignore（渲染路径上不能刷屏、也不该列进候选）
+	// 6. ⭐⭐ 站点名单（1.2.0）：只约束**自动**那一路
+	// ============================================================
+	const withMode = (mode, list) => ({ settings: { externalSiteMode: mode, externalSiteList: list } });
+	// ⚠️ 这些用例的主机**必须避开 `img.example.com` / `s3.example.com`** ——
+	// 那两个是夹具里的自有存储主机，会被"本存储"那条判据先拦掉，
+	// 于是名单根本没被问到（断言会以"本存储"的名义失败，找错方向）。
+	const thirdParty = "cdn.example.com";
+
+	// 黑名单：命中的站点不自动处理，其余照常
+	assert.equal(
+		decide(`https://${thirdParty}/a.png`, withMode("blocklist", ["example.com"])).action,
+		"ignore",
+		"★ 黑名单命中就不自动处理（写 example.com 会命中 cdn.example.com —— 按域名后缀匹配）"
+	);
+	assert.equal(
+		decide("https://other.net/a.png", withMode("blocklist", ["example.com"])).action,
+		"cache",
+		"黑名单没命中 ⇒ 照常自动处理"
+	);
+
+	// 白名单：只处理名单内的
+	assert.equal(
+		decide(`https://${thirdParty}/a.png`, withMode("allowlist", ["example.com"])).action,
+		"cache",
+		"白名单命中 ⇒ 自动处理"
+	);
+	assert.equal(
+		decide("https://other.net/a.png", withMode("allowlist", ["example.com"])).action,
+		"ignore",
+		"★ 白名单没命中就不自动处理"
+	);
+	// ⚠️ 白名单为空 = 一个站点都不自动处理（诚实的结果，不是坏值）
+	assert.equal(
+		decide("https://other.net/a.png", withMode("allowlist", [])).action,
+		"ignore",
+		"★ 白名单为空 ⇒ 什么都不自动处理"
+	);
+	// 「所有站点」= 不过滤（名单被忽略）
+	assert.equal(
+		decide("https://other.net/a.png", withMode("off", ["other.net"])).action,
+		"cache",
+		"「所有站点」不做过滤（名单即使填了也不生效）"
+	);
+
+	// ⭐⭐ 名单**不管**显式工具：勾选 / 点确认本身就是显式动作。
+	// 少了这条，"关掉开关 + 用名单"会连手动挑选一起挡掉。
+	assert.equal(
+		decide(`https://${thirdParty}/a.png`, {
+			...withMode("blocklist", ["example.com"]),
+			purpose: "manual",
+		}).action,
+		"cache",
+		"★★ 显式工具不受名单约束：黑名单里的站点，手动勾选照样能缓存"
+	);
+	assert.equal(
+		decide("https://other.net/a.png", {
+			...withMode("allowlist", ["example.com"]),
+			purpose: "manual",
+		}).action,
+		"cache",
+		"★★ 显式工具不受名单约束：白名单外的站点，手动勾选照样能缓存"
+	);
+
+	// ============================================================
+	// 7. 未配置 → ignore（渲染路径上不能刷屏、也不该列进候选）
 	// ============================================================
 	assert.equal(
 		decide("https://third-party.example.net/x.png", { configured: false }).action,
 		"ignore",
 		"★ 未配置时不该动手（渲染路径上每张图都会走到这里）"
 	);
-	// ⭐ 即使设置里选了「直接缓存」也一样：没有客户端就拿不到图，
-	// 列进候选只会让用户勾完才发现做不成
+	// ⭐ 显式工具也一样：没有客户端就拿不到文件，列进候选只会让用户勾完才发现做不成
 	assert.equal(
-		decide("https://third-party.example.net/x.png", {
-			configured: false,
-			settings: { externalImageDefault: "cache" },
-		}).action,
+		decide("https://third-party.example.net/x.png", { configured: false, purpose: "manual" }).action,
 		"ignore",
-		"★ 存储没配好时，即使选了「直接缓存」也不动手（没有客户端可发请求）"
+		"★ 存储没配好时，显式工具也不该列候选（勾了也做不成）"
 	);
-	assert.equal(isCacheableExternal(decide("https://third-party.example.net/x.png", { configured: false })), false, "未就绪的不进候选");
 
 	// ============================================================
-	// 7. ⭐ 只认主机，不认文件名（清单与披露都按主机）
+	// 8. ⭐ 只认主机，不认文件名（清单与披露都按主机）
 	// ============================================================
 	const lookalike = decide("https://img.example.com.evil.com/k1.png");
-	assert.equal(lookalike.action, "wait", "★ 只认主机不认文件名（`img.example.com.evil.com` 是另一个站点）");
+	assert.equal(lookalike.action, "cache", "★ 只认主机不认文件名（`img.example.com.evil.com` 是另一个站点）");
 	assert.equal(lookalike.host, "img.example.com.evil.com", "主机要如实取出");
 
 	// ============================================================
-	// 8. blockedHost 可被覆写（接缝）
+	// 9. blockedHost 可被覆写（接缝）
 	// ============================================================
 	assert.equal(
 		decide("https://third-party.example.net/x.png", { blockedHost: () => true }).action,
@@ -228,7 +283,44 @@ export function runExternalDecideSuite(mod) {
 	);
 
 	// ============================================================
-	// 9. 三个辅助函数本身
+	// 10. ⭐ 名单纯函数本身（用户会怎么写、我们怎么读）
+	// ============================================================
+	// 归一化：整条 URL、通配前缀、大小写、末尾的点、路径与查询串
+	assert.equal(normalizeSiteEntry("Example.COM"), "example.com", "归一大小写");
+	assert.equal(normalizeSiteEntry("example.com."), "example.com", "去掉末尾的点（FQDN 的合法写法）");
+	assert.equal(normalizeSiteEntry("  example.com  "), "example.com", "去掉首尾空白");
+	assert.equal(normalizeSiteEntry("*.example.com"), "example.com", "去掉通配前缀（后缀匹配本来就覆盖）");
+	assert.equal(normalizeSiteEntry(".example.com"), "example.com", "去掉前导点");
+	assert.equal(normalizeSiteEntry("https://cdn.example.com/foo.png?x=1"), "cdn.example.com", "整条链接只取主机");
+	assert.equal(normalizeSiteEntry("example.com:8080"), "example.com:8080", "★ 保留端口");
+	assert.equal(normalizeSiteEntry("example.com/foo"), "example.com", "去掉路径");
+	assert.equal(normalizeSiteEntry(""), "", "空条目归一成空串");
+	assert.equal(normalizeSiteEntry(42), "", "非字符串归一成空串");
+
+	// 解析：去重、分桶（带端口的精确匹配，其余后缀匹配）
+	const parsed = parseSiteList(["Example.com", "example.com", "cdn.example.com:8080", "", "*.foo.net"]);
+	assert.deepEqual(parsed.suffixes, ["example.com", "foo.net"], "去重 + 去空 + 归一后按后缀归桶");
+	assert.deepEqual(parsed.exact, ["cdn.example.com:8080"], "★ 带端口的进精确桶");
+
+	// 匹配：后缀命中、端口精确
+	const list = parseSiteList(["example.com", "cdn.foo.net:8080"]);
+	assert.equal(matchesSiteList(list, "example.com"), true, "同名命中");
+	assert.equal(matchesSiteList(list, "img.example.com"), true, "★ 子域命中（这就是「写站点名」的意图）");
+	assert.equal(matchesSiteList(list, "example.com:9000"), true, "★ 后缀条目不区分端口（同一个站点）");
+	assert.equal(matchesSiteList(list, "notexample.com"), false, "★ 不做「包含」匹配（notexample.com 不是 example.com 的子域）");
+	assert.equal(matchesSiteList(list, "cdn.foo.net:8080"), true, "带端口的条目要精确命中");
+	assert.equal(matchesSiteList(list, "cdn.foo.net:9090"), false, "★ 端口不同即不同（条目写死了端口）");
+
+	// siteListAllows：三档语义
+	assert.equal(siteListAllows("off", ["example.com"], "img.example.com"), true, "off = 不过滤");
+	assert.equal(siteListAllows("blocklist", ["example.com"], "img.example.com"), false, "黑名单命中 ⇒ 不允许");
+	assert.equal(siteListAllows("blocklist", ["example.com"], "other.net"), true, "黑名单没命中 ⇒ 允许");
+	assert.equal(siteListAllows("allowlist", ["example.com"], "other.net"), false, "白名单没命中 ⇒ 不允许");
+	assert.equal(siteListAllows("allowlist", [], "other.net"), false, "★ 白名单为空 ⇒ 一个都不允许");
+	assert.equal(siteListAllows("allowlist", ["example.com"], "example.com"), true, "白名单命中 ⇒ 允许");
+
+	// ============================================================
+	// 11. 三个辅助函数本身
 	// ============================================================
 	assert.deepEqual(
 		[...ownHosts(address)].sort(),

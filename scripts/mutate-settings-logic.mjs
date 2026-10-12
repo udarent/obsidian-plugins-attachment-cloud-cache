@@ -26,10 +26,10 @@ await runMutations({
 		{
 			// 后果：下拉里多出一个**从不生效**的值（假选项），用户选了它以为行为变了，
 			// 实际什么都没发生 —— 界面上能选的必须与类型清单完全一致。
-			name: "★ 站外默认档的选项里混进一个未实现的值（界面上出现假选项）",
-			from: "\tfor (const value of EXTERNAL_IMAGE_DEFAULTS) options[value] = labelOf(value);",
-			to: '\tfor (const value of [...EXTERNAL_IMAGE_DEFAULTS, "always"]) options[value] = labelOf(value);',
-			expect: "选项集合必须与 EXTERNAL_IMAGE_DEFAULTS 完全一致",
+			name: "★ 站点名单那一档的选项里混进一个未实现的值（界面上出现假选项）",
+			from: "\tfor (const value of EXTERNAL_SITE_MODES) options[value] = labelOf(value);",
+			to: '\tfor (const value of [...EXTERNAL_SITE_MODES, "always"]) options[value] = labelOf(value);',
+			expect: "选项集合必须与 EXTERNAL_SITE_MODES 完全一致",
 		},
 		{
 			// 后果：401 被归到"其它"⇒ 用户看到一句含糊的"无法判断"，

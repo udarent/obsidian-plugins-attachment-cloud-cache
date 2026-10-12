@@ -51,7 +51,8 @@ const SETTINGS = {
 	localCopy: "cache",
 	fallbackDownload: true,
 	externalImageCache: false,
-	externalImageDefault: "ask",
+	externalSiteMode: "off",
+	externalSiteList: [],
 	cacheLimitMb: 0,
 	s3: {
 		endpoint: "https://s3.example.com",

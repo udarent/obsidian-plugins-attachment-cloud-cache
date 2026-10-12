@@ -26,7 +26,7 @@
 
 import { Component, MarkdownRenderer, Notice, Plugin, TFile, getLanguage } from "obsidian";
 
-import { SETTINGS_DEFAULTS, hasLegacyObjectKeyTemplate, mergePluginSettings } from "./settings";
+import { SETTINGS_DEFAULTS, hasLegacyExternalImageDefault, hasLegacyObjectKeyTemplate, legacyAutoCacheEnabled, mergePluginSettings } from "./settings";
 import type { LocalCopyAction, PluginSettings } from "./types";
 import { detectLocale, translate } from "./i18n";
 import { SettingsTab } from "./ui/settings-tab";
@@ -194,6 +194,14 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 提示要等他看得懂、而不是在插件还在启动时闪一下。
 	 */
 	private legacyKeyTemplateUpgraded = false;
+
+	/**
+	 * 这次启动有没有把旧的两档「遇到站外文件链接时」折进那个开关（1.2.0）。
+	 *
+	 * 存折算**结果**（自动处理到底开没开）而不是一个布尔：提示文案要说清"你原来的
+	 * 选择被保留成了哪个状态"，否则开关显示为关的用户会以为插件擅自把他的功能关了。
+	 */
+	private legacyExternalModeMerged: { auto: boolean } | null = null;
 
 	/**
 	 * 上一拍「本地副本」是哪一档 —— 只为了认出**用户刚切到「不留副本」**那一刻。
@@ -603,6 +611,18 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			if (this.legacyKeyTemplateUpgraded) {
 				this.legacyKeyTemplateUpgraded = false;
 				new Notice(this.t("legacyKeyTemplateUpgraded"));
+			}
+
+			// ⭐ 同上（1.2.0）：告诉用户"那一档去哪了" —— 尤其是原来选「什么都不做」的人，
+			// 他会看到那个开关现在是**关**的；不说一声就像插件擅自关掉了他的功能。
+			if (this.legacyExternalModeMerged) {
+				const { auto } = this.legacyExternalModeMerged;
+				this.legacyExternalModeMerged = null;
+				new Notice(
+					this.t("legacyExternalDefaultMerged", {
+						state: this.t(auto ? "legacyExternalKeptOn" : "legacyExternalKeptOff"),
+					})
+				);
 			}
 		});
 
@@ -1477,12 +1497,12 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			referencedPaths,
 		});
 
-		// ⭐ 笔记里的**外链图**也算候选：这条命令补的是"把还没进你自己存储的图搬进去"，
-		// 而指向别处的图同样没进存储 —— 只是它们在别人的服务器上。
-		// 判定用的是**按需缓存那一条**（`decideExternalCache`），所以"功能关掉 /
-		// 自己的存储 / 回环地址 / 存储未就绪"全都自动一致，不另立一套标准。
-		// ⚠️ 候选收 `wait`（默认不动手那些）：**点这个确认框本身就是显式动作**，
-		// 否则用户把默认设成「什么都不做」之后这条命令会什么都不做。
+		// ⭐ 笔记里的**外链文件**也算候选：这条命令补的是"把还没进你自己存储的搬进去"，
+		// 而指向别处的同样没进存储 —— 只是它们在别人的服务器上。
+		// 判定用的是**同一个纯函数**（`decideExternalCache`），所以"自己的存储 /
+		// 回环地址 / 存储未就绪"全都自动一致，不另立一套标准。
+		// ⚠️ 它走 `purpose: "manual"`：**点这个确认框本身就是显式动作**，
+		// 于是功能开关与站点名单都不约束它（关掉开关也照样能跑这条命令）。
 		const external = selectExternalUploadCandidates(await this.readAllNoteTexts(), {
 			settings: this.settings,
 			configured: connectionReadiness(this.app.secretStorage, this.settings).ready,
@@ -1570,11 +1590,9 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * "我勾的那几张三张里成了几张"。两句都给：单张的细节 + 一句总账。
 	 */
 	async cachePickedExternalImages(): Promise<void> {
-		if (!this.settings.externalImageCache) {
-			// 功能关着时连候选都挑不出来（判定层第一步就会判掉），所以这里早退而不是弹一个空清单
-			new Notice(this.t("externalPickDisabled"));
-			return;
-		}
+		// ⚠️ 1.2.0 起这里**不再检查** `externalImageCache`：那个开关只管**自动**那一路，
+		// 而这里是用户**显式**挑出来的（勾选本身就是同意）。
+		// 唯一的真前提是"存储配好了" —— 没配好连候选都挑不出来，早退比弹个空清单清楚。
 		if (!this.buildClient()) {
 			new Notice(this.t("maintainNotConfigured"));
 			return;
@@ -2068,8 +2086,23 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		// ⚠️ 幂等：清掉之后再进来就查不到了 ⇒ 只会写这一次（`hasLegacy...` 问的就是
 		// "文件里还有没有那个键"）。写失败也不影响本次运行 —— 设置已经是对的，
 		// 只是文件要到下次保存才干净，所以这里**不提示失败**（那会变成每次启动都弹一条噪音）。
+		let needsRewrite = false;
 		if (hasLegacyObjectKeyTemplate(stored)) {
 			this.legacyKeyTemplateUpgraded = true;
+			needsRewrite = true;
+		}
+
+		// ⭐ 另一次一次性兼容升级（1.2.0）：旧的两档「遇到站外文件链接时」已并进
+		// 「站外文件按普通附件处理」这一个开关（折算规则见 `legacyAutoCacheEnabled`）。
+		// ⚠️ 这一次**会改设置值**（不只是清遗留键）：旧语义是两个控件，新语义是一个，
+		// 折算必须显式 —— 否则"开着功能但什么都不做"的用户会被静默改成自动搬。
+		if (hasLegacyExternalImageDefault(stored)) {
+			this.settings.externalImageCache = legacyAutoCacheEnabled(stored);
+			this.legacyExternalModeMerged = { auto: this.settings.externalImageCache };
+			needsRewrite = true;
+		}
+
+		if (needsRewrite) {
 			try {
 				await this.saveData(this.settings);
 			} catch (error) {

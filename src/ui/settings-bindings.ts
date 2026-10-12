@@ -25,8 +25,8 @@
  * 用户的修改会在重启后被**静默重置**（表现为"改了没用"）。
  */
 
-import { formatCacheLimitMb, parseCacheLimitMb } from "./settings-logic";
-import { isExternalImageDefault, isLocalCopyAction } from "../types";
+import { formatCacheLimitMb, formatSiteListText, parseCacheLimitMb, parseSiteListText } from "./settings-logic";
+import { isExternalSiteMode, isLocalCopyAction } from "../types";
 
 /** 把点号键切成路径段。`""` 与只含空段的键视为非法。 */
 export function splitKey(key: unknown): string[] | null {
@@ -79,6 +79,8 @@ export function writeByKey(root: unknown, key: unknown, value: unknown): boolean
 const PRESENT: Record<string, (stored: unknown) => unknown> = {
 	// 设置里是数字，文本框里是字符串
 	cacheLimitMb: (stored) => formatCacheLimitMb(stored),
+	// 设置里是数组，多行文本框里是"一行一条"
+	externalSiteList: (stored) => formatSiteListText(stored),
 };
 
 /**
@@ -93,6 +95,9 @@ const COERCE: Record<string, (raw: unknown) => unknown> = {
 	// 写进数字字段强：后者会在下次加载时被回落成默认值（同样是不限制），
 	// 可用户会以为"我填的东西丢了"，且查不出原因。
 	cacheLimitMb: (raw) => parseCacheLimitMb(raw) ?? 0,
+	// ⚠️ 空文本 ⇒ 空数组（清空名单是一个明确动作）。它在白名单模式下意味着
+	// "什么都不再自动处理" —— 那正是用户敲下这个动作的后果，如实存下来。
+	externalSiteList: (raw) => parseSiteListText(raw),
 };
 
 /** 设置值 → 控件显示值。 */
@@ -132,8 +137,8 @@ export function isWritableValue(key: unknown, value: unknown): boolean {
 		// 写坏了要等下次加载时被回落成默认值才发现，而那时的症状是"改了没用"。
 		case "localCopy":
 			return isLocalCopyAction(value);
-		case "externalImageDefault":
-			return isExternalImageDefault(value);
+		case "externalSiteMode":
+			return isExternalSiteMode(value);
 		default:
 			return true;
 	}

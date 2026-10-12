@@ -680,12 +680,17 @@ export function runMaintenanceSuite(mod) {
 	);
 	assert.deepEqual(externalFileUrlsIn(""), [], "空文本安全返回空");
 
-	// ── 2. 挑选：候选的判据是"能不能搬"，与默认行为无关 ──
+	// ── 2. 挑选：候选的判据是"能不能搬"，与功能开关和站点名单**都**无关 ──
 	{
-		// ⚠️ 刻意把默认设成「什么都不做」：命令与选择器是**显式动作**，
-		// 它们的候选必须照旧列出来 —— 否则用户把默认调成「什么都不做」之后，
-		// 这两个入口会列出一份空清单（等于功能不存在）。
-		const externalSettings = { ...settings, externalImageCache: true, externalImageDefault: "skip" };
+		// ⚠️ 刻意把开关**关掉**、并设一份"谁都拦得住"的白名单：命令与选择器是**显式动作**，
+		// 候选必须照旧列出来 —— 否则"只想手动挑几张"的用户打开命令只会看到空清单
+		//（那个入口等于不存在）。1.2.0 把开关与名单都归进**自动**那一路，这就是它的判据。
+		const externalSettings = {
+			...settings,
+			externalImageCache: false,
+			externalSiteMode: "allowlist",
+			externalSiteList: [],
+		};
 		const notes = [
 			{
 				path: "notes/one.md",
@@ -727,16 +732,15 @@ export function runMaintenanceSuite(mod) {
 			"站点顺序与笔记的读取顺序无关"
 		);
 
-		// ── 3. 「缓存站外图片」关着时，命令**不得**越过这个开关 ──
-		const off = selectExternalUploadCandidates(notes, {
+		// ── 3. ⭐ 反过来：把开关打开 —— 候选**一模一样**（它只约束自动那一路） ──
+		const open = selectExternalUploadCandidates(notes, {
 			...options,
-			settings: { ...externalSettings, externalImageCache: false },
+			settings: { ...externalSettings, externalImageCache: true },
 		});
-		assert.deepEqual(off.candidates, [], "★ 功能关着时命令不得去碰任何站外图（那是用户对外的隐私立场）");
-		assert.equal(
-			off.skipped.some((s) => s.reason.includes("功能")),
-			true,
-			"跳过的原因要如实来自判定层（这里是「功能已关闭」）"
+		assert.deepEqual(
+			open.candidates.map((c) => c.url),
+			picked.candidates.map((c) => c.url),
+			"★ 功能开关不该影响这条命令的候选（它只管自动那一路）"
 		);
 
 		// ── 4. 存储没就绪：不该出现在候选清单里 ──
@@ -762,15 +766,22 @@ export function runMaintenanceSuite(mod) {
 			"跳过的原因应当指出是本地/链路本地地址（诊断要能一眼看出是安全拦截）"
 		);
 
-		// ── 5b. ⭐ 默认设成「直接缓存」时，候选一模一样 ──
-		const cached = selectExternalUploadCandidates(notes, {
+		// ── 5b. ⭐ 把候选里**所有**站点都拉黑，候选还是一个不少 ──
+		//
+		// 这是"名单只约束自动那一路"最直接的一条判据。少了它，
+		// "名单被误用到候选上"会静默地让手动挑选整个消失。
+		const blacklisted = selectExternalUploadCandidates(notes, {
 			...options,
-			settings: { ...externalSettings, externalImageDefault: "cache" },
+			settings: {
+				...externalSettings,
+				externalSiteMode: "blocklist",
+				externalSiteList: ["offsite.test", "other.test", "third.test"],
+			},
 		});
 		assert.deepEqual(
-			cached.candidates.map((c) => c.url),
+			blacklisted.candidates.map((c) => c.url),
 			picked.candidates.map((c) => c.url),
-			"★ 候选清单与默认行为无关（那一档说的是「现在动不动手」，不是「能不能搬」）"
+			"★ 候选清单与站点名单无关（名单说的是「自动处理哪些站点」，不是「能不能手动挑」）"
 		);
 
 		// ── 6. 坏输入不该让整批失败 ──

@@ -173,7 +173,6 @@ export async function runExternalCacheSuite(mod) {
 	const {
 		MAX_EXTERNAL_BYTES,
 		shouldReportExternalFailure,
-		localCopyForExternal,
 		isAttachmentResponse,
 		headerOf,
 		mimeFromContentType,
@@ -233,9 +232,6 @@ export async function runExternalCacheSuite(mod) {
 			`isAttachmentResponse（${label}）`
 		);
 	}
-
-	assert.equal(localCopyForExternal("trash"), "keep", "★ trash 要改成 keep（那条链必须留本地副本，否则离线看不见且症状不可见）");
-	assert.equal(localCopyForExternal("keep"), "keep", "keep 有本地副本，不必改");
 
 	for (const status of ["fetch-timeout", "fetch-network", "fetch-failed", "refused", "unavailable", "cached"]) {
 		assert.equal(shouldReportExternalFailure(status), false, `★ ${status} 应静默（离线/没做，不是故障）`);
@@ -367,7 +363,7 @@ export async function runExternalCacheSuite(mod) {
 			autoUpload: true,
 			enabledExtensions: ["png"],
 			attachmentFolder: "",
-			localCopy: "cache",
+			localCopy: "keep",
 			fallbackDownload: true,
 			externalImageCache: true,
 			...options.settings,
@@ -502,7 +498,6 @@ export async function runExternalCacheSuite(mod) {
 	// ---------- 2.3 各种"什么都不该做"的情形：零请求 + 笔记不动 ----------
 	const noteText = `![x](${url})\n`;
 	for (const [label, options, notePath, want] of [
-		["功能关着", { settings: { externalImageCache: false } }, NOTE, "refused"],
 		["拿不到客户端（未配置）", { noClient: true }, NOTE, "unavailable"],
 		["没有笔记路径", {}, undefined, "no-note"],
 		["笔记不存在", {}, "notes/nope.md", "no-note"],
@@ -517,6 +512,27 @@ export async function runExternalCacheSuite(mod) {
 			assert.equal(liveHost.requests.length, before, `★ ${label} 时一个请求都不该发`);
 			assert.equal(h.server.countByMethod("PUT"), 0, `★ ${label} 时不该上传`);
 			assert.equal(await h.readNote(NOTE), noteText, `★ ${label} 时笔记必须一个字都不动`);
+		} finally {
+			await h.close();
+		}
+	}
+
+	// ---------- 2.3b ⭐ 执行器**不看**功能开关（1.2.0：显式工具不受它约束） ----------
+	{
+		// 那个开关只管**自动**那一路。显式工具（挑选 / 批量命令）拿到的同意来自
+		// "用户勾了它"，与开关无关 —— 所以关掉开关之后这条链**仍然**要能干活。
+		// ⚠️ 这正是"合并成一个开关"最容易踩坏的地方：顺手在执行器里再查一次开关，
+		// 就会把整条手动路径一起关掉，而且没有任何报错。
+		const h = await makeHarness({ settings: { externalImageCache: false } });
+		try {
+			await h.writeNote(NOTE, noteText);
+			const outcome = await h.cache(url, NOTE);
+
+			assert.equal(outcome.status, "cached", "★ 关掉功能开关**不该**挡住显式工具（勾选本身就是同意）");
+			assert.ok(
+				(await h.readNote(NOTE)).includes(outcome.remoteUrl),
+				"★ 关掉开关时手动缓存也要真的改写链接（否则用户勾了个寂寞）"
+			);
 		} finally {
 			await h.close();
 		}
@@ -666,16 +682,23 @@ export async function runExternalCacheSuite(mod) {
 		}
 	}
 
-	// ---------- 2.12 ⭐ localCopy=trash 也要留下本地副本 ----------
+	// ---------- 2.12 ⭐ localCopy=trash 时**同样不留**本地副本（1.2.0 / D-20） ----------
 	{
+		// ⚠️ 这里曾经断言的是**相反**的行为（"用户点的是「缓存」，所以即便 trash 也要留副本"）。
+		// 那个破例在 1.2.0 被取消，理由很简单：**上传之后那份文件已经是站内附件了**，
+		// 凭什么它要跟别的附件两样？选「不留副本」的人要的就是"库里不留副本" ——
+		// 而那一档的含义本来就是"关闭缓存"（离线可用在那一档里本来就不成立，见 `isCacheDisabled`）。
 		const h = await makeHarness({ settings: { localCopy: "trash" } });
 		try {
 			await h.writeNote(NOTE, noteText);
 			const outcome = await h.cache(url, NOTE);
 
-			assert.equal(outcome.status, "cached", "应成功");
-			assert.ok(outcome.localPath, "★ 用户点的是「缓存」—— 即便设了 trash 也要留下本地副本");
-			assert.equal(await h.exists(outcome.localPath), true, "★ 本地副本要真的在磁盘上（否则离线看不见，且症状完全不可见）");
+			assert.equal(outcome.status, "cached", "应成功（该上传的还是照上传）");
+			assert.equal(outcome.localPath, "", "★ trash 档下不留本地副本（不再对站外破例）");
+			assert.ok(
+				(await h.readNote(NOTE)).includes(outcome.remoteUrl),
+				"链接照样要改写成你的地址（否则这条链等于没做）"
+			);
 		} finally {
 			await h.close();
 		}

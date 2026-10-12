@@ -36,14 +36,14 @@ import { normalizePath } from "obsidian";
  *   而且遗留值该从文件里清掉 ⇒ 见 `hasLegacyObjectKeyTemplate` 与 `main.ts` 的载入流程。
  */
 
-import { EXTERNAL_IMAGE_DEFAULTS, LOCAL_COPY_ACTIONS, ORPHAN_ASK_MODES, isExternalImageDefault, isLocalCopyAction, isOrphanAskMode } from "./types";
-import type { ExternalImageDefault, LocalCopyAction, OrphanAskMode, PluginSettings, S3Config } from "./types";
+import { EXTERNAL_SITE_MODES, LOCAL_COPY_ACTIONS, ORPHAN_ASK_MODES, isExternalSiteMode, isLocalCopyAction, isOrphanAskMode } from "./types";
+import type { ExternalSiteMode, LocalCopyAction, OrphanAskMode, PluginSettings, S3Config } from "./types";
 import { CACHE_LIMIT_MB_MAX } from "./types";
 import { isPlainRecord } from "./records";
 
 // 枚举类型守卫定义在 types.ts（与枚举本身同处一地，避免两个模块各存一份）。
 // 这里转出去，让"读设置的模块"同时就是"拿守卫的模块"。
-export { isExternalImageDefault, isLocalCopyAction, isOrphanAskMode };
+export { isExternalSiteMode, isLocalCopyAction, isOrphanAskMode };
 
 // ─────────────────────────── 字段表 ───────────────────────────
 //
@@ -70,6 +70,28 @@ function boolValue(): FieldReader<boolean> {
  */
 function textValue(): FieldReader<string> {
 	return (raw, fallback) => (typeof raw === "string" ? raw : fallback);
+}
+
+/**
+ * 字符串数组：只接受**元素全是字符串**的数组，其余一律回退。
+ *
+ * ⚠️ 返回的永远是**新数组**。`fallback` 是出厂表里那一个（被 `SETTINGS_DEFAULTS` 展开后
+ * 仍与它共用引用），直接把它返回出去就等于"用户设置"和"出厂值"是同一个数组 ——
+ * 之后任何一次 `list.push(...)` 都会改到出厂值本身，于是**后续所有新实例**都带着
+ * 被改过的名单。与 `SETTINGS_DEFAULTS` 必须单独复制 `s3` 是同一条理由。
+ *
+ * ⚠️ 元素只做"去首尾空白 + 丢掉空条目"：**怎么解读**（后缀匹配、端口、去重）
+ * 是纯函数的事（`render/external-decide.ts`）。这里只保证"设置里存的是字符串数组"。
+ */
+function stringListValue(): FieldReader<string[]> {
+	return (raw, fallback) => {
+		if (!Array.isArray(raw)) return [...fallback];
+		// `Array.isArray` 只把类型收窄到 `any[]`，元素仍是 `any` —— 显式收成 `unknown[]`
+		// 再过类型判断，别让 `any` 顺着 `.trim()` 漏下去（lint 会拦，也确实该拦）。
+		const items = raw as unknown[];
+		if (!items.every((item) => typeof item === "string")) return [...fallback];
+		return (items as string[]).map((item) => item.trim()).filter((item) => item !== "");
+	};
 }
 
 /**
@@ -159,13 +181,14 @@ const FACTORY_SETTINGS = {
 	// ⚠️ 1.2.0 之前这里写的是 `"cache"`；老用户存着的值由 `localCopyValue` 折成同一个结果。
 	localCopy: "keep" as LocalCopyAction,
 	fallbackDownload: true,
-	// ⚠️ 默认**关**。打开它意味着插件会对外发 PUT 并**改写用户的笔记**，
-	// 而这种动作的同意应当显式；何况默认开会让已有 vault 里所有站外图站点
-	// 在首次渲染时集体弹常驻通知 —— 一次更新就满屏弹窗。
+	// ⚠️ 默认**关**。打开它意味着渲染时遇到站外文件就会对外发 GET + PUT
+	// 并**改写用户的笔记** —— 这类动作必须由用户**事前、显式**决定；
+	// 出厂就开着等于替他做了决定（他多半还不知道这个功能存在）。
 	externalImageCache: false,
-	// ⚠️ 出厂「什么都不做」。打开上面那个开关**不等于**同意去下载别人的图 ——
-	// 那件事靠用户把这个值改成 `cache`、或者在「选择要缓存的外链图片」里逐张勾选来显式表达。
-	externalImageDefault: "skip" as ExternalImageDefault,
+	// ⚠️ 出厂「不过滤」：名单是一项**收窄**，默认不该替用户排除掉任何站点。
+	externalSiteMode: "off" as ExternalSiteMode,
+	// ⚠️ 空名单。注意 `allowlist` + 空名单 = **一个站点都不自动处理**（见 `types.ts`）。
+	externalSiteList: [] as string[],
 	// ⚠️ 默认**不限制**（0）。上限默认关着有两层理由：
 	// ① 自动淘汰是"后台删文件"，用户没要求就不该发生；
 	// ② 它默认关着，"离线可用"这个主承诺就不会被悄悄打折。
@@ -191,7 +214,8 @@ const SETTINGS_SPEC: {
 	localCopy: localCopyValue(),
 	fallbackDownload: boolValue(),
 	externalImageCache: boolValue(),
-	externalImageDefault: oneOfValue(EXTERNAL_IMAGE_DEFAULTS),
+	externalSiteMode: oneOfValue(EXTERNAL_SITE_MODES),
+	externalSiteList: stringListValue(),
 	cacheLimitMb: numberValue({ min: 0, max: CACHE_LIMIT_MB_MAX }),
 	orphanAsk: oneOfValue(ORPHAN_ASK_MODES),
 };
@@ -256,6 +280,44 @@ export function hasLegacyObjectKeyTemplate(loaded: unknown): boolean {
 	const raw = isPlainRecord(loaded) ? loaded : {};
 	const rawS3 = s3BlockOf(raw);
 	return Object.prototype.hasOwnProperty.call(rawS3, "objectKeyTemplate");
+}
+
+/**
+ * 老 `data.json` 里还有没有**已被取消的**「遇到站外文件链接时」那一档（1.2.0）。
+ *
+ * 与 `hasLegacyObjectKeyTemplate` 同一个用途：**识别**（决定要不要跑一次迁移）、
+ * **清理**（把遗留值从文件里写掉）、**告知**（旧的两档并成了一个开关，得说一声）。
+ * ⚠️ 同样只看这一个键，不顺手清理更早版本砍掉的东西。
+ */
+export function hasLegacyExternalImageDefault(loaded: unknown): boolean {
+	const raw = isPlainRecord(loaded) ? loaded : {};
+	return Object.prototype.hasOwnProperty.call(raw, "externalImageDefault");
+}
+
+/**
+ * 把旧的两档折算成新的**一个开关**（1.2.0）。
+ *
+ * ⭐ 判据只有一条：**旧数据里有没有一次真正的"同意自动搬"**。
+ * 只有当 `externalImageCache === true` **且** `externalImageDefault === "cache"` 时才算——
+ * 也就是用户当年明确选了「直接缓存」。
+ *
+ * ## ⚠️ 为什么不能简单地"沿用 `externalImageCache` 那个布尔值"
+ *
+ * 那样会让一批 `externalImageCache: true` + `externalImageDefault: "skip"` 的用户
+ * **被动地**开始自动下载别人的图、并改写自己的笔记 —— 而他们当年那个组合的含义
+ * 恰恰是"开着功能，但什么都别自动做"（多半是为了用「挑选要缓存的文件」）。
+ *
+ * ⚠️ 判据不是"怕踩某条红线"，而是**不擅自改变用户已经表达过的配置**：
+ * 他选过"别自动做"，迁移就不能把它变成"自动做"。这与"站外图一律不许自动下载"
+ * 无关 —— 那句话在 1.2.0 之后**不再是规则**：要不要自动处理，现在由用户在设置里
+ * **事前显式**决定（默认关）。
+ *
+ * 这类用户升级后开关是**关**的，但「挑选要缓存的文件」已经**独立于开关**
+ *（见 `render/external-decide.ts` 的 `purpose`），所以他们照样能手动挑 —— 一件都没少。
+ */
+export function legacyAutoCacheEnabled(loaded: unknown): boolean {
+	const raw = isPlainRecord(loaded) ? loaded : {};
+	return raw.externalImageCache === true && raw.externalImageDefault === "cache";
 }
 
 /**

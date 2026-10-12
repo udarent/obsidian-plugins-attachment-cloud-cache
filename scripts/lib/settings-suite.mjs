@@ -159,7 +159,7 @@ export function runSettingsSuite(mod) {
 
 	// 取值受限的字段必须换成**另一个合法值**，否则会被校验回落成默认值，
 	// 从而误报成"不能往返"。
-	const ALTERNATIVES = { localCopy: "trash", externalImageDefault: "cache", orphanAsk: "never" };
+	const ALTERNATIVES = { localCopy: "trash", externalSiteMode: "allowlist", orphanAsk: "never" };
 	for (const key of Object.keys(ALTERNATIVES)) {
 		assert.ok(key in SETTINGS_DEFAULTS, `ALTERNATIVES 里的 ${key} 已不在 SETTINGS_DEFAULTS 中（死键）`);
 	}

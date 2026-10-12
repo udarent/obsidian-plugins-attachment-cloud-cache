@@ -413,16 +413,20 @@ async function main() {
 					};
 					undo.push(() => { plugin.externalHook.process = originalProcess; });
 
-					// ⭐ 把默认行为临时设成「什么都不做」：这条检查要证明的是
+					// ⭐ 打开功能、同时把该站点拉黑：这条检查要证明的是
 					// **候选真的送到了编排层**（编辑态那条路径通着），而不是真的去下载别人的图 ——
-					// 「直接缓存」会在真实 vault 上发起真请求并改写笔记，那是这个探针不该做的事。
-					const originalDefault = plugin.settings.externalImageDefault;
+					// 让自动处理真跑起来会在真实 vault 上发真请求并改写笔记，那是这个探针不该做的事。
+					// ⚠️ 1.2.0：挡住它的不再是「什么都不做」那一档（已并进开关），而是**站点名单**。
 					const originalEnabled = plugin.settings.externalImageCache;
+					const originalMode = plugin.settings.externalSiteMode;
+					const originalList = plugin.settings.externalSiteList;
 					plugin.settings.externalImageCache = true;
-					plugin.settings.externalImageDefault = "skip";
+					plugin.settings.externalSiteMode = "blocklist";
+					plugin.settings.externalSiteList = ["example.com"];
 					undo.push(() => {
-						plugin.settings.externalImageDefault = originalDefault;
 						plugin.settings.externalImageCache = originalEnabled;
+						plugin.settings.externalSiteMode = originalMode;
+						plugin.settings.externalSiteList = originalList;
 					});
 
 					const leaf = app.workspace.getLeaf("tab");
@@ -437,11 +441,12 @@ async function main() {
 					);
 
 					// ⭐ 第二条：改完设置必须让**当前打开着的**笔记重新被看一遍。
-					// 缺了它，用户把默认值改成「直接缓存」之后什么都看不到
+					// 缺了它，用户改了站外设置之后什么都看不到
 					//（已经渲染出来的图不会自己重跑判定），只会以为设置坏了。
-					// 这里改的是「什么都不做」，所以重看一遍也**不会**去下载任何东西。
+					// 这里动的是**名单**（把该站点继续留在黑名单里，只多写一条无害的条目），
+					// 所以重看一遍也**不会**去下载任何东西。
 					const deliveredBeforeChange = delivered.length;
-					plugin.settings.externalImageDefault = originalDefault;
+					plugin.settings.externalSiteList = ["example.com", "another.example"];
 					await plugin.saveSettings();
 					await new Promise((r) => setTimeout(r, 1500));
 					const deliveredAfterChange = delivered.length - deliveredBeforeChange;

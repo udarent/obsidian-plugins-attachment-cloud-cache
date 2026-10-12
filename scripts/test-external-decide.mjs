@@ -11,8 +11,8 @@ await withLoadedTs(["src/render/external-decide"], (mod) => {
 	runExternalDecideSuite(mod);
 	console.log(
 		"External-decide tests passed (every input lands in the right bucket: our own endpoint and public prefix are not " +
-			"'external', host matching normalises case and keeps the port, loopback is refused whatever the default says, " +
-			"LAN hosts still count as candidates, the default setting decides only 'now or later' and can never override " +
-			"the safety or ownership checks, and an unconfigured plugin neither acts nor lists anything)."
+			"'external', host matching normalises case and keeps the port, loopback is refused even when an allow list names it, " +
+			"LAN hosts still count as cacheable, the site list only constrains the automatic path while the explicit tools " +
+			"(picking / batch) always pass through, and an unconfigured plugin neither acts nor lists anything)."
 	);
 });

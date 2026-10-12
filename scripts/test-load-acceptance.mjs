@@ -24,9 +24,10 @@ console.log(
 		"refers to and any stray copy alone; " +
 		"an unconfigured paste is left to Obsidian; batch upload also picks up the images notes " +
 		"link to elsewhere, and its dialog names the sites it will visit (that confirmation is the authorisation) " +
-		"while cancelling downloads nothing; with the feature on and the default set to \"cache straight away\" such " +
-		"an image is downloaded, uploaded and its link rewritten, whereas the default \"leave it alone\" sends no " +
-		"request and leaves the note byte-for-byte identical; changing that setting makes the plugin look at the notes " +
+		"while cancelling downloads nothing; with the feature on such an image is downloaded, uploaded and its link " +
+		"rewritten, whereas a hostile site list sends no request and leaves the note byte-for-byte identical — and " +
+		"letting it through again proves the list filters rather than disables; changing a site setting makes the " +
+		"plugin look at the notes " +
 		"that are open right now; the \"pick which to cache\" command was driven end to end (its dialog standing in for " +
 		"\"see the list, select all, confirm\") — a fresh image lands a local copy *and* a row in the " +
 		"index file, an image whose bytes are already cached reuses that copy instead of adding anything, and a " +

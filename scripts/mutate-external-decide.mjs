@@ -2,13 +2,18 @@ import { runMutations } from "./lib/mutate.mjs";
 import { runExternalDecideSuite } from "./lib/external-decide-suite.mjs";
 
 /**
- * 变异验证：站外缓存判定（`src/render/external-decide.ts`）。
+ * 变异验证：站外文件判定（`src/render/external-decide.ts`）。
  *
- * 这一层的每条分支坏掉都不报错，只是行为变成另一个样子：
- * 功能关了却还在搬、对着自己的存储发问、把内网地址也拿去请求、
- * 或者**默认行为判反**（用户在设置里选了"什么都不做"，插件却在后台下载上传并改他的笔记）。
+ * 这一层的每条分支坏掉都不报错，只是行为变成另一个样子：功能关了却还在搬、
+ * 对着自己的存储发问、把内网地址也拿去请求、或者**名单形同虚设**
+ *（用户在设置里把某个站点拉黑，插件照旧自动去搬它的文件并改写笔记）。
  *
- * ⚠️ 站点记忆那一套（`allow` / `deny`）已经整条拆掉，所以那两个锚点也随之删除 ——
+ * ⚠️ 1.2.0 把旧的三态（`ignore` / `wait` / `cache`）收敛成了两态，判定多了
+ * `purpose` 这一维，所以这里锚定的东西也换了：
+ * - 从前守的是"默认行为别判反"，现在守的是"**别把开关 / 名单也套到显式工具上**" ——
+ *   那会让「挑选要缓存的文件」随开关一起消失（入口消失比行为错更难发现）。
+ *
+ * ⚠️ 站点记忆那一套（`allow` / `deny`）已经整条拆掉，所以相关的锚点也随之删除 ——
  * 留着它们只会得到"变异点未找到"。
  */
 await runMutations({
@@ -17,11 +22,35 @@ await runMutations({
 	suite: runExternalDecideSuite,
 	mutations: [
 		{
-			// 后果：用户**关掉了功能却仍在被处理** —— 关不掉的开关比没有开关更糟。
-			name: "★ 不看总开关（关掉功能仍会被处理）",
-			from: '\tif (!input.settings.externalImageCache) return { action: "ignore", reason: "功能已关闭" };\n',
-			to: "\t// 变异：不看开关\n",
+			// 后果：用户**关掉了功能却仍在被自动处理** —— 关不掉的开关比没有开关更糟。
+			name: "★ 不看总开关（关掉功能仍会被自动处理）",
+			from: '\tif (input.purpose === "auto" && !input.settings.externalImageCache) {\n',
+			to: '\tif (input.purpose === "auto" && false) {\n',
 			expect: "功能关着",
+		},
+		{
+			// 后果：**把总开关也套到显式工具上** ⇒ 关掉自动处理的人连
+			// 「挑选要缓存的文件」都列不出候选。入口悄无声息地消失，用户只会以为"功能没了"。
+			name: "★ 把总开关套到显式工具上（关掉开关后挑不出候选）",
+			from: '\tif (input.purpose === "auto" && !input.settings.externalImageCache) {\n',
+			to: '\tif (!input.settings.externalImageCache) {\n',
+			expect: "显式工具不受开关约束",
+		},
+		{
+			// 后果：**名单也套到了显式工具上** ⇒ 用户手动勾中的文件搬不动，
+			// 而界面上没有任何提示（勾选本身就是同意，不该被一份"自动搬的准入"否掉）。
+			name: "★ 把名单也套到显式工具上（手动勾选的被名单挡住）",
+			from: '\t\tinput.purpose === "auto" &&\n\t\t!siteListAllows(input.settings.externalSiteMode, input.settings.externalSiteList, host)\n',
+			to: '\t\t!siteListAllows(input.settings.externalSiteMode, input.settings.externalSiteList, host)\n',
+			expect: "显式工具不受名单约束",
+		},
+		{
+			// 后果：**名单形同虚设** —— 用户把站点拉黑（或只留白名单），插件照旧自动去搬。
+			// 这是"设置改了、没有任何效果"的典型：用户查不出为什么名单不起作用。
+			name: "★ 名单形同虚设（自动处理无视黑/白名单）",
+			from: "\t\t!siteListAllows(input.settings.externalSiteMode, input.settings.externalSiteList, host)\n",
+			to: "\t\tfalse\n",
+			expect: "黑名单",
 		},
 		{
 			// 后果：对着**用户自己的存储端点**列出候选（换过桶、或改过 publicUrlBase 的旧链接
@@ -40,29 +69,12 @@ await runMutations({
 			expect: "回环",
 		},
 		{
-			// 后果：没配好存储时也把图算成"可搬" ⇒ 渲染路径上每张图都会试一次，
+			// 后果：没配好存储时也把文件算成"可搬" ⇒ 渲染路径上每张图都会试一次，
 			// 候选清单里也会出现勾了也做不成的条目。
 			name: "★ 不再检查是否已配好（未配置时也当可搬）",
 			from: '\tif (!input.configured) return { action: "ignore", reason: "存储未就绪" };\n',
 			to: "\t// 变异：不看配置状态\n",
 			expect: "未配置时不该动手",
-		},
-		{
-			// 后果：**默认行为判反** —— 用户在设置里选的是「什么都不做」，
-			// 插件却在后台把图下载、上传、并改写他的笔记。偏好被无视，而且静默。
-			// 这是这一层最严重的一种坏法。
-			name: "★ 默认行为判反（选了「什么都不做」却去下载上传并改写笔记）",
-			from: '\treturn input.settings.externalImageDefault === "cache"',
-			to: '\treturn input.settings.externalImageDefault !== "cache"',
-			expect: "局域网地址照常算可搬的候选",
-		},
-		{
-			// 后果：`wait`（默认不动手）被当成"不许碰" ⇒ 命令与「选择要缓存的外链图片」
-			// 列不出任何候选 —— 用户把默认设成「什么都不做」之后，那两个显式入口等于不存在。
-			name: "★ 把「默认不动手」当成「不许碰」（两个显式入口列不出候选）",
-			from: '\treturn decision.action !== "ignore";',
-			to: '\treturn decision.action === "cache";',
-			expect: "局域网地址要能进候选清单",
 		},
 	],
 });

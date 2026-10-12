@@ -55,9 +55,9 @@ await runMutations({
 			from: "return (raw, fallback) => (allowed.includes(raw as T) ? (raw as T) : fallback);",
 			to: "return (raw, fallback) => raw as T;",
 			// ⚠️ 实测先红的是"逐字段筛坏值"那一轮里的**类型一致性**断言（`null` 输入下
-			// `externalImageDefault` 必须与默认值同类型）。1.2.0（D-17）之后 `localCopy`
-			// 有自己的读取器，不再是 `oneOfValue` 的用户 ⇒ 那条更具体的"非法枚举应回落默认"
-			// 不再由这个变异照亮，先说话的换成了它。
+			// `localCopy` / `externalSiteMode` 必须与默认值同类型）。1.2.0（D-17）之后
+			// `localCopy` 有自己的读取器，不再是 `oneOfValue` 的用户 ⇒ 那条更具体的
+			// "非法枚举应回落默认"不再由这个变异照亮，先说话的换成了它。
 			expect: "类型应与默认值一致",
 		},
 		// ⚠️ 1.2.0（D-17）：这里原本有**三条**锚点，全部指向 `pathValue` ——

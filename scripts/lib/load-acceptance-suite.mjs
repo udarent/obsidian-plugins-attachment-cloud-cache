@@ -987,9 +987,8 @@ ${text}`);
 			await writeFile(join(root, notePath), originalNote, "utf8");
 			await harness.refreshPathCache();
 
-			// 打开功能（默认关），并选「直接缓存」
+			// 打开功能（默认关）= 用户同意自动处理
 			plugin.settings.externalImageCache = true;
-			plugin.settings.externalImageDefault = "cache";
 			externalHostRequests.length = 0;
 			const putsBefore = server.countByMethod("PUT");
 
@@ -1030,37 +1029,56 @@ ${text}`);
 		}
 
 		// ============================================================
-		// 8b1. ⭐⭐ 默认「什么都不做」时：一个请求都不发，笔记一个字都不动
+		// 8b1. ⭐⭐ 站点名单把该站点挡在外面时：一个请求都不发，笔记一个字都不动
 		//
-		// 这是这条链路的**红线**。设置里明明写着"什么都不做"，插件却在后台把图
-		// 下载上传、还改写了用户的笔记 —— 这是最严重的一种坏法：偏好被无视，而且静默。
+		// 1.2.0 之前这里量的是「开着功能但选『什么都不做』」。那个状态已经并进开关了，
+		// 于是这一段改量**新**的那道闸门：开关是开的（用户同意自动处理），
+		// 但名单把该站点排除在外。名单形同虚设 = "设置改了、没有任何效果"，而且静默。
+		// ⚠️ 这里量的是**自动**那一路；显式勾选不受名单约束（见 8b4 段）。
 		// ============================================================
 		{
 			const externalUrl = EXTERNAL_IMAGE_URL;
-			const notePath = "notes/站外不动.md";
+			const externalHost = new URL(externalUrl).host;
+			const notePath = "notes/站外不在范围内.md";
 			const originalNote = `# 别动我\n\n![x](${externalUrl})\n`;
 
 			await writeFile(join(root, notePath), originalNote, "utf8");
 			await harness.refreshPathCache();
 
 			plugin.settings.externalImageCache = true;
-			plugin.settings.externalImageDefault = "skip";
+			plugin.settings.externalSiteMode = "blocklist";
+			plugin.settings.externalSiteList = [externalHost];
 			externalHostRequests.length = 0;
 			const putsBefore = server.countByMethod("PUT");
 
 			for (const processor of plugin.postProcessors) {
 				processor(makeFakeContainer([makeFakeImage(externalUrl)]), { sourcePath: notePath });
 			}
-			// 给 fire-and-forget 一点时间：若实现判反了，这里就会看到请求
+			// 给 fire-and-forget 一点时间：名单若没被读到，这里就会看到请求
 			await new Promise((resolve) => setTimeout(resolve, 500));
 
-			assert.equal(externalHostRequests.length, 0, "★ 默认「什么都不做」时，一个字节都不该下载");
+			assert.equal(externalHostRequests.length, 0, "★ 被名单挡住的站点，一个字节都不该下载");
 			assert.equal(server.countByMethod("PUT"), putsBefore, "★ 也不该上传任何东西");
 			assert.equal(
 				await readFile(join(root, notePath), "utf8"),
 				originalNote,
 				"★ 笔记必须逐字符不变（改写别人的笔记是不可逆的）"
 			);
+
+			// ⭐ 反向：把名单换成别的站点 ⇒ 立刻照常搬。
+			// 少了这一条，"名单"有可能只是**把功能整个关掉**了 —— 那种实现同样能让
+			// 上面三条全绿，而用户会发现"名单里填什么都一样"。
+			plugin.settings.externalSiteList = ["someone-else.example"];
+			externalHostRequests.length = 0;
+			for (const processor of plugin.postProcessors) {
+				processor(makeFakeContainer([makeFakeImage(externalUrl)]), { sourcePath: notePath });
+			}
+			await waitFor(
+				() => externalHostRequests.length > 0,
+				"★ 不在名单里的站点必须照常处理（否则名单等于把功能关掉了）"
+			);
+			// 让这条链跑完（它还要上传 + 改写笔记）再收尾，免得收尾时它正写到一半
+			await new Promise((resolve) => setTimeout(resolve, 500));
 
 			// 收拾干净：这一段造的那篇笔记里**刻意留着**那条站外链接（那正是它的意义），
 			// 而它会被后面"命令扫全库"那段算成候选 —— 不删掉就会让那一段的请求计数变成 2。
@@ -1070,6 +1088,8 @@ ${text}`);
 			await harness.refreshPathCache();
 
 			plugin.settings.externalImageCache = false;
+			plugin.settings.externalSiteMode = "off";
+			plugin.settings.externalSiteList = [];
 		}
 
 		// ============================================================
@@ -1083,16 +1103,15 @@ ${text}`);
 		// 而**真正的授权发生在命令的确认框里** —— 所以确认框必须把站点列出来。
 		// 下面三段分别钉住：确认即授权（且记住）、取消 = 什么都没发生、不再询问 = 一个请求都不发。
 		//
-		// ⚠️ 这一段与 8b 的区别：8b 走的是"渲染路径按默认行为自动搬"，
-		// 这里走的是**命令**（显式动作）—— 它必须能处理 `wait`（默认不动手）那些图，
-		// 否则用户把默认设成「什么都不做」之后，这条命令会什么都不做。
+		// ⚠️ 这一段与 8b 的区别：8b 走的是"渲染路径自动搬"，这里走的是**命令**（显式动作）——
+		// 它必须能找到那些图，**哪怕开关是关的**（1.2.0 起命令不要求先打开开关），
+		// 否则"只想手动挑几张"的用户会连这条命令都用不了。
 		// ============================================================
 		{
 			const externalUrl = EXTERNAL_IMAGE_URL;
 			const externalNote = "notes/外链待迁移.md";
-			plugin.settings.externalImageCache = true;
-			// ⭐ 故意设成「什么都不做」：命令是显式动作，不受这一档影响
-			plugin.settings.externalImageDefault = "skip";
+			// ⭐ 故意**关掉开关**：命令是显式动作，不受它约束
+			plugin.settings.externalImageCache = false;
 			await writeFile(join(root, externalNote), `# 外链\n\n![x](${externalUrl})\n`, "utf8");
 			await harness.refreshPathCache();
 
@@ -1154,21 +1173,21 @@ ${text}`);
 			);
 
 			plugin.settings.externalImageCache = false;
-			plugin.settings.externalImageDefault = "skip";
 		}
 
 		// ============================================================
-		// 8b3. ⭐⭐ 改了「遇到外链图片时」之后，**当前打开着的**笔记要立刻重新判定
+		// 8b3. ⭐⭐ 改了站外相关设置之后，**当前打开着的**笔记要立刻重新判定
 		//
-		// 站外图那条判定是**渲染时**做的，而改设置不会让已经渲染出来的图重跑 ——
-		// 少了这一步，用户把默认值改成「直接缓存」之后**什么都看不到**，
+		// 站外那条判定是**渲染时**做的，而改设置不会让已经渲染出来的图重跑 ——
+		// 少了这一步，用户打开功能（或改了名单）之后**什么都看不到**，
 		// 要等下次重开笔记才生效。这正是本项目一直在防的那类"改了设置没反应"。
 		//
-		// 这条断言不真的去下载（默认值设成「什么都不做」），只验"确实重看了一遍"。
+		// 这条断言不真的去下载：把**名单**设成拦住这个站点 ⇒ 重看了，却什么都不搬。
 		// ============================================================
 		{
 			plugin.settings.externalImageCache = true;
-			plugin.settings.externalImageDefault = "skip";
+			plugin.settings.externalSiteMode = "blocklist";
+			plugin.settings.externalSiteList = [new URL(EXTERNAL_IMAGE_URL).host];
 			const externalUrl = EXTERNAL_IMAGE_URL;
 			// 造一个"打开着的笔记视图"：容器里挂着一张站外图。
 			// ⚠️ `contains` 不能少 —— 归属解析判的是"这个元素在不在这个视图的容器里"
@@ -1208,6 +1227,8 @@ ${text}`);
 			} finally {
 				app.workspace.leaves.pop();
 				plugin.settings.externalImageCache = false;
+				plugin.settings.externalSiteMode = "off";
+				plugin.settings.externalSiteList = [];
 			}
 		}
 
@@ -1278,8 +1299,8 @@ ${text}`);
 				plugin.pickExternalImages = async (load) => load("note");
 			};
 
-			plugin.settings.externalImageCache = true;
-			plugin.settings.externalImageDefault = "skip"; // 只让弹窗那条路动手
+			// ⭐ 开关**关着**：只让弹窗（显式勾选）那条路动手 —— 1.2.0 起它不受开关约束
+			plugin.settings.externalImageCache = false;
 
 			// ── 甲：一张**全新**的外站图，缓存目录与索引都该长出东西来 ──
 			const externalUrl = PICKER_FRESH_URL;

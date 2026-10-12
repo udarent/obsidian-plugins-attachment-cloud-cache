@@ -1,14 +1,17 @@
 /**
  * 把**站外**图片搬进用户自己的对象存储（下载 → 上传 → 落本地副本 → 改写链接）。
  *
- * ## ⚠️ 这是全库唯一会下载"别人的图"的地方
+ * ## ⚠️ 这是全库唯一会下载"别人的文件"的地方
  *
- * `core/download.ts` 里那条红线是「**未经用户同意，绝不把站外字节写进 vault**」。
- * 本模块**不碰那条守卫**，而是给"同意"提供一个**独立入口**：
- * 调用它的前提是用户在询问里选了「缓存」，而入口内部还会**再复核一次**
- * （开关仍开、主机未被拦、不是本存储的 URL、客户端可用）。
- * 于是红线从"永不"精确化为"未获同意前永不"，而"写站外字节进 vault"的路径
+ * `core/download.ts` 里那条守卫是「**未经用户同意，绝不把站外字节写进 vault**」。
+ * 本模块**不碰那条守卫**，而是给"同意"提供一个**独立入口**：调用它的前提是
+ * 用户**事前**在设置里打开了「把站外文件当普通附件处理」，或者在「挑选要缓存的文件」
+ * 里显式勾中；而入口内部还会**再复核一次**（主机未被拦、不是本存储的 URL、客户端可用）。
+ * 于是那条守卫从"永不"精确化为"未获同意前永不"，而"写站外字节进 vault"的路径
  * 在全库仍然只有这一条 —— 可审计、可测试。
+ *
+ * ⚠️ 1.2.0 起这里**不再复核功能开关**：那个开关只管**自动**那一路，
+ * 而本执行器同时服务显式工具（挑选 / 批量）—— 那条路上开关关着也照样要搬。
  *
  * ## 一条纪律：**先拿到原文，再下载**
  *
@@ -36,7 +39,7 @@
 import type { App, RequestUrlParam, RequestUrlResponse } from "obsidian";
 import { TFile, requestUrl } from "obsidian";
 
-import type { PluginSettings, LocalCopyAction } from "../types";
+import type { PluginSettings } from "../types";
 import type { S3Client } from "../s3/client";
 import type { CacheIndex } from "../cache/index";
 import { ingestAttachment } from "./ingest";
@@ -144,23 +147,6 @@ export function shouldReportExternalFailure(status: ExternalCacheStatus): boolea
 		default:
 			return true;
 	}
-}
-
-/**
- * 这条路线上本地副本怎么处置（**纯函数**）。
- *
- * ⚠️ `trash`（不留本地副本）在这里被改成 `keep`。理由：那个选项的语义是
- * "上传后把本地文件移入回收站"，用户选它时想的是"vault 保持干净"；
- * 但用户在**这一次**里明确点的是「缓存这张图」 —— 而"没有本地副本"
- * 会让这条路径的全部意义（离线可见）消失，且**症状完全不可见**
- * （图在该显示的地方显示不出来，只在断网时才发现）。
- *
- * ⚠️ 1.2.0（D-17）之前这里改写成 `"cache"`（搬进缓存目录）。那个取值随缓存目录一起没了，
- * 正确的落点于是变成 `keep` —— **语义一字未变**（同样是"留下本地副本"），
- * 变的只是"留下"现在意味着"就在原地"。
- */
-export function localCopyForExternal(action: LocalCopyAction): LocalCopyAction {
-	return action === "trash" ? "keep" : action;
 }
 
 /**
@@ -433,8 +419,10 @@ export function createExternalCacher(deps: ExternalCacherDeps): ExternalCacher {
 			notifyUser(deps, key, params);
 		};
 
-		// ── 1. 复核同意（防线不止一道；用户可能在询问与执行之间关掉了功能） ──
-		if (!settings.externalImageCache) return { ...base, status: "refused" };
+		// ── 1. 复核（防线不止一道：判定之后、执行之前状态可能已经变了） ──
+		// ⚠️ 这里**刻意不查 `externalImageCache`**：那个开关只管**自动**那一路，
+		// 而本执行器同时服务显式工具（挑选 / 批量）—— 在那条路上开关关着也照样要搬
+		//（勾选本身就是同意）。开关只在渲染路径的 `purpose: "auto"` 里判。
 		if (!host) return { ...base, status: "refused" };
 		if ((deps.blockedHost ?? isBlockedHost)(host)) return { ...base, status: "refused" };
 		// 本存储的 URL 不该走这条路（那是回退下载的活；走到这里说明调用方搞错了）
@@ -480,16 +468,13 @@ export function createExternalCacher(deps: ExternalCacherDeps): ExternalCacher {
 		}
 
 		// ── 4. 上传 + 落本地副本 + 登记索引（复用现成零件，一次调用完成） ──
-		// ⚠️ `localCopy` 在这里被改写一次：见 `localCopyForExternal` 的说明。
-		const ingestSettings: PluginSettings = {
-			...settings,
-			localCopy: localCopyForExternal(settings.localCopy),
-		};
-
+		// ⭐ 1.2.0：本地副本**照常**由 `localCopy` 那一档决定，不再对站外破例。
+		//（曾经破例：站外缓存一律留副本，理由是"离线可见"。可上传之后那份文件
+		// 已经**是站内的附件**了，没有道理跟别的附件两样 —— 见 D-20。）
 		const ingested = await ingestAttachment(
 			{
 				app: deps.app,
-				settings: ingestSettings,
+				settings,
 				client,
 				index: deps.index(),
 				persistIndex: deps.persistIndex,

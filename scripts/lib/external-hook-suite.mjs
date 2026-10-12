@@ -5,9 +5,8 @@
  *
  * - **`inflight` 失败没摘除** → 那个 URL 被永久卡住，用户重试也没反应；
  * - **没有笔记路径却不早退** → 缓存了但链接改不了（图进了存储、笔记还指着别人的服务器）；
- * - **默认行为判反** → 设置里写着「什么都不做」，却在后台偷偷下载上传并改写笔记
- *   （这是最严重的一条：用户的偏好被无视，而且是**静默**的）；
- * - **默认行为没生效** → 设置里写着「直接缓存」，却什么都不做。
+ * - **开关或站点名单不生效** → 设置里关掉了功能、或把某个站点拉黑，渲染路径照旧在后台
+ *   下载上传并改写笔记（用户的偏好被无视，而且是**静默**的 —— 最严重的一条）。
  *
  * 所以这里逐条钉住。**执行层是注入的接缝**，于是每条都能单独驱动。
  *
@@ -36,10 +35,11 @@ export async function runExternalHookSuite(mod) {
 		autoUpload: true,
 		enabledExtensions: ["png"],
 		attachmentFolder: "",
-		localCopy: "cache",
+		localCopy: "keep",
 		fallbackDownload: true,
 		externalImageCache: true,
-		externalImageDefault: "cache",
+		externalSiteMode: "off",
+		externalSiteList: [],
 		s3: address,
 		...overrides,
 	});
@@ -161,25 +161,42 @@ export async function runExternalHookSuite(mod) {
 	}
 
 	// ============================================================
-	// 5. ⭐⭐ 默认行为：设置说「什么都不做」就真的什么都不做
+	// 5. ⭐⭐ 站点名单：渲染路径是**自动**那一路，所以要受名单约束
 	//
-	// 这是这条链路最容易犯的错：**用户偏好被无视，而且是静默的** ——
-	// 他在设置里选了「什么都不做」，插件却在后台把图下载上传、还改了他的笔记。
+	// 这是这条链路最容易犯的错：**用户在设置里把某个站点拉黑，渲染路径照旧去搬它的文件** ——
+	// 设置改了、没有任何效果，而且是静默的。
+	// ⚠️ 名单**只**在自动这一路生效；显式工具（挑选 / 批量）不受它约束
+	//（那是判定层 `purpose` 的职责，由 `external-decide-suite` 钉住）——
+	// 所以这里量的是"渲染路径确实问了名单"，而不是"名单到处都是"。
 	// ============================================================
 	{
-		const h = makeHarness({ settings: settingsWith({ externalImageDefault: "skip" }) });
+		const h = makeHarness({
+			settings: settingsWith({ externalSiteMode: "blocklist", externalSiteList: ["example.net"] }),
+		});
 		const r = h.hook.process(container([A, B]), ctx(NOTE));
-		assert.equal(r.queued, 0, "★ 默认「什么都不做」时，渲染路径**一张都不许搬**");
+		assert.equal(r.queued, 0, "★ 黑名单命中的站点：渲染路径一张都不许搬");
 		assert.equal(h.queued.length, 0, "★ 不该调到执行层（那是一次真的下载 + 一次真的文件写入）");
-		assert.equal(r.skipped, 2, "两张都记为跳过");
 	}
-
-	// 反向：默认「直接缓存」时照常搬（否则那个设置是摆设）
 	{
-		const h = makeHarness({ settings: settingsWith({ externalImageDefault: "cache" }) });
+		const h = makeHarness({
+			settings: settingsWith({ externalSiteMode: "blocklist", externalSiteList: ["example.com"] }),
+		});
 		const r = h.hook.process(container([A]), ctx(NOTE));
-		assert.equal(r.queued, 1, "★ 默认「直接缓存」时要真的入队（否则用户会以为功能坏了）");
-		assert.equal(h.queued.length, 1);
+		assert.equal(r.queued, 1, "★ 名单没命中的站点照常搬（否则黑名单等于把功能整个关掉）");
+	}
+	{
+		const h = makeHarness({
+			settings: settingsWith({ externalSiteMode: "allowlist", externalSiteList: ["example.net"] }),
+		});
+		const r = h.hook.process(container([A]), ctx(NOTE));
+		assert.equal(r.queued, 1, "白名单命中的站点照常搬");
+	}
+	{
+		const h = makeHarness({
+			settings: settingsWith({ externalSiteMode: "allowlist", externalSiteList: [] }),
+		});
+		const r = h.hook.process(container([A]), ctx(NOTE));
+		assert.equal(r.queued, 0, "★ 白名单为空 ⇒ 渲染路径什么都不自动搬");
 	}
 
 	// ============================================================

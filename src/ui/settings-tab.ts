@@ -42,7 +42,7 @@ import {
 	classifyPublicLink,
 	connectionFailureKey,
 	ensureSecretSlot,
-	externalImageDefaultOptions,
+	externalSiteModeOptions,
 	localCopyOptions,
 	orphanAskOptions,
 	publicLinkKey,
@@ -51,6 +51,7 @@ import {
 	shouldShowCacheLimit,
 	shouldShowFallbackDownload,
 	shouldShowReleaseSpace,
+	shouldShowSiteList,
 } from "./settings-logic";
 
 /** 一次连接测试的**一行**结果（已翻成文案 key，界面只负责显示）。 */
@@ -521,21 +522,31 @@ export class SettingsTab extends PluginSettingTab {
 				name: this.t("externalImageCache"),
 				desc: this.t("externalImageCacheDesc"),
 				// 别名要覆盖用户会搜的词：默认关，所以"找不到它"就等于"功能不存在"
-				aliases: ["external", "hotlink", "third-party", "站外", "外链", "图床"],
+				aliases: ["external", "hotlink", "third-party", "站外", "外链", "图床", "自动"],
 				control: { type: "toggle", key: "externalImageCache" },
 			},
 			{
-				name: this.t("externalImageDefault"),
-				desc: this.t("externalImageDefaultDesc"),
-				aliases: ["cache", "auto", "default", "默认", "自动", "外链"],
-				// ⚠️ 条件显示：功能关着时这一档没有任何意义（判定层第一步就忽略了）。
+				name: this.t("externalSiteMode"),
+				desc: this.t("externalSiteModeDesc"),
+				aliases: ["site", "allowlist", "blocklist", "filter", "站点", "名单", "白名单", "黑名单", "过滤"],
+				// ⚠️ 条件显示：功能关着时名单没有任何意义（自动那一路整个不跑）。
 				// 与「缓存目录」那条同一个纪律：**看不见的字段不会产生矛盾组合**。
 				visible: () => this.plugin.settings.externalImageCache,
 				control: {
 					type: "dropdown",
-					key: "externalImageDefault",
-					options: externalImageDefaultOptions((value) => this.t(`externalDefault_${value}`)),
+					key: "externalSiteMode",
+					options: externalSiteModeOptions((value) => this.t(`externalSite_${value}`)),
 				},
+			},
+			{
+				name: this.t("externalSiteList"),
+				desc: this.t("externalSiteListDesc"),
+				aliases: ["site", "list", "domain", "host", "站点", "名单", "域名"],
+				// ⚠️ 两重条件：功能关着时整段站外都没意义；`off` 档下名单**不生效**
+				//（判定层根本不读它）—— 显示一个不起作用的框比不显示更糟。
+				visible: () =>
+					this.plugin.settings.externalImageCache && shouldShowSiteList(this.plugin.settings.externalSiteMode),
+				render: (setting) => this.renderSiteList(setting),
 			},
 			{
 				name: this.t("externalPickName"),
@@ -599,7 +610,32 @@ export class SettingsTab extends PluginSettingTab {
 	}
 
 	/**
-	 * 「选择要缓存的外链图片」那颗按钮。
+	 * 站点名单的输入框（多行，一行一条）。
+	 *
+	 * ⚠️ 用 `render` 而不是声明式的 `control: { type: "text" }`：那个控件是**单行**输入框，
+	 * 而名单天然是多条。转换仍然走 `settings-bindings.ts` 那张表
+	 *（`formatSiteListText` / `parseSiteListText`）—— "文本 ↔ 数组"只有一处定义，
+	 * 不在这里另写一份 split/join（那正是这类字段最容易出的静默错：
+	 * 存进去的类型和读回来的不是同一个，症状是"改了设置、重启就没了"）。
+	 */
+	private renderSiteList(setting: Setting): void {
+		setting.addTextArea((area) => {
+			// 稳定的钩子：真机探针靠它确认"这个字段是多行输入框"，而不必猜 DOM 结构
+			area.inputEl.addClass("acc-site-list-input");
+			area.inputEl.rows = 4;
+			area.setPlaceholder(this.t("externalSiteListPlaceholder"));
+			// `getControlValue` 走的是绑定表里的 `formatSiteListText`（数组 → "一行一条"）。
+			// 显式判类型而不是 `String(...)`：后者对非字符串会给出 `[object Object]`（lint 也会拦）。
+			const text = this.getControlValue("externalSiteList");
+			area.setValue(typeof text === "string" ? text : "");
+			area.onChange((value) => {
+				void this.setControlValue("externalSiteList", value);
+			});
+		});
+	}
+
+	/**
+	 * 「挑选要缓存的文件」那颗按钮。
 	 *
 	 * 用 `render` 而不是 `control`：这是一个**动作**，不是一个要存下来的值
 	 *（官方给 `render` 的场景之一就是这类"不是普通输入控件"的东西）。
@@ -608,6 +644,9 @@ export class SettingsTab extends PluginSettingTab {
 	 * 设置页只是"另一个入口"，候选范围、勾选逻辑、汇总提示都不另写一份。
 	 * 两个入口行为不同是这类功能最典型的坏法：按钮能用、命令不能用（或反之），
 	 * 而且没人会发现。
+	 *
+	 * ⚠️ 1.2.0 起它**不要求**先打开上面那个开关（候选判定走 `purpose: "manual"`）——
+	 * 关掉自动处理的人，照样能到这里手动挑。
 	 */
 	private renderExternalPicker(setting: Setting): void {
 		setting.addButton((button) =>

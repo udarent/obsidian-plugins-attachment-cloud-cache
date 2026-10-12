@@ -15,7 +15,7 @@
  *
  * 原先的流程是：遇到站外图 → 按站点弹一个常驻通知 → 用户答"缓存 / 不再询问" →
  * 把答案记进 `.site-decisions.json`。它被换成了**两件用户能预期的事**：
- * 设置里的默认行为（`externalImageDefault`），以及「选择要缓存的外链图片」里逐张勾选。
+ * 设置里的功能开关与站点名单（1.2.0 起合并/新增），以及「挑选要缓存的文件」里逐张勾选。
  * 拆掉的理由有两条，都来自实际使用：
  *
  * - 询问出现在**阅读**路径上，而"要不要把这张图搬进我的存储"并不紧急，
@@ -126,12 +126,13 @@ export function createExternalHook(deps: ExternalHookDeps): ExternalHook {
 						src,
 						settings,
 						configured,
+						// ⭐ 渲染路径 = **自动**处理：受功能开关与站点名单约束。
+						// 显式工具（挑选 / 批量）用 `"manual"`，两者不受约束。
+						purpose: "auto",
 						blockedHost: deps.blockedHost,
 					});
 
-					// `wait`（默认不动手）与 `ignore`（不该处理）在这里是一条路：
-					// 渲染路径**只**执行"现在就该搬"这一个决定。
-					// 但两者的语义不同（`wait` 会被命令与选择器收作候选），所以判定层分开表达。
+					// 渲染路径**只**执行"现在就该搬"这一个决定；`ignore` 一律跳过。
 					if (decision.action !== "cache") {
 						result.skipped += 1;
 						continue;

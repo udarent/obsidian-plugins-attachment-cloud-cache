@@ -27,7 +27,7 @@ export function runSettingsUiSuite(mod) {
 		classifyPublicLink,
 		publicLinkKey,
 		publicLinkTone,
-		externalImageDefaultOptions,
+		externalSiteModeOptions,
 		orphanAskOptions,
 		ensureSecretSlot,
 		SECRET_SLOT_PREFIX,
@@ -415,28 +415,29 @@ export function runSettingsUiSuite(mod) {
 	);
 
 	// ============================================================
-	// 3b. 「遇到外链图片时」那一档的选项（`externalImageDefaultOptions`）
+	// 3b. 「处理哪些站点」那一档的选项（`externalSiteModeOptions`）
 	//
 	// 与上面 `localCopyOptions` 同一个纪律：**由类型清单生成**，于是"界面能选的"
 	// 与"类型允许的"只有一处定义。漏一个取值的后果很具体 ——
 	// 用户在下拉里选不到它，而那个取值在代码里是支持的（功能静默地不可达）。
 	// ============================================================
 	{
-		const externalOptions = externalImageDefaultOptions((value) => `label:${value}`);
+		const externalOptions = externalSiteModeOptions((value) => `label:${value}`);
 		assert.deepEqual(
 			Object.keys(externalOptions).sort(),
-			["cache", "skip"],
-			"选项集合必须与 EXTERNAL_IMAGE_DEFAULTS 完全一致（不多不少）"
+			["allowlist", "blocklist", "off"],
+			"选项集合必须与 EXTERNAL_SITE_MODES 完全一致（不多不少）"
 		);
-		assert.equal(externalOptions.skip, "label:skip", "每个取值都要有文案（少一个就是一个选不中的选项）");
-		assert.equal(externalOptions.cache, "label:cache", "同上");
+		assert.equal(externalOptions.off, "label:off", "每个取值都要有文案（少一个就是一个选不中的选项）");
+		assert.equal(externalOptions.blocklist, "label:blocklist", "同上");
+		assert.equal(externalOptions.allowlist, "label:allowlist", "同上");
 		// ⭐ 顺序也有意义：下拉里的第一项就是"用户第一眼看到的那个"，必须是出厂值。
-		// 这里写死 `skip` 是刻意的 —— 它就是文档里写给用户的那个出厂值，
+		// 这里写死 `off` 是刻意的 —— 它就是文档里写给用户的那个出厂值（"不过滤"），
 		// 改名要同时改文档、类型清单与 `settings.ts` 的出厂表（那三处由各自的断言把着）。
 		assert.equal(
-			Object.keys(externalImageDefaultOptions((value) => value))[0],
-			"skip",
-			"★ 下拉第一项必须是出厂值「什么都不做」"
+			Object.keys(externalSiteModeOptions((value) => value))[0],
+			"off",
+			"★ 下拉第一项必须是出厂值「所有站点」（不过滤）"
 		);
 	}
 

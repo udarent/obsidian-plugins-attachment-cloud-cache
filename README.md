@@ -57,8 +57,8 @@ once. This does both — the file goes to your bucket, and the copy that renders
 - **Bulk-upload what you already have** — one command handles the files your notes link to and leaves the rest alone.
 - **Cloud space cleanup** — lists the objects in your storage no note refers to, with the count and the size, and
   deletes only what you confirm.
-- **Two optional features, both off by default** — caching files from other sites, and a cache size limit that trims
-  least-recently-used copies in the background.
+- **Two optional features, both off by default** — treating files from other sites like ordinary files (with a site
+  list to include or exclude hosts), and a cache size limit that trims least-recently-used copies in the background.
 
 ## Requirements
 
@@ -94,9 +94,10 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 | **Where the local copy goes** | Keep the file where it is (default), or delete it after uploading. The file itself is the copy — nothing is moved into a separate folder. "Delete" turns caching off: the plugin uploads and rewrites links, and never fetches a copy back — so nothing works offline. Switching to "delete" asks once whether to also clear the copies already on disk. |
 | **Cache size limit (MB)** | Trims least-recently-used copies past this; `0` means no limit. Only copies the index knows about are counted. |
 | **Download missing copies** | Auto-downloads our own objects that have no local copy — never anything from other sites. Hidden when "none" is selected above, because caching is off then. |
-| **Cache files from other sites** | Off by default; while it is off, nothing off-site is touched. |
-| **When a note links to a file on another site** | `Leave it alone` (default) or `Cache straight away`. |
-| **Pick specific files** | Tick individual off-site files; only those are fetched. |
+| **Handle files from other sites like ordinary files** | On: an off-site file is downloaded, uploaded to your storage and the link rewritten — the same as pasting a local file, "where the local copy goes" included. Off by default; while it is off, nothing off-site is touched automatically. |
+| **Which sites to handle** | `All sites` (default, no filter), `All except the ones listed`, or `Only the ones listed`. This filters the automatic handling above — picking files by hand is never restricted by it. |
+| **Site list** | One domain per line. `example.com` also matches `img.example.com`; write `example.com:8080` to match that exact host. With "Only the ones listed", an empty list means nothing is handled automatically. |
+| **Pick specific files** | Tick individual off-site files; only those are fetched. Works whether or not the switch above is on. |
 | **Attachments folder override · Compatibility mode** | Advanced: override Obsidian's attachment folder; use path-style addressing (keep on for R2 and MinIO). |
 
 ## Commands
@@ -106,7 +107,7 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 | **Show cache usage** | How much your local copies hold, and how much of it no note refers to any more. That figure is an estimate: nothing is removed before your storage is confirmed to still have the object. |
 | **Repair the local-copy index** | Drops index entries whose files are already gone. |
 | **Upload existing attachments** | Uploads what your notes link to and rewrites those links. Your files stay where they are — that copy *is* the local copy. |
-| **Cache files from other sites…** | Tick individual off-site files to fetch. Needs the off-site feature turned on. |
+| **Cache files from other sites…** | Tick individual off-site files to fetch. Works whether or not the off-site switch is on — picking them is the consent. |
 | **Clean up unused objects in the cloud…** | Lists objects no note here refers to — with count and size — then deletes what you confirm. |
 
 ## Good to know
@@ -152,8 +153,9 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 ## Privacy & security
 
 - **It normally talks only to your storage**, and touches nothing outside your vault. No telemetry, no analytics.
-- **One optional feature reaches other sites — only after you turn it on and tell it to act** ("Cache files from other
-  sites", off by default, and doing nothing by default). The request carries nothing beyond the file's own address.
+- **One optional feature reaches other sites — and it never turns itself on.** It is off by default; turning it on is
+  the consent, and the site list narrows it further. Picking files by hand works without the switch.
+  The request carries nothing beyond the file's own address.
 - **A web page is never stored** — `text/html` and other `text/*` answers are refused rather than uploaded.
 - **The secret access key lives in the OS keychain**, never in `data.json`. The **access key ID is** written to
   `data.json`: an identifier, not a secret, and Obsidian's keychain accepts only lowercase IDs.
@@ -229,7 +231,7 @@ Obsidian version and which storage provider you use; the errors name the step th
 - **画布引用与笔记引用同等算数** —— 摆在画布上的文件同样会被上传，画布里的引用会继续有效。
 - **存量附件一条命令搬完** —— 只处理笔记引用着的文件，其余的绝不碰。
 - **云端空间清理** —— 列出你存储里「本库没有笔记引用」的对象（连同个数与体积），只删你确认过的那些。
-- **两个可选功能，默认都关** —— 缓存站外文件；缓存大小上限（超限时后台按最近最少使用清理）。
+- **两个可选功能，默认都关** —— 站外文件按普通附件处理（可配站点名单：只处理、或跳过指定站点）；缓存大小上限（超限时后台按最近最少使用清理）。
 
 ## 环境要求
 
@@ -264,10 +266,11 @@ Obsidian version and which storage provider you use; the errors name the step th
 | **新增附件自动上传** | 默认开启；关闭后这些全交回 Obsidian，文件只存在本地。 |
 | **本地副本的处理** | 留在原处（默认）或上传后删除。**那份文件本身就是**本地副本，不会搬去别的目录。选「不留」等于关闭缓存：只上传并改写链接，也不会把副本补回来，所以离线不可用。切到「不留」时会问一次，要不要把盘上已有的副本也一起清掉。 |
 | **缓存大小上限（MB）** | 超过后按最近最少使用清理；`0` 表示不限制。只统计索引里记过的副本。 |
-| **缺本地副本时自动下载** | 只自动下载**本存储**没有副本的对象，站外文件永不下载。上面选「不留」时这一项不显示（那一档已关闭缓存）。 |
-| **缓存站外文件** | 默认关闭；关着时站外的东西一步都不会被碰。 |
-| **遇到站外文件链接时** | `什么都不做`（默认）或 `直接缓存`。 |
-| **挑选要缓存的文件** | 勾选具体的站外文件，只有勾中的会被取。 |
+| **缺本地副本时自动下载** | 只自动下载**本存储**没有副本的对象；站外文件不走这条路（它们由下面那个开关管）。上面选「不留」时这一项不显示（那一档已关闭缓存）。 |
+| **站外文件按普通附件处理** | 打开后，站外文件会被下载、上传到你的存储并改写链接 —— 与粘贴一张本地附件完全一样（连「本地副本的处理」那一档也一样适用）。默认关闭；关着时站外的东西一步都不会被自动碰。 |
+| **处理哪些站点** | `所有站点`（默认，不过滤）、`除名单外的站点`、`仅名单内的站点`。它**只筛自动处理**；手动挑选不受它限制。 |
+| **站点名单** | 一行一个域名。写 `example.com` 也会命中 `img.example.com`；写 `example.com:8080` 则只匹配含那个端口的地址。选「仅名单内的站点」时，留空表示什么都不自动处理。 |
+| **挑选要缓存的文件** | 勾选具体的站外文件，只有勾中的会被取。开关关着也能用。 |
 | **附件目录覆盖 · 兼容模式** | 高级：覆盖 Obsidian 的附件目录；按「地址/桶/键」寻址（R2 与 MinIO 都要开着）。 |
 
 ## 命令
@@ -277,7 +280,7 @@ Obsidian version and which storage provider you use; the errors name the step th
 | **查看缓存占用** | 本地副本占了多少、其中多少已经没有笔记引用了。这个数字是**估算**：真正删除前会先确认你的存储里仍然有这个对象。 |
 | **自检并修复本地副本索引** | 丢掉那些文件已经不在的索引记录。 |
 | **上传已存在的附件** | 上传笔记里引用着的附件并改写链接。文件**留在原地** —— 那份就是本地副本。 |
-| **缓存站外文件（可挑选）…** | 勾选具体的站外文件去下载。需要先打开站外文件功能。 |
+| **缓存站外文件（可挑选）…** | 勾选具体的站外文件去下载。开关关着也能用 —— 勾选本身就是同意。 |
 | **清理云端未使用对象…** | 列出「本库没有笔记引用」的对象（含个数与体积），确认后删除。 |
 
 ## 需要注意的
@@ -316,8 +319,8 @@ Obsidian version and which storage provider you use; the errors name the step th
 ## 隐私与安全
 
 - **默认只连你自己的存储**，也不碰 vault 之外的文件。不含遥测、统计。
-- **有一个可选功能会访问其它站点，而且只有你打开它、并明确让它做时才会**（「缓存站外文件」默认关闭，打开后也默认
-  什么都不做）。请求里除文件地址本身不带任何其它内容。
+- **有一个可选功能会访问其它站点，而且它不会自己启动**：默认关闭，打开它就是同意，站点名单再把范围收窄；
+  手动勾选不需要打开它。请求里除文件地址本身不带任何其它内容。
 - **网页永远不会被存下来** —— `text/html` 与其它 `text/*` 一律拒收，而不是传上去。
 - **秘密访问密钥存在系统钥匙串里**，绝不写进 `data.json`。**访问密钥 ID 会**写进 `data.json`：它是标识符而不是
   秘密，而且 Obsidian 的钥匙串只接受小写 ID。

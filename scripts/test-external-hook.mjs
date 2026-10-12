@@ -12,7 +12,6 @@ await withLoadedTs(["src/render/external-hook"], async (mod) => {
 	console.log(
 		"External-hook tests passed (one fetch per URL even when the same image renders repeatedly, inflight is released " +
 			"on failure so a retry still works, a throwing image never stops the next one, no note path means nothing is " +
-			"fetched, and the default setting really decides: 'leave it alone' fetches nothing at all while 'cache " +
-			"straight away' does the work)."
+			"fetched, and the automatic path really obeys both the switch and the site list)."
 	);
 });
