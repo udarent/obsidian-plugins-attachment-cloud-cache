@@ -63,10 +63,12 @@ await runMutations({
 		{
 			// 后果：`localCopy: "trash"` 的用户点了「缓存」，结果本地没留副本 ⇒
 			// 这条路径的全部意义（离线可见）消失，而症状完全不可见（只在断网时才发现）。
-			name: "★ trash 不再被改成 cache（用户点了「缓存」却在本地什么都没留）",
-			from: '\treturn action === "trash" ? "cache" : action;',
+			// ⚠️ 1.2.0（D-17）：改写目标从 `"cache"` 变成 `"keep"`（那个取值没了），
+			// 语义一字未变 —— 仍是"必须留下本地副本"。
+			name: "★ trash 不再被改成 keep（用户点了「缓存」却在本地什么都没留）",
+			from: '\treturn action === "trash" ? "keep" : action;',
 			to: "\treturn action;",
-			expect: "trash",
+			expect: "trash 要改成 keep",
 		},
 		{
 			// 后果：本存储的 URL 也走这条链 ⇒ 把自己的图重新下载再上传一遍，

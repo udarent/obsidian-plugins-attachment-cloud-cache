@@ -179,7 +179,7 @@ for (const file of CACHE_MAINTENANCE) {
 {
 	const types = read("src/types.ts");
 	assert.ok(
-		types.includes('export const LOCAL_COPY_ACTIONS: readonly LocalCopyAction[] = ["cache", "keep", "trash"]'),
+		types.includes('export const LOCAL_COPY_ACTIONS: readonly LocalCopyAction[] = ["keep", "trash"]'),
 		"★ localCopy 的 trash 必须保留（那是「上传后不留本地副本」，删的是用户自己的文件）"
 	);
 

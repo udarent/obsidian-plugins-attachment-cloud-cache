@@ -149,16 +149,18 @@ export function shouldReportExternalFailure(status: ExternalCacheStatus): boolea
 /**
  * 这条路线上本地副本怎么处置（**纯函数**）。
  *
- * ⚠️ `trash`（不留本地副本）在这里被改成 `cache`。理由：那个选项的语义是
+ * ⚠️ `trash`（不留本地副本）在这里被改成 `keep`。理由：那个选项的语义是
  * "上传后把本地文件移入回收站"，用户选它时想的是"vault 保持干净"；
  * 但用户在**这一次**里明确点的是「缓存这张图」 —— 而"没有本地副本"
  * 会让这条路径的全部意义（离线可见）消失，且**症状完全不可见**
  * （图在该显示的地方显示不出来，只在断网时才发现）。
  *
- * `keep`（留在附件目录原地）不动：它同样有本地副本，离线可见，没有矛盾。
+ * ⚠️ 1.2.0（D-17）之前这里改写成 `"cache"`（搬进缓存目录）。那个取值随缓存目录一起没了，
+ * 正确的落点于是变成 `keep` —— **语义一字未变**（同样是"留下本地副本"），
+ * 变的只是"留下"现在意味着"就在原地"。
  */
 export function localCopyForExternal(action: LocalCopyAction): LocalCopyAction {
-	return action === "trash" ? "cache" : action;
+	return action === "trash" ? "keep" : action;
 }
 
 /**

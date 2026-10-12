@@ -29,7 +29,6 @@ export function runExternalDecideSuite(mod) {
 		enabledExtensions: ["png"],
 		attachmentFolder: "",
 		localCopy: "cache",
-		cacheFolder: "_attachment-cache",
 		fallbackDownload: true,
 		externalImageCache: true,
 		s3: address,

@@ -21,7 +21,7 @@ shareable link while the copy stays behind, so files render with **zero remote r
 
 ![Paste an image, a PDF and an audio clip into a note: each one uploads to your own storage, a copy of each stays in your vault, and all three still render after the storage goes offline](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
 
-*Recorded from the plugin running in Obsidian: paste an image, a PDF and an audio clip → each one uploads → the note keeps a link while a copy of each stays in the vault's cache folder. The last step stops the storage to show that all three still work — the image, the PDF page, and an audio player.*
+*Recorded from the plugin running in Obsidian: paste an image, a PDF and an audio clip → each one uploads → the note keeps a link, and each file stays in your vault as its own offline copy. The last step stops the storage to show that all three still work — the image, the PDF page, and an audio player.*
 
 > **Everything here has been exercised for real** — see [How far it is verified](#how-far-it-is-verified).
 > **Not proven yet:** iOS never run; Android never run on a real device.
@@ -47,9 +47,11 @@ once. This does both — the file goes to your bucket, and the copy that renders
   a different name are a separate object.
 - **Any file type, not just images** — images, audio, video, PDF, archives, documents, extension-less files. Types
   Obsidian can preview (image/audio/video/PDF) are inserted as embeds; everything else becomes a clickable link.
-- **Offline, multi-device, and light to sync** — the rendering copy is local (zero remote requests, always, not
-  just when the network is down); a new device back-fills copies on demand; and with the default "move into the cache
-  folder" the vault's bulk is text plus disposable copies, so syncing stays fast and cheap.
+- **Offline, multi-device, and no second copy** — the rendering copy is local (zero remote requests, always, not
+  just when the network is down), and a new device back-fills copies on demand. The copy *is* the file you already
+  had, so the vault never carries two copies of the same attachment. The trade-off: attachments stay in your vault
+  and therefore sync. If you would rather the vault hold nothing but text, switch to "delete the local file after
+  uploading" — at the cost of offline viewing.
 - **Canvas references count the same as note references** — a file placed on a canvas is uploaded, and its canvas
   reference keeps working.
 - **Bulk-upload what you already have** — one command handles the files your notes link to and leaves the rest alone.
@@ -89,9 +91,8 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 | **Test connection** | One signed request, then one **credential-free** request to the address your links would use. |
 | **Import from a credentials file** | MinIO's "Download credentials" JSON fills in endpoint, key and addressing mode; no copy is kept. |
 | **Upload new attachments automatically** | On by default; off returns all of it to Obsidian, leaving files local only. |
-| **Where the local copy goes** | Cache folder (default), attachments folder, or none. "None" turns caching off: the plugin uploads and rewrites links, and never fetches a copy back — so nothing works offline. |
-| **Cache folder** | Relative to the vault root. Disposable: deleting it costs one re-download. |
-| **Cache size limit (MB)** | Trims least-recently-used copies past this; `0` means no limit. |
+| **Where the local copy goes** | Keep the file where it is (default), or delete it after uploading. The file itself is the copy — nothing is moved into a separate folder. "Delete" turns caching off: the plugin uploads and rewrites links, and never fetches a copy back — so nothing works offline. |
+| **Cache size limit (MB)** | Trims least-recently-used copies past this; `0` means no limit. Only copies the index knows about are counted. |
 | **Download missing copies** | Auto-downloads our own objects that have no local copy — never anything from other sites. Hidden when "none" is selected above, because caching is off then. |
 | **Cache files from other sites** | Off by default; while it is off, nothing off-site is touched. |
 | **When a note links to a file on another site** | `Leave it alone` (default) or `Cache straight away`. |
@@ -192,9 +193,9 @@ Obsidian version and which storage provider you use; the errors name the step th
 
 [安装](#安装) · [版本发布](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases) · [反馈问题](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues) · 需要 Obsidian **1.13.0+**（[为什么](#环境要求)）
 
-![演示：往笔记里粘贴一张图片、一个 PDF 和一段音频 —— 它们各自上传到你的存储，vault 里各留一份缓存副本；随后把存储整个停掉，三者仍然正常显示与播放](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
+![演示：往笔记里粘贴一张图片、一个 PDF 和一段音频 —— 它们各自上传到你的存储，文件留在库中作为离线副本；随后把存储整个停掉，三者仍然正常显示与播放](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
 
-*动图取自真实运行中的 Obsidian：粘贴图片、PDF 和音频 → 各自上传 → 笔记里各留一条链接，同时 vault 的缓存目录里各留一份副本。最后一步把存储整个停掉，用来证明图片、PDF 页和音频播放器都照常工作。*
+*动图取自真实运行中的 Obsidian：粘贴图片、PDF 和音频 → 各自上传 → 笔记里各留一条链接，文件留在库中作为离线副本。最后一步把存储整个停掉，用来证明图片、PDF 页和音频播放器都照常工作。*
 
 > **下面写的每条行为都真机跑过** —— 见[已验证到什么程度](#已验证到什么程度)。
 > **还没验证的：** iOS 从未运行过；Android 也没在真机上跑过。
@@ -217,8 +218,9 @@ Obsidian version and which storage provider you use; the errors name the step th
 - **附件怎么进来都行** —— 粘贴、拖入、手机相册或相机、分享到 Obsidian、从别处拷进库，都会被上传，笔记里的链接换成远端地址。对象 key 里带**文件名 + 完整内容哈希**：同一个文件再传一次不会多占空间，而同一份内容换个名字会是另一份对象。
 - **任何类型的附件，不只图片** —— 图片、音频、视频、PDF、压缩包、文档、没有扩展名的文件。Obsidian 能预览的
   类型（图片/音频/视频/PDF）插入为嵌入，其余插入为可点开的普通链接。
-- **离线、多设备、同步轻快** —— 渲染走本地副本（零远端请求，始终如此，不只是「网不通」时）；换新设备时副本按需补回；
-  默认档「移入缓存目录」下，vault 的体量是纯文本 + 可丢弃的副本，把那个目录排除在同步外就又快又省。
+- **离线、多设备、不多留一份** —— 渲染走本地副本（零远端请求，始终如此，不只是「网不通」时）；换新设备时副本按需补回。
+  **副本就是你已经有的那份文件**，vault 里不会为同一份附件存两份。代价是：附件留在库里，于是会跟着同步 ——
+  想让 vault 保持纯文本，就把档位换成「上传后删除本地文件」（代价是离线看不了）。
 - **画布引用与笔记引用同等算数** —— 摆在画布上的文件同样会被上传，画布里的引用会继续有效。
 - **存量附件一条命令搬完** —— 只处理笔记引用着的文件，其余的绝不碰。
 - **云端空间清理** —— 列出你存储里「本库没有笔记引用」的对象（连同个数与体积），只删你确认过的那些。
@@ -255,9 +257,8 @@ Obsidian version and which storage provider you use; the errors name the step th
 | **测试连接** | 先发一次签名请求，再**不带凭据**请求一次「你笔记里会写的那条地址」。 |
 | **从凭据文件导入** | MinIO「下载凭据」的 JSON 会填好服务地址、密钥与寻址方式；不留副本。 |
 | **新增附件自动上传** | 默认开启；关闭后这些全交回 Obsidian，文件只存在本地。 |
-| **本地副本的处理** | 缓存目录（默认）/ 附件目录 / 不留。选「不留」等于关闭缓存：只上传并改写链接，也不会把副本补回来，所以离线不可用。 |
-| **缓存目录** | 相对 vault 根目录。可丢弃：删掉只会多下载一次。 |
-| **缓存大小上限（MB）** | 超过后按最近最少使用清理；`0` 表示不限制。 |
+| **本地副本的处理** | 留在原处（默认）或上传后删除。**那份文件本身就是**本地副本，不会搬去别的目录。选「不留」等于关闭缓存：只上传并改写链接，也不会把副本补回来，所以离线不可用。 |
+| **缓存大小上限（MB）** | 超过后按最近最少使用清理；`0` 表示不限制。只统计索引里记过的副本。 |
 | **缺本地副本时自动下载** | 只自动下载**本存储**没有副本的对象，站外文件永不下载。上面选「不留」时这一项不显示（那一档已关闭缓存）。 |
 | **缓存站外文件** | 默认关闭；关着时站外的东西一步都不会被碰。 |
 | **遇到站外文件链接时** | `什么都不做`（默认）或 `直接缓存`。 |

@@ -32,7 +32,6 @@ export function runRenderTargetSuite(mod) {
 		enabledExtensions: ["png"],
 		attachmentFolder: "",
 		localCopy: "cache",
-		cacheFolder: "_attachment-cache",
 		fallbackDownload: true,
 		s3,
 	});

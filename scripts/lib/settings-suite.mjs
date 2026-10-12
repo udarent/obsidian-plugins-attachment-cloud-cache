@@ -29,10 +29,14 @@ export function runSettingsSuite(mod) {
 
 	//  一个字段同时表达了旧版的 cacheEnabled + localFileAction ——
 	// 那两个字段的组合会产生"选了移入缓存却得到原地保留"这类静默矛盾，合并后不存在了。
+	//
+	// ⚠️ 1.2.0（D-17）：默认从 `"cache"`（搬进缓存目录）变成 `"keep"`（留在原地）——
+	// 缓存目录整个取消，"那份文件**本身就是**本地副本"。断言守的仍是同一件事：
+	// **默认不能牺牲离线可用**（`"trash"` 是唯一会牺牲离线的档）。
 	assert.equal(
 		SETTINGS_DEFAULTS.localCopy,
-		"cache",
-		"上传后本地副本默认应**移入缓存**（不是删除）—— 「本地副本即缓存」是离线可用的前提"
+		"keep",
+		"上传后本地副本默认应**留在原地**（不是删除）—— 「有本地副本」是离线可用的前提"
 	);
 
 	// ⭐ 1.1.0 起「参与的文件类型」整个设置项被删除（需求 R15：任何类型都上传，
@@ -249,31 +253,26 @@ export function runSettingsSuite(mod) {
 	// 官方 guideline 明确要求：接受用户给的 vault 路径时必须过 `normalizePath()`。
 	//
 	// 不归一的具体后果：用户从别处粘一个反斜杠分隔、或带双斜杠的路径
-	//（Windows 上很自然），会被**逐字**拼进缓存路径 —— 于是生成一个 vault 里
-	// 根本不存在的层级，而症状是"缓存目录里没有文件""清理命令找不到任何东西"，
-	// 看不出与那次粘贴有关。
+	//（Windows 上很自然），会被**逐字**拼进 vault 路径 —— 于是生成一个 vault 里
+	// 根本不存在的层级，而症状是"文件不在预期的地方"，看不出与那次粘贴有关。
+	//
+	// ⚠️ 1.2.0（D-17）：这里原先还有 `cacheFolder` 的三条断言（归一 / 幂等 /
+	// "必填、归一后为空回落默认"）。那个字段随缓存目录一起没了，于是它们连同
+	// `pathValue` 的 `required` 参数与对应的变异锚点**一并删除** ——
+	// 留着一节测已删字段的断言，比没有测试更糟（会让人以为字段还在）。
 	{
 		const messy = mergePluginSettings(SETTINGS_DEFAULTS, {
 			...SETTINGS_DEFAULTS,
-			cacheFolder: "//attachments\\cache//",
 			attachmentFolder: ".\\images//sub/",
 		});
-		assert.equal(messy.cacheFolder, "attachments/cache", "★ 缓存目录要归一（反斜杠、重复斜杠、前后斜杠）");
-		assert.equal(messy.attachmentFolder, "images/sub", "★ 附件目录同理");
+		assert.equal(messy.attachmentFolder, "images/sub", "★ 附件目录要归一（反斜杠、重复斜杠、前后斜杠）");
 
 		// 已归一的路径不该被再次改动（幂等）—— 否则每次读设置都会变一点
 		const again = mergePluginSettings(SETTINGS_DEFAULTS, {
 			...SETTINGS_DEFAULTS,
-			cacheFolder: "attachments/cache",
+			attachmentFolder: "images/sub",
 		});
-		assert.equal(again.cacheFolder, "attachments/cache", "归一必须幂等");
-
-		// 只敲斜杠 ⇒ 归一后为空。必填字段回落默认，而不是拿空目录名去建目录
-		const slashOnly = mergePluginSettings(SETTINGS_DEFAULTS, {
-			...SETTINGS_DEFAULTS,
-			cacheFolder: "/",
-		});
-		assert.equal(slashOnly.cacheFolder, SETTINGS_DEFAULTS.cacheFolder, "★ 归一后为空的必填路径要回落默认");
+		assert.equal(again.attachmentFolder, "images/sub", "归一必须幂等");
 
 		// 附件目录是**可选**的：空 = 跟随宿主设置，是有意义的状态，不能回落成某个目录名
 		const emptyAttachment = mergePluginSettings(SETTINGS_DEFAULTS, {
@@ -284,12 +283,44 @@ export function runSettingsSuite(mod) {
 	}
 
 	// ============================================================
+	// 4c. ⭐ 1.2.0（D-17）：老 data.json 里的 `"cache"` **静默折成** `"keep"`
+	//
+	// 三态收窄成两态时，"上传后搬进缓存目录"这个取值没了，而真实用户的 data.json
+	// 里就存着它。**不能**只靠"非法值回落默认"来处理：那条路**跟着默认值走**，
+	// 哪天默认值改成「不留副本」，老用户就会被静默搬到另一个档去 —— 而这个字段
+	// 决定"上传后本地文件还在不在"，搬错档是会让人丢文件的。
+	// ============================================================
+	{
+		const merged = mergePluginSettings(SETTINGS_DEFAULTS, { localCopy: "cache" });
+		assert.equal(merged.localCopy, "keep", '★ 遗留值 "cache" 要折成 "keep"');
+
+		// ⭐ 反向：**即使默认值不是 keep**，这个折叠也照样成立 ——
+		// 上面那段注释的全部意义就在这一条断言里。
+		const otherDefaults = { ...SETTINGS_DEFAULTS, localCopy: "trash" };
+		assert.equal(
+			mergePluginSettings(otherDefaults, { localCopy: "cache" }).localCopy,
+			"keep",
+			'★ 折叠不能跟着默认值走（默认改成 trash 时，"cache" 仍必须得到 keep）'
+		);
+
+		// 真正的非法值仍然回落默认（折叠只对那一个历史取值生效）
+		assert.equal(
+			mergePluginSettings(otherDefaults, { localCopy: "nonsense" }).localCopy,
+			"trash",
+			"非法值仍走回落默认那条路"
+		);
+	}
+
+	// ============================================================
 	// 5. 枚举守卫本身要能用（供 UI 与合并共用）
 	// ============================================================
-	for (const good of ["cache", "keep", "trash"]) assert.equal(isLocalCopyAction(good), true, good);
+	for (const good of ["keep", "trash"]) assert.equal(isLocalCopyAction(good), true, good);
+	// ⭐ 1.2.0（D-17）：`cache` **不再是**合法取值 —— 老 data.json 里的它由
+	// `localCopyValue` 在**读的时候**折成 `keep`（见 4c 节），所以这里必须是 false。
+	assert.equal(isLocalCopyAction("cache"), false, '★ 「移入缓存目录」这一档已取消，不能再是合法取值');
 	assert.equal(isLocalCopyAction("delete"), false);
 	assert.equal(isLocalCopyAction(null), false);
-	// `ask` 曾是合法取值但**从未实现**（planLocalCopy 里等同 cache）——
+	// `ask` 曾是合法取值但**从未实现**（planLocalCopy 里等同 keep）——
 	// 界面上写着"每次询问"却从不询问，是假选项，必须不再被接受。
 	assert.equal(isLocalCopyAction("ask"), false, "未实现的 ask 不应再是合法取值");
 
@@ -357,18 +388,16 @@ export function runSettingsSuite(mod) {
 	// ============================================================
 	// 8. ⭐ 不允许为空的字段：空串 / 纯空白必须回落默认
 	//
-	// 清空 `cacheFolder` 会让缓存路径推导直接返回 null ⇒ 缓存**静默失效**，
-	// 而"离线可用"正是这个插件的核心价值。空值必须回落，不能当合法值收下。
 	// ⚠️ 凭据的**名字**不在此列 —— 空串表示"尚未在钥匙串里选择"，是合法状态。
+	// ⚠️ 1.2.0（D-17）删掉了这条规则的另一位用户 `cacheFolder`：它不能为空，是因为
+	// 空目录名会让缓存路径推导直接返回 null ⇒ 缓存**静默失效**。那个字段随缓存目录一起没了。
 	// ============================================================
 	for (const emptyish of ["", "   ", "\t\n"]) {
 		const label = JSON.stringify(emptyish);
 		const merged = mergePluginSettings(SETTINGS_DEFAULTS, {
-			cacheFolder: emptyish,
 			s3: { region: emptyish },
 		});
 
-		assert.equal(merged.cacheFolder, SETTINGS_DEFAULTS.cacheFolder, `cacheFolder 为 ${label} 时应回落默认`);
 		assert.equal(merged.s3.region, SETTINGS_DEFAULTS.s3.region, `s3.region 为 ${label} 时应回落默认`);
 	}
 

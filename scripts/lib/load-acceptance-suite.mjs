@@ -135,6 +135,15 @@ async function realRequestUrl(options) {
  * "入口有没有把这条链路接上"。
  */
 const EXTERNAL_HOST = "images.example.test";
+
+/**
+ * 1.2.0（D-17）之前的缓存目录名。
+ *
+ * ⚠️ 插件**自己已经不认识它了**（那个设置项被删掉，任何地方都不许再读它）。
+ * 这个常量只在两处当**夹具**用：① 老 `data.json` 里那个遗留键；② "副本躺在
+ * 老缓存目录里"这件事 —— 用来证明上限淘汰与索引都**不再按目录判**。
+ */
+const LEGACY_CACHE_FOLDER = "_attachment-cache";
 const EXTERNAL_IMAGE_URL = `https://${EXTERNAL_HOST}/a.png`;
 /**
  * 等「启动那一轮定时器」要用多久。
@@ -425,6 +434,10 @@ export async function runLoadAcceptance(options = {}) {
 		autoUpload: true,
 		enabledExtensions: ["png", "jpg"],
 		attachmentFolder: "",
+		// ⚠️ 两个**故意的遗留值**：老用户的 data.json 里就是这样躺着。
+		// `"cache"` 是 D-17 取消掉的第三档（读设置时折成 `"keep"`）；
+		// `cacheFolder` 是随缓存目录一起删掉的字段（字段表直接丢掉，且**谁都不许再读它**）。
+		// 两条都有对应断言钉住 —— 见下面"一次性兼容升级"之后那两行。
 		localCopy: "cache",
 		cacheFolder: "_attachment-cache",
 		fallbackDownload: true,
@@ -525,6 +538,14 @@ export async function runLoadAcceptance(options = {}) {
 			!("objectKeyTemplate" in saveDataCalls[0].s3),
 			"★ 重写后的设置里不得再有遗留的 key 模板键（它已不参与任何行为）"
 		);
+
+		// ⭐ 1.2.0（D-17）：「本地副本」三态收窄成两态，而夹具里那个 `"cache"` 是
+		// 老 data.json 的真实形态 ⇒ 必须在**读设置时**折成 `"keep"`；`cacheFolder`
+		// 那个键则从此不存在于设置里（字段表丢掉它）。
+		// ⚠️ 两条一起钉：折叠失败会让老用户落进"没有本地副本"的档（**悄悄丢掉离线**），
+		// 而字段泄漏回来会让设置页凭空长出一个早已取消的输入框。
+		assert.equal(plugin.settings.localCopy, "keep", '★ 老 data.json 里的 "cache" 必须折成 "keep"');
+		assert.ok(!("cacheFolder" in plugin.settings), "★ 已取消的 cacheFolder 不得再出现在设置里");
 
 		// ⭐ 后台自动轮换必须**真的接上了**：轮换器存在（忘了 new 就等于没有这个功能），
 		// 而它依赖的两个定时器必须**登记了清理回调** —— 后者放在第 9b 节按**效果**验
@@ -1207,7 +1228,6 @@ ${text}`);
 		//（它正是"离线可用"这个主承诺的反面）。
 		// ============================================================
 		{
-			const cacheFolder = plugin.settings.cacheFolder;
 			const readIndex = async () => {
 				try {
 					return JSON.parse(await readFile(join(root, CACHE_INDEX_PATH), "utf8"));
@@ -1435,9 +1455,9 @@ ${text}`);
 			bigBytes.set(HOSTILE_BYTES);
 			const legacyKey = "legacy-big-1f.png";
 			const orphanKey = "legacy-gone-2f.png";
-			const legacyPath = `${plugin.settings.cacheFolder}/${legacyKey}`;
-			const orphanPath = `${plugin.settings.cacheFolder}/${orphanKey}`;
-			await mkdir(join(root, plugin.settings.cacheFolder), { recursive: true });
+			const legacyPath = `${LEGACY_CACHE_FOLDER}/${legacyKey}`;
+			const orphanPath = `${LEGACY_CACHE_FOLDER}/${orphanKey}`;
+			await mkdir(join(root, LEGACY_CACHE_FOLDER), { recursive: true });
 			await writeFile(join(root, legacyPath), Buffer.from(bigBytes));
 			await writeFile(join(root, orphanPath), Buffer.from([...bigBytes, 0x7c]));
 			// ⭐ 只有第一份在"云端"（HEAD 复核要能查到它）

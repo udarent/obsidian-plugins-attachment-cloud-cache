@@ -37,7 +37,6 @@ export async function runExternalHookSuite(mod) {
 		enabledExtensions: ["png"],
 		attachmentFolder: "",
 		localCopy: "cache",
-		cacheFolder: "_attachment-cache",
 		fallbackDownload: true,
 		externalImageCache: true,
 		externalImageDefault: "cache",

@@ -21,7 +21,7 @@ await withLoadedTs(["src/ui/settings-logic", "src/ui/settings-bindings", "src/s3
 	runSettingsUiSuite(mod);
 	console.log(
 		"Settings-UI tests passed (the only value conversion left is the numeric cache limit, which round-trips both ways, " +
-			"conditional visibility hides the cache folder unless the copy is cached, " +
+			"conditional visibility follows whether *this* mode can produce a copy at all (the limit is shown exactly when it can act - that is how P7 was closed), " +
 			"dropdown options are generated from the type list so no fake option can appear, " +
 			"bindings read/write dotted keys without inventing intermediate objects, " +
 			"empty values are refused only where empty would silently break a feature, " +

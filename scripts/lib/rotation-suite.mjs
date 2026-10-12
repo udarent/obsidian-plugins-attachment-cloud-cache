@@ -44,7 +44,6 @@ export async function runRotationSuite(mod) {
 	const { createCacheRotator, isRotationDue, DEFAULT_ROTATION_MIN_INTERVAL_MS } = mod;
 
 	const settingsWith = (overrides = {}) => ({
-		cacheFolder: "_attachment-cache",
 		cacheLimitMb: 1,
 		...overrides,
 	});

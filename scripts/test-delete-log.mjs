@@ -18,8 +18,8 @@ await withLoadedTs("src/maintenance/delete-log", async (mod) => {
 	const stats = await runDeleteLogSuite(mod);
 	console.log(
 		`Delete-log tests passed (${stats.cases} cases: the log lives next to the cache index in the ` +
-			"plugin folder - NOT in the cache folder, which the plugin promises you can delete wholesale, " +
-			"and which would take the evidence with it; when the plugin folder is unknown the path is " +
+			"plugin folder - NOT anywhere the plugin treats as disposable, because the point of the log is " +
+			"to outlive the deletion it records; when the plugin folder is unknown the path is " +
 			"refused outright instead of being defaulted, because a default name would drop a file into " +
 			"the vault root; entries are one JSON object per line so a script can " +
 			"read them back and a filename with commas or Chinese survives; a whole batch is appended in one " +

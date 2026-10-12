@@ -537,7 +537,6 @@ export function runMaintenanceSuite(mod) {
 		autoUpload: true,
 		attachmentFolder: "",
 		localCopy: "cache",
-		cacheFolder: CACHE,
 		fallbackDownload: true,
 		s3: {
 			endpoint: "https://s3.example.com",

@@ -82,13 +82,9 @@ export const I18N: Record<string, Locale> = {
 		// ── 离线副本 ──
 		localCopy: "Where the local copy goes",
 		localCopyDesc:
-			"Where the local copy of an uploaded file is kept. Without a local copy, files cannot be shown offline. Choosing \"do not keep\" turns caching off: the plugin uploads and rewrites links, and never fetches a copy back.",
-		localCopy_cache: "Move into the cache folder (offline works)",
-		localCopy_keep: "Leave in the attachments folder (offline works)",
-		localCopy_trash: "Do not keep a local copy (caching off; offline unavailable)",
-		cacheFolder: "Cache folder",
-		cacheFolderDesc:
-			"Relative to the vault root. This folder is disposable: deleting it only costs one re-download.",
+			"Where the local copy of an uploaded file is kept. The uploaded file itself is the copy — nothing is moved into a separate folder. Without a local copy, files cannot be shown offline. Choosing \"do not keep\" turns caching off: the plugin uploads and rewrites links, and never fetches a copy back.",
+		localCopy_keep: "Keep the file where it is (offline works)",
+		localCopy_trash: "Delete the local file after uploading (offline unavailable)",
 		fallbackDownload: "Download missing copies",
 		fallbackDownloadDesc:
 			"For files from this storage that have no local copy, such as ones synced from another device. Files from other sites are never downloaded. Not used when no local copy is kept, since caching is off then.",
@@ -243,7 +239,7 @@ export const I18N: Record<string, Locale> = {
 		// ── 缓存上限与自动轮换 ──
 		cacheLimit: "Local copy limit (MB)",
 		cacheLimitDesc:
-			"Once your local copies grow past this, the least recently used ones are deleted in the background and the disk space is freed right away — they are downloaded again the next time you view them. A copy is only ever deleted after confirming it still exists in your storage. 0 means no limit.",
+			"Once your local copies grow past this, the least recently used ones are deleted in the background and the disk space is freed right away — they are downloaded again the next time you view them. A copy is only ever deleted after confirming it still exists in your storage. Only copies the index knows about are counted: attachments you never uploaded are left alone. 0 means no limit.",
 		cacheLimitPlaceholder: "0 = no limit",
 		cacheLimitNone: "unlimited",
 		cacheLimitValue: "{mb} MB",
@@ -322,12 +318,9 @@ export const I18N: Record<string, Locale> = {
 
 		localCopy: "本地副本的处理",
 		localCopyDesc:
-			"上传后，本地副本放在哪里。选「不留」等于关闭缓存：插件只负责上传与改写链接，不会把副本补回来。",
-		localCopy_cache: "移入缓存目录（离线可用）",
+			"上传后，本地副本放在哪里。上传的那份文件**本身就是**本地副本（不会搬去别的目录）。选「不留」等于关闭缓存：插件只负责上传与改写链接，不会把副本补回来。",
 		localCopy_keep: "留在附件目录（离线可用）",
 		localCopy_trash: "不留本地副本（等于关闭缓存，离线不可用）",
-		cacheFolder: "缓存目录",
-		cacheFolderDesc: "相对 vault 根目录。这个目录是可丢弃的：删掉只会导致重新下载一次。",
 		fallbackDownload: "缺本地副本时自动下载",
 		fallbackDownloadDesc:
 			"属于本存储、却没有本地副本的附件（例如从另一台设备同步来的）会自动下载。站外文件永不下载。选「不留副本」时不生效（那一档已关闭缓存）。",
@@ -460,7 +453,7 @@ export const I18N: Record<string, Locale> = {
 		// ── 缓存上限与自动轮换 ──
 		cacheLimit: "本地副本上限（MB）",
 		cacheLimitDesc:
-			"本地副本总量超过这个大小后，后台会把最久没用过的副本删掉，磁盘空间立刻释放 —— 下次看到它们时会自动重新下载。只有在确认你的存储里仍然有这个对象之后才会删。填 0 表示不限制。",
+			"本地副本总量超过这个大小后，后台会把最久没用过的副本删掉，磁盘空间立刻释放 —— 下次看到它们时会自动重新下载。只有在确认你的存储里仍然有这个对象之后才会删。只统计**索引里记过的**副本：没有经手过的附件不计入。填 0 表示不限制。",
 		cacheLimitPlaceholder: "0 = 不限制",
 		cacheLimitNone: "不限",
 		cacheLimitValue: "{mb} MB",

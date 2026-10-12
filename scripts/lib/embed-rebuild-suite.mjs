@@ -48,7 +48,6 @@ const SETTINGS = {
 	autoUpload: true,
 	attachmentFolder: "",
 	localCopy: "cache",
-	cacheFolder: "_attachment-cache",
 	fallbackDownload: true,
 	externalImageCache: false,
 	externalImageDefault: "skip",

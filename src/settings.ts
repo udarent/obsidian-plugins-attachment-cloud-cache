@@ -73,24 +73,22 @@ function textValue(): FieldReader<string> {
 }
 
 /**
- * vault 路径：**读进来那一刻就归一**，并区分「必填」与「可空」两档。
+ * vault 路径：**读进来那一刻就归一**。
  *
  * ⚠️ 官方 guideline 要求：接受用户给的 vault 路径时必须过 normalizePath()。
  * 不归一的后果很具体：用户从别处粘一个反斜杠分隔或带双斜杠的路径（Windows 上很自然），
- * 会被**逐字**拼进缓存路径 ⇒ 生成 vault 里根本不存在的层级，
- * 而症状是「缓存目录里没有文件」「清理命令找不到东西」，看不出与那次粘贴有关。
+ * 会被**逐字**拼进 vault 路径 ⇒ 生成 vault 里根本不存在的层级，而症状是
+ * 「文件不在预期的地方」，看不出与那次粘贴有关。
  *
- * 两个调用点的「空」含义不同，所以保留与 textValue / requiredTextValue 一致的两档：
- * - cacheFolder **必填**：归一后为空（用户只敲了斜杠）就回落默认目录；
- * - attachmentFolder **可空**：空 = 跟随宿主的附件设置，是**有意义**的状态。
+ * ⚠️ 空 = **跟随宿主的附件设置**，是一个有意义的状态（所以归一后为空就返回 `""`，不回落默认）。
+ * 1.2.0（D-17）之前这里还有第二档「必填」（`cacheFolder` 用：归一后为空回落默认目录）——
+ * 那个字段随缓存目录一起没了，于是这一档也**删掉**：留着一个没有调用方的分支，
+ * 只会让下一个人以为还有别的情况要考虑。
  */
-function pathValue(options: { required?: boolean } = {}): FieldReader<string> {
-	const required = options.required ?? false;
+function pathValue(): FieldReader<string> {
 	return (raw, fallback) => {
 		if (typeof raw !== "string") return fallback;
-		const normalized = normalizePath(raw.trim());
-		if (normalized !== "") return normalized;
-		return required ? fallback : "";
+		return normalizePath(raw.trim());
 	};
 }
 
@@ -107,6 +105,26 @@ function requiredTextValue(): FieldReader<string> {
  */
 function oneOfValue<T extends string>(allowed: readonly T[]): FieldReader<T> {
 	return (raw, fallback) => (allowed.includes(raw as T) ? (raw as T) : fallback);
+}
+
+/** 1.2.0（D-17）之前 `localCopy` 的第三个取值（"移入缓存目录"）。 */
+const LEGACY_LOCAL_COPY = "cache";
+
+/**
+ * `localCopy` 的读取器：把**遗留值** `"cache"` 静默折成 `"keep"`（⭐ 1.2.0 / D-17）。
+ *
+ * 为什么不直接靠 `oneOfValue` 的"非法值回落默认"：那条路今天恰好也得到 `"keep"`，
+ * 但它**跟着默认值走** —— 哪天默认值改成别的档，老用户存着的 `"cache"` 就会被静默搬到
+ * 另一个档位去。这个字段决定"上传后本地文件还在不在"，搬错档是会让人丢文件的
+ * ⇒ 显式写死"`"cache"` 就是 `"keep"`"，不依赖默认值。
+ */
+function localCopyValue(): FieldReader<LocalCopyAction> {
+	return (raw, fallback) => {
+		if (raw === LEGACY_LOCAL_COPY) return "keep";
+		return (LOCAL_COPY_ACTIONS as readonly string[]).includes(raw as string)
+			? (raw as LocalCopyAction)
+			: fallback;
+	};
 }
 
 /**
@@ -136,9 +154,10 @@ function numberValue(options: { min?: number; max?: number } = {}): FieldReader<
 const FACTORY_SETTINGS = {
 	autoUpload: true,
 	attachmentFolder: "",
-	// 默认"移入缓存"：本地副本就是离线可用的前提，且缓存目录可整体清理
-	localCopy: "cache" as LocalCopyAction,
-	cacheFolder: "_attachment-cache",
+	// ⚠️ 默认「留在附件目录」：本地副本是"离线可用"这个主承诺的前提，而 1.2.0（D-17）起
+	// 那份副本**就是附件本身**（不再有"搬进缓存目录"这一步）⇒ 这是唯一不牺牲离线的档。
+	// ⚠️ 1.2.0 之前这里写的是 `"cache"`；老用户存着的值由 `localCopyValue` 折成同一个结果。
+	localCopy: "keep" as LocalCopyAction,
 	fallbackDownload: true,
 	// ⚠️ 默认**关**。打开它意味着插件会对外发 PUT 并**改写用户的笔记**，
 	// 而这种动作的同意应当显式；何况默认开会让已有 vault 里所有站外图站点
@@ -169,10 +188,7 @@ const SETTINGS_SPEC: {
 } = {
 	autoUpload: boolValue(),
 	attachmentFolder: pathValue(),
-	localCopy: oneOfValue(LOCAL_COPY_ACTIONS),
-	// ⚠️ 用 requiredTextValue 而不是 textValue：缓存目录为空会让缓存**静默失效**
-	// （路径推不出来 → 永远不命中），比"回落到默认目录"糟得多。
-	cacheFolder: pathValue({ required: true }),
+	localCopy: localCopyValue(),
 	fallbackDownload: boolValue(),
 	externalImageCache: boolValue(),
 	externalImageDefault: oneOfValue(EXTERNAL_IMAGE_DEFAULTS),

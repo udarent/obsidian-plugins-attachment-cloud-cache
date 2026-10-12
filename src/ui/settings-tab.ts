@@ -48,7 +48,6 @@ import {
 	publicLinkKey,
 	publicLinkTone,
 	randomSlotPart,
-	shouldShowCacheFolder,
 	shouldShowCacheLimit,
 	shouldShowFallbackDownload,
 } from "./settings-logic";
@@ -487,21 +486,12 @@ export class SettingsTab extends PluginSettingTab {
 				},
 			},
 			{
-				name: this.t("cacheFolder"),
-				desc: this.t("cacheFolderDesc"),
-				// ⚠️ 条件显示：只有选了「移入缓存」它才有意义。
-				// 用谓词表达而不是整页重渲染 —— 框架会在改动后自动重算。
-				// 一个看不见的字段不会和别的字段产生矛盾组合。
-				visible: () => shouldShowCacheFolder(this.plugin.settings.localCopy),
-				control: { type: "text", key: "cacheFolder" },
-			},
-			{
 				name: this.t("cacheLimit"),
 				desc: this.t("cacheLimitDesc"),
+				// ⭐ P7 的关闭方式（1.2.0 / D-17）：可见性跟着"**这一档会不会产生副本**"走
+				// （见 `shouldShowCacheLimit`）—— 从前它只在「移入缓存」档显示，而后台只看
+				// `cacheLimitMb > 0` ⇒ 「留在附件目录」档**看不见的开关却在生效**。
 				aliases: ["limit", "quota", "size", "rotate", "上限", "轮换", "容量", "空间"],
-				// ⚠️ 与缓存目录同一个显示条件：副本不在缓存目录里时（`keep`），
-				// 这个上限永远不会触发 —— 显示一个永远不起作用的开关比不显示更糟。
-				// ⭐ P7 的关闭方式：可见性跟着"这一档会不会有副本"走（见 `shouldShowCacheLimit`）
 				visible: () => shouldShowCacheLimit(this.plugin.settings.localCopy),
 				control: { type: "text", key: "cacheLimitMb", placeholder: this.t("cacheLimitPlaceholder") },
 			},
@@ -509,10 +499,10 @@ export class SettingsTab extends PluginSettingTab {
 				name: this.t("fallbackDownload"),
 				desc: this.t("fallbackDownloadDesc"),
 				aliases: ["download", "sync", "下载", "同步"],
-				// ⚠️ 与缓存目录同一个理由：选「不留副本」时那一档等于关闭缓存，
-				// 这一项永远不会动手 —— 显示一个不起作用的开关比不显示更糟。
+				// ⚠️ 选「不留副本」时那一档等于关闭缓存，这一项永远不会动手 ——
+				// 显示一个不起作用的开关比不显示更糟。
 				// ⚠️ 但「留在附件目录」时它**仍然有用**（副本在附件目录，换设备要它补回来），
-				// 所以只能按"缓存是否被关掉"判，不能复用它上面那个"只在 cache 档显示"。
+				// 所以只能按"缓存是否被关掉"判，不能复用上面那个"会不会产生副本"。
 				visible: () => shouldShowFallbackDownload(this.plugin.settings.localCopy),
 				control: { type: "toggle", key: "fallbackDownload" },
 			},

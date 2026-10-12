@@ -61,7 +61,6 @@ export async function runRenderHookSuite(mod) {
 		enabledExtensions: ["png"],
 		attachmentFolder: "",
 		localCopy: "cache",
-		cacheFolder: "_attachment-cache",
 		fallbackDownload: true,
 		s3: address,
 	};

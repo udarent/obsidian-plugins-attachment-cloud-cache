@@ -121,7 +121,6 @@ export function isWritableValue(key: unknown, value: unknown): boolean {
 	if (typeof value !== "string") return true;
 
 	switch (key) {
-		case "cacheFolder":
 		case "s3.region":
 			return value.trim() !== "";
 		case "cacheLimitMb":

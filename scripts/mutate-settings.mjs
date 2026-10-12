@@ -54,27 +54,17 @@ await runMutations({
 			name: "枚举不再校验（非法值直接生效）",
 			from: "return (raw, fallback) => (allowed.includes(raw as T) ? (raw as T) : fallback);",
 			to: "return (raw, fallback) => raw as T;",
-			expect: "非法枚举应回落默认",
+			// ⚠️ 实测先红的是"逐字段筛坏值"那一轮里的**类型一致性**断言（`null` 输入下
+			// `externalImageDefault` 必须与默认值同类型）。1.2.0（D-17）之后 `localCopy`
+			// 有自己的读取器，不再是 `oneOfValue` 的用户 ⇒ 那条更具体的"非法枚举应回落默认"
+			// 不再由这个变异照亮，先说话的换成了它。
+			expect: "类型应与默认值一致",
 		},
-		{
-			// ⚠️ 这两条原本锚在 `textListValue`（扩展名列表）上。那个设置项在 1.1.0
-			// 被删除（需求 R15：任何类型都上传），于是它们失去了锚点 —— 换成
-			// 同样"不会报错、只会行为不对"的两处：路径归一与必填回落。
-			// 后果：用户从别处粘一个反斜杠分隔或带双斜杠的路径，会被**逐字**拼进
-			// 缓存路径 ⇒ 生成 vault 里根本不存在的层级，而症状只是"缓存目录里没有文件"。
-			name: "vault 路径读进来时不再归一（反斜杠/重复斜杠会被逐字拼进缓存路径）",
-			from: "\t\tconst normalized = normalizePath(raw.trim());",
-			to: "\t\tconst normalized = raw.trim();",
-			expect: "缓存目录要归一",
-		},
-		{
-			// 后果：把缓存目录清成 `/`（归一后为空）时，必填字段**不回落默认** ⇒
-			// 缓存路径推导返回 null ⇒ 缓存静默失效（"设了缓存目录却什么都没缓存"）。
-			name: "必填路径归一后为空时不再回落默认（缓存静默失效）",
-			from: "\t\treturn required ? fallback : \"\";",
-			to: "\t\treturn \"\";",
-			expect: "归一后为空的必填路径要回落默认",
-		},
+		// ⚠️ 1.2.0（D-17）：这里原本有**三条**锚点，全部指向 `pathValue` ——
+		// 两条钉它的归一那一行（`cacheFolder` 与 `attachmentFolder` 当时共用这个读取器），
+		// 一条钉它的 `required` 分支。`cacheFolder` 随缓存目录被删、`required` 分支随之
+		// 没有调用方 ⇒ 前两条**收敛成一条**（见下面"用户填的路径"那条），后一条**删掉**。
+		// 留着锚在已删代码上的变异只会"找不到目标" —— 那是假绿。
 
 		// ── ⭐ 字段被真的读进来（"存得进读不出"）──
 		{
@@ -138,19 +128,35 @@ await runMutations({
 			expect: "默认应为 path-style",
 		},
 		{
-			name: "默认不再把本地副本移入缓存（离线可用的前提没了）",
-			from: '\tlocalCopy: "cache" as LocalCopyAction,',
+			name: "默认不再保留本地副本（离线可用的前提没了）",
+			from: '\tlocalCopy: "keep" as LocalCopyAction,',
 			to: '\tlocalCopy: "trash" as LocalCopyAction,',
 			expect: "本地副本默认应",
 		},
 		{
 			// 后果：本地副本的处置不再受枚举约束，而是原样透传 ⇒ 一个手改过
-			// data.json、或旧版本遗留的值会一路流到处置判定里（那一层只认三个取值），
+			// data.json、或旧版本遗留的值会一路流到处置判定里，
 			// 表现成"上传后本地副本的行为不是我选的那个"。
-			name: "★ localCopy 的枚举校验被去掉（坏值原样透传）",
-			from: "\tlocalCopy: oneOfValue(LOCAL_COPY_ACTIONS),",
+			// ⚠️ 1.2.0（D-17）：这条路现在同时管两件事 —— **枚举校验**与**遗留值折叠**
+			// 都在 `localCopyValue` 里，换成 `textValue()` 之后两条规则一起消失。
+			name: "★ localCopy 的读取不再校验也不再折叠（坏值与遗留值原样透传）",
+			from: "\tlocalCopy: localCopyValue(),",
 			to: "\tlocalCopy: textValue(),",
+			// ⚠️ 实测先红的是**早**在 4 节的那条"非法枚举应回落默认"（`localCopy` 是它举的例子），
+			// 而不是 4c 节新加的折叠断言 —— 换成 `textValue()` 之后枚举这一层先塌，
+			// 折叠那条根本轮不到发言。两条规则在同一处实现，红哪条取决于顺序，故照实记。
 			expect: "非法枚举应回落默认",
+		},
+		{
+			// ⭐ 后果：折叠**跟着默认值走**。今天默认恰好也是 `keep`，所以症状为零；
+			// 可一旦默认换成别的档，存着 `"cache"` 的老用户就会被静默搬到那个档去 ——
+			// 而这个字段决定"上传后本地文件还在不在"（搬错档会让人丢文件）。
+			// ⚠️ 这一条的门牙是 4c 节那条**反向断言**（"折叠不能跟着默认值走"）：
+			// 少了它，"把折叠删掉"在默认值仍为 keep 时看不出任何差别。
+			name: "★ 遗留值不再折叠（改为跟着默认值走 ⇒ 默认档一变，老用户被静默搬档）",
+			from: '\t\tif (raw === LEGACY_LOCAL_COPY) return "keep";',
+			to: "\t\t// 变异：不折叠，交给下面的默认回落",
+			expect: "折叠不能跟着默认值走",
 		},
 		{
 			// ⚠️ 锚点钉在 `s3BlockOf` 的**那一行**上（1.2.0 把"怎么读 s3 段"收敛成了一处）：
@@ -161,20 +167,12 @@ await runMutations({
 			expect: "s3.bucket 必须能往返",
 		},
 		{
-			// 后果：用户粘进来的反斜杠/双斜杠路径被**逐字**落进 data.json 并拼进缓存路径 ⇒
-			// 生成 vault 里不存在的层级，症状是"缓存目录里没有文件"，与那次粘贴看不出关系。
+			// 后果：用户粘进来的反斜杠/双斜杠路径被**逐字**落进 data.json 并拼进 vault 路径 ⇒
+			// 生成 vault 里不存在的层级，症状是"文件不在预期的地方"，与那次粘贴看不出关系。
 			name: "★ 用户填的路径不再归一（反斜杠/双斜杠逐字落盘）",
-			from: "\t\tconst normalized = normalizePath(raw.trim());",
-			to: "\t\tconst normalized = raw.trim();",
-			expect: "缓存目录要归一",
-		},
-		{
-			// 后果：只敲了斜杠时归一成空串，而必填字段拿了空目录名 ⇒
-			// 缓存目录变成 vault 根目录，清理命令会去扫描整个库。
-			name: "★ 必填路径归一后为空时不再回落默认（缓存目录变成库根）",
-			from: "\t\treturn required ? fallback : \"\";",
-			to: '\t\treturn "";',
-			expect: "归一后为空的必填路径要回落默认",
+			from: "\t\treturn normalizePath(raw.trim());",
+			to: "\t\treturn raw.trim();",
+			expect: "附件目录要归一",
 		},
 	],
 });

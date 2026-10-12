@@ -100,26 +100,19 @@ export function orphanAskOptions(labelOf: (value: OrphanAskMode) => string): Rec
 }
 
 /**
- * 「缓存目录」这一项要不要显示。
- *
- * ⚠️ 这是消除"矛盾配置"的**界面侧**手段：只有选了「移入缓存」，
- * 缓存目录才有意义。留着它可见会让用户以为改它有用 ——
- * 而实际上 `planLocalCopy` 在其余两种取值下根本不会用到它。
- * 看不见的字段不会产生矛盾。
+ * ⚠️ 1.2.0（D-17）删掉了 `shouldShowCacheFolder`：那个选项是"选「移入缓存」才显示缓存目录"，
+ * 而缓存目录与那个选项**一起去掉了**，于是这条谓词没有任何调用方。
+ * 删掉它是死代码纪律的一部分（连同套件断言与变异锚点）—— 别把它当成"以后可能有用"留下。
  */
-export function shouldShowCacheFolder(action: unknown): boolean {
-	return action === "cache";
-}
 
 /**
  * 「缺本地副本时自动下载」这一项要不要显示。
  *
- * ⚠️ 与缓存目录同一个理由：选「不留副本」时那一档**等于关闭缓存**
- * （判定在 `types.ts` 的 `isCacheDisabled`），这一项永远不会动手 ——
- * 显示一个永远不起作用的开关比不显示更糟。
+ * ⚠️ 选「不留副本」时那一档**等于关闭缓存**（判定在 `types.ts` 的 `isCacheDisabled`），
+ * 这一项永远不会动手 —— 显示一个永远不起作用的开关比不显示更糟。
  *
- * ⚠️ 但**不能**图省事复用 `shouldShowCacheFolder`：选「留在附件目录」时缓存目录确实没用，
- * 而这一项**仍然有用** —— 副本就在附件目录里，换设备时正是它把副本补回来。
+ * ⚠️ 反过来，这一项**不能**跟着"会不会产生副本"一起藏掉：选「留在附件目录」时副本就在
+ * 附件目录里，换设备时正是它把副本补回来。它与「本地副本上限」问的其实是两个问题。
  */
 export function shouldShowFallbackDownload(action: unknown): boolean {
 	return !isCacheDisabled(action);

@@ -17,7 +17,6 @@ import assert from "node:assert/strict";
 export function runSettingsUiSuite(mod) {
 	const {
 		// settings-logic
-		shouldShowCacheFolder,
 		shouldShowCacheLimit,
 		shouldShowFallbackDownload,
 		localCopyOptions,
@@ -54,19 +53,17 @@ export function runSettingsUiSuite(mod) {
 
 	// ============================================================
 	// 2. 条件显示：一个看不见的字段不会和别的字段产生矛盾
+	//
+	// ⚠️ 1.2.0（D-17）删掉了「缓存目录」这个设置项，于是"选「移入缓存」才显示缓存目录"
+	// 那条谓词（`shouldShowCacheFolder`）连同它的五条断言一起没了 —— 一个测已删函数的
+	// 段落比没有测试更糟（会让人以为字段还在）。
 	// ============================================================
-	assert.equal(shouldShowCacheFolder("cache"), true, "移入缓存时才有缓存目录可配");
-	assert.equal(shouldShowCacheFolder("keep"), false, "★ 原地保留时缓存目录必须隐藏（否则用户以为改它有用）");
-	assert.equal(shouldShowCacheFolder("trash"), false, "★ 不留副本时同理");
-	assert.equal(shouldShowCacheFolder("nonsense"), false, "非法值也隐藏（宁可少显示，不可误导）");
-	assert.equal(shouldShowCacheFolder(undefined), false, "缺值时隐藏");
 
 	// ⭐ 「缺本地副本时自动下载」：只有「不留副本」那一档才隐藏。
 	//
 	// 那一档等于**关闭缓存**（用户口径），这一项永远不会动手 —— 显示它只会让用户
 	// 以为自己关掉的那件事还有开关可用。⚠️ 而「留在附件目录」**不能**跟着隐藏：
 	// 副本就在附件目录里，换设备时正是这一项把副本补回来。
-	assert.equal(shouldShowFallbackDownload("cache"), true, "移入缓存时要显示");
 	assert.equal(shouldShowFallbackDownload("keep"), true, "★ 原地保留时**仍然**要显示（换设备靠它补副本）");
 	assert.equal(shouldShowFallbackDownload("trash"), false, "★ 不留副本 = 关闭缓存，这一项没有作用，必须隐藏");
 	assert.equal(shouldShowFallbackDownload("nonsense"), true, "非法值不该把开关藏起来（宁可多显示，不可静默少一个开关）");
@@ -76,7 +73,6 @@ export function runSettingsUiSuite(mod) {
 	// 这**正是 P7 的关闭方式**：从前它只在「移入缓存」档显示，而后台判定只看
 	// `cacheLimitMb > 0` ⇒ 「原地保留」档"看不见的开关却在生效"。
 	// 现在统计范围含附件目录里的副本，于是"看得见 = 真的生效、看不见 = 真的不起作用"。
-	assert.equal(shouldShowCacheLimit("cache"), true, "移入缓存（老设置）档要显示");
 	assert.equal(
 		shouldShowCacheLimit("keep"),
 		true,
@@ -86,18 +82,27 @@ export function runSettingsUiSuite(mod) {
 	assert.equal(shouldShowCacheLimit("nonsense"), true, "非法值不该把开关藏起来（宁可多显示）");
 	assert.equal(shouldShowCacheLimit(undefined), true, "缺值时按默认档显示");
 
+	// ⚠️ 遗留值 `"cache"`：读设置时已经被折成 `"keep"`（`settings.ts::localCopyValue`），
+	// 界面**看不到**它。但这两个谓词收的是 `unknown`，所以顺手钉一条"即便漏进来，
+	// 结果也必须与 keep 一致" —— 折叠哪天失效，它们是最后一道不会说谎的显示逻辑。
+	assert.equal(shouldShowFallbackDownload("cache"), true, "遗留值按 keep 处理（显示）");
+	assert.equal(shouldShowCacheLimit("cache"), true, "遗留值按 keep 处理（显示）");
+
 	// ============================================================
 	// 3. 下拉选项必须与类型清单同源
 	// ============================================================
 	const options = localCopyOptions((value) => `label:${value}`);
 	assert.deepEqual(
 		Object.keys(options).sort(),
-		["cache", "keep", "trash"],
+		["keep", "trash"],
 		"选项集合必须与 LOCAL_COPY_ACTIONS 完全一致（不多不少）"
 	);
-	assert.equal(options.cache, "label:cache", "选项值对应文案");
+	assert.equal(options.keep, "label:keep", "选项值对应文案");
 	// 反向守护：`ask` 曾是合法取值但从未实现，不该再出现在界面上
 	assert.equal("ask" in options, false, "★ 未实现的 ask 不该出现在选项里（假选项）");
+	// ⭐ 1.2.0（D-17）：「移入缓存目录」这一档没了（缓存目录整个取消），
+	// 界面上不能还留着一个搬文件的选项。
+	assert.equal("cache" in options, false, '★ 已取消的 "cache" 档不该再出现在选项里');
 
 	// ⭐ 缓存清理**没有**「删除方式」的下拉选项生成器 —— 那个备选已被去掉。
 	// 这条与 `settings-suite` 里"没有 deleteMode 设置项"是同一件事的两端：
@@ -210,14 +215,10 @@ export function runSettingsUiSuite(mod) {
 
 	// ============================================================
 	// 8. 哪些值可以写进设置
+	//
+	// ⚠️ 1.2.0（D-17）：`cacheFolder` 那三条（非空可写 / 空与纯空白不可写）随字段一起删除 ——
+	// 它当时"不能为空"是因为空目录名会让缓存路径推导直接返回 null。
 	// ============================================================
-	assert.equal(isWritableValue("cacheFolder", "image-cache"), true, "非空目录名可写");
-	assert.equal(
-		isWritableValue("cacheFolder", ""),
-		false,
-		"★ 空缓存目录不可写 —— 它会让缓存路径推不出来（缓存静默失效）"
-	);
-	assert.equal(isWritableValue("cacheFolder", "   "), false, "纯空白同样不可写");
 	assert.equal(isWritableValue("s3.region", ""), false, "区域不能为空");
 	assert.equal(
 		isWritableValue("attachmentFolder", ""),
@@ -322,7 +323,7 @@ export function runSettingsUiSuite(mod) {
 	// ============================================================
 	// 10. 连通性前置检查
 	// ============================================================
-	const base = { autoUpload: true, attachmentFolder: "", localCopy: "cache", cacheFolder: "c", fallbackDownload: true };
+	const base = { autoUpload: true, attachmentFolder: "", localCopy: "keep", fallbackDownload: true };
 	const s3Base = { endpoint: "https://s3.example.com", region: "auto", bucket: "b", publicUrlBase: "", accessKeyId: "AKIA", secretAccessKeyRef: "s", forcePathStyle: true };
 	const ready = connectionReadiness(readerWith({ s: "SECRET" }), { ...base, s3: s3Base });
 	assert.equal(ready.ready, true, "配置齐全时应就绪");

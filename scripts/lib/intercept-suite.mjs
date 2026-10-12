@@ -27,7 +27,6 @@ export function runInterceptSuite(mod) {
 		autoUpload: true,
 		attachmentFolder: "",
 		localCopy: "cache",
-		cacheFolder: "_attachment-cache",
 		fallbackDownload: true,
 		s3: {
 			endpoint: "https://s3.example.com",

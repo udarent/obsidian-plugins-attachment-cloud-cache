@@ -234,9 +234,8 @@ export async function runExternalCacheSuite(mod) {
 		);
 	}
 
-	assert.equal(localCopyForExternal("trash"), "cache", "★ trash 要改成 cache（否则离线看不见，且症状不可见）");
+	assert.equal(localCopyForExternal("trash"), "keep", "★ trash 要改成 keep（那条链必须留本地副本，否则离线看不见且症状不可见）");
 	assert.equal(localCopyForExternal("keep"), "keep", "keep 有本地副本，不必改");
-	assert.equal(localCopyForExternal("cache"), "cache", "cache 原样");
 
 	for (const status of ["fetch-timeout", "fetch-network", "fetch-failed", "refused", "unavailable", "cached"]) {
 		assert.equal(shouldReportExternalFailure(status), false, `★ ${status} 应静默（离线/没做，不是故障）`);
@@ -369,7 +368,6 @@ export async function runExternalCacheSuite(mod) {
 			enabledExtensions: ["png"],
 			attachmentFolder: "",
 			localCopy: "cache",
-			cacheFolder: "_attachment-cache",
 			fallbackDownload: true,
 			externalImageCache: true,
 			...options.settings,

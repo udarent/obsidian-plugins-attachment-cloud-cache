@@ -44,21 +44,18 @@
  * 它们描述的是同一件事（本地副本的命运），拆成两个必然产生矛盾组合：
  * `action: "cache"` + `cacheEnabled: false` 会**静默退化**成"原地保留"，
  * 而 `action: "trash"` 会**压过**缓存开关（开了"缓存"却永远拿不到离线）。
- * 现在只有三个互斥且都能落地的结果，不存在"选了 A 却得到 B"。
+ * 现在只有两个互斥且都能落地的结果，不存在"选了 A 却得到 B"。
+ *
+ * ⚠️ **1.2.0（D-17）起从三态收窄成两态**：原来的 `"cache"`（上传后把文件搬进缓存目录）
+ * 整个消失 —— 没有缓存目录可搬，那份文件**本身就是**本地副本。老 `data.json` 里的
+ * `"cache"` 由 `settings.ts` 静默折成 `"keep"`（见 `localCopyValue`），它不再是一个可选值。
  */
 export type LocalCopyAction =
 	/**
-	 * 移入缓存目录（默认）。
-	 *
-	 * 附件目录因此保持干净，副本集中在缓存目录里，而缓存目录是**可整体清理**的。
-	 * 离线可见。
-	 */
-	| "cache"
-	/**
-	 * 留在附件目录原地。
+	 * 留在附件目录原地（**默认**）。
 	 *
 	 * 不额外建目录；笔记里的链接同样改成远端地址，所以这个文件不再被笔记引用，
-	 * 只作为离线副本存在。vault 会因此持续变大。离线可见。
+	 * 只作为离线副本存在。离线可见。
 	 */
 	| "keep"
 	/**
@@ -77,7 +74,7 @@ export type LocalCopyAction =
 	 */
 	| "trash";
 
-export const LOCAL_COPY_ACTIONS: readonly LocalCopyAction[] = ["cache", "keep", "trash"];
+export const LOCAL_COPY_ACTIONS: readonly LocalCopyAction[] = ["keep", "trash"];
 
 export function isLocalCopyAction(value: unknown): value is LocalCopyAction {
 	return typeof value === "string" && (LOCAL_COPY_ACTIONS as readonly string[]).includes(value);
@@ -228,8 +225,10 @@ export interface PluginSettings {
 	attachmentFolder: string;
 	/** 上传成功后本地副本怎么处理。 */
 	localCopy: LocalCopyAction;
-	/** 缓存目录（相对 vault 根）。仅在 `localCopy === "cache"` 时起作用。 */
-	cacheFolder: string;
+	// ⚠️ 1.2.0（D-17）起**没有** `cacheFolder` 字段了：缓存目录整个取消，本地副本就是
+	// 附件目录里那份原件。老 `data.json` 里那个键由字段表自动丢弃（`fromJSON` 对多余键本就忽略）。
+	// ⚠️ 迁移期若还需要"老缓存目录在哪"，**不要**回到这个字段：`data.json` 可能已被之后任意
+	// 一次设置保存清掉它 ⇒ 从**索引条目的 `cachePath`** 反推才是可靠来源（设计 §20.11 有更正）。
 	/**
 	 * 遇到「属于本存储但没有本地副本」的图片时是否自动下载。
 	 *
