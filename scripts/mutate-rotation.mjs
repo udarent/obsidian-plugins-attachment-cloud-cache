@@ -10,7 +10,7 @@ import { runRotationSuite } from "./lib/rotation-suite.mjs";
  */
 await runMutations({
 	source: "src/maintenance/rotation.ts",
-	entries: ["src/maintenance/rotation", "src/maintenance/eviction", "src/cache-path"],
+	entries: ["src/maintenance/rotation", "src/maintenance/eviction"],
 	suite: runRotationSuite,
 	mutations: [
 		{

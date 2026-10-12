@@ -19,7 +19,6 @@ await runMutations({
 		"src/maintenance/references",
 		"src/maintenance/batch",
 		"src/cache/index",
-		"src/cache-path",
 		"src/settings",
 		"src/types",
 		// 套件里有外链候选那一段（它要跑判定层），所以要一起进 bundle ——

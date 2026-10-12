@@ -20,7 +20,6 @@ await runMutations({
 		"src/maintenance/attach-watch",
 		"src/maintenance/batch",
 		"src/cache/index",
-		"src/cache-path",
 		"src/vault-files",
 		"src/settings",
 		"src/types",

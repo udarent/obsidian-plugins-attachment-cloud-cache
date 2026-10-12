@@ -7,7 +7,7 @@ import { runRotationSuite } from "./lib/rotation-suite.mjs";
  * 依赖全部注入（列目录、扫笔记、执行淘汰、提示都是假的），
  * 所以这套**不碰磁盘、不碰网络** —— 它要验的是"什么时候去动文件"，而不是"怎么动"。
  */
-await withLoadedTs(["src/maintenance/rotation", "src/maintenance/eviction", "src/cache-path"], async (mod) => {
+await withLoadedTs(["src/maintenance/rotation", "src/maintenance/eviction"], async (mod) => {
 	await runRotationSuite(mod);
 	console.log(
 		"Rotation tests passed (candidates and the size total both come from INDEX ∩ DISK, so a stale row whose file is " +

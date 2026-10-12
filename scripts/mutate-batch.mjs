@@ -22,7 +22,6 @@ await runMutations({
 		"src/maintenance/references",
 		"src/maintenance/batch",
 		"src/cache/index",
-		"src/cache-path",
 		"src/settings",
 		"src/types",
 		"src/render/external-decide",
