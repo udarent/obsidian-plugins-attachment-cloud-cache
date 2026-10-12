@@ -145,6 +145,25 @@ export const I18N: Record<string, Locale> = {
 		cloudCleanupListFailed: "Could not list the objects in your storage: {error}",
 		cloudCleanupPersistFailed: "Could not save the cache index: {error}",
 		cloudCleanupUnreadableNote: "Could not read {path}, so the cleanup was cancelled.",
+		// F18：清理本地占用（并入「不留副本」档，见设计 §20.10）
+		releaseSpaceName: "Free up local space",
+		releaseSpaceDesc:
+			"Delete the local copies of attachments that are already uploaded and still linked from a note through your storage. The files are deleted for good — not moved to the trash — so the space comes back right away. Your storage keeps the objects and your notes keep their links; a copy you delete is downloaded again the next time a note shows it. Copies no note links to are not covered here.",
+		releaseSpaceButton: "Delete local copies…",
+		releaseSpaceTitle: "Delete these local copies for good?",
+		releaseSpaceSummary: "{count} local copy(ies), about {mb} MB:",
+		releaseSpaceCannotUndo:
+			"These files are deleted permanently — they do not go to the trash, so this cannot be undone. They are downloaded again the next time a note shows them.",
+		releaseSpaceCloudUntouched:
+			"Nothing in your storage is deleted and your notes are not changed — and each copy is only deleted after confirming it is still there.",
+		releaseSpaceCta: "Delete permanently",
+		releaseSpaceDone: "Deleted {deleted} local copy(ies), freeing about {mb} MB. Skipped {skipped}.",
+		releaseSpaceNothingDeleted:
+			"Nothing was deleted: {skipped} copy(ies) could not be confirmed in your storage just now. A local copy is only deleted when the object is still there — it may be the last one. Local copies look fine; if the objects really are gone, your index and your storage have drifted apart.",
+		releaseSpaceNothing:
+			"Nothing to clean up: this only covers copies that a note still links to through your storage (attachments you never uploaded are left alone).",
+		releaseSpaceNothingMissing:
+			"Nothing to clean up. {count} index record(s) point at files that are no longer there — \"Check and repair the local-copy index\" clears those.",
 		orphanTitle: "Clean up these unused attachments?",
 		orphanBody:
 			"{count} attachment(s) you uploaded are no longer linked from any note or canvas.",
@@ -364,6 +383,25 @@ export const I18N: Record<string, Locale> = {
 		cloudCleanupListFailed: "无法列出你存储里的对象：{error}",
 		cloudCleanupPersistFailed: "缓存索引保存失败：{error}",
 		cloudCleanupUnreadableNote: "读不到 {path}，因此取消了这次清理。",
+		// F18：清理本地占用（并入「不留副本」档，见设计 §20.10）
+		releaseSpaceName: "释放本地空间",
+		releaseSpaceDesc:
+			"把已上传、且笔记里仍引用着你存储地址的附件本地副本清掉。这些文件会被永久删除（不进回收站），所以空间立刻释放；云端对象与笔记里的链接都不动，删掉的那份下次看图时会自动重新下载。没有任何笔记引用的副本不归它管。",
+		releaseSpaceButton: "清理本地副本…",
+		releaseSpaceTitle: "永久删除这些本地副本？",
+		releaseSpaceSummary: "{count} 个本地副本，约 {mb} MB：",
+		releaseSpaceCannotUndo:
+			"这些文件会被永久删除（不进回收站），无法撤销。下次笔记里显示它们时会自动重新下载。",
+		releaseSpaceCloudUntouched:
+			"云端对象与你的笔记都不会被改动；每一份都是在确认云端仍然有它之后才会删。",
+		releaseSpaceCta: "永久删除",
+		releaseSpaceDone: "已永久删除 {deleted} 个本地副本，释放约 {mb} MB；跳过 {skipped} 个。",
+		releaseSpaceNothingDeleted:
+			"一个都没删：有 {skipped} 份副本刚才没能确认云端仍然有它。只有在云端确实还在时才会删本地副本 —— 它可能是最后一份。图不受影响；如果云端确实已经没有了，说明索引与你的存储对不上了。",
+		releaseSpaceNothing:
+			"没有可清理的本地副本 —— 只清理笔记里仍引用着你存储地址的那些（你自己未上传的附件一概不碰）。",
+		releaseSpaceNothingMissing:
+			"没有可清理的副本。有 {count} 条索引记录指向的文件已经不在，那些记录由「自检并修复本地副本索引」处理。",
 		orphanTitle: "要清掉这些没人用的附件吗？",
 		orphanBody: "你上传过的 {count} 个附件已经不再被任何笔记或画布引用了。",
 		orphanMore: "……还有 {count} 个。",

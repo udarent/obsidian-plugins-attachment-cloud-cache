@@ -91,7 +91,7 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 | **Test connection** | One signed request, then one **credential-free** request to the address your links would use. |
 | **Import from a credentials file** | MinIO's "Download credentials" JSON fills in endpoint, key and addressing mode; no copy is kept. |
 | **Upload new attachments automatically** | On by default; off returns all of it to Obsidian, leaving files local only. |
-| **Where the local copy goes** | Keep the file where it is (default), or delete it after uploading. The file itself is the copy — nothing is moved into a separate folder. "Delete" turns caching off: the plugin uploads and rewrites links, and never fetches a copy back — so nothing works offline. |
+| **Where the local copy goes** | Keep the file where it is (default), or delete it after uploading. The file itself is the copy — nothing is moved into a separate folder. "Delete" turns caching off: the plugin uploads and rewrites links, and never fetches a copy back — so nothing works offline. Switching to "delete" asks once whether to also clear the copies already on disk. |
 | **Cache size limit (MB)** | Trims least-recently-used copies past this; `0` means no limit. Only copies the index knows about are counted. |
 | **Download missing copies** | Auto-downloads our own objects that have no local copy — never anything from other sites. Hidden when "none" is selected above, because caching is off then. |
 | **Cache files from other sites** | Off by default; while it is off, nothing off-site is touched. |
@@ -123,6 +123,11 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
   be undone; only *this* device's references are visible.
 - **"Do not keep a local copy" turns caching off**, which is the plain-image-host behaviour: files are uploaded and
   the note's link is rewritten, but nothing is kept or fetched back, so nothing is available offline.
+- **Switching to "delete" asks once about the copies already on disk** — it offers to clear the local copies of
+  attachments that were uploaded before and are still linked from a note, and says how much room that frees.
+  Those files are deleted **for good, not moved to the trash**, so the space comes back at once; your storage
+  objects and the note's links are untouched, and a copy you remove is downloaded again next time a note shows it.
+  Each one is only deleted after confirming the object is still in your storage, and copies no note links to are left alone.
 - **The local-copy index repairs itself.** After startup the plugin drops index entries whose files are already
   gone — it only ever edits the index and never touches a file. If you deleted a copy outside Obsidian,
   or a file never made it across from another device, this is what puts the numbers straight. *Repair the
@@ -257,7 +262,7 @@ Obsidian version and which storage provider you use; the errors name the step th
 | **测试连接** | 先发一次签名请求，再**不带凭据**请求一次「你笔记里会写的那条地址」。 |
 | **从凭据文件导入** | MinIO「下载凭据」的 JSON 会填好服务地址、密钥与寻址方式；不留副本。 |
 | **新增附件自动上传** | 默认开启；关闭后这些全交回 Obsidian，文件只存在本地。 |
-| **本地副本的处理** | 留在原处（默认）或上传后删除。**那份文件本身就是**本地副本，不会搬去别的目录。选「不留」等于关闭缓存：只上传并改写链接，也不会把副本补回来，所以离线不可用。 |
+| **本地副本的处理** | 留在原处（默认）或上传后删除。**那份文件本身就是**本地副本，不会搬去别的目录。选「不留」等于关闭缓存：只上传并改写链接，也不会把副本补回来，所以离线不可用。切到「不留」时会问一次，要不要把盘上已有的副本也一起清掉。 |
 | **缓存大小上限（MB）** | 超过后按最近最少使用清理；`0` 表示不限制。只统计索引里记过的副本。 |
 | **缺本地副本时自动下载** | 只自动下载**本存储**没有副本的对象，站外文件永不下载。上面选「不留」时这一项不显示（那一档已关闭缓存）。 |
 | **缓存站外文件** | 默认关闭；关着时站外的东西一步都不会被碰。 |
@@ -285,6 +290,10 @@ Obsidian version and which storage provider you use; the errors name the step th
   默认保留。同一个文件传两次只存一份，所以一个对象可能被多篇笔记、多台设备共用，而云端删除无法撤销；清理只能看到**本设备**的引用。
 - **「不留本地副本」这一档等于关闭缓存**，也就是普通图床的行为：文件照常上传、笔记里的链接照样改写，
   但不保留副本、也不把副本取回来，所以断网时什么都看不到。
+- **切到「不留本地副本」时会问你一次：盘上已有的副本要不要一起清掉** —— 清的是**已经上传过、且笔记里仍
+  引用着你存储地址**的那些附件本地副本，并告诉你能腾出多少空间。这些文件**会被永久删除，不进回收站**
+  （所以空间立刻释放）；云端对象与笔记里的链接都不动，删掉的那份下次看图时会自动重新下载。每一份都是在
+  确认云端仍然有它之后才会删；没有任何笔记引用的那些不归它管。
 - **本地副本索引会自愈。** 启动之后，插件会摘掉那些指向「文件已经不在了」的索引记录 —— 它**只改索引，
   绝不碰任何文件**。在 Obsidian 外面删过某份副本、或某个文件没能从别的设备同步过来，靠的就是它把数字
   理顺。「自检并修复本地副本索引」做的是同一件事，供你想立刻核一遍时用，并会告诉你查出多少条失效记录。

@@ -138,6 +138,24 @@ export function shouldShowCacheLimit(action: unknown): boolean {
 }
 
 /**
+ * 「释放本地空间」（F18：清掉存量副本）这一项要不要显示。
+ *
+ * ⚠️ 只在**「不留副本」**那一档显示 —— 判据是"这一档的含义**就是**本地不留副本"，
+ * 而这个按钮做的正是把那条含义**应用到已经存在的那批副本**上（设计 §20.10）。
+ *
+ * ⚠️ 在「保留副本」档**必须**藏起来：用户刚说了"我要留副本"，再给他一个
+ * "把副本全删掉"的按钮是**自相矛盾**的配置（与"隐藏缓存目录"同一条纪律：
+ * 界面上的两个元素不该互相打架）。
+ *
+ * ⚠️ 但**不能**并入 `shouldShowCacheLimit` / `shouldShowFallbackDownload`：
+ * 那两条问的是"这一档**会不会产生**副本"，这一条问的是"有没有**存量**要清" ——
+ * 三个问题各自都可能单独变（例如将来给「保留副本」档也开一个"只清未引用的"入口）。
+ */
+export function shouldShowReleaseSpace(action: unknown): boolean {
+	return action === "trash";
+}
+
+/**
  * 「测试连接」失败的归类。
  *
  * 不直接把 `error.message` 抛给用户：那是给排查用的（可能带一屏 XML），

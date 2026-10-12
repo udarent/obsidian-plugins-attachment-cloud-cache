@@ -26,6 +26,7 @@ import { auditCache } from "./audit";
 import type { CacheAudit, DiskFile } from "./audit";
 import { removeCacheFile } from "./remove";
 import type { EvictionOutcome, EvictionPlan } from "./eviction";
+import type { ReleaseSpaceSelection } from "./release-space";
 import { keysInText, planCanvasRewrites, planLinkRewrites } from "./references";
 import type { RewriteRule } from "./references";
 import { selectUploadCandidates } from "./batch";
@@ -150,6 +151,22 @@ export async function inspectLocalCopies(
 	};
 }
 
+/**
+ * 一条**要删掉的本地副本**。
+ *
+ * ⚠️ 上限淘汰（`eviction.ts`）与存量清理（`release-space.ts`）共用这个形状 ——
+ * 它们是**同一条执行路径**（F18 与 §20.3④ 的差别只在"候选怎么挑"，不在"怎么删"）。
+ * 少一种形状就少一处可能被改歪的删除代码。
+ */
+export interface RemovalVictim {
+	/** 对象 key（执行时按它复核云端）。 */
+	key: string;
+	/** 本地副本的 vault 相对路径。 */
+	cachePath: string;
+	/** 字节数（**索引记的值** —— 用于汇报"释放了多少"）。 */
+	bytes: number;
+}
+
 /** 按计划执行淘汰（缓存上限轮换的执行层）。 */
 export interface EvictionRunResult extends EvictionOutcome {
 	/** 顺手摘掉的索引记录数。 */
@@ -157,40 +174,59 @@ export interface EvictionRunResult extends EvictionOutcome {
 }
 
 /**
- * 按计划执行淘汰：**把文件删掉，并摘掉它们的索引记录**。
+ * **唯一的删除循环**：把清单上的副本**验证后删掉**，并摘掉它们的索引记录。
+ *
+ * ## 谁在用
+ *
+ * 1. `runEviction`（自动淘汰，超上限时）；
+ * 2. `runReleaseSpace`（F18 存量清理，用户在「不留副本」档下主动确认）。
+ *
+ * 两者**必须**走同一份：它们都删**用户的附件目录里的文件**，
+ * 判据也不完全一样（一个按 LRU、一个按用户勾选），但"删之前要复核什么"一模一样 ——
+ * 而那才是风险所在。分成两份代码，早晚会有一份漏掉某道复核。
+ *
+ * ## ⚠️ 双保险（1.2.0 换掉了旧的那道）
+ *
+ * 清单是**上一拍**算出来的，而这个函数在**删文件**，少一层校验的代价不可逆：
+ *
+ * 1. **索引此刻仍认这份副本**（key 与路径都对得上）—— 这一拍之间用户可能已经
+ *    把它挪走、改名，或者换成了另一个同名文件；
+ * 2. **云端现在确实还有这个对象**（`confirmRemote`）—— 否则删掉的是**最后一份**。
+ *    台账只证明"我们传过它"，而别的设备可能已经把云端对象清掉了。
+ *    ⚠️ 这条在 1.2.0 之前**不需要**（缓存目录里的东西必然是刚传上去的）；
+ *    现在副本可能比云端对象活得久，所以必须问服务端。确认不上（离线/出错）⇒ 不分删。
  *
  * ## ⚠️ 为什么一定要摘索引
  *
- * 索引的用途是回答"这条 URL 对应的本地副本在哪"。文件被淘汰之后若还留着记录，
+ * 索引的用途是回答"这条 URL 对应的本地副本在哪"。文件被删掉之后若还留着记录，
  * 渲染层会以为本地还有那份副本 → 换成 `app://` 地址 → 加载失败 → 走 error 兜底 →
  * **每次渲染都白试一次**（还每次都去请求一遍补齐）。摘掉之后判定会回到
  * "属于本存储、但本地没有副本"，于是下次看到这张图时**自动重新下载** ——
- * 这正是"淘汰之后还能自己长回来"的机制。
+ * 这正是"删掉之后还能自己长回来"的机制。
  *
- * ## ⭐ 为什么删得干脆是可以的（1.2.0 重述）
+ * ## ⭐ 为什么删得干脆是可以的
  *
- * 缓存目录时代这句话很好说："删的只是缓存副本"。现在那份文件**同时是用户附件目录里的
- * 一份可见文件**，所以论证要重讲一遍 —— 判据不是"文件在哪"，而是**"能不能重新拿到"**：
+ * 那份文件**同时是用户附件目录里的一份可见文件**，所以论证要讲全 ——
+ * 判据不是"文件在哪"，而是**"能不能重新拿到"**：
  *
- * 1. 对象**已经确认还在云端**（`confirmRemote` 逐个 HEAD 复核，确认不上就不删）；
+ * 1. 对象**已经确认还在云端**（上面第 2 道复核，确认不上就不删）；
  * 2. 笔记里存的**始终是远端地址**（我们从没改写过它们）⇒ 副本消失不影响任何链接；
  * 3. 于是可恢复性由**重新下载**提供，而这份副本的行踪**不依赖回收站**。
  *
- * 而"为什么不走回收站"：上限的用途是"别让副本把磁盘吃光"，回收站**不解**这个问题 ——
- * 文件离开了 vault、物理空间却还占着，于是表现成"设了上限，磁盘还是满的"。
- * 这与用户确认的整理（R17，走回收站）是**两条不同的路**：那条不需要立刻腾空间。
+ * 而"为什么不走回收站"：这两条路径的用途都是"别让副本把磁盘吃光"，
+ * 回收站**不解**这个问题 —— 文件离开了 vault、物理空间却还占着，
+ * 于是表现成"清了下限/清了缓存，磁盘还是满的"。用户确认的整理（R17）走回收站，
+ * 那是**另一条路**：它不需要立刻腾空间（见设计 §20.16 #7）。
  */
-
-export async function runEviction(deps: MaintenanceDeps, plan: EvictionPlan): Promise<EvictionRunResult> {
-	const result: EvictionRunResult = { evicted: 0, freed: 0, skipped: [], unindexed: 0 };
+export async function deleteVerifiedCopies(
+	deps: MaintenanceDeps,
+	victims: readonly RemovalVictim[],
+	result: EvictionRunResult
+): Promise<void> {
 	const removedKeys: string[] = [];
 
-	for (const victim of plan.evict) {
-		// ⭐ 双保险（1.2.0 换掉了旧的那道）：清单来自索引，但这是**删文件**的循环，
-		// 少一层校验的代价不可逆。两道新的：
-		//   ① 索引**此刻**仍认这份副本（key 与路径都对得上）—— 清单可能是上一拍算的，
-		//      而这一拍用户可能已经把它挪走/改名/换成了别的文件；
-		//   ② 云端**现在**确实还有这个对象（`confirmRemote`）—— 否则删掉的是最后一份。
+	for (const victim of victims) {
+		// 两道复核的完整理由见函数头（为什么不能只信清单、为什么必须问云端）
 		const known = deps.index().findByCachePath(victim.cachePath);
 		if (!known || known.key !== victim.key) {
 			result.skipped.push({ path: victim.cachePath, reason: deps.t("maintainSkipUnknownCopy") });
@@ -242,7 +278,38 @@ export async function runEviction(deps: MaintenanceDeps, plan: EvictionPlan): Pr
 			deps.notify(deps.t("maintainPersistFailed", { error: describeError(error) }));
 		}
 	}
+}
 
+/**
+ * 按计划执行淘汰（缓存上限轮换的执行层）。
+ *
+ * 判定在 `eviction.ts`（纯函数），删除在 `deleteVerifiedCopies`（与存量清理共用）——
+ * 这一层只负责把两者接起来。
+ */
+export async function runEviction(deps: MaintenanceDeps, plan: EvictionPlan): Promise<EvictionRunResult> {
+	const result: EvictionRunResult = { evicted: 0, freed: 0, skipped: [], unindexed: 0 };
+	await deleteVerifiedCopies(deps, plan.evict, result);
+	return result;
+}
+
+/**
+ * 执行**存量清理**（F18，设计 §20.10）：把用户在「不留副本」档下确认的那批副本删掉。
+ *
+ * ⚠️ 走的是**与自动淘汰同一份删除循环**（`deleteVerifiedCopies`）——
+ * 两道复核（索引此刻仍认它 / 云端现在确实还有它）一个字都不改。
+ * 这是刻意的：**候选的来源不同，不代表删之前要看的东西不同**，
+ * 而"删错了"是不可逆的。区别只在 `eviction` 按 LRU + 超限字节挑人，
+ * 这里按用户的勾选（或全量）挑人。
+ *
+ * 结果形状与淘汰相同（`EvictionRunResult`）：`evicted` = 真删了几个、
+ * `freed` = 释放了多少字节、`skipped` = 为什么跳过（逐条原因）、`unindexed` = 摘了几条记录。
+ */
+export async function runReleaseSpace(
+	deps: MaintenanceDeps,
+	selection: ReleaseSpaceSelection
+): Promise<EvictionRunResult> {
+	const result: EvictionRunResult = { evicted: 0, freed: 0, skipped: [], unindexed: 0 };
+	await deleteVerifiedCopies(deps, selection.candidates, result);
 	return result;
 }
 

@@ -162,5 +162,31 @@ await runMutations({
 			to: "\t\t// 变异：不重看当前打开的笔记\n",
 			expect: "立刻重看当前打开的笔记",
 		},
+		{
+			// ⚠️ F18（2026-10-12 / D-19）的**入口**：切到「不留副本」那一刻问一次。
+			// 后果：不问 ⇒ 库里的存量副本永远留着，而用户以为"选了不留副本就都清了"
+			//（这一档的承诺只兑现了一半，且界面上看不出来）。
+			name: "★ 切到「不留副本」不再问一次（存量副本永远留着）",
+			from: '\t\tif (\n\t\t\tpreviousLocalCopy !== undefined &&\n\t\t\tpreviousLocalCopy !== this.settings.localCopy &&\n\t\t\tthis.settings.localCopy === "trash"\n\t\t) {',
+			to: "\t\tif (false) {",
+			expect: "切档时**问一次**",
+		},
+		{
+			// 后果：候选不再要求"该对象**被笔记引用着**" ⇒ 连**孤儿**一起清 ——
+			// 而孤儿正是"用户可能还想留着"的那一类（笔记删了、图还在），
+			// 且它越过了与 R17 三档询问的分工线（那条线是**逐次询问**）。
+			name: "★ 存量清理不再要求「带远端链接」（孤儿也被一起清掉）",
+			from: "\t\t\treferencedKeys,\n\t\t});",
+			to: "\t\t\treferencedKeys: new Set(entries.map((entry) => entry.key)),\n\t\t});",
+			expect: "孤儿（没有任何笔记引用）不归它管",
+		},
+		{
+			// 后果：候选不再要求"这个对象是我们传上去的" ⇒ 一个**从没上传成功**的
+			// 本地附件也会被删，而它云端可能根本没有 —— 那是真正丢数据的一条。
+			name: "★★ 存量清理不再查上传台账（没传成功过的本地文件也会被删）",
+			from: "\t\t\tuploaded: new Set(index.uploadedKeys()),",
+			to: "\t\t\tuploaded: new Set(entries.map((entry) => entry.key)),",
+			expect: "台账里没有的对象不得删",
+		},
 	],
 });

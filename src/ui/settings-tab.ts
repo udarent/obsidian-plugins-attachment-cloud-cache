@@ -50,6 +50,7 @@ import {
 	randomSlotPart,
 	shouldShowCacheLimit,
 	shouldShowFallbackDownload,
+	shouldShowReleaseSpace,
 } from "./settings-logic";
 
 /** 一次连接测试的**一行**结果（已翻成文案 key，界面只负责显示）。 */
@@ -486,6 +487,16 @@ export class SettingsTab extends PluginSettingTab {
 				},
 			},
 			{
+				name: this.t("releaseSpaceName"),
+				desc: this.t("releaseSpaceDesc"),
+				aliases: ["free", "space", "disk", "clean", "delete", "空间", "磁盘", "清理", "释放"],
+				// ⚠️ 只在「不留副本」档可见：那一档的含义**就是**本地不留副本，
+				// 而这个按钮是把它应用到**已经存在的**那批副本上（F18 / 设计 §20.10）。
+				// 在「保留副本」档显示它是自相矛盾的（用户刚说要留副本）。
+				visible: () => shouldShowReleaseSpace(this.plugin.settings.localCopy),
+				render: (setting) => this.renderReleaseSpace(setting),
+			},
+			{
 				name: this.t("cacheLimit"),
 				desc: this.t("cacheLimitDesc"),
 				// ⭐ P7 的关闭方式（1.2.0 / D-17）：可见性跟着"**这一档会不会产生副本**"走
@@ -605,6 +616,24 @@ export class SettingsTab extends PluginSettingTab {
 				.setCta()
 				.onClick(() => {
 					void this.plugin.cachePickedExternalImages();
+				})
+		);
+	}
+
+	/**
+	 * 「释放本地空间」按钮（F18）。
+	 *
+	 * ⚠️ 标成**破坏性**：它删的文件**不进回收站**（空间要立刻释放，而回收站不释放），
+	 * 所以它是设置页里唯一一个不可撤销的按钮 —— 样式必须与"点开一个选择框"看起来不同。
+	 * 真正的确认在弹窗那一步（清单 + 总字节 + 不可撤销的说明）。
+	 */
+	private renderReleaseSpace(setting: Setting): void {
+		setting.addButton((button) =>
+			button
+				.setButtonText(this.t("releaseSpaceButton"))
+				.setDestructive()
+				.onClick(() => {
+					void this.plugin.freeUpLocalSpace();
 				})
 		);
 	}

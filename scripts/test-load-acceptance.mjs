@@ -34,5 +34,9 @@ console.log(
 		"in the " +
 		"real type; and with a cache limit set, the background rotation deleted the least recently used " +
 		"copies outright (freeing the space now) and removed their index entries, without ever going near the trash, " +
-		"and with the note itself untouched))."
+		"and with the note itself untouched; switching the local-copy mode to \"keep nothing\" offered once to also " +
+		"clear the copies that were already there — the copy a note still links to was deleted outright (not trashed) " +
+		"with its index row removed while the upload ledger kept it, and three copies were left alone: the one no note " +
+		"links to, the one whose object could not be confirmed in storage, and the one that was never uploaded; " +
+		"running it again deletes nothing and says so, including why))."
 );

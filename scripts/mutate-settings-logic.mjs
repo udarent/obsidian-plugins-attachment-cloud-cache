@@ -60,6 +60,23 @@ await runMutations({
 			to: 'export function shouldShowCacheLimit(action: unknown): boolean {\n\treturn action === "cache";\n}',
 			expect: "原地保留档**也要显示**",
 		},
+		{
+			// 后果（F18 / D-19）：一个**永久删除**本地副本的按钮出现在「保留副本」档下 ——
+			// 用户刚说了"我要留副本"，界面却给他一个"全删掉"。配置自相矛盾，
+			// 而按下它删掉的东西**不进回收站**。
+			name: "★ 「释放本地空间」按钮在「保留副本」档也显示（自相矛盾的界面）",
+			from: 'export function shouldShowReleaseSpace(action: unknown): boolean {\n\treturn action === "trash";\n}',
+			to: "export function shouldShowReleaseSpace(action: unknown): boolean {\n\treturn true;\n}",
+			expect: "保留副本档必须隐藏",
+		},
+		{
+			// 相反的错向：把判据写成"不等于 trash" ⇒ 按钮在**该出现的档**消失，
+			// 而"界面上找不到"与"功能没做"看起来完全一样（功能静默不可达）。
+			name: "★ 判据写反（按钮在该出现的档消失，功能静默不可达）",
+			from: 'export function shouldShowReleaseSpace(action: unknown): boolean {\n\treturn action === "trash";\n}',
+			to: 'export function shouldShowReleaseSpace(action: unknown): boolean {\n\treturn action !== "trash";\n}',
+			expect: "不留副本档要显示",
+		},
 
 		// ── 选项生成 ──
 		{

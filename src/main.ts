@@ -27,14 +27,17 @@
 import { Component, MarkdownRenderer, Notice, Plugin, TFile, getLanguage } from "obsidian";
 
 import { SETTINGS_DEFAULTS, hasLegacyObjectKeyTemplate, mergePluginSettings } from "./settings";
-import type { PluginSettings } from "./types";
+import type { LocalCopyAction, PluginSettings } from "./types";
 import { detectLocale, translate } from "./i18n";
 import { SettingsTab } from "./ui/settings-tab";
 import { CacheIndex } from "./cache/index";
 import { createIndexStore, makeSerializer } from "./host/runtime";
 import type { HostContext } from "./host/runtime";
 import { createEditorHandlers } from "./host/editor-bridge";
-import { inspectLocalCopies, runBatchUpload, runEviction, scanReferences } from "./maintenance/run";
+import { inspectLocalCopies, readCopies, runBatchUpload, runEviction, runReleaseSpace, scanReferences } from "./maintenance/run";
+import { formatMegabytes } from "./maintenance/eviction";
+import { planReleaseSpace } from "./maintenance/release-space";
+import type { ReleaseSpaceSelection } from "./maintenance/release-space";
 import { canvasTextTargets, keysInText } from "./maintenance/references";
 import { describeError } from "./error-text";
 import type { MaintenanceDeps } from "./maintenance/run";
@@ -138,6 +141,9 @@ const ORPHAN_LIST_MAX = 8;
 /** 同上，给「清理云端未使用对象」那条命令的确认框用（对象可能很多，列少一点）。 */
 const CLOUD_CLEANUP_LIST_MAX = 10;
 
+/** 同上，给「清理本地占用」（F18）的确认框用。 */
+const RELEASE_SPACE_LIST_MAX = 10;
+
 /**
  * 这篇文件是不是"引用的来源"（只监视笔记与画布）。
  *
@@ -188,6 +194,16 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 提示要等他看得懂、而不是在插件还在启动时闪一下。
 	 */
 	private legacyKeyTemplateUpgraded = false;
+
+	/**
+	 * 上一拍「本地副本」是哪一档 —— 只为了认出**用户刚切到「不留副本」**那一刻。
+	 *
+	 * ⚠️ F18（2026-10-12，D-19）的询问挂在"切换"这个**动作**上，不是挂在"当前值是 trash"上：
+	 * 后者每次保存设置都会问一遍（用户改任何一个字段都被问），那是骚扰。
+	 * 只在 `loadSettings` 里初始化，于是"启动时就已经是这一档"的老用户**不会**被问
+	 * —— 他想清就自己去设置页点那个按钮。
+	 */
+	private lastLocalCopyAction?: LocalCopyAction;
 
 	/** 索引的读写（含串行化落盘）。`onload` 里初始化。 */
 	private indexStore: ReturnType<typeof createIndexStore> | null = null;
@@ -1220,6 +1236,149 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	}
 
 	/**
+	 * 算一遍"哪些本地副本可以清掉"（F18 的**唯一**计算入口）。
+	 *
+	 * 候选的四条判据在 `planReleaseSpace`（纯函数，套件穷举）；这里只负责把
+	 * "索引 + 磁盘 + 笔记正文"三样东西凑齐：
+	 *
+	 * 1. **索引条目** —— 候选的来源（索引外的文件一概不碰，那可能是用户自己的附件）；
+	 * 2. **磁盘上的样子** —— 一次 `stat` 一条索引路径（**不扫目录**，理由同 `readCopies`）；
+	 * 3. ⭐ **"仍被引用"的对象 key** —— 复用云端清理那份 `cloudReferencedKeys()`：
+	 *    同一套 URL→key 换算，于是"哪些对象算带远端链接"与渲染、与云端清理**永远一致**。
+	 *    ⚠️ 它在**读不到某篇笔记时会抛错 ⇒ 整体放弃**（调用方要如实告知、什么都不清）——
+	 *    那正是我们要的方向：不知道有没有人引用，就不该删文件。
+	 */
+	private async localSpaceSelection(): Promise<ReleaseSpaceSelection> {
+		const index = this.currentIndex();
+		const entries = index.toArray();
+		const copies = await readCopies(
+			this.app,
+			entries.map((entry) => entry.cachePath)
+		);
+		const referencedKeys = await this.cloudReferencedKeys();
+
+		return planReleaseSpace({
+			entries,
+			uploaded: new Set(index.uploadedKeys()),
+			present: (path) => copies.has(path),
+			referencedKeys,
+		});
+	}
+
+	/**
+	 * 设置页那个按钮的入口（F18 的**手动**入口）。
+	 *
+	 * ⚠️ 与"切档时的那次询问"共用同一个流程（`releaseLocalSpace`），
+	 * 差别只在"没有可清项时要不要出声"：手动入口必须说一声（他是特地来的）。
+	 */
+	async freeUpLocalSpace(): Promise<void> {
+		await this.releaseLocalSpace("notice");
+	}
+
+	/**
+	 * 「清理本地占用」（F18，设计 §20.10）：把**已上传且仍带远端链接**的本地副本
+	 * **永久删除**，把磁盘空间立刻还回来。
+	 *
+	 * ## 两个入口共用这一个流程
+	 *
+	 * 1. **用户主动**（设置页「不留副本」档下的按钮）⇒ `whenEmpty: "notice"`
+	 *    —— 他是特地来清东西的，没有可清项必须说一声；
+	 * 2. **切档时的那次询问** ⇒ `whenEmpty: "silent"`
+	 *    —— 没东西可清就别打扰他（他刚做的事是"改设置"，不是"清理"）。
+	 *
+	 * ## ⚠️ 为什么是"直接删"而不是回收站
+	 *
+	 * 这一档的新上传那段走回收站（`planLocalCopy`），这里走 `Vault.delete` ——
+	 * 两段删法**故意不同**：判据是"**要不要立刻释放空间**"（设计 §20.16 #7）。
+	 * 用户按下这个按钮的**全部目的**就是腾空间，而回收站（系统回收站与 `.trash`
+	 * 都在同一块盘上）**不释放** —— 走回收站等于让他跑完发现"空间没变"。
+	 * 代价是**不可撤销**，所以确认框必须写明白（`releaseSpaceCannotUndo`），
+	 * 而且执行层会**逐个 HEAD 复核"云端现在确实还有它"**，确认不上就不删。
+	 */
+	private async releaseLocalSpace(whenEmpty: "notice" | "silent"): Promise<void> {
+		let selection: ReleaseSpaceSelection;
+		try {
+			selection = await this.localSpaceSelection();
+		} catch (error) {
+			// 扫引用失败（有笔记读不到）⇒ 什么都不清，并把原因说清楚。
+			// ⚠️ 不能"跳过那篇笔记继续"：漏掉的那篇可能正是引用着这些图的笔记，
+			// 于是候选会凭空变大 —— 这是这个功能唯一能"因为读不到而多删"的方向。
+			new Notice(describeError(error));
+			return;
+		}
+
+		if (selection.candidates.length === 0) {
+			if (whenEmpty === "silent") return;
+			new Notice(
+				selection.missing > 0
+					? this.t("releaseSpaceNothingMissing", { count: selection.missing })
+					: this.t("releaseSpaceNothing")
+			);
+			return;
+		}
+
+		const index = this.currentIndex();
+		const cards = this.fileCards(
+			selection.candidates.map((candidate) => {
+				const entry = index.get(candidate.key);
+				return {
+					id: candidate.key,
+					name: entry?.sourceName || displayNameForKey(candidate.key),
+					localPath: candidate.cachePath,
+					remoteKey: candidate.key,
+				};
+			}),
+			RELEASE_SPACE_LIST_MAX
+		);
+
+		const lines = [
+			this.t("releaseSpaceSummary", {
+				count: selection.candidates.length,
+				mb: formatMegabytes(selection.bytes),
+			}),
+			...(selection.candidates.length > RELEASE_SPACE_LIST_MAX
+				? [
+						this.t("maintainMoreItems", {
+							count: selection.candidates.length - RELEASE_SPACE_LIST_MAX,
+						}),
+					]
+				: []),
+			// ⚠️ 这两句是按下按钮前**唯一**读到的安全信息，必须如实：
+			// 一句说"不可撤销"，一句说"云端与笔记都不动"（否则用户会怕把图删死）。
+			this.t("releaseSpaceCannotUndo"),
+			this.t("releaseSpaceCloudUntouched"),
+		];
+
+		const confirmed = await this.confirmMaintenance({
+			title: this.t("releaseSpaceTitle"),
+			lines,
+			cards,
+			cta: this.t("releaseSpaceCta"),
+			destructive: true,
+		});
+		if (!confirmed) {
+			new Notice(this.t("maintainCancelled"));
+			return;
+		}
+
+		const result = await runReleaseSpace(this.maintenanceDeps(), selection);
+		new Notice(
+			this.t("releaseSpaceDone", {
+				deleted: result.evicted,
+				mb: formatMegabytes(result.freed),
+				skipped: result.skipped.length,
+			})
+		);
+		// ⚠️ "一个都没删"必须解释清楚 —— 否则用户刚按下"永久删除"、看到"跳过 N 个"，
+		// 完全不知道发生了什么（他会以为功能坏了）。
+		// 真实原因只有一个：候选是**纯判定**（不联网），而删除前要逐个 HEAD 复核
+		// "云端现在确实还有它"（那可能是最后一份）⇒ 确认不上的那些会被跳过。
+		if (result.evicted === 0 && result.skipped.length > 0) {
+			new Notice(this.t("releaseSpaceNothingDeleted", { skipped: result.skipped.length }));
+		}
+	}
+
+	/**
 	 * 「自检并修复本地副本索引」命令。
 	 *
 	 * ⚠️ 它调的是**与后台自愈同一份实现**（`maintenance/self-heal.ts`）。
@@ -1897,6 +2056,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		// 的入口 —— 让它显式地不信任，而不是靠 `any` 悄悄流过去。
 		const stored: unknown = await this.loadData();
 		this.settings = mergePluginSettings(SETTINGS_DEFAULTS, stored);
+		// 记下"这次启动时它是哪一档"：F18 的询问只认**切换**这个动作
+		this.lastLocalCopyAction = this.settings.localCopy;
 
 		// ⭐ 一次性兼容升级（1.2.0）：老 `data.json` 里的 `objectKeyTemplate` 已被取消。
 		//
@@ -1930,6 +2091,23 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		// 要等下次重开笔记才生效（"改了设置没反应"是本项目一直在防的一类症状）。
 		// 只在功能开着时做：关着时判定第一步就忽略，扫一遍纯属白费。
 		if (this.settings.externalImageCache) this.reprocessOpenNotes();
+
+		// 触发 ④（F18 / D-19）：用户刚把「本地副本」切成**不留副本** ——
+		// 这一档的含义是"本地不留副本"，可库里**已经上传过的**那些副本还占着空间。
+		// 所以切过来的**那一刻**问一次"要不要把已有的也清掉"（清单 + 可释放字节）。
+		// ⚠️ 只在**切换**时问（见 `lastLocalCopyAction` 的说明）；
+		// ⚠️ 更**不自动删** —— 那是不可逆的批量动作，必须用户点头（里面的确认框）。
+		const previousLocalCopy = this.lastLocalCopyAction;
+		this.lastLocalCopyAction = this.settings.localCopy;
+		if (
+			previousLocalCopy !== undefined &&
+			previousLocalCopy !== this.settings.localCopy &&
+			this.settings.localCopy === "trash"
+		) {
+			void this.releaseLocalSpace("silent").catch((error) => {
+				console.error("[attachment-cloud-cache] 存量清理的询问失败（不影响本次设置保存）", error);
+			});
+		}
 	}
 
 	/**

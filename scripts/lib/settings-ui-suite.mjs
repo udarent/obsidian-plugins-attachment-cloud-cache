@@ -19,6 +19,7 @@ export function runSettingsUiSuite(mod) {
 		// settings-logic
 		shouldShowCacheLimit,
 		shouldShowFallbackDownload,
+		shouldShowReleaseSpace,
 		localCopyOptions,
 		deleteModeOptions,
 		classifyConnectionFailure,
@@ -87,6 +88,21 @@ export function runSettingsUiSuite(mod) {
 	// 结果也必须与 keep 一致" —— 折叠哪天失效，它们是最后一道不会说谎的显示逻辑。
 	assert.equal(shouldShowFallbackDownload("cache"), true, "遗留值按 keep 处理（显示）");
 	assert.equal(shouldShowCacheLimit("cache"), true, "遗留值按 keep 处理（显示）");
+
+	// ⭐ F18（2026-10-12 / D-19）：「释放本地空间」按钮**只**在「不留副本」档显示。
+	//
+	// 判据是"这一档的含义就是本地不留副本"—— 那个按钮把这个含义应用到**已经存在的**
+	// 那批副本上。反过来在「保留副本」档给它一个"全删掉"的按钮是**自相矛盾**的配置。
+	assert.equal(shouldShowReleaseSpace("trash"), true, "★ 不留副本档要显示（这正是这一档的存量部分）");
+	assert.equal(
+		shouldShowReleaseSpace("keep"),
+		false,
+		"★ 保留副本档必须隐藏 —— 用户刚说要留副本，不能再给他一个「全删掉」的按钮"
+	);
+	assert.equal(shouldShowReleaseSpace("nonsense"), false, "★ 非法值也隐藏（宁可少显示，绝不误导）");
+	assert.equal(shouldShowReleaseSpace(undefined), false, "缺值时隐藏");
+	// 遗留值已折成 keep ⇒ 与 keep 一致（隐藏）
+	assert.equal(shouldShowReleaseSpace("cache"), false, "遗留值按 keep 处理（隐藏）");
 
 	// ============================================================
 	// 3. 下拉选项必须与类型清单同源

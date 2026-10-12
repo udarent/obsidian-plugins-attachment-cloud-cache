@@ -1563,6 +1563,168 @@ ${text}`);
 		}
 
 		// ============================================================
+		// 8d. ⭐ F18「释放本地空间」（2026-10-12 / D-19，设计 §20.10）
+		//
+		// 它是「本地副本 = 不留副本」那一档的**存量部分**：切到这一档时问一次，
+		// 同意之后把**已上传 + 笔记仍引用着远端地址**的副本**永久删除**。
+		//
+		// 这一段的判据全部**不可逆**（被清的副本不进回收站），所以除了"该删的删了"，
+		// 还要逐一钉住四条边界：
+		// ① 删法必须是 `Vault.delete`（走回收站 = 空间不释放 = 这个功能白做）；
+		// ② **孤儿不归它管**（没有远端链接的副本必须原封不动 —— 那是 R17 的活）；
+		// ③ 云端确认不上就**不删**（那可能是最后一份）；
+		// ④ 台账**不动**（云端对象还在）、索引条目**摘掉**（摘了才走"缺副本 ⇒ 重新下载"）。
+		// ============================================================
+		{
+			const attachDir = "attachments";
+			await mkdir(join(root, attachDir), { recursive: true });
+			const targetKey = "release-target-1f.png";
+			const orphanKey = "release-orphan-2f.png";
+			const goneKey = "release-gone-3f.png";
+			const neverUploadedKey = "release-never-4f.png";
+			const targetPath = `${attachDir}/${targetKey}`;
+			const orphanCopyPath = `${attachDir}/${orphanKey}`;
+			const gonePath = `${attachDir}/${goneKey}`;
+			const neverUploadedPath = `${attachDir}/${neverUploadedKey}`;
+
+			const releaseBytes = new Uint8Array(3 * 1024 * 1024);
+			releaseBytes.set(HOSTILE_BYTES);
+			for (const path of [targetPath, orphanCopyPath, gonePath, neverUploadedPath]) {
+				await writeFile(join(root, path), Buffer.from(releaseBytes));
+			}
+			// ⭐ 云端：目标、**孤儿**、**没传过的那份**都放进替身，只有 `goneKey` 故意不放。
+			//
+			// ⚠️ 为什么"该被拦下的那两份"也要有云端对象：否则它们会**因为云端确认不上**
+			// 而被跳过 —— 于是"判据被改瞎（孤儿的记录被一并删）"这种变异**看不出来**
+			//（文件照样在，断言照样过）。夹具必须让**因果可区分**：
+			// 有云端对象 ⇒ 只要判据失效，它就会被真的删掉 ⇒ 断言立刻红。
+			for (const key of [targetKey, orphanKey, neverUploadedKey]) {
+				server.objects.set(key, { body: Buffer.from(releaseBytes), contentType: "image/png" });
+			}
+			await harness.refreshPathCache();
+
+			const releaseIndex = plugin.indexStore.index;
+			for (const [key, cachePath] of [
+				[targetKey, targetPath],
+				[orphanKey, orphanCopyPath],
+				[goneKey, gonePath],
+				[neverUploadedKey, neverUploadedPath],
+			]) {
+				releaseIndex.set({
+					key,
+					cachePath,
+					remoteUrl: `${PUBLIC_BASE}/${key}`,
+					size: releaseBytes.length,
+					contentType: "image/png",
+					etag: "",
+					uploadedAt: new Date().toISOString(),
+					lastUsedAt: Date.now(),
+					sourceName: key,
+				});
+			}
+			// 台账：只有前三份"是我们传上去的"（第四份故意不记 —— 它未必在云端）
+			for (const key of [targetKey, orphanKey, goneKey]) releaseIndex.markUploaded(key);
+			// 笔记里引用各自的对象：**孤儿那份故意不写进任何笔记**
+			const releaseNote = "notes/清理本地占用.md";
+			await writeFile(
+				join(root, releaseNote),
+				`![a](${PUBLIC_BASE}/${targetKey})\n![b](${PUBLIC_BASE}/${goneKey})\n![c](${PUBLIC_BASE}/${neverUploadedKey})\n`
+			);
+			await harness.refreshPathCache();
+
+			// 切到「不留副本」——这一档的含义就是"本地不留副本"，于是切过来**那一刻问一次**
+			const releaseAsks = [];
+			plugin.confirmMaintenance = async (options) => {
+				releaseAsks.push(options);
+				return true;
+			};
+			const deletesBeforeRelease = harness.calls.delete.length;
+			const trashesBeforeRelease = harness.calls.trash.length;
+			mockObsidian.Notice.instances.length = 0;
+			plugin.settings.localCopy = "trash";
+			await plugin.saveSettings();
+
+			// ⭐ 先钉"切档那一刻**问了**一次"（那是 F18 的入口①本身），再看效果 ——
+			// 少了这一步，"不问"这种失效只能表现为后面那个超时，报出来的原因不指向入口。
+			await waitFor(() => releaseAsks.length === 1, "切档时**问一次**", 10000, diagnose);
+
+			// ⚠️ 等**最后一步**（摘索引记录）而不是等"删除调用出现"：替身是先记账再
+			// `rm`，记账那一刻文件还在磁盘上 —— 早先按"调用出现"等，结果紧接着的
+			// "文件必须离开磁盘"偶发为真（实测踩到）。摘索引是这一轮的最后一步，
+			// 它成立 ⇒ 前面的删除都已经落定。
+			await waitFor(
+				() => !releaseIndex.has(targetKey),
+				"切到「不留副本」后清掉了存量副本（索引记录被摘掉）",
+				10000,
+				diagnose
+			);
+
+			assert.equal(releaseAsks.length, 1, "★ 切档时**问一次**（而且只问这一次，不是每次保存都问）");
+			assert.equal(releaseAsks[0].destructive, true, "★ 不可撤销的删除必须标成破坏性按钮");
+			assert.ok(
+				releaseAsks[0].lines.some((line) => /permanent|永久/.test(line)),
+				`★ 确认框必须写明"永久删除"（它不进回收站）：${JSON.stringify(releaseAsks[0].lines)}`
+			);
+			assert.ok(
+				(releaseAsks[0].cards ?? []).some((card) => String(card.id) === targetKey),
+				"★ 清单里要列出将被删的那一份（那是用户按下按钮前唯一能核对的东西）"
+			);
+
+			// ① 该删的删了，而且**不进回收站**
+			assert.equal(await existsOnDisk(root, targetPath), false, "★ 目标副本必须离开磁盘");
+			assert.ok(harness.calls.delete.length > deletesBeforeRelease, "删除调用应当增加");
+			assert.equal(
+				harness.calls.trash.length,
+				trashesBeforeRelease,
+				"★ 存量清理不许走回收站（回收站不释放磁盘空间，而腾空间正是这个功能的目的）"
+			);
+			// ④ 索引记录摘掉、台账留着
+			assert.equal(releaseIndex.has(targetKey), false, "★ 索引记录要摘掉（摘了才走「缺副本 ⇒ 重新下载」那条路）");
+			assert.equal(releaseIndex.wasUploaded(targetKey), true, "★ 台账要留着 —— 云端对象还在，它不属于「没传过」");
+
+			// ②③ 两条"绝不能碰"的边界
+			assert.ok(await existsOnDisk(root, orphanCopyPath), "★ 孤儿（没有任何笔记引用）不归它管，必须留着");
+			assert.ok(releaseIndex.has(orphanKey), "★ 孤儿的索引记录也要留着");
+			assert.ok(await existsOnDisk(root, gonePath), "★ 云端确认不上的那份必须留着（它可能是最后一份）");
+			assert.ok(releaseIndex.has(goneKey), "★ 它的索引记录也要留着");
+			assert.ok(await existsOnDisk(root, neverUploadedPath), "★ 台账里没有的对象不得删（它未必在云端）");
+			assert.ok(releaseIndex.has(neverUploadedKey), "★ 它的索引记录也要留着");
+
+			// ⑥ 再跑一次：**该删的已经删完了**，但"云端确认不上"的那份仍是候选
+			//（候选是纯判定、不联网；HEAD 复核在执行时做），所以它会再次出现在确认框里
+			// 并在执行时被跳过 —— 结果通知必须**如实**报"删了 0 个、跳过 1 个"，
+			// 而且"一个都没删"要另给一句解释（否则用户以为功能坏了）。
+			//
+			// ⚠️ 先把两条"会把副本补回来"的路径关掉：渲染遇到缺副本会重新下载
+			//（外部图那条链在保存设置时会重跑一遍渲染）—— 那样子再跑就又有候选了，
+			// 这条断言测到的会是"下载速度"而不是幂等。这是**如实设置前置条件**。
+			plugin.settings.fallbackDownload = false;
+			plugin.settings.externalImageCache = false;
+			await plugin.saveSettings();
+			mockObsidian.Notice.instances.length = 0;
+			const deletesAfterFirst = harness.calls.delete.length;
+			await plugin.freeUpLocalSpace();
+			assert.equal(harness.calls.delete.length, deletesAfterFirst, "★ 该删的已经删完 ⇒ 不该再有新的删除");
+			assert.ok(
+				mockObsidian.Notice.instances.some((notice) =>
+					notice.message.includes(plugin.t("releaseSpaceDone", { deleted: 0, mb: "0.0", skipped: 1 }))
+				),
+				`★ 结果要如实报「删了 0 个、跳过 1 个」：${JSON.stringify(
+					mockObsidian.Notice.instances.map((notice) => notice.message)
+				)}`
+			);
+			assert.ok(
+				mockObsidian.Notice.instances.some((notice) =>
+					notice.message.includes(plugin.t("releaseSpaceNothingDeleted", { skipped: 1 }))
+				),
+				"★ 「一个都没删」必须另给一句解释（说明在哪一步被拦下），否则用户以为功能坏了"
+			);
+			// ⚠️ 这一轮**会**再弹确认框（候选非空）—— 如实写在这里，免得下一个人
+			// 以为"再跑一次是空操作"成立（它不是：永远确认不上的那份会一直出现）。
+			assert.equal(releaseAsks.length, 2, "★ 候选非空就会问一次（云端确认不上的那份仍在候选里）");
+		}
+
+		// ============================================================
 		// 9. 卸载：事件引用必须能被宿主注销（否则热重载后每粘一次插两条）
 		// ============================================================
 		for (const ref of plugin.eventRefs) app.workspace.offref(ref);
