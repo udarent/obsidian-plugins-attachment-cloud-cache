@@ -465,7 +465,7 @@ export async function runExternalCacheSuite(mod) {
 			// 字节逐字节落盘
 			const onDisk = new Uint8Array(await readFile(join(h.root, outcome.localPath)));
 			assert.deepEqual(onDisk, IMAGE_BYTES, "★ 本地副本要逐字节一致");
-			// ⭐ 1.3.0（D-17）：副本落在**附件目录**（缓存目录已取消），名字取自站外地址的文件名
+			// ⭐ 1.2.0（D-17）：副本落在**附件目录**（缓存目录已取消），名字取自站外地址的文件名
 			assert.equal(outcome.localPath, "a.png", "本地副本应落在附件目录，且用原始文件名");
 			assert.equal(outcome.localPath.includes("_attachment-cache"), false, "不再有任何缓存目录被建出来");
 

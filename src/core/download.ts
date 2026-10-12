@@ -17,7 +17,7 @@
  * 于是不为任何图取回副本 —— 判定见 `types.ts` 的 `isCacheDisabled`。
  * 已经存在的副本不受影响（那由渲染判定使用，与"要不要写"是两件事）。
  *
- * ## 落点（1.3.0 / D-17：不再有缓存目录）
+ * ## 落点（1.2.0 / D-17：不再有缓存目录）
  *
  * 补回来的副本落在**附件目录**，文件名取**原始文件名**（三层兜底与撞名规则见
  * `download-target.ts`）—— 用户能认出它是哪张图，也能参与检索。
@@ -248,7 +248,7 @@ export function createLocalCopyEnsurer(deps: LocalCopyDeps) {
 			return { status: "reused", key, localPath: known.cachePath };
 		}
 
-		// ⭐ 1.3.0（D-17）：落点 = **附件目录 + 原始文件名**（不再有缓存目录）。
+		// ⭐ 1.2.0（D-17）：落点 = **附件目录 + 原始文件名**（不再有缓存目录）。
 		//
 		// 取名靠三级兜底（条目 `sourceName` → key 反推 → key 本身），撞名先比内容哈希、
 		// 再走序号 —— 全部在 `download-target.ts` 里，这里只负责给它两个探针。

@@ -113,7 +113,7 @@ await runMutations({
 			// 后者现在本来就该在字段表里（它是标识符，且钥匙串的 ID 不允许大写、
 			// 装不下它 —— 详见 types.ts 的文件头）。拿它当变异目标会变成无意义的空操作。
 			name: "★ 秘密字段被允许进入 s3 配置（旧配置里的明文秘密会被保留并随 vault 同步出去）",
-			// ⚠️ 锚点原先钉在 `objectKeyTemplate` 那一行上，而 1.3.0 把它从字段表里删了 ⇒
+			// ⚠️ 锚点原先钉在 `objectKeyTemplate` 那一行上，而 1.2.0 把它从字段表里删了 ⇒
 			// 改钉字段表的**结尾**（效果一样：往表里塞一个不该存在的字段）。
 			from: "\tforcePathStyle: boolValue(),\n};",
 			to: "\tforcePathStyle: boolValue(),\n\tsecretAccessKey: textValue(),\n};",
@@ -153,7 +153,7 @@ await runMutations({
 			expect: "非法枚举应回落默认",
 		},
 		{
-			// ⚠️ 锚点钉在 `s3BlockOf` 的**那一行**上（1.3.0 把"怎么读 s3 段"收敛成了一处）：
+			// ⚠️ 锚点钉在 `s3BlockOf` 的**那一行**上（1.2.0 把"怎么读 s3 段"收敛成了一处）：
 			// 坏掉它，合并逻辑与遗留键识别会**一起**失效 —— 所以红的是第一条 s3 往返断言。
 			name: "s3 子对象不再从 data.s3 读（整块配置读不出来）",
 			from: "return isPlainRecord(raw.s3) ? raw.s3 : {};",

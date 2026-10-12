@@ -8,7 +8,7 @@ import { runMaintenanceSuite } from "./lib/maintenance-suite.mjs";
  * 失效的症状还特别安静：多删一份副本没人立刻发现（下次联网会重新下载），
  * 但改坏一条链接会立刻显示成"图没了"。
  *
- * ⚠️ 1.3.0（D-17）：审计的口径换成了**索引 + 存在性**（见 `audit.ts` 文件头）。
+ * ⚠️ 1.2.0（D-17）：审计的口径换成了**索引 + 存在性**（见 `audit.ts` 文件头）。
  * 与"孤儿 / 缓存目录"有关的两条锚点随代码一起删掉了；新锚点盯的是新口径里那几件
  * 会出错的事：索引外的文件混进统计、字节取错来源、同一路径重复计。
  */
@@ -30,7 +30,7 @@ await runMutations({
 	mutations: [
 		{
 			// 后果：**用户的附件被计成我们的副本** —— 报告里的数字从此包含不属于我们的东西，
-			// 而"可回收多少"会被读成"能删多少"。这正是 1.3.0 把口径改成"只认索引"的原因。
+			// 而"可回收多少"会被读成"能删多少"。这正是 1.2.0 把口径改成"只认索引"的原因。
 			name: "★ 索引外的文件也计进占用（用户的附件被当成我们的副本）",
 			from: "\treturn { missingCopies, unused, healthy, bytes: { total, reclaimable } };",
 			to: "\tfor (const [p, f] of input.copies) if (!counted.has(p)) total += f.bytes;\n\treturn { missingCopies, unused, healthy, bytes: { total, reclaimable } };",
@@ -52,7 +52,7 @@ await runMutations({
 			expect: "同一路径只计一次占用",
 		},
 		{
-			// ⚠️ 1.3.0：`planCleanup`（"执行清单也用截断后的"那条锚点）随 `clean-cache` 的退役
+			// ⚠️ 1.2.0：`planCleanup`（"执行清单也用截断后的"那条锚点）随 `clean-cache` 的退役
 			// 一起删掉了 —— 死代码的锚点留着只会让"全都抓住了"这句话不可信。
 			// 后果：没扫描引用时把所有副本都报成"未引用"⇒ 用户看到"全部可回收"。
 			name: "★ 没扫描引用也判\"未引用\"（把每一份都报成可删）",

@@ -74,7 +74,7 @@ await runMutations({
 		{
 			// 后果：维护命令不再请求确认 ⇒ 用户在命令面板里点错一下就开始改笔记、
 			// 下载站外图（"取消 = 什么都没发生"这条路径整个不存在了）。
-			// ⚠️ 1.3.0（D-17）：原锚点钉的是 `clean-cache` 的确认闸（随命令退役），
+			// ⚠️ 1.2.0（D-17）：原锚点钉的是 `clean-cache` 的确认闸（随命令退役），
 			// 现在改钉**批量上传**的同一道闸 —— 它是同一类风险，且套件里有会红的断言。
 			name: "★ 维护命令不再请求确认（点错命令即改笔记、下载站外图）",
 			from: "\t\tif (!confirmed) {\n\t\t\tnew Notice(this.t(\"maintainCancelled\"));\n\t\t\treturn;\n\t\t}\n\n\t\tconst result = await runBatchUpload(deps, { external, referencedPaths });",
@@ -128,7 +128,7 @@ await runMutations({
 			// 用户的预期是从前那句"会被搬进缓存目录"来的 —— 少了这句，他跑完发现
 			// 文件还在会以为没生效（反过来也可能以为文件被搬走了）。
 			// 而"这动作动不动我的文件"正是他按下按钮前唯一的依据。
-			// ⚠️ 1.3.0（D-17）：原锚点钉的是 `maintainCleanSafety`（键随 clean-cache 退役），
+			// ⚠️ 1.2.0（D-17）：原锚点钉的是 `maintainCleanSafety`（键随 clean-cache 退役），
 			// 现在改钉批量上传确认框里那句"文件留在附件目录"。
 			name: "★ 确认框不再说清文件留在原地（用户以为没生效或以为文件被搬走）",
 			from: '\t\t\tthis.t("maintainBatchOriginalsStay"),\n',

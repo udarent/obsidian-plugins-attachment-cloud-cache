@@ -72,7 +72,7 @@ export function runSettingsUiSuite(mod) {
 	assert.equal(shouldShowFallbackDownload("nonsense"), true, "非法值不该把开关藏起来（宁可多显示，不可静默少一个开关）");
 	assert.equal(shouldShowFallbackDownload(undefined), true, "缺值时按默认档显示");
 
-	// ⭐ 1.3.0（D-17）：上限的可见性 = "这一档会不会产生本地副本"。
+	// ⭐ 1.2.0（D-17）：上限的可见性 = "这一档会不会产生本地副本"。
 	// 这**正是 P7 的关闭方式**：从前它只在「移入缓存」档显示，而后台判定只看
 	// `cacheLimitMb > 0` ⇒ 「原地保留」档"看不见的开关却在生效"。
 	// 现在统计范围含附件目录里的副本，于是"看得见 = 真的生效、看不见 = 真的不起作用"。

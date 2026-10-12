@@ -187,7 +187,7 @@ export const I18N: Record<string, Locale> = {
 		maintainBatchNothing: "No attachments to upload (everything is already handled).",
 		maintainBatchTitle: "Upload existing attachments",
 		maintainBatchSummary: "Upload {count} file(s) and rewrite note links to point at your storage.",
-		// ⚠️ 1.3.0（D-17）起，"上传后把原文件搬走"这件事**不存在了** —— 那份文件留在原地、
+		// ⚠️ 1.2.0（D-17）起，"上传后把原文件搬走"这件事**不存在了** —— 那份文件留在原地、
 		// 就地作为本地副本（没有缓存目录可搬）。所以必须照实说"不移动、不改名"：
 		// 从前这里承诺的正是"附件目录里不再留一份"，照抄下来会让用户以为命令没生效。
 		// 同时说清"没被引用的文件不碰"。
@@ -409,7 +409,7 @@ export const I18N: Record<string, Locale> = {
 		maintainBatchSummary: "将上传 {count} 个文件，并把笔记里的链接改成指向你的存储。",
 		// ⚠️ 别在文案里写 markdown（`**加粗**`）：确认弹窗是 `createDiv({ text })`、
 		// 提示是宿主的 Notice，两者都**按纯文本**渲染 —— 星号会原样显示给用户。
-		// ⚠️ 1.3.0（D-17）：上传后文件**留在附件目录里**（它就是本地副本，没有缓存目录可搬）——
+		// ⚠️ 1.2.0（D-17）：上传后文件**留在附件目录里**（它就是本地副本，没有缓存目录可搬）——
 		// 照实说"不移动、不改名"，否则用户会以为命令没生效（从前这里承诺的正是"搬走"）。
 		maintainBatchOriginalsStay:
 			"不会移动或改名：文件留在附件目录里，就地作为本地副本 —— 只有笔记里的链接会被改写。没有任何笔记引用的文件不会被碰。",

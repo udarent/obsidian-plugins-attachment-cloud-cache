@@ -128,7 +128,7 @@ async function makeHarness(mod, options = {}) {
 	const settings = {
 		...mod.SETTINGS_DEFAULTS,
 		...options.settings,
-		// ⚠️ 1.3.0 起没有"钉模板"那一步了：key 形状不可配置（模板设置已取消），
+		// ⚠️ 1.2.0 起没有"钉模板"那一步了：key 形状不可配置（模板设置已取消），
 		// 本套件断言的形状就是产品唯一的形状（与 ingest-suite 同一处结论）。
 		s3: { ...mod.SETTINGS_DEFAULTS.s3, ...options.settings?.s3 },
 	};
@@ -769,7 +769,7 @@ export async function runTransferSuite(mod) {
 			makeFile("a-copy.png", "image/png", IMAGE_BYTES),
 		]);
 
-		// ⚠️ 1.3.0 起这条的**口径变了**，两侧都钉住才不会让人误读：
+		// ⚠️ 1.2.0 起这条的**口径变了**，两侧都钉住才不会让人误读：
 		// 名字进了 key ⇒ 同一份字节配不同名字是**两个对象**（跨名去重失效，C2 的已知代价），
 		// 于是"两张图"在结果上也确实是两条链接（不会被上游按 key 合并掉）。
 		// 「同内容同名字只插一条」由 §7a2 单独钉（那才是用户报的重复插入）。
@@ -793,7 +793,7 @@ export async function runTransferSuite(mod) {
 
 	// 7h. ⭐ 非 ASCII 文件名不得被**双重编码**（P0 验收标准之一）
 	//
-	// ⚠️ 1.3.0 之前这条必须靠 `{filename}` 自定义模板才能让中文名进 URL
+	// ⚠️ 1.2.0 之前这条必须靠 `{filename}` 自定义模板才能让中文名进 URL
 	//（默认模板是纯哈希，测不到编码路径 —— 那是个"看着在测其实没测"的假断言）。
 	// 现在形状固定成 `<原名>-<哈希>.<扩展名>`，中文名**必然**进 key，这条用例不再需要
 	// 任何设置配合，而且测的就是出厂行为本身。

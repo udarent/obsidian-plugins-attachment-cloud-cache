@@ -219,7 +219,7 @@ export function runCacheIndexSuite(mod) {
 
 	// 6b2. ⭐ `wasContentUploaded`：按**内容哈希**问"这份内容我们传过吗"
 	//
-	// 用途只有一处（1.3.0 的 attach-watch 第 ③ 条闸门）：同步到达的副本
+	// 用途只有一处（1.2.0 的 attach-watch 第 ③ 条闸门）：同步到达的副本
 	// 要靠它一眼认出"内容早就在云端了"。判据必须**经 `hashFromKey`** ——
 	// C2 之后 key 是 `名字-<哈希>.ext`，直接拿文件哈希去比 key 会永远不相等
 	//（判据恒假正是 N11 的形状）。

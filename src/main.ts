@@ -335,7 +335,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		// 而宿主的链接是文件落盘**之后**才插进笔记的，所以这里不能立刻动手 ——
 		// 退避重试与攒批都在 `attach-watch` 里。
 		//
-		// ⭐ 1.3.0（D-17）：判"这个新文件是不是我们自己的副本"不再靠**缓存目录**
+		// ⭐ 1.2.0（D-17）：判"这个新文件是不是我们自己的副本"不再靠**缓存目录**
 		// （那层目录取消了），改由三重簿记：自写台账 → 索引路径 → 内容哈希在台账里。
 		this.attachWatch = createAttachWatcher({
 			autoUpload: () => this.settings.autoUpload,
@@ -440,7 +440,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		this.rotation = createCacheRotator({
 			settings: () => this.settings,
 			index: () => this.currentIndex(),
-			// ⭐ 1.3.0：候选与统计**一律来自索引**（缓存目录已经不在了）。
+			// ⭐ 1.2.0：候选与统计**一律来自索引**（缓存目录已经不在了）。
 			// 存在性用宿主的文件索引回答 —— 它可能滞后，而滞后只会让这一轮少淘汰几个。
 			isPresent: (path) => Boolean(this.app.vault.getAbstractFileByPath(path)),
 			// 扫引用这条仍然复用维护功能那一份实现（只此一处）
@@ -816,7 +816,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		if (choice === "keep") return;
 
 		// ⚠️ 清单按**索引当时的记录**算（`planOrphanLocalRemoval` 是纯函数）。
-		// 1.3.0（D-17）起删法只有一种（走回收站）：从前那条"在缓存目录里 ⇒ 直接删"的分支
+		// 1.2.0（D-17）起删法只有一种（走回收站）：从前那条"在缓存目录里 ⇒ 直接删"的分支
 		// 随缓存目录一起没了，而那份文件现在**同时可能就是用户的附件原件**。
 		const localTargets = planOrphanLocalRemoval(selection.asks, {
 			cachePathOf: (key) => this.currentIndex().get(key)?.cachePath,
@@ -1178,7 +1178,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 把清单里的项算成"怎么展示"（缩略图 + 名字 + 类型标记）。
 	 *
 	 * 三处确认框共用：孤儿询问、清理云端未使用对象、批量上传
-	 * （1.3.0 起 `clean-cache` 退役 —— 它原来那份清单也走这里）。
+	 * （1.2.0 起 `clean-cache` 退役 —— 它原来那份清单也走这里）。
 	 * 判定本身在 `ui/file-cards.ts`（纯函数，可穷举），这里只负责接上宿主的两件事
 	 * —— 本地文件地址与远端地址。
 	 */
@@ -1192,7 +1192,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	/**
 	 * 看一遍本地副本占用（只读，不动任何文件）。
 	 *
-	 * ⚠️ 1.3.0（D-17）起口径是**索引 + 存在性**：只统计"索引里记过的副本此刻还在不在"。
+	 * ⚠️ 1.2.0（D-17）起口径是**索引 + 存在性**：只统计"索引里记过的副本此刻还在不在"。
 	 * 从前那些"孤儿文件"（磁盘有、索引无）**不再可能出现** ——
 	 * 索引外的文件可能是用户自己的附件，扫出来也绝不能动（见 `audit.ts` 文件头）。
 	 */
@@ -1340,7 +1340,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			...(selection.paths.length > 10
 				? [this.t("maintainMoreItems", { count: selection.paths.length - 10 })]
 				: []),
-			// ⚠️ 1.3.0（D-17）后这条必须照实说"什么都不搬"：文件留在原处就地当本地副本，
+			// ⚠️ 1.2.0（D-17）后这条必须照实说"什么都不搬"：文件留在原处就地当本地副本，
 			// 变的只有笔记里的链接。不写清楚，用户跑完发现文件还在会以为没生效
 			//（旧文案承诺的正是"会被搬进缓存目录"）。
 			this.t("maintainBatchOriginalsStay"),
