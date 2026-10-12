@@ -365,8 +365,8 @@ function isHttpUrl(value: string): boolean {
  *
  * 判定只回答"能不能搬"。**真正的授权是两个显式动作**：
  * 这条命令的确认框（点确认 = 同意去访问列出来的那些站点），
- * 以及「选择要缓存的外链图片」里的勾选。红线仍然是
- * **「没有用户的显式动作，站外图永不下载」**。
+ * 以及「选择要缓存的外链图片」里的勾选。判据：**授权来自显式动作**
+ * （事前打开开关，或当场勾选 / 点确认），而不是某个"默认"。
  */
 export function selectExternalUploadCandidates(
 	notes: readonly NoteTextLike[],

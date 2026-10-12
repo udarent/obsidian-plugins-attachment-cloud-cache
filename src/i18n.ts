@@ -87,7 +87,7 @@ export const I18N: Record<string, Locale> = {
 		localCopy_trash: "Delete the local file after uploading (offline unavailable)",
 		fallbackDownload: "Download missing copies",
 		fallbackDownloadDesc:
-			"For files from this storage that have no local copy, such as ones synced from another device. Files from other sites are never downloaded. Not used when no local copy is kept, since caching is off then.",
+			"For files from this storage that have no local copy, such as ones synced from another device. Only objects in your own storage are handled. Not used when no local copy is kept, since caching is off then.",
 
 		// ── 高级 ──
 		attachmentFolder: "Attachments folder override",
@@ -351,7 +351,7 @@ export const I18N: Record<string, Locale> = {
 		localCopy_trash: "不留本地副本（等于关闭缓存，离线不可用）",
 		fallbackDownload: "缺本地副本时自动下载",
 		fallbackDownloadDesc:
-			"属于本存储、却没有本地副本的附件（例如从另一台设备同步来的）会自动下载。站外文件永不下载。选「不留副本」时不生效（那一档已关闭缓存）。",
+			"属于本存储、却没有本地副本的附件（例如从另一台设备同步来的）会自动下载。只处理你自己存储里的对象。选「不留副本」时不生效（那一档已关闭缓存）。",
 
 		attachmentFolder: "附件目录覆盖",
 		attachmentFolderPlaceholder: "跟随 Obsidian",

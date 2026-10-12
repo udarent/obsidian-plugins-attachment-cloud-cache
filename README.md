@@ -93,7 +93,7 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 | **Upload new attachments automatically** | On by default; off returns all of it to Obsidian, leaving files local only. |
 | **Where the local copy goes** | Keep the file where it is (default), or delete it after uploading. The file itself is the copy — nothing is moved into a separate folder. "Delete" turns caching off: the plugin uploads and rewrites links, and never fetches a copy back — so nothing works offline. Switching to "delete" asks once whether to also clear the copies already on disk. |
 | **Cache size limit (MB)** | Trims least-recently-used copies past this; `0` means no limit. Only copies the index knows about are counted. |
-| **Download missing copies** | Auto-downloads our own objects that have no local copy — never anything from other sites. Hidden when "none" is selected above, because caching is off then. |
+| **Download missing copies** | Auto-downloads the objects in your own storage that have no local copy (for example after switching devices). Hidden when "none" is selected above, because caching is off then. |
 | **Handle files from other sites like ordinary files** | On: an off-site file is downloaded, uploaded to your storage and the link rewritten — the same as pasting a local file, "where the local copy goes" included. Off by default; while it is off, nothing off-site is touched automatically. |
 | **Which sites to handle** | `All sites` (default, no filter), `All except the ones listed`, or `Only the ones listed`. This filters the automatic handling above — picking files by hand is never restricted by it. |
 | **Site list** | One domain per line. `example.com` also matches `img.example.com`; write `example.com:8080` to match that exact host. With "Only the ones listed", an empty list means nothing is handled automatically. |
@@ -266,7 +266,7 @@ Obsidian version and which storage provider you use; the errors name the step th
 | **新增附件自动上传** | 默认开启；关闭后这些全交回 Obsidian，文件只存在本地。 |
 | **本地副本的处理** | 留在原处（默认）或上传后删除。**那份文件本身就是**本地副本，不会搬去别的目录。选「不留」等于关闭缓存：只上传并改写链接，也不会把副本补回来，所以离线不可用。切到「不留」时会问一次，要不要把盘上已有的副本也一起清掉。 |
 | **缓存大小上限（MB）** | 超过后按最近最少使用清理；`0` 表示不限制。只统计索引里记过的副本。 |
-| **缺本地副本时自动下载** | 只自动下载**本存储**没有副本的对象；站外文件不走这条路（它们由下面那个开关管）。上面选「不留」时这一项不显示（那一档已关闭缓存）。 |
+| **缺本地副本时自动下载** | 只自动下载**你自己的存储**里没有本地副本的对象（例如从另一台设备同步来的）。上面选「不留」时这一项不显示（那一档已关闭缓存）。 |
 | **站外文件按普通附件处理** | 打开后，站外文件会被下载、上传到你的存储并改写链接 —— 与粘贴一张本地附件完全一样（连「本地副本的处理」那一档也一样适用）。默认关闭；关着时站外的东西一步都不会被自动碰。 |
 | **处理哪些站点** | `所有站点`（默认，不过滤）、`除名单外的站点`、`仅名单内的站点`。它**只筛自动处理**；手动挑选不受它限制。 |
 | **站点名单** | 一行一个域名。写 `example.com` 也会命中 `img.example.com`；写 `example.com:8080` 则只匹配含那个端口的地址。选「仅名单内的站点」时，留空表示什么都不自动处理。 |

@@ -1533,8 +1533,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		}
 
 		if (external.candidates.length > 0) {
-			// ⚠️ 必须把**站点**列出来：这个确认框就是那份授权（没有用户的显式动作，
-			// 站外图永不下载）。只说"还有 3 张站外图"等于让用户盲签一份许可。
+			// ⚠️ 必须把**站点**列出来：这个确认框就是那份授权（点它就是显式同意）。
+			// 只说"还有 3 张站外图"等于让用户盲签一份许可。
 			lines.push(
 				this.t("maintainBatchExternal", {
 					count: external.candidates.length,
