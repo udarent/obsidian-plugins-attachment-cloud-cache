@@ -46,7 +46,6 @@
  * 用户就没法"只做他能接受的那一半"（见 `planOrphanLocalRemoval`）。
  */
 
-import { isUnderCacheFolder } from "../cache-path";
 
 /** 监视对象的类型。画布的引用藏在 JSON 字符串里，提取方式与笔记不同。 */
 export type NoteKind = "md" | "canvas";
@@ -262,29 +261,22 @@ export interface OrphanLocalTarget {
 	key: string;
 	/** 本地副本的 vault 相对路径（索引里记的那条）。 */
 	path: string;
-	/**
-	 * `true` = 这份副本在**缓存目录之外**（`localCopy: "keep"` 时就是用户自己的附件）
-	 * ⇒ 走**回收站**；`false` = 缓存副本 ⇒ 直接删、空间立刻释放。
-	 */
-	isUserFile: boolean;
 }
 
 /**
  * 把"用户决定连本地副本一起清掉"翻译成**待删清单**（纯函数）。
  *
- * ## ⚠️ 为什么必须分两类，而不是一律 `vault.delete`
+ * ## ⭐ 删法只有一种（1.3.0 / D-17）
  *
- * 索引里的 `cachePath` **不保证**在缓存目录里：`localCopy: "keep"` 时它就是
- * 用户附件目录里的那份**原件**。两者"能不能重新拿到"不一样，删除方式因此也不一样：
+ * 从前这里按"副本在不在缓存目录里"分两类：目录内直接删、目录外走回收站。
+ * 缓存目录取消之后**只剩一类** —— 那份副本同时**可能就是用户的附件原件**
+ *（`localCopy: "keep"` 时它就是），而删它的判据不是"文件在哪"，是
+ * **"能不能重新拿到"**；这条路上用户已经**明确选了删除**、也不需要立刻腾空间
+ * ⇒ 一律走 `fileManager.trashFile`（尊重用户的「删除即进回收站」设置）。
  *
- * | 位置 | 是什么 | 删除方式 | 理由 |
- * |---|---|---|---|
- * | 缓存目录内 | 我们落的可再生副本 | `vault.delete` | 空间立刻释放；回收站不释放 |
- * | 缓存目录外 | **用户自己的附件** | `fileManager.trashFile` | 尊重用户的「删除即进回收站」设置 |
- *
- * 判错的后果**不对称**：把用户文件当成缓存文件 ⇒ 绕过回收站**永久删除用户的图**；
- * 反过来只是"空间没立刻释放"。所以分类用的是 `isUnderCacheFolder`（按**路径段**判断、
- * 拒绝 `..`），而不是字符串前缀。
+ * ⚠️ 与**上限淘汰**那条路的区别是刻意的（见设计 §20.16 #7）：那条要**立刻**释放空间
+ * （上限存在的全部理由），所以它用 `vault.delete`，但代价是它必须先逐个
+ * HEAD 确认云端仍有 —— 两条路对"可恢复性"的担保不同，别把它们合并。
  *
  * ## 为什么"没有记录"就什么都不做
  *
@@ -305,8 +297,6 @@ export function planOrphanLocalRemoval(
 	context: {
 		/** 索引里这个 key 的本地副本路径（没有记录就返回空）。 */
 		cachePathOf: (key: string) => string | null | undefined;
-		/** 缓存目录（vault 相对路径）。 */
-		cacheFolder: string;
 	}
 ): OrphanLocalTarget[] {
 	const targets: OrphanLocalTarget[] = [];
@@ -325,7 +315,10 @@ export function planOrphanLocalRemoval(
 		if (seen.has(path)) continue;
 		seen.add(path);
 
-		targets.push({ key, path, isUserFile: !isUnderCacheFolder(path, context.cacheFolder) });
+		// ⚠️ 1.3.0（D-17）：这里从前还带一个 `isUserFile` 分类（缓存目录内 ⇒ 直接删），
+		// 而那份文件现在**同时可能就是用户的附件原件** ⇒ 删法固定为回收站，
+		// 分类随之消失（判据不是"文件在哪"，而是"能不能重新拿到"——见设计 §20.16 #7）。
+		targets.push({ key, path });
 	}
 
 	return targets;

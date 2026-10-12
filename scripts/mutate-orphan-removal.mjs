@@ -4,9 +4,10 @@ import { runOrphanRemovalSuite } from "./lib/orphan-removal-suite.mjs";
 /**
  * 变异验证：删掉孤儿副本（`src/maintenance/orphan-removal.ts`）。
  *
- * 这一层是**自动弹出的询问**背后真正动手删文件的地方，而它删的可能是
- * **用户自己的附件**。三个变异各对应一种"看起来很小、后果不可逆"的退化：
- * - 两类副本走反 ⇒ 绕过回收站永久删掉用户的图；
+ * 这一层是**用户明确确认之后**真正动手删文件的地方，而它删的可能是
+ * **用户自己的附件**。1.3.0（D-17）起删法只有一种（走回收站）。三个变异各对应一种
+ * "看起来很小、后果不可逆"的退化：
+ * - 不走回收站 ⇒ 永久删掉用户的图；
  * - 删失败也摘记录 ⇒ 索引与磁盘脱节（渲染层以为没副本，又去下回来）；
  * - 先计数后删除 ⇒ 上报"已清理 N 个"而文件还在。
  */
@@ -16,12 +17,13 @@ await runMutations({
 	suite: runOrphanRemovalSuite,
 	mutations: [
 		{
-			// 后果：**用户自己的附件**被当成缓存副本 ⇒ 直接删、绕过回收站 ⇒ 不可恢复。
-			// `localCopy: "keep"` 时索引里的 cachePath 就在附件目录里，这是常态而非边角。
-			name: "★★ 两类副本走反（用户自己的附件被直接永久删除）",
-			from: "\t\t\tif (target.isUserFile) await deps.app.fileManager.trashFile(file);\n\t\t\telse await removeCacheFile(deps.app, file);",
-			to: "\t\t\tif (target.isUserFile) await removeCacheFile(deps.app, file);\n\t\t\telse await deps.app.fileManager.trashFile(file);",
-			expect: "用户自己的附件必须走回收站",
+			// 后果：**用户自己的附件被直接永久删除**（绕过回收站 ⇒ 不可恢复）。
+			// 1.3.0 起这条路的副本同时可能就是用户的附件原件（附件目录里那份），
+			// 所以"直接删"不是"少一步确认"，而是删掉用户的图。
+			name: "★★ 不走回收站（用户自己的附件被直接永久删除）",
+			from: "\t\t\tawait deps.app.fileManager.trashFile(file);",
+			to: "\t\t\tawait deps.app.vault.delete(file);",
+			expect: "★ 走回收站",
 		},
 		{
 			// 后果：没删掉却记成删成了 ⇒ 文件还在磁盘上、上报却是"已清理 N 个"；

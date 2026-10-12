@@ -24,7 +24,7 @@ await withLoadedTs(["src/maintenance/orphan-watch"], async (mod) => {
 			"fail are recorded instead of being treated as 'no references'; the ask filter keeps only " +
 			"objects we have handled (from the upload ledger, NOT from the local-copy index - so the " +
 			"'no local copy' setting still gets asked) that have not been asked about yet; and the local-removal " +
-			"plan sorts copies into 'cache file, deleted outright' versus 'the user's own attachment, sent to the " +
-			"trash', by path segment rather than by prefix, skipping anything the index does not vouch for)."
+			"plan produces targets only for copies the index vouches for (disposal is now fixed to the trash — " +
+			"there is only one kind of copy left, and it may well be the user's own attachment))."
 	);
 });

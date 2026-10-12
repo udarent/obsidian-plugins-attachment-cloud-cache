@@ -203,7 +203,7 @@ export function runCacheIndexSuite(mod) {
 		assert.equal(index.markUploaded("   "), false, "空白不是合法 key，不该记进去");
 		assert.equal(index.wasUploaded("b.png"), false, "没记过的就是没有");
 
-		// ⭐ 台账与条目**互不派生**：删掉本地副本（`clean-cache` 那条路）**不该**忘掉台账 ——
+		// ⭐ 台账与条目**互不派生**：删掉本地副本那条路（上限淘汰 / R17 的整理）**不该**忘掉台账 ——
 		// 云端对象还在，R17 以后还要认领它。
 		const both = new CacheIndex([{ ...SAMPLE, key: "k1.png" }]);
 		both.markUploaded("k2.png");

@@ -14,9 +14,9 @@ import { runOrphanRemovalSuite } from "./lib/orphan-removal-suite.mjs";
 await withLoadedTs(["src/maintenance/orphan-removal"], async (mod) => {
 	const result = await runOrphanRemovalSuite(mod);
 	console.log(
-		`Orphan-removal tests passed (${result.cases} cases: a cached copy is deleted outright and never sent to ` +
-			"the trash, while the user's own attachment in the attachments folder goes to the trash and is never " +
-			"deleted outright - the two flips are pinned in both directions; a file the host index does not know " +
+		`Orphan-removal tests passed (${result.cases} cases: every copy goes to the trash and Vault.delete is ` +
+			"never called (the copy may be the user's own attachment, and this path is one the user explicitly " +
+			"confirmed); a file the host index does not know " +
 			"is skipped entirely, leaving both the file and its record alone; a delete that fails is not counted " +
 			"and does not drop the record; one failure never stops the batch; the index is written at most once " +
 			"per run and only when something really changed; and a save that fails is reported)."

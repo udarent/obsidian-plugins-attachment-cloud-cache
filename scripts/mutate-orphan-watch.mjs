@@ -47,15 +47,12 @@ await runMutations({
 			expect: "没问过的",
 		},
 		{
-			// 后果：**用户自己的附件**被当成缓存副本 ⇒ 上层走 `vault.delete`
-			//（不经回收站、空间立刻释放那条路）⇒ **永久删掉用户的文件，不可恢复**。
-			// `localCopy: "keep"` 时索引里的 `cachePath` 就在附件目录里，这是常态而不是边角。
-			name: "★★ 本地副本一律当成缓存文件（用户附件被永久删除，不进回收站）",
-			from: "\t\ttargets.push({ key, path, isUserFile: !isUnderCacheFolder(path, context.cacheFolder) });",
-			to: "\t\ttargets.push({ key, path, isUserFile: false });",
-			expect: "用户自己的附件",
-		},
-		{
+			// ⚠️ 1.3.0（D-17）：这里原本有一条"本地副本一律当成缓存文件"的锚点
+			//（打坏 `isUserFile` 的分类 ⇒ 用户的附件被永久删）。缓存目录取消后那个分类
+			// 整块消失了，**删法只剩一种** ⇒ 那条锚点连同它在源码里的落点一起删掉，
+			// 而"删法走不走回收站"由 `mutate-orphan-removal.mjs` 在同一条路径上钉住。
+			// 死代码的锚点留着，只会让"全都抓住了"这句话变得不可信。
+			//
 			// 后果：只有空格的路径也交给宿主去解析 ⇒ 是在赌它怎么处理这种输入，
 			// 而我们为这种输入冒的是"删错文件"的风险。
 			// ⚠️ 变异只削 `trim()`（保留空串那一半）：两个判断都在守同一件事，

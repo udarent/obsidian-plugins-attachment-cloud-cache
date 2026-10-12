@@ -41,7 +41,7 @@
  *
  * 所以另记一份**只管"经手过"**的 key 集合：与"本地有没有副本"完全无关。
  * 它和条目放在同一个文件里（不新增要迁移、要忽略的文件），但**两者互不派生**：
- * - 条目可以消失（`clean-cache` 删掉副本）而台账仍在 —— 云端对象还在；
+ * - 条目可以消失（用户删掉本地副本，或按上限淘汰）而台账仍在 —— 云端对象还在；
  * - 只有**云端删除**才同时摘条目与台账（见 `maintenance/cloud-cleanup.ts`）。
  *
  * ⚠️ 老索引文件里没有这个字段 ⇒ 加载时按条目里的 key **回填**（见 `fromJSON`）。
@@ -328,8 +328,8 @@ export class CacheIndex {
 	 * 忘掉一条台账。返回是否真的删掉了。
 	 *
 	 * ⚠️ **只在云端对象确实被删掉时调用**（`maintenance/cloud-cleanup.ts`）。
-	 * 绝不能跟着 `remove()`（删本地副本那条路）一起做 —— 那样 `clean-cache`
-	 * 会把"云端还在、只是本地副本没了"的对象也从台账里抹掉。
+	 * 绝不能跟着 `remove()`（删本地副本那条路）一起做 —— 那样"云端还在、
+	 * 只是本地副本没了"的对象会被一起抹掉。
 	 */
 	forgetUploaded(key: string): boolean {
 		return typeof key === "string" && this.uploaded.delete(key.trim());

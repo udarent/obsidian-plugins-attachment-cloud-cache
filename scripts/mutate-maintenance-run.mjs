@@ -33,12 +33,15 @@ await runMutations({
 		{
 			// 后果：清理命令绕过 `remove.ts`，直接把文件送进回收站 ⇒ 文件离开 vault
 			// 而物理空间不释放，用户会以为"清理了缓存，磁盘却没变"。
-			name: "★ 清理命令绕过删除原语，改走回收站（空间不释放）",
+			// 后果：走回收站 ⇒ 磁盘空间不会立刻释放 ⇒ 表现成"设了上限，磁盘还是满的"。
+			// 1.3.0（D-17）起这条路径只剩下**自动淘汰**（用户确认的整理改走回收站，
+			// 那条不需要立刻腾空间）—— 所以锚点跟到淘汰那段循环上。
+			name: "★ 淘汰绕过删除原语，改走回收站（空间不释放）",
 			from:
 				"\t\t\tawait removeCacheFile(deps.app, file);\n" +
-				"\t\t\tresult.removed += 1;",
-			to: "\t\t\tawait deps.app.fileManager.trashFile(file);\n\t\t\tresult.removed += 1;",
-			expect: "缓存清理必须用 Vault.delete",
+				"\t\t\tresult.evicted += 1;",
+			to: "\t\t\tawait deps.app.fileManager.trashFile(file);\n\t\t\tresult.evicted += 1;",
+			expect: "自动淘汰也必须用 Vault.delete",
 		},
 		{
 			// 后果：外链那一趟根本不跑 ⇒ 命令只搬库内文件，笔记里的外链图原样留着

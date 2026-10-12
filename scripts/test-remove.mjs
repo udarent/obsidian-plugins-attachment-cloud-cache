@@ -157,8 +157,15 @@ for (const file of CACHE_MAINTENANCE) {
 	]) {
 		assert.ok(!i18n.includes(forbidden), `★ 文案里不该再有 ${forbidden}（单一删除方式不需要分叉）`);
 	}
-	// 正向：收敛后的键必须在，否则通知/确认框会显示成键名本身
-	for (const required of ["maintainCleanSummary:", "maintainCleanSafety:", "maintainCleanCta:", "cacheEvicted:"]) {
+	// 正向：收敛后的键必须在，否则通知/框里会显示成键名本身。
+	// ⚠️ 1.3.0（D-17）：`clean-cache` 那条命令退役了，所以这条正向检查从它改到
+	// **两条仍在的删除路径**上：上限淘汰（`cacheEvicted*`）与 R17 的本地删除（`orphan*Deleted`）。
+	for (const required of [
+		"cacheEvicted:",
+		"cacheEvictedPartial:",
+		"orphanLocalDeleted:",
+		"orphanDeletedBoth:",
+	]) {
 		assert.ok(i18n.includes(required), `★ 文案里必须有收敛后的单键 ${required}`);
 	}
 }

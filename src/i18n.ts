@@ -166,31 +166,19 @@ export const I18N: Record<string, Locale> = {
 		cloudDeleteFailed: "Could not delete the object: {error}",
 		cmdAuditCache: "Show cache usage",
 		cmdRepairIndex: "Repair the local-copy index",
-		cmdCleanCache: "Clean up unused cache files",
 		cmdUploadAttachments: "Upload existing attachments",
 
 		maintainUsageReport:
-			"Cache: {totalMb} MB in {count} files. Reclaimable: {reclaimableMb} MB — {orphans} orphaned, {unused} unused, {missing} entries pointing at missing files. Limit: {limit}.",
+			"Local copies: {totalMb} MB in {count} files. Not linked from any note: {unused} ({reclaimableMb} MB — an estimate: nothing is removed before your storage is confirmed to still have it). {missing} index entr(ies) point at files that are gone. Limit: {limit}.",
 		selfHealRepaired:
 			"Cache index repaired automatically: {count} record(s) pointed at files that are no longer there.",
 		legacyKeyTemplateUpgraded:
 			"The object-key template setting is gone: new uploads are always named “original-name-content-hash.ext”, so files stay findable by name in your storage (the name therefore also reaches your storage provider). Existing links keep working; content you uploaded under the old naming is stored once more if you paste it again.",
 		repairIndexFound: "Index repaired: {count} stale record(s) dropped.",
 		repairIndexNothing: "Index is fine — no stale records.",
-		maintainNothingToClean: "Nothing to clean up. {healed} stale index entries were repaired.",
-		maintainCleanTitle: "Clean up cache files",
-		// 缓存清理只有一种方式：直接删除。所以文案不需要按模式分叉 ——
-		// 这三条只需说清"删了、空间立刻释放、图会重新下载"。
-		maintainCleanSummary: "This deletes {count} file(s) ({mb} MB) from the cache folder.",
-		maintainCleanMore: "…and {count} more",
-		// 这条必须写清楚"不能撤销" —— 它是用户按下确认前唯一的安全信息。
-		maintainCleanSafety:
-			"Deleted files are gone — this cannot be undone, and the disk space is freed right away. They are downloaded again when you next view them. Copies still referenced by a note are never touched.",
-		maintainCleanCta: "Delete permanently",
+		maintainMoreItems: "…and {count} more",
 		maintainCancelled: "Cancelled — nothing was changed.",
-		maintainCleaned: "Cleaned {removed} file(s); repaired {healed} index entries; {skipped} skipped.",
 		maintainPersistFailed: "Could not save the index after repairing it: {error}",
-		maintainSkipOutsideCache: "Not inside the cache folder",
 		maintainSkipUnknownCopy: "The index no longer points at this file — skipped",
 		maintainSkipUnconfirmed: "Could not confirm the cloud still has it — skipped",
 		maintainSkipNotInCloud: "Your storage no longer has this object — skipped, this copy is the only one left",
@@ -199,10 +187,12 @@ export const I18N: Record<string, Locale> = {
 		maintainBatchNothing: "No attachments to upload (everything is already handled).",
 		maintainBatchTitle: "Upload existing attachments",
 		maintainBatchSummary: "Upload {count} file(s) and rewrite note links to point at your storage.",
-		// ⚠️ 必须说清"跑完原文件就不在附件目录里了"（设置项承诺的是「移入缓存目录」），
-		// 否则用户做完发现文件还在会以为没生效；也得说清"没被引用的文件不碰"。
-		maintainBatchMovesOriginals:
-			"Once uploaded, these files move into the cache folder and are renamed by content — nothing stays behind in the attachments folder. Files that no note refers to are left alone.",
+		// ⚠️ 1.3.0（D-17）起，"上传后把原文件搬走"这件事**不存在了** —— 那份文件留在原地、
+		// 就地作为本地副本（没有缓存目录可搬）。所以必须照实说"不移动、不改名"：
+		// 从前这里承诺的正是"附件目录里不再留一份"，照抄下来会让用户以为命令没生效。
+		// 同时说清"没被引用的文件不碰"。
+		maintainBatchOriginalsStay:
+			"Nothing is moved or renamed: the file stays in your attachments folder and remains the local copy — only the links in your notes are rewritten. Files that no note refers to are left alone.",
 		maintainBatchSkipsUnreferenced:
 			"{count} file(s) in your vault are not linked from any note, so they are left alone.",
 		maintainBatchCanvasSkipped:
@@ -397,30 +387,18 @@ export const I18N: Record<string, Locale> = {
 		cloudDeleteFailed: "删除对象失败：{error}",
 		cmdAuditCache: "查看缓存占用",
 		cmdRepairIndex: "自检并修复本地副本索引",
-		cmdCleanCache: "清理未使用的缓存文件",
 		cmdUploadAttachments: "上传已存在的附件",
 
 		maintainUsageReport:
-			"缓存共 {count} 个文件、{totalMb} MB。其中可回收 {reclaimableMb} MB —— 孤儿 {orphans} 个、未引用 {unused} 个、索引指向的文件已不在 {missing} 条。上限：{limit}。",
+			"本地副本共 {count} 个文件、{totalMb} MB。其中没有任何笔记引用的 {unused} 个（{reclaimableMb} MB —— 这是估算：真正删除前会先确认你的存储里仍然有它）。索引指向的文件已不在 {missing} 条。上限：{limit}。",
 		selfHealRepaired: "缓存索引已自动修复：{count} 条记录指向的本地副本已经不在了。",
 		legacyKeyTemplateUpgraded:
 			"「对象 key 模板」设置已取消：之后上传的对象固定命名为「原文件名-内容哈希.扩展名」，存储里可以按名字找到文件（文件名因此也会出现在你的存储服务商那边）。已有链接不受影响；按旧命名传过的内容若再贴一次，会在云端多存一份。",
 		repairIndexFound: "索引已修复：摘掉 {count} 条失效记录。",
 		repairIndexNothing: "索引没有失效记录，无需修复。",
-		maintainNothingToClean: "没有需要清理的内容。已修复失效索引记录 {healed} 条。",
-		maintainCleanTitle: "清理缓存文件",
-		// 缓存清理只有一种方式：直接删除。所以文案不需要按模式分叉 ——
-		// 这三条只需说清"删了、空间立刻释放、图会重新下载"。
-		maintainCleanSummary: "将从缓存目录删除 {count} 个文件（{mb} MB），磁盘空间立刻释放。",
-		maintainCleanMore: "……还有 {count} 个",
-		// 这条必须写清楚"不能撤销" —— 它是用户按下确认前唯一的安全信息。
-		maintainCleanSafety:
-			"删除后无法撤销，磁盘空间会立刻释放。它们会在你下次查看时重新下载。仍被笔记引用的副本一律不动。",
-		maintainCleanCta: "彻底删除",
+		maintainMoreItems: "……还有 {count} 个",
 		maintainCancelled: "已取消，没有改动任何内容。",
-		maintainCleaned: "已清理 {removed} 个文件；修复索引记录 {healed} 条；跳过 {skipped} 个。",
 		maintainPersistFailed: "修复后保存索引失败：{error}",
-		maintainSkipOutsideCache: "不在缓存目录内",
 		maintainSkipUnknownCopy: "索引里已经不再指向这个文件 —— 跳过",
 		maintainSkipUnconfirmed: "确认不了云端是否还有它 —— 跳过",
 		maintainSkipNotInCloud: "你的存储里已经没有这个对象 —— 跳过，这份是仅剩的副本",
@@ -431,8 +409,10 @@ export const I18N: Record<string, Locale> = {
 		maintainBatchSummary: "将上传 {count} 个文件，并把笔记里的链接改成指向你的存储。",
 		// ⚠️ 别在文案里写 markdown（`**加粗**`）：确认弹窗是 `createDiv({ text })`、
 		// 提示是宿主的 Notice，两者都**按纯文本**渲染 —— 星号会原样显示给用户。
-		maintainBatchMovesOriginals:
-			"上传成功后，这些文件会被移入缓存目录并按内容改名 —— 附件目录里不再留一份。没有任何笔记引用的文件不会被碰。",
+		// ⚠️ 1.3.0（D-17）：上传后文件**留在附件目录里**（它就是本地副本，没有缓存目录可搬）——
+		// 照实说"不移动、不改名"，否则用户会以为命令没生效（从前这里承诺的正是"搬走"）。
+		maintainBatchOriginalsStay:
+			"不会移动或改名：文件留在附件目录里，就地作为本地副本 —— 只有笔记里的链接会被改写。没有任何笔记引用的文件不会被碰。",
 		maintainBatchSkipsUnreferenced: "另有 {count} 个文件没有被任何笔记引用，不会被处理。",
 		maintainBatchCanvasSkipped:
 			"画布里有 {count} 处引用没能改写（画布文件不是可读的 JSON），它们仍指向旧位置。",

@@ -746,13 +746,14 @@ export async function runLoadAcceptance(options = {}) {
 		commandIds,
 		[
 			"audit-cache",
-			"clean-cache",
 			"cleanup-cloud",
 			"pick-external-images",
 			"repair-index",
 			"upload-attachments",
 		],
-		"★ 六条维护命令都要注册（少一条就是「功能写了但用户找不到」）；cleanup-cloud 是 1.1.0 新增的云端清理"
+		// ⚠️ 1.3.0（D-17）：从六条变五条 —— `clean-cache` 退役（设计 §20.16 #5）。
+		// 它原来的两个职责都有新家：自愈已自动化；删未引用副本由 R17 的询问与 cleanup-cloud 承担。
+		"★ 五条维护命令都要注册（少一条就是「功能写了但用户找不到」）"
 	);
 
 		const runCommand = (id) => {
@@ -761,104 +762,113 @@ export async function runLoadAcceptance(options = {}) {
 			command.callback?.();
 		};
 
-		// ⚠️ 先把粘贴产生的链接**真的写进一篇笔记**。
-		// 之前这一步缺失，于是"引用扫描"看到的是一个没有任何笔记引用的副本 ——
-		// 清理把它删掉是**正确行为**，而我的断言以为它不该被删。
-		// 补上这篇笔记之后，这条断言才在验"引用扫描真的生效"（而不是在验一个错前提）。
+		// ⚠️ 先把粘贴产生的链接**真的写进一篇笔记**：否则引用扫描看到的是一个没有引用的副本，
+		// 下面那些数字会与"有没有笔记引用"这件事混在一起。
 		const noteWithLink = "notes/未命名.md";
 		await mkdir(join(root, "notes"), { recursive: true });
-		await writeFile(join(root, noteWithLink), `这是笔记\n\n${text}\n`);
-		await harness.refreshPathCache();
+		await writeFile(join(root, noteWithLink), `这是笔记
 
-		// 造一个孤儿文件（磁盘上有、索引里没有）—— 它是"可清理"的那一类
-		const orphanVaultPath = "_attachment-cache/orphan.png";
-		await mkdir(join(root, "_attachment-cache"), { recursive: true });
-		await writeFile(join(root, orphanVaultPath), Buffer.from([1, 2, 3]));
-		// 让宿主的文件索引看到它（`refreshPathCache` 模拟 Obsidian 重新索引）
+${text}`);
 		await harness.refreshPathCache();
-
 		const referencedCopy = entry.cachePath; // 仍被笔记引用的那份
 
-		// 记下确认框里到底写了什么。**这是必要的**：确认框是用户按下那个不可逆按钮前
-		// 唯一读到的安全信息。缓存清理只有一种方式（直接删除），所以它必须说清
-		// "删了就没法撤销" —— 说"可以还原"会让用户以为删错也能找回。
-		// 不记下来的话，这段话没有任何断言看着，改错了也没人知道。
-		const confirms = [];
-		const captureConfirm = (result) => async (options) => {
-			confirms.push(options);
-			return result;
-		};
-
-		const beforeCleanTrash = harness.calls.trash.length;
-		const beforeCleanDelete = harness.calls.delete.length;
-
-		plugin.confirmMaintenance = captureConfirm(true); // 自动确认（"确认后执行"这条路径）
-		mockObsidian.Notice.instances.length = 0;
-		runCommand("clean-cache");
-		// 等**提示**（它在清理之后才发）而不是等文件消失 —— 后者会在命令还没收尾时就返回
-		await waitFor(
-			() => mockObsidian.Notice.instances.some((n) => /Cleaned|清理/.test(n.message)),
-			"清理完成并给出汇报",
-			5000,
-			diagnose
-		);
-
-		assert.ok(await existsOnDisk(root, orphanVaultPath) === false, "★ 孤儿文件应当被拿掉");
-		assert.ok(
-			harness.calls.delete.includes(orphanVaultPath),
-			"★ 缓存清理必须用 Vault.delete（它是唯一能立刻腾出空间的原语）"
-		);
-		// ⭐ 这条是"回收站那个备选已被去掉"在端到端层的钉子。它与 `test-remove.mjs` 的
-		// 静态守卫分工不同：静态守卫盯着"代码里还有没有回收站"，这条盯着
-		// "**跑起来**会不会走回收站" —— 而它的后果是可感知的：
-		// 走了回收站，磁盘空间就不会释放，用户会以为清理没生效。
-		assert.equal(
-			harness.calls.trash.length,
-			beforeCleanTrash,
-			"★ 缓存清理不许走回收站（回收站不释放物理空间，与「空间有限」的动机直接矛盾）"
-		);
-		assert.ok(harness.calls.delete.length > beforeCleanDelete, "删除调用应当增加");
-		assert.ok(
-			await existsOnDisk(root, referencedCopy),
-			"★ 仍被笔记引用的副本**绝不能**被清理（那是离线可用的依赖）"
-		);
-
-		// ⭐ 确认框必须说清"无法撤销" —— 那是这个不可逆动作的唯一安全信息。
-		// 两种语言各留一条正则：套件不该假设界面语言。
-		const cleanConfirm = confirms[confirms.length - 1];
-		assert.ok(cleanConfirm, "清理应当先弹确认框");
-		assert.ok(
-			/cannot be undone|无法撤销/.test(cleanConfirm.lines.join(" ")),
-			`★ 直接删除时确认框必须说清「无法撤销」（实际：${cleanConfirm.lines.join(" / ")}）`
-		);
-		assert.ok(
-			/Delete permanently|彻底删除/.test(cleanConfirm.cta),
-			`★ 按钮文案要说清这是删除（实际：${cleanConfirm.cta}）`
-		);
-
-		// 取消时不执行任何清理 —— 这条路径最容易被漏测（用户点错命令时全靠它）
-		const secondOrphan = "_attachment-cache/orphan2.png";
-		await writeFile(join(root, secondOrphan), Buffer.from([4, 5, 6]));
-		await harness.refreshPathCache();
-		plugin.confirmMaintenance = captureConfirm(false); // 用户取消
-		runCommand("clean-cache");
-		await new Promise((resolve) => setTimeout(resolve, 60));
-		assert.ok(
-			await existsOnDisk(root, secondOrphan),
-			"★ 用户取消时**一个文件都不能动**（否则确认框等于没有）"
-		);
-
-		// ⚠️ 它已经完成使命（证明"取消不动"），必须**清掉**，否则会漏进后面的小节。
+		// ============================================================
+		// ⭐⭐ 「查看缓存占用」的口径（1.3.0 / D-17）：**只认索引记过的路径**。
 		//
-		// 这不是洁癖：批量上传是**全库扫描**（按扩展名 + 大小 + 不在索引里筛候选），
-		// 于是这个 `.png` 孤儿会被当成一个**上传候选**，让下面那条
-		// "批量上传应恰好 PUT 一次"数出 2 次 —— 而它想验的是**附件**被传上去，
-		// 与缓存目录里的杂物无关。这类"计数断言被别的东西满足/破坏"的坑，
-		// 在这个套件里已经踩过第二次（第一次是被另一个孤儿满足的）。
-		// 手法就是：让每一条断言只面对自己造出来的现场。
-		await rm(join(root, secondOrphan), { force: true });
+		// 这条口径是"取消缓存目录"之后最容易被静默取消的一处设计（设计 §20.16 #4）：
+		// 从前它靠"扫缓存目录"找孤儿；那条目录没了之后，**索引外的文件可能是用户的附件** ——
+		// 所以它既不能计入任何数字、更不能被动。
+		//
+		// ⚠️ 断言用**增量**而不是绝对值：这段跑到现在，索引里早就有前面几节留下的记录了，
+		// 写死数字等于把断言绑在现场上（本项目为此吃过好几次亏）。
+		// ============================================================
+		const trashesBeforeReport = harness.calls.trash.length;
+		const deletesBeforeReport = harness.calls.delete.length;
+		const readReport = async () => {
+			mockObsidian.Notice.instances.length = 0;
+			runCommand("audit-cache");
+			await waitFor(
+				() => mockObsidian.Notice.instances.length > 0,
+				"报告给出",
+				5000,
+				diagnose
+			);
+			return mockObsidian.Notice.instances.map((n) => n.message).join(" | ");
+		};
+		// 两个语言各一条正则（套件不该假设界面语言）；取到的那一组里第一个非空数字。
+		const firstNumber = (text, pattern) => {
+			const match = pattern.exec(text);
+			if (!match) return Number.NaN;
+			for (const group of match.slice(1)) if (group !== undefined && group !== "") return Number(group);
+			return Number.NaN;
+		};
+		const filesIn = (t) => firstNumber(t, /(?:in (\d+) files|共 (\d+) 个文件)/);
+		const unusedIn = (t) => firstNumber(t, /(?:note: (\d+) |引用的 (\d+) 个)/);
+		const missingIn = (t) => firstNumber(t, /(?:(\d+) index entr|已不在 (\d+) 条)/);
+
+		const baseline = await readReport();
+		assert.ok(Number.isFinite(filesIn(baseline)), `报告应能解析出文件数，实际：${baseline}`);
+		const files0 = filesIn(baseline);
+		const unused0 = unusedIn(baseline);
+		const missing0 = missingIn(baseline);
+
+		// ① 索引外的文件：**三个数字都不许变**（这就是"索引外的文件不参与统计"的钉子）
+		const outsideFile = "attachments/用户的图.png";
+		await mkdir(join(root, "attachments"), { recursive: true });
+		await writeFile(join(root, outsideFile), Buffer.from([1, 2, 3, 4]));
 		await harness.refreshPathCache();
-		assert.ok(await existsOnDisk(root, secondOrphan) === false, "（清理现场：这条孤儿不该留在后面）");
+		const withOutside = await readReport();
+		assert.deepEqual(
+			[filesIn(withOutside), unusedIn(withOutside), missingIn(withOutside)],
+			[files0, unused0, missing0],
+			`★ 索引外的文件不得影响任何数字（它可能是用户的附件）实际：${withOutside}`
+		);
+
+		// ② 登记一份**没有笔记引用**的副本 ⇒ 文件数 +1、"没人引用" +1，失效数不变
+		const unusedPath = "attachments/没人引用.png";
+		await writeFile(join(root, unusedPath), Buffer.from([9, 9, 9, 9, 9]));
+		const indexHandle = plugin.indexStore.index;
+		indexHandle.set({
+			key: "unused-1f.png",
+			cachePath: unusedPath,
+			remoteUrl: `${PUBLIC_BASE}/unused-1f.png`,
+			size: 5,
+			contentType: "image/png",
+			etag: "",
+			uploadedAt: new Date().toISOString(),
+			lastUsedAt: Date.now(),
+			sourceName: "没人引用.png",
+		});
+		const withUnused = await readReport();
+		assert.equal(filesIn(withUnused), files0 + 1, `★ 索引里多了一条副本 ⇒ 文件数 +1 实际：${withUnused}`);
+		assert.equal(unusedIn(withUnused), unused0 + 1, `★ 它没有笔记引用 ⇒"没人引用" +1 实际：${withUnused}`);
+		assert.equal(missingIn(withUnused), missing0, `★ 失效数不该动 实际：${withUnused}`);
+
+		// ③ 再登记一条**失效记录**（索引里有、磁盘上没有）⇒ 只有失效数 +1
+		indexHandle.set({
+			key: "stale-1f.png",
+			cachePath: "attachments/已经不在了.png",
+			remoteUrl: `${PUBLIC_BASE}/stale-1f.png`,
+			size: 7,
+			contentType: "image/png",
+			etag: "",
+			uploadedAt: new Date().toISOString(),
+			lastUsedAt: Date.now(),
+			sourceName: "已经不在了.png",
+		});
+		const withStale = await readReport();
+		assert.equal(
+			missingIn(withStale),
+			missing0 + 1,
+			`★ 索引指向的文件已不在 ⇒ 失效数 +1（自愈会摘掉这条）实际：${withStale}`
+		);
+		assert.equal(filesIn(withStale), files0 + 1, `★ 失效那条**不算副本** 实际：${withStale}`);
+
+		// ⭐ 只读性：报告一个文件都不该动（它没有任何确认框，也没有删除路径）
+		assert.equal(harness.calls.trash.length, trashesBeforeReport, "★ 报告不许碰回收站（它只读）");
+		assert.equal(harness.calls.delete.length, deletesBeforeReport, "★ 报告不许删任何文件（它只读）");
+		assert.ok(await existsOnDisk(root, outsideFile), "★ 索引外的文件必须原封不动（它可能是用户的附件）");
+		assert.ok(await existsOnDisk(root, referencedCopy), "★ 被引用的副本当然也原封不动");
 
 		// 批量上传：把 `attachments/pic.png` 传上去，并改写笔记里的本地链接
 		const attachmentPath = "attachments/pic.png";
@@ -871,7 +881,7 @@ export async function runLoadAcceptance(options = {}) {
 		// 让这条断言看着在守一件事，其实守的是另一件）。
 		const BATCH_BYTES = new Uint8Array([...HOSTILE_BYTES, 0x7a, 0x7b]);
 		await writeFile(join(root, attachmentPath), Buffer.from(BATCH_BYTES));
-		// 用**另一篇**笔记：上面那篇里的引用是 clean-cache 那条断言的依据，不能覆盖掉
+		// 用**另一篇**笔记：上面那篇里的引用是缓存占用报告那几条断言的依据，不能覆盖掉
 		const notePath = "notes/待迁移.md";
 		await writeFile(join(root, notePath), `![[pic.png]]\n\n![x](attachments/pic.png)\n`);
 
@@ -1095,6 +1105,16 @@ export async function runLoadAcceptance(options = {}) {
 			assert.ok(
 				externalLines.includes(EXTERNAL_HOST),
 				`★ 确认框必须列出即将访问的站点（那是授权凭据）：${externalLines}`
+			);
+
+			// ⭐ 同一张确认框也必须说清"文件留在原地"（1.3.0 / D-17）：用户的预期
+			// 来自旧文案"会被搬进缓存目录"，如今什么都不搬 —— 不写清楚，
+			// 他跑完发现文件还在会以为命令没生效（或者反过来，以为文件被搬走了）。
+			// ⚠️ 判据对**两种语言**都成立（套件不该假设界面语言），所以查
+			// "attachments folder" 或 "附件目录" 任一个。
+			assert.ok(
+				/(?:attachments folder|附件目录)/.test(externalLines),
+				`★ 确认框必须说明原文件留在附件目录里（不然用户以为命令没生效）：${externalLines}`
 			);
 
 			// ── 取消 = 什么都没发生（一个请求都不发，笔记一个字都不动）──
@@ -1456,9 +1476,30 @@ export async function runLoadAcceptance(options = {}) {
 			const trashedBefore = harness.calls.trash.length;
 			mockObsidian.Notice.instances.length = 0;
 
+			// ⭐⭐ 先钉住"保存设置这一下，**接线上**真的触发了一轮检查"，再看效果。
+			// 为什么不能只看效果（实测踩到过）：`maybeRotate` 有四条触发线
+			//（启动 / 周期 / 保存设置 / 索引长大），其中"索引长大"那条在别的场景里
+			// 也会被调到 ⇒ 把"保存设置 → 立刻检查"那行调用整条删掉，这一段**依然通过**
+			//（变异「★ 保存设置后不触发轮换」因此**漏过**，是本次才发现的无牙锚点）。
+			// 所以必须直接盯住那次调用本身，而不是它的间接后果。
+			const realRotator = plugin.rotation;
+			const rotateReasons = [];
+			plugin.rotation = {
+				maybeRotate: (reason) => {
+					rotateReasons.push(reason);
+					return realRotator.maybeRotate(reason);
+				},
+			};
+
 			// 把上限调到 1 MB 并保存 —— 保存设置会触发一轮检查
 			plugin.settings.cacheLimitMb = 1;
 			await plugin.saveSettings();
+			assert.ok(
+				rotateReasons.includes("settings"),
+				`★ 保存设置必须立刻触发一轮上限检查（用户刚把上限调小，期待立刻生效）—— 实际收到的触发原因：${
+					JSON.stringify(rotateReasons)
+				}`
+			);
 
 			await waitFor(() => !index.has(legacyKey), "超限后自动淘汰了最久没用过的遗留副本", 20000, diagnose);
 
@@ -1498,6 +1539,7 @@ export async function runLoadAcceptance(options = {}) {
 
 			// 关掉上限，免得影响后面的场景
 			plugin.settings.cacheLimitMb = 0;
+			plugin.rotation = realRotator;
 		}
 
 		// ============================================================

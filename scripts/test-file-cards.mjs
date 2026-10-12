@@ -5,7 +5,7 @@ import { runFileCardsSuite } from "./lib/file-cards-suite.mjs";
  * 确认框里那张「文件清单」的测试（`src/ui/file-cards.ts`）。
  *
  * 起因（用户口径）：**"确认文件时应当以缩略图方式展示，以便用户确认是哪个文件"** ——
- * 两处不可恢复的确认框（`clean-cache` 与云端清理）原先列的是对象 key / 缓存路径，
+ * 两处确认框（孤儿询问、清理云端未使用对象）原先列的是对象 key / 缓存路径，
  * 末段都是一串 sha256，用户认不出那是哪张图，而清单是他按下按钮前唯一能核对的东西。
  *
  * 断言在 `lib/file-cards-suite.mjs`（与变异验证共用）。

@@ -21,8 +21,9 @@ await withLoadedTs(
 	(mod) => {
 		runMaintenanceSuite(mod);
 		console.log(
-			"Maintenance planners passed (four audit classes with attachment-folder files never treated as orphans; " +
-				"preview truncated but execution list full; link spans for wikilink/alias/subpath/title/angle forms; " +
+			"Maintenance planners passed (audit classes derived from the index alone — a file the index never " +
+				"recorded is ignored by every class and never counted, byte totals come from the disk rather than from " +
+				"the index, and an unreferenced copy is only reported when references were actually scanned; " +
 				"rewrites preserve aliases and never touch unrelated links, and an extension-less link still matches " +
 				"an extensioned rule; canvas rewriting touches only the two value kinds it owns (file nodes move to " +
 				"the new in-vault path, text nodes get the same remote URLs as notes would), leaves indentation and " +

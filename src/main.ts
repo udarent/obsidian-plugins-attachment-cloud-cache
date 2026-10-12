@@ -34,7 +34,7 @@ import { CacheIndex } from "./cache/index";
 import { createIndexStore, makeSerializer } from "./host/runtime";
 import type { HostContext } from "./host/runtime";
 import { createEditorHandlers } from "./host/editor-bridge";
-import { auditForCleanup, runBatchUpload, runCleanup, runEviction, scanReferences } from "./maintenance/run";
+import { inspectLocalCopies, runBatchUpload, runEviction, scanReferences } from "./maintenance/run";
 import { canvasTextTargets, keysInText } from "./maintenance/references";
 import { describeError } from "./error-text";
 import type { MaintenanceDeps } from "./maintenance/run";
@@ -619,12 +619,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		});
 
 		this.addCommand({
-			id: "clean-cache",
-			name: this.t("cmdCleanCache"),
-			callback: () => void this.cleanCache(),
-		});
-
-		this.addCommand({
 			id: "upload-attachments",
 			name: this.t("cmdUploadAttachments"),
 			callback: () => void this.uploadExistingAttachments(),
@@ -783,7 +777,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		}
 
 		// 存储没配好就**不问了**：这个弹窗的三个选项里有两个以"云端"为前提，
-		// 而只有一个能成立时，问法本身是误导（"只删本地"另有 `clean-cache` 负责）。
+		// 而只有一个能成立时，问法本身是误导（"只删本地副本"那一档由 R17 的询问
+		// 与 `cleanup-cloud` 承担，跟这里的三选一不是一件事）。
 		const client = this.buildClient();
 		if (!client) return;
 
@@ -820,11 +815,11 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		});
 		if (choice === "keep") return;
 
-		// ⚠️ 清单按**索引当时的记录**算（`planOrphanLocalRemoval` 是纯函数，
-		// 分类规则与 `clean-cache` 共用同一个 `isUnderCacheFolder`）。
+		// ⚠️ 清单按**索引当时的记录**算（`planOrphanLocalRemoval` 是纯函数）。
+		// 1.3.0（D-17）起删法只有一种（走回收站）：从前那条"在缓存目录里 ⇒ 直接删"的分支
+		// 随缓存目录一起没了，而那份文件现在**同时可能就是用户的附件原件**。
 		const localTargets = planOrphanLocalRemoval(selection.asks, {
 			cachePathOf: (key) => this.currentIndex().get(key)?.cachePath,
-			cacheFolder: this.settings.cacheFolder,
 		});
 
 		// 先删云端（不可恢复的那一半先做：失败时下面那句提示会如实说明"云端对象未动"）
@@ -898,9 +893,9 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 *
 	 * ## 两条刻意的选择
 	 *
-	 * ① **写在插件目录，不写缓存目录**：缓存目录是承诺过"可以整体删除"的
-	 *   （那是"离线副本可再生"这条承诺的一部分）—— 留痕写在那里，用户跑一次
-	 *   `clean-cache` 就把证据一起抹掉了，等于白留。
+	 * ① **写在插件目录，不写本地副本所在处**：本地副本（附件目录里那份、或用户选的
+	 *   缓存目录）是承诺过"可以整体删除"的 —— 留痕写在那里，用户清理一次副本
+	 *   就把证据一起抹掉了，等于白留。
 	 * ② **写失败绝不抛错**：见 `maintenance/delete-log.ts`。为一个附属功能
 	 *   炸断一条不可恢复的主流程，代价完全不成比例。
 	 *
@@ -1011,7 +1006,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			}),
 			...(selection.candidates.length > CLOUD_CLEANUP_LIST_MAX
 				? [
-						this.t("maintainCleanMore", {
+						this.t("maintainMoreItems", {
 							count: selection.candidates.length - CLOUD_CLEANUP_LIST_MAX,
 						}),
 					]
@@ -1182,7 +1177,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	/**
 	 * 把清单里的项算成"怎么展示"（缩略图 + 名字 + 类型标记）。
 	 *
-	 * 三处确认框共用：孤儿询问、清理云端未使用对象、clean-cache。
+	 * 三处确认框共用：孤儿询问、清理云端未使用对象、批量上传
+	 * （1.3.0 起 `clean-cache` 退役 —— 它原来那份清单也走这里）。
 	 * 判定本身在 `ui/file-cards.ts`（纯函数，可穷举），这里只负责接上宿主的两件事
 	 * —— 本地文件地址与远端地址。
 	 */
@@ -1193,10 +1189,16 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		});
 	}
 
-	/** 查看缓存占用（只读，不动任何文件）。 */
+	/**
+	 * 看一遍本地副本占用（只读，不动任何文件）。
+	 *
+	 * ⚠️ 1.3.0（D-17）起口径是**索引 + 存在性**：只统计"索引里记过的副本此刻还在不在"。
+	 * 从前那些"孤儿文件"（磁盘有、索引无）**不再可能出现** ——
+	 * 索引外的文件可能是用户自己的附件，扫出来也绝不能动（见 `audit.ts` 文件头）。
+	 */
 	private async reportCacheUsage(): Promise<void> {
 		const deps = this.maintenanceDeps();
-		const { audit } = await auditForCleanup(deps, (url) => this.keyOfUrl(url));
+		const { audit } = await inspectLocalCopies(deps, (url) => this.keyOfUrl(url));
 		const mb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1);
 
 		// 上限：0 = 不限制。用一句人话表示，而不是把 0 直接摆给用户看
@@ -1207,11 +1209,9 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 
 		new Notice(
 			this.t("maintainUsageReport", {
-				total: audit.bytes.total,
 				totalMb: mb(audit.bytes.total),
-				count: audit.healthy.length + audit.unused.length + audit.orphans.length,
+				count: audit.healthy.length + audit.unused.length,
 				reclaimableMb: mb(audit.bytes.reclaimable),
-				orphans: audit.orphans.length,
 				unused: audit.unused.length,
 				missing: audit.missingCopies.length,
 				limit,
@@ -1294,63 +1294,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		return false;
 	}
 
-	/** 清理未使用的缓存（**破坏性**：先确认，删除不可撤销）。 */
-	private async cleanCache(): Promise<void> {
-		const deps = this.maintenanceDeps();
-		const { plan } = await auditForCleanup(deps, (url) => this.keyOfUrl(url));
-
-		if (plan.all.length === 0) {
-			new Notice(this.t("maintainNothingToClean", { healed: plan.healKeys.length }));
-			// 没有可清理的对象时仍然自愈（那是零风险的）
-			if (plan.healKeys.length > 0) await runCleanup(deps, plan);
-			return;
-		}
-
-		const mb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1);
-		// ⭐ 列出来的每一行给一张缩略图 + 名字：`plan.preview` 是**缓存路径**，
-		// 末段就是对象 key（一串 sha256）—— 用户看它认不出是哪张图，
-		// 而这是按下不可逆按钮前唯一能核对的东西。
-		// ⚠️ 这条路列的**就是磁盘上的文件**（`clean-cache` 只清缓存目录）⇒ 缩略图零网络：
-		// 直接显示本地那一份，不需要也不该去推远端地址。
-		const indexByPath = new Map(this.currentIndex().toArray().map((entry) => [entry.cachePath, entry]));
-		const cards = this.fileCards(
-			plan.preview.map((path) => ({
-				id: path,
-				// 条目缺名字时从缓存路径末段（就是对象 key）反推 —— 解析器认 Windows 分隔符
-				name: indexByPath.get(path)?.sourceName || displayNameForKey(path),
-				localPath: path,
-			})),
-			plan.preview.length
-		);
-
-		// ⚠️ 确认框里那句话是用户按下**不可逆**按钮前唯一读到的安全信息：
-		// 它必须说清"删了没法撤销、空间立刻释放"，否则用户会以为还能找回。
-		const confirmed = await this.confirmMaintenance({
-			title: this.t("maintainCleanTitle"),
-			lines: [
-				this.t("maintainCleanSummary", { count: plan.all.length, mb: mb(plan.bytes) }),
-				...(plan.hidden > 0 ? [this.t("maintainCleanMore", { count: plan.hidden })] : []),
-				this.t("maintainCleanSafety"),
-			],
-			cards,
-			cta: this.t("maintainCleanCta"),
-			destructive: true,
-		});
-		if (!confirmed) {
-			new Notice(this.t("maintainCancelled"));
-			return;
-		}
-
-		const result = await runCleanup(deps, plan);
-		new Notice(
-			this.t("maintainCleaned", {
-				removed: result.removed,
-				healed: result.healed,
-				skipped: result.skipped.length,
-			})
-		);
-	}
-
 	/**
 	 * 上传附件目录里已有的图片（P1 #8）。
 	 *
@@ -1395,12 +1338,12 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			this.t("maintainBatchSummary", { count: selection.paths.length }),
 			...selection.paths.slice(0, 10),
 			...(selection.paths.length > 10
-				? [this.t("maintainCleanMore", { count: selection.paths.length - 10 })]
+				? [this.t("maintainMoreItems", { count: selection.paths.length - 10 })]
 				: []),
-			// ⚠️ 必须说清"跑完原文件就不在附件目录里了" —— 用户是照着设置项
-			// 「移入缓存目录」来理解这条命令的，做完发现文件还在会以为没生效；
-			// 反过来，现在就告诉他"会被搬走"，他才能在跑之前决定。
-			this.t("maintainBatchMovesOriginals"),
+			// ⚠️ 1.3.0（D-17）后这条必须照实说"什么都不搬"：文件留在原处就地当本地副本，
+			// 变的只有笔记里的链接。不写清楚，用户跑完发现文件还在会以为没生效
+			//（旧文案承诺的正是"会被搬进缓存目录"）。
+			this.t("maintainBatchOriginalsStay"),
 		];
 
 		// ⚠️ 也要说清"哪些**不会**被处理" —— 用户跑这条命令的预期往往是"把没搬的全搬"，

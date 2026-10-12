@@ -3,18 +3,17 @@
  *
  * ## 这里要钉住什么
  *
- * 这是全库**唯一**会删"用户自己的文件"的自动路径（触发点是**自动弹出的询问**），
- * 而它同时要处理两类完全不同的东西：
+ * 这是用户**明确确认**之后删本地副本的那条路（触发点是自动弹出的询问）。
+ * 1.3.0（D-17）起删法**只有一种**：`FileManager.trashFile` —— 那份副本同时可能就是
+ * 用户附件目录里的原件，判据不是「文件在哪」而是「能不能重新拿到」。
+ *（要立刻腾空间的是**上限淘汰**那条自动路径，它用 `Vault.delete`，但另有一套
+ * 云端 HEAD 前置复核 —— 两条路别混。）
  *
- * | 副本在哪 | 走哪条路 | 判错的后果 |
- * |---|---|---|
- * | 缓存目录内（可再生） | `Vault.delete` | 空间没立刻释放 |
- * | 缓存目录外（**用户自己的附件**） | `FileManager.trashFile` | **永久删掉用户的图** |
+ * 所以替身**同时**提供 `trashFile` 与 `delete`（不是「少一个 API 所以走不了」，那是假通过），
+ * 而断言里 `delete` 必须**始终为空** —— 一旦有人把这条路的删法改回直接删，
+ * 那就是绕过回收站永久删掉用户的图。
  *
- * 所以替身**同时**提供 `trashFile` 与 `delete`（不是"少一个 API 所以走不了"，那是假通过），
- * 每条断言都看**调用了哪一个**。
- *
- * 另外两条纪律也在这里钉住，因为它们的后果都是"很久之后才显形"的：
+ * 另外两条纪律也在这里钉住，因为它们的后果都是「很久之后才显形」的：
  * ① 拿不到删除凭据（宿主文件索引滞后）时**文件与记录都不动**；
  * ② 删失败不算成功、也不摘记录，每次运行最多落盘一次。
  */
@@ -27,7 +26,9 @@ function makeApp(files, options = {}) {
 	const app = {
 		fileManager: {
 			async trashFile(file) {
-				if (options.trashThrows) throw new Error("回收站失败");
+				if (options.trashThrows || options.trashThrowsFor === file.path) {
+				  throw new Error("回收站失败");
+				}
 				calls.trash.push(file.path);
 				delete files[file.path];
 			},
@@ -45,23 +46,20 @@ function makeApp(files, options = {}) {
 	return { app, calls };
 }
 
-const cacheTarget = (key, path) => ({ key, path, isUserFile: false });
-const userTarget = (key, path) => ({ key, path, isUserFile: true });
+const target = (key, path) => ({ key, path });
 
 export async function runOrphanRemovalSuite(mod) {
 	const { removeOrphanCopies } = mod;
 
 	// ============================================================
-	// 1. ⭐⭐ 用户自己的附件：走回收站，**绝不能直接删**
+	// 1. ⭐⭐ 只有一种删法：走回收站，**绝不能直接删**
 	// ============================================================
-	// ⚠️ 这一条**刻意排在最前**：把两类副本走反的那个变异，应当在**这一条**上失败 ——
+	// ⚠️ 这一条**刻意排在最前**：把删法改成「直接删」的那个变异，应当在**这一条**上失败 ——
 	// 那是这个模块最不可逆的失效（绕过回收站永久删掉用户的图）。
-	// 排到后面的话，同一个变异会先在"缓存副本没走 delete"上红，
-	// 报出的原因就与"用户的图被永久删了"这件事错位了。
 	{
 		const files = { "attachments/mine.png": true };
 		const { app, calls } = makeApp(files);
-		const removed = await removeOrphanCopies([userTarget("mine.png", "attachments/mine.png")], {
+		const removed = await removeOrphanCopies([target("mine.png", "attachments/mine.png")], {
 			app,
 			forget: () => true,
 			persist: async () => {},
@@ -71,32 +69,18 @@ export async function runOrphanRemovalSuite(mod) {
 		assert.deepEqual(
 			calls.trash,
 			["attachments/mine.png"],
-			"★★ 用户自己的附件必须走回收站（`localCopy: keep` 时索引里的 cachePath 就在附件目录里）"
+			"★ 走回收站（索引里的 cachePath 就是用户附件目录里那份）"
 		);
-		assert.deepEqual(calls.delete, [], "★★ 绝不能直接删用户文件 —— 那是绕过回收站、不可恢复");
+		assert.deepEqual(calls.delete, [], "★★ 绝不能直接删 —— 那是绕过回收站、不可恢复");
 	}
 
 	// ============================================================
-	// 2. ⭐⭐ 缓存副本：直接删，**绝不碰回收站**
+	// 2.（已删除）「缓存副本 ⇒ Vault.delete」
+	//
+	// 1.3.0（D-17）取消了缓存目录 ⇒ 那个分支**永远不会命中**，随之删掉。
+	// 留一句说明而不是留一条用例：死主题的断言永远绿，还会让人以为那条路还在。
 	// ============================================================
-	{
-		const files = { "_attachment-cache/a.png": true };
-		const { app, calls } = makeApp(files);
-		const removed = await removeOrphanCopies([cacheTarget("a.png", "_attachment-cache/a.png")], {
-			app,
-			forget: () => true,
-			persist: async () => {
-				calls.persisted += 1;
-			},
-			onPersistError: () => {},
-		});
-		assert.equal(removed, 1, "删掉了一个");
-		assert.deepEqual(calls.delete, ["_attachment-cache/a.png"], "★ 缓存副本走 Vault.delete（空间立刻释放）");
-		assert.deepEqual(calls.trash, [], "★ 缓存副本不许走回收站 —— 回收站不释放物理空间");
-		assert.equal(files["_attachment-cache/a.png"], undefined, "文件真的没了");
-	}
 
-	// ============================================================
 	// 3. 拿不到删除凭据（宿主文件索引滞后）⇒ 文件与记录都不动
 	// ============================================================
 	// 这条守的是"不绕过宿主自己删"。跳过时**也不能摘记录**：
@@ -104,7 +88,7 @@ export async function runOrphanRemovalSuite(mod) {
 	{
 		const { app, calls } = makeApp({});
 		let forgotten = 0;
-		const removed = await removeOrphanCopies([cacheTarget("a.png", "_attachment-cache/a.png")], {
+		const removed = await removeOrphanCopies([target("a.png", "attachments/a.png")], {
 			app,
 			forget: () => {
 				forgotten += 1;
@@ -125,12 +109,12 @@ export async function runOrphanRemovalSuite(mod) {
 	// 4. 删失败：不算成功、不摘记录、如实记下来
 	// ============================================================
 	{
-		const files = { "_attachment-cache/a.png": true, "_attachment-cache/b.png": true };
+		const files = { "attachments/a.png": true, "attachments/b.png": true };
 		const errors = [];
 		let forgotten = 0;
-		const { app, calls } = makeApp(files, { deleteThrows: true });
+		const { app, calls } = makeApp(files, { trashThrows: true });
 		const removed = await removeOrphanCopies(
-			[cacheTarget("a.png", "_attachment-cache/a.png"), cacheTarget("b.png", "_attachment-cache/b.png")],
+			[target("a.png", "attachments/a.png"), target("b.png", "attachments/b.png")],
 			{
 				app,
 				forget: () => {
@@ -154,10 +138,10 @@ export async function runOrphanRemovalSuite(mod) {
 	// 5. 一次失败不中断整批（用户要的是"把能清的清掉"）
 	// ============================================================
 	{
-		const files = { "attachments/mine.png": true, "_attachment-cache/b.png": true };
-		const { app, calls } = makeApp(files, { trashThrows: true });
+		const files = { "attachments/mine.png": true, "attachments/b.png": true };
+		const { app, calls } = makeApp(files, { trashThrowsFor: "attachments/mine.png" });
 		const removed = await removeOrphanCopies(
-			[userTarget("mine.png", "attachments/mine.png"), cacheTarget("b.png", "_attachment-cache/b.png")],
+			[target("mine.png", "attachments/mine.png"), target("b.png", "attachments/b.png")],
 			{
 				app,
 				forget: () => true,
@@ -168,22 +152,26 @@ export async function runOrphanRemovalSuite(mod) {
 				onDeleteError: () => {},
 			}
 		);
-		assert.equal(removed, 1, "★ 第一个失败，第二个照删（一个失败不中断整批）");
-		assert.deepEqual(calls.delete, ["_attachment-cache/b.png"], "删掉的正是第二个");
+		assert.equal(
+			removed,
+			1,
+			"★ 第一个失败（只让它失败），第二个照删 —— 一个失败不该中断整批"
+		);
+		assert.deepEqual(calls.trash, ["attachments/b.png"], "删掉的正是第二个（只有第一个路径被注入失败）");
 	}
 
 	// ============================================================
 	// 6. ⚠️ 索引落盘：整个运行**最多一次**（不是每个文件一次）
 	// ============================================================
 	{
-		const files = { "_attachment-cache/a.png": true, "_attachment-cache/b.png": true, "_attachment-cache/c.png": true };
+		const files = { "attachments/a.png": true, "attachments/b.png": true, "attachments/c.png": true };
 		const { app, calls } = makeApp(files);
 		let forgotten = 0;
 		await removeOrphanCopies(
 			[
-				cacheTarget("a.png", "_attachment-cache/a.png"),
-				cacheTarget("b.png", "_attachment-cache/b.png"),
-				cacheTarget("c.png", "_attachment-cache/c.png"),
+				target("a.png", "attachments/a.png"),
+				target("b.png", "attachments/b.png"),
+				target("c.png", "attachments/c.png"),
 			],
 			{
 				app,
@@ -203,9 +191,9 @@ export async function runOrphanRemovalSuite(mod) {
 
 	// 反向：`forget` 说记录根本不存在（跳过的都算）⇒ 没有变化就不落盘
 	{
-		const files = { "_attachment-cache/a.png": true };
+		const files = { "attachments/a.png": true };
 		const { app, calls } = makeApp(files);
-		await removeOrphanCopies([cacheTarget("a.png", "_attachment-cache/a.png")], {
+		await removeOrphanCopies([target("a.png", "attachments/a.png")], {
 			app,
 			forget: () => false,
 			persist: async () => {
@@ -220,10 +208,10 @@ export async function runOrphanRemovalSuite(mod) {
 	// 7. 落盘失败：如实汇报（与批量清理同一条纪律）
 	// ============================================================
 	{
-		const files = { "_attachment-cache/a.png": true };
+		const files = { "attachments/a.png": true };
 		const { app } = makeApp(files);
 		const reported = [];
-		const removed = await removeOrphanCopies([cacheTarget("a.png", "_attachment-cache/a.png")], {
+		const removed = await removeOrphanCopies([target("a.png", "attachments/a.png")], {
 			app,
 			forget: () => true,
 			persist: async () => {

@@ -72,11 +72,14 @@ await runMutations({
 			expect: "维护命令",
 		},
 		{
-			// 后果：清理命令不再请求确认 ⇒ 用户在命令面板里点错一下就删了文件。
-			name: "★ 清理不再请求确认（点错命令即删文件）",
-			from: "\t\tif (!confirmed) {\n\t\t\tnew Notice(this.t(\"maintainCancelled\"));\n\t\t\treturn;\n\t\t}\n\n\t\tconst result = await runCleanup(deps, plan);",
-			to: "\t\tvoid confirmed;\n\t\tconst result = await runCleanup(deps, plan);",
-			expect: "一个文件都不能动",
+			// 后果：维护命令不再请求确认 ⇒ 用户在命令面板里点错一下就开始改笔记、
+			// 下载站外图（"取消 = 什么都没发生"这条路径整个不存在了）。
+			// ⚠️ 1.3.0（D-17）：原锚点钉的是 `clean-cache` 的确认闸（随命令退役），
+			// 现在改钉**批量上传**的同一道闸 —— 它是同一类风险，且套件里有会红的断言。
+			name: "★ 维护命令不再请求确认（点错命令即改笔记、下载站外图）",
+			from: "\t\tif (!confirmed) {\n\t\t\tnew Notice(this.t(\"maintainCancelled\"));\n\t\t\treturn;\n\t\t}\n\n\t\tconst result = await runBatchUpload(deps, { external, referencedPaths });",
+			to: "\t\tvoid confirmed;\n\t\tconst result = await runBatchUpload(deps, { external, referencedPaths });",
+			expect: "取消之后",
 		},
 		{
 			// 后果：整条站外链路在入口上断掉 —— 用户开了功能、也被问了，
@@ -100,7 +103,9 @@ await runMutations({
 			name: "★ 保存设置后不触发轮换（改了上限不立刻生效）",
 			from: '\t\tvoid this.rotation?.maybeRotate("settings");\n',
 			to: "\t\t// 变异：不触发\n",
-			expect: "自动淘汰",
+			// ⚠️ 这条的判据必须是"保存设置**调用过**检查"，而不是"最终确实淘汰了" ——
+			// 后者"索引长大"那条触发线也能做到，于是删掉这行调用套件照样通过（实测漏过）。
+			expect: "保存设置必须立刻触发一轮上限检查",
 		},
 		{
 			// 后果：周期检查不再登记 ⇒ 插件**永远不会自己发现超限**，
@@ -119,13 +124,16 @@ await runMutations({
 			expect: "清理回调",
 		},
 		{
-			// 后果：确认框不再说明后果。用户按下的按钮是**不可逆**的，
-			// 而那句话是他在按下之前唯一读到的安全信息 ——
-			// 少了它，"删掉就找不回来"这件事只存在于文档里。
-			name: "★ 确认框不再说明「无法撤销」（不可逆动作失去唯一的安全提示）",
-			from: '\t\t\t\tthis.t("maintainCleanSafety"),\n',
-			to: "\t\t\t\t// 变异：去掉安全说明\n",
-			expect: "无法撤销",
+			// 后果：确认框不再说清"文件留在原地、只有链接会变"。
+			// 用户的预期是从前那句"会被搬进缓存目录"来的 —— 少了这句，他跑完发现
+			// 文件还在会以为没生效（反过来也可能以为文件被搬走了）。
+			// 而"这动作动不动我的文件"正是他按下按钮前唯一的依据。
+			// ⚠️ 1.3.0（D-17）：原锚点钉的是 `maintainCleanSafety`（键随 clean-cache 退役），
+			// 现在改钉批量上传确认框里那句"文件留在附件目录"。
+			name: "★ 确认框不再说清文件留在原地（用户以为没生效或以为文件被搬走）",
+			from: '\t\t\tthis.t("maintainBatchOriginalsStay"),\n',
+			to: "\t\t\t// 变异：去掉'留在原地'的说明\n",
+			expect: "留在附件目录",
 		},
 		{
 			// 后果：算出了外链候选却不交给执行层 ⇒ 命令只搬库内文件、外链图原样留着，

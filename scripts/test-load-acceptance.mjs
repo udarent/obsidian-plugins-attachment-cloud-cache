@@ -15,8 +15,10 @@ console.log(
 		"a real paste went through: 1 PUT + cached copy byte-identical + link inserted, a second identical paste " +
 		"issued 0 PUT, and a clipboard that hands the same image over twice (once in `files`, once in `items`) still " +
 		"leaves exactly one link — one paste must not show the same picture twice; rendering rewrote the src to the local copy with **zero** requests in both reading view and " +
-		"live preview, while a third-party image was left alone; clean-cache deleted only the orphan through " +
-		"Vault.delete (never the trash), said so in the confirmation text, left the referenced copy alone, and " +
+		"live preview, while a third-party image was left alone; the usage report counts local copies" +
+		"by the index alone — a file it never recorded (possibly the user's own attachment) changes none of" +
+		"its numbers and is never touched, an unreferenced copy and a stale record each move exactly one" +
+		"number, and the report itself deletes nothing; " +
 		"cancelling touched nothing; batch upload rewrote both link forms, left the user's file exactly where it " +
 		"was (no cache folder is ever created — that file *is* the local copy) and left both the attachment no note " +
 		"refers to and any stray copy alone; " +

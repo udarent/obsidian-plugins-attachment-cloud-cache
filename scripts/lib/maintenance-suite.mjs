@@ -1,5 +1,5 @@
 /**
- * 维护功能的纯判定层套件：缓存审计、清理计划、引用扫描、链接改写、批量候选。
+ * 维护功能的纯判定层套件：本地副本审计、引用扫描、链接改写、批量候选。
  *
  * ## 为什么这些必须穷举
  *
@@ -12,7 +12,7 @@
 import assert from "node:assert/strict";
 
 export function runMaintenanceSuite(mod) {
-	const { auditCache, planCleanup } = mod;
+	const { auditCache } = mod;
 	const {
 		findLinkSpans,
 		planLinkRewrites,
@@ -36,120 +36,107 @@ export function runMaintenanceSuite(mod) {
 	});
 
 	// ============================================================
-	// 1. 审计的四类对象
+	// 1. ⭐ 审计的三类对象（1.3.0 / D-17：口径从"扫缓存目录"换成"索引 + 存在性"）
+	//
+	// 缓存目录取消之后 **"孤儿"这一类不存在了**：本地副本只有一种来源（我们登记过的那条），
+	// 而索引外的文件可能是**用户自己的附件**。所以这一层只遍历索引里的条目 ——
+	// 下面那条"塞一个索引外的文件进去，它必须被完全忽略"就是这条性质的钉子。
 	// ============================================================
 	const audit = auditCache({
 		entries: [
-			entry("healthy.png", `${CACHE}/healthy.png`, 10),
-			entry("missing.png", `${CACHE}/missing.png`, 20),
-			entry("unused.png", `${CACHE}/unused.png`, 30),
-			// `localCopy: keep` 时副本在附件目录里 —— 那不是缓存文件
-			entry("kept.png", "attachments/kept.png", 40),
+			// ⚠️ 三条的 `size`（索引记的值）**故意与磁盘上的字节不同**：报告里的两个数字
+			// 都必须按磁盘算 —— 索引里的值可能过时（用户换过文件、同步中断过）。
+			entry("healthy.png", "attachments/healthy.png", 10),
+			entry("missing.png", "attachments/missing.png", 20),
+			entry("unused.png", "attachments/unused.png", 30),
 		],
-		files: [
-			{ path: `${CACHE}/healthy.png`, bytes: 10 },
-			{ path: `${CACHE}/unused.png`, bytes: 30 },
-			{ path: `${CACHE}/orphan.png`, bytes: 50 },
-			// 附件目录里的文件**不在**缓存目录下，不该被当成候选
-			{ path: "attachments/kept.png", bytes: 40 },
-			{ path: "attachments/user-photo.png", bytes: 60 },
-		],
+		copies: new Map([
+			["attachments/healthy.png", { path: "attachments/healthy.png", bytes: 11 }],
+			["attachments/unused.png", { path: "attachments/unused.png", bytes: 33 }],
+		]),
 		referencedKeys: new Set(["healthy.png"]),
-		cacheFolder: CACHE,
 	});
 
 	assert.deepEqual(
 		audit.healthy.map((e) => e.key),
 		["healthy.png"],
-		"索引与磁盘一致、且仍被引用的才是健康副本"
+		"索引与磁盘一致、且仍被引用的才是正常副本"
 	);
 	assert.deepEqual(
 		audit.missingCopies.map((e) => e.key),
 		["missing.png"],
-		"索引有、磁盘没有 → 应判为失效条目（自愈只改索引，不碰文件）"
+		"索引有、磁盘没有 → 失效条目（自愈只改索引，不碰文件）"
 	);
 	assert.deepEqual(
 		audit.unused.map((e) => e.key),
 		["unused.png"],
-		"索引与磁盘都有、但没有笔记引用 → 未引用副本"
+		"索引与磁盘都有、但没有笔记引用 → 可回收（具体动作见 R17 / 上限淘汰）"
 	);
-	assert.deepEqual(
-		audit.orphans.map((f) => f.path),
-		[`${CACHE}/orphan.png`],
-		"★ 磁盘有、索引没有 → 孤儿。附件目录里的文件**绝不能**算孤儿"
-	);
-	assert.deepEqual(
-		audit.outsideCache.map((e) => e.key),
-		["kept.png"],
-		"★ 副本不在缓存目录内的条目要单独归一类：既不自愈也不清理（那是用户的正常附件）"
-	);
-	assert.equal(audit.bytes.total, 90, "总字节只算缓存目录内的（10+30+50）");
-	assert.equal(audit.bytes.reclaimable, 80, "可回收 = 孤儿 50 + 未引用 30");
 
-	// ⭐ 没提供引用集合时**不产生**"未引用" —— 否则"只看占用"会把每一份都报成可删
-	const withoutRefs = auditCache({
-		entries: [entry("a.png", `${CACHE}/a.png`), entry("b.png", `${CACHE}/b.png`)],
-		files: [
-			{ path: `${CACHE}/a.png`, bytes: 1 },
-			{ path: `${CACHE}/b.png`, bytes: 1 },
-		],
-		cacheFolder: CACHE,
+	// ⚠️ 字节一律取**磁盘上的真实大小**，不用索引里记的 `size`：
+	// 那个值可能过时（用户替换过文件、同步中断过），而这两个数字都要回答
+	// "占了多少 / 能腾多少"。上面三条 entry 的 size 故意与 bytes 不同来钉这一点。
+	assert.equal(audit.bytes.total, 44, "总字节按**磁盘**算（11 + 33），且失效的那条不计（它没有占用）");
+	assert.equal(audit.bytes.reclaimable, 33, "可回收 = 未引用副本在磁盘上的字节");
+
+	// ⭐⭐ 结构性保证：`copies` 里就算塞了**索引外**的文件，也不会被任何一类认领 ——
+	// 因为这一层只遍历索引里的条目。索引外的文件可能是用户的附件，
+	// "扫出来删掉"是**永远不该做**的事（旧实现的"孤儿"类别正是这么干的）。
+	const withExtra = auditCache({
+		entries: [entry("a.png", "attachments/a.png", 1)],
+		copies: new Map([
+			["attachments/a.png", { path: "attachments/a.png", bytes: 1 }],
+			["attachments/user-photo.png", { path: "attachments/user-photo.png", bytes: 999 }],
+		]),
+		// ⚠️ 这里**必须**给引用集合：不给的话，这一条的判定会与"没扫描引用"那条变异纠缠在一起
+		//（那个变异会先把这一条打红，报出的原因就与"索引外的文件"这件事错位了）。
+		referencedKeys: new Set(["a.png"]),
 	});
-	assert.deepEqual(withoutRefs.unused, [], "★ 没扫描引用时不该产生\"未引用副本\"（那是把全部判成可删）");
+	assert.equal(withExtra.bytes.total, 1, "★ 索引外的文件不得计入占用（它可能是用户的附件）");
+	assert.deepEqual(
+		[withExtra.healthy.length, withExtra.unused.length, withExtra.missingCopies.length],
+		[1, 0, 0],
+		"★ 索引外的文件不得出现在任何一类里（这一层只认索引记过的路径）"
+	);
+
+	// ⭐ 没提供引用集合时**不产生**"未引用" —— 否则"只看占用"会把每一份都报成可回收
+	const withoutRefs = auditCache({
+		entries: [entry("a.png", "attachments/a.png"), entry("b.png", "attachments/b.png")],
+		copies: new Map([
+			["attachments/a.png", { path: "attachments/a.png", bytes: 1 }],
+			["attachments/b.png", { path: "attachments/b.png", bytes: 1 }],
+		]),
+	});
+	assert.deepEqual(withoutRefs.unused, [], "★ 没扫描引用时不该产生\"未引用副本\"（那是把全部判成可回收）");
 	assert.deepEqual(
 		withoutRefs.healthy.map((e) => e.key),
 		["a.png", "b.png"],
-		"没扫描引用时应按\"一致即健康\"处理"
+		"没扫描引用时应按\"一致即正常\"处理"
 	);
 
-	// `localCopy: keep` 的副本路径不在缓存目录内：即使索引记着、文件也在，也不参与回收
-	assert.equal(
-		audit.bytes.reclaimable,
-		80,
-		"附件目录里的文件不计入可回收字节（那是用户的正常附件）"
-	);
-
-	// 路径写法差异不该造成误判（前导斜杠 / 反斜杠）
+	// 路径写法差异不该造成误判（前导斜杠 / 反斜杠 / 重复斜杠）
 	const sloppy = auditCache({
-		entries: [entry("x.png", `/${CACHE}/x.png`)],
-		files: [{ path: `${CACHE}/x.png`, bytes: 5 }],
-		cacheFolder: CACHE,
+		entries: [entry("x.png", "/attachments//x.png")],
+		copies: new Map([["attachments/x.png", { path: "attachments/x.png", bytes: 5 }]]),
 	});
 	assert.equal(sloppy.missingCopies.length, 0, "路径写法差异不该被判成\"磁盘上没有\"");
 
+	// 同一路径只算一次占用（两条记录指着同一份是索引不该有的状态，但报告不该虚高）
+	const sharedPath = auditCache({
+		entries: [entry("dup-a.png", "attachments/shared.png", 40), entry("dup-b.png", "attachments/shared.png", 40)],
+		copies: new Map([["attachments/shared.png", { path: "attachments/shared.png", bytes: 40 }]]),
+	});
+	assert.equal(sharedPath.bytes.total, 40, "同一路径只计一次占用");
+
 	// ============================================================
-	// 2. 清理计划：展示可截断、执行不可
+	// 2.（已删除）清理计划 `planCleanup`
+	//
+	// 1.3.0（D-17）取消了「清理未使用的缓存文件」这条命令（设计 §20.16 #5）⇒ `planCleanup`
+	// 与它一起删掉。它的两个职责都有了新家：**自愈**已经自动化（§16），
+	// 而**删未引用副本**由 R17 的询问与 `cleanup-cloud` 的对话框承担。
+	//
+	// ⚠️ 这里刻意**只留一句说明、不留用例**：死主题的断言永远绿，还会让人以为那条命令还在。
 	// ============================================================
-	const many = auditCache({
-		entries: [],
-		files: Array.from({ length: 25 }, (_, i) => ({ path: `${CACHE}/o${i}.png`, bytes: 2 })),
-		cacheFolder: CACHE,
-	});
-	const plan = planCleanup({ audit: many, previewLimit: 10 });
-
-	assert.equal(plan.all.length, 25, "★ 执行清单必须**全量**（用截断清单去删会静默漏掉后面的对象）");
-	assert.equal(plan.preview.length, 10, "展示清单按上限截断");
-	assert.equal(plan.hidden, 15, "★ 被省略的数量要如实给出（否则用户以为只有 10 个）");
-	assert.equal(plan.bytes, 50, "回收字节按全量算（25 × 2），不是按展示的那 10 个");
-
-	// 自愈与清理**同批**下发：调用方先自愈（不动文件）再清理，避免"先清后修"白丢
-	const healPlan = planCleanup({
-		audit: auditCache({
-			entries: [entry("gone.png", `${CACHE}/gone.png`)],
-			files: [{ path: `${CACHE}/orphan.png`, bytes: 7 }],
-			cacheFolder: CACHE,
-		}),
-	});
-	assert.deepEqual(healPlan.healKeys, ["gone.png"], "自愈清单要一并给出");
-	assert.deepEqual(healPlan.all, [`${CACHE}/orphan.png`], "清理清单照旧");
-
-	// 空审计 → 空计划（不该产生"删 0 个"之外的任何东西）
-	const empty = planCleanup({
-		audit: auditCache({ entries: [], files: [], cacheFolder: CACHE }),
-	});
-	assert.deepEqual(empty.all, [], "没有可清理对象时清单应为空");
-	assert.equal(empty.hidden, 0);
-	assert.equal(empty.bytes, 0);
 
 	// ============================================================
 	// 3. 链接定位：五种写法都要找对路径段

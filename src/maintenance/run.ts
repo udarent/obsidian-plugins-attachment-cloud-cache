@@ -3,15 +3,18 @@
  *
  * ## 三条安全性质在这里落地
  *
- * 1. **先自愈再清理。** 调用顺序写死在这个模块里（`runCleanup` 内部先摘除失效条目），
- *    而不是留给调用方记得先跑哪个命令 —— 顺序记错会白丢文件（见 `audit.ts` 的说明）。
- * 2. **拿不到删除凭据就跳过，绝不退化为底层删除。** 宿主的文件索引可能滞后于磁盘
+ * 1. **删文件只有一条路，且拿不到凭据就跳过。** 宿主的文件索引可能滞后于磁盘
  *    （刚同步进来的文件还没被索引），此时 `getAbstractFileByPath` 返回 null。
  *    用 `adapter.remove` 硬删会**绕过宿主的文件索引** —— 文件从磁盘上没了，
  *    而宿主仍然认得它，留下"看得见、读不到"的幽灵条目 —— 所以宁可跳过并如实汇报。
  *    至于"怎么删"，由 `remove.ts` 统一决定（只有一种方式：直接删除）。
- * 3. **改笔记前先把原文取到手。** `vault.modify` 是**整文件覆盖**：若写入的是空串
+ *    ⚠️ 1.3.0（D-17）起那份文件**同时是用户的附件**，所以"能不能重新拿到"成了
+ *    删它的唯一依据 ⇒ 自动淘汰那条路**必须先确认云端还有**（`confirmRemote`），
+ *    详见 `runEviction` 的说明。
+ * 2. **改笔记前先把原文取到手。** `vault.modify` 是**整文件覆盖**：若写入的是空串
  *    （例如读取失败却继续往下走），用户的笔记就没了。所以读失败一律跳过该文件。
+ * 3. **判定与执行分开。** "该动哪些"由纯函数决定（`audit.ts` / `eviction.ts`），
+ *    这一层只负责"照着清单做"，并把每一步的失败如实记进结果。
  */
 
 import { TFile } from "obsidian";
@@ -19,9 +22,8 @@ import type { App } from "obsidian";
 
 import type { CacheIndex } from "../cache/index";
 import type { PluginSettings } from "../types";
-import { isUnderCacheFolder } from "../cache-path";
-import { auditCache, planCleanup } from "./audit";
-import type { CacheAudit, CleanupPlan, DiskFile } from "./audit";
+import { auditCache } from "./audit";
+import type { CacheAudit, DiskFile } from "./audit";
 import { removeCacheFile } from "./remove";
 import type { EvictionOutcome, EvictionPlan } from "./eviction";
 import { keysInText, planCanvasRewrites, planLinkRewrites } from "./references";
@@ -31,17 +33,7 @@ import type { ExternalSelection, VaultFileLike } from "./batch";
 import type { IngestRequest, IngestResult } from "../core/ingest";
 import type { ExternalCacheOutcome } from "../core/external-cache";
 import { describeError } from "../error-text";
-
-/** 一次清理的结果，供汇报。 */
-export interface CleanupResult {
-	/** 成功拿掉的文件数。 */
-	removed: number;
-	/** 拿不到删除凭据而跳过的（宿主的索引滞后于磁盘）。 */
-	skipped: { path: string; reason: string }[];
-	/** 自愈摘除的索引条目数。 */
-	healed: number;
-	bytes: number;
-}
+import { normalizeVaultPath } from "../vault-files";
 
 export interface MaintenanceDeps {
 	app: App;
@@ -75,47 +67,29 @@ export interface MaintenanceDeps {
 }
 
 /**
- * 列出缓存目录下的所有文件。
+ * 读出这些路径**此刻在磁盘上的样子**（不在表里 = 那份副本已经不在了）。
  *
- * 走 `adapter.list`（移动端可用）而不是 Node `fs`。
- * 递归是为了容错：缓存目录本该只有一层（插件一直只往这一层写），
- * 但用户可能手工建过子目录，那样的文件我们**看不见就当孤儿删掉**是不对的，
- * 所以照实列出来、交给审计判定。
+ * ⚠️ 输入是**索引里记过的路径**，不是"某个目录下的所有文件"。
+ * 1.3.0（D-17）之前这里列的是缓存目录，那个做法随那条目录一起没了：
+ * 现在**索引外的文件可能是用户自己的附件**，扫出来也绝不能动（见 `audit.ts` 文件头）。
+ * B3 的迁移命令要枚举**老缓存目录**，那份枚举由它自己实现 ——
+ * 别把"扫目录"重新接回这里，否则"删索引外的文件"会跟着回来。
+ *
+ * 走 `adapter.stat` 而不是 Node `fs`：移动端只有前者可用；
+ * 失败/读不到一律当作"不在"（报告里会算进"失效"），绝不让整条命令失败。
  */
-export async function collectCacheFiles(app: App, cacheFolder: string): Promise<DiskFile[]> {
-	const root = String(cacheFolder ?? "")
-		.replace(/\\/g, "/")
-		.replace(/^\/+|\/+$/g, "");
-	if (!root) return [];
-
-	const out: DiskFile[] = [];
-	const queue = [root];
-	const seen = new Set<string>();
-
-	while (queue.length > 0) {
-		const folder = queue.shift();
-		if (folder === undefined || seen.has(folder)) continue;
-		seen.add(folder);
-
-		let listing: { files: string[]; folders: string[] };
+export async function readCopies(app: App, paths: readonly string[]): Promise<Map<string, DiskFile>> {
+	const out = new Map<string, DiskFile>();
+	for (const raw of paths ?? []) {
+		const path = normalizeVaultPath(raw);
+		// 空路径与重复路径都要挡：交给宿主 `getAbstractFileByPath` 空串是在赌它怎么处理，
+		// 而我们没有任何理由为这种输入冒风险。
+		if (!path || out.has(path)) continue;
 		try {
-			listing = await app.vault.adapter.list(folder);
+			const info = await app.vault.adapter.stat(path);
+			if (info && typeof info.size === "number") out.set(path, { path, bytes: Math.max(0, info.size) });
 		} catch {
-			continue; // 目录不存在 / 读不了 → 当作没有文件，而不是让整条命令失败
-		}
-
-		for (const path of listing.files) {
-			let bytes = 0;
-			try {
-				const stat = await app.vault.adapter.stat(path);
-				bytes = typeof stat?.size === "number" ? stat.size : 0;
-			} catch {
-				// 拿不到大小不影响清理判定，按 0 计（只是"可回收字节"会略少）
-			}
-			out.push({ path, bytes });
-		}
-		for (const sub of listing.folders) {
-			if (!seen.has(sub)) queue.push(sub);
+			// 读不到 = 当作不在（报告里会算成"索引指向的文件已不在"）
 		}
 	}
 	return out;
@@ -147,86 +121,33 @@ export async function scanReferences(
 	return { keys, byPath };
 }
 
-export interface AuditForCleanup {
+export interface LocalCopyInspection {
 	audit: CacheAudit;
-	plan: CleanupPlan;
 }
 
 /**
- * 审计 + 出清理计划（供"先给用户看一眼再执行"）。
+ * 看一遍本地副本现在的状况（只读，不动任何东西）。
  *
- * ⚠️ 判定与执行分开两步是刻意的：用户要能看到**具体要删哪些**。
- * 一条"已清理 N 个文件"的提示等于让人闭着眼睛按确认。
+ * 它是「查看缓存占用」那条命令的全部数据来源，也是判定层与磁盘之间**唯一**的接缝：
+ * 这里把"索引里的路径"变成"磁盘上的实际样子"，交给纯函数 `auditCache` 去分类。
+ *
+ * ⚠️ 只查**索引里出现过的**路径（每条一次 `stat`）：不再扫目录，也就不会再有
+ * "索引外的文件"进到判定里 —— 那是不可逆错误唯一的入口。
  */
-export async function auditForCleanup(
+export async function inspectLocalCopies(
 	deps: MaintenanceDeps,
-	keyFromUrl: (url: string) => string | null,
-	previewLimit = 10
-): Promise<AuditForCleanup> {
-	const settings = deps.settings();
-	const files = await collectCacheFiles(deps.app, settings.cacheFolder);
+	keyFromUrl: (url: string) => string | null
+): Promise<LocalCopyInspection> {
+	const entries = deps.index().toArray();
+	const copies = await readCopies(
+		deps.app,
+		entries.map((entry) => entry.cachePath)
+	);
 	const { keys } = await scanReferences(deps.app, keyFromUrl);
 
-	const audit = auditCache({
-		entries: deps.index().toArray(),
-		files,
-		referencedKeys: keys,
-		cacheFolder: settings.cacheFolder,
-	});
-
-	return { audit, plan: planCleanup({ audit, previewLimit }) };
-}
-
-/**
- * 执行清理：**先自愈，再删掉清单里的文件**。
- *
- * 顺序写死在这里，不给调用方选 —— 顺序搞反会白丢文件（见 `audit.ts`）。
- */
-export async function runCleanup(deps: MaintenanceDeps, plan: CleanupPlan): Promise<CleanupResult> {
-	const result: CleanupResult = { removed: 0, skipped: [], healed: 0, bytes: 0 };
-
-	// ── 1. 自愈：只改索引，不碰文件 ──
-	if (plan.healKeys.length > 0) {
-		const index = deps.index();
-		for (const key of plan.healKeys) {
-			if (index.remove(key)) result.healed += 1;
-		}
-		if (result.healed > 0) {
-			try {
-				await deps.persistIndex();
-			} catch (error) {
-				deps.notify(deps.t("maintainPersistFailed", { error: describeError(error) }));
-			}
-		}
-	}
-
-	// ── 2. 清理：删除（唯一实现见 `remove.ts`）──
-	for (const path of plan.all) {
-		// 双保险：清单理论上只含缓存目录内的路径，但这是**删文件**的循环，
-		// 少一层校验的代价不可逆。
-		if (!isUnderCacheFolder(path, deps.settings().cacheFolder)) {
-			result.skipped.push({ path, reason: deps.t("maintainSkipOutsideCache") });
-			continue;
-		}
-
-		const file = deps.app.vault.getAbstractFileByPath(path);
-		if (!file) {
-			// 宿主的索引滞后于磁盘：**跳过**，绝不退化为 adapter.remove
-			//（那会绕过宿主的文件索引，留下"看得见、读不到"的幽灵条目）。
-			result.skipped.push({ path, reason: deps.t("maintainSkipNotIndexed") });
-			continue;
-		}
-
-		try {
-			await removeCacheFile(deps.app, file);
-			result.removed += 1;
-		} catch (error) {
-			result.skipped.push({ path, reason: describeError(error) });
-		}
-	}
-
-	result.bytes = plan.bytes;
-	return result;
+	return {
+		audit: auditCache({ entries, copies, referencedKeys: keys }),
+	};
 }
 
 /** 按计划执行淘汰（缓存上限轮换的执行层）。 */
@@ -246,20 +167,20 @@ export interface EvictionRunResult extends EvictionOutcome {
  * "属于本存储、但本地没有副本"，于是下次看到这张图时**自动重新下载** ——
  * 这正是"淘汰之后还能自己长回来"的机制。
  *
- * ## 与 `runCleanup` 共用同一条安全纪律
+ * ## ⭐ 为什么删得干脆是可以的（1.3.0 重述）
  *
- * 两个入口都通过 `remove.ts` 删文件（走宿主 API、拿不到删除凭据就**跳过**、
- * 绝不退化成 `adapter.remove`）。这是**自动**运行的路径、没人在旁边看，
- * 所以纪律更要守；而"怎么删"只有一处定义，两个入口不可能分叉。
+ * 缓存目录时代这句话很好说："删的只是缓存副本"。现在那份文件**同时是用户附件目录里的
+ * 一份可见文件**，所以论证要重讲一遍 —— 判据不是"文件在哪"，而是**"能不能重新拿到"**：
  *
- * ## 为什么是"直接删除"而不是先进回收站
+ * 1. 对象**已经确认还在云端**（`confirmRemote` 逐个 HEAD 复核，确认不上就不删）；
+ * 2. 笔记里存的**始终是远端地址**（我们从没改写过它们）⇒ 副本消失不影响任何链接；
+ * 3. 于是可恢复性由**重新下载**提供，而这份副本的行踪**不依赖回收站**。
  *
- * 上限的用途是"别让缓存把磁盘吃光"，而回收站**不解**这个问题：文件离开了 vault，
- * 物理空间却还占着，于是表现成"设了上限，磁盘还是满的"。
- * 而这里删的只是**缓存副本**（笔记里存的始终是远端地址），副本下次看到那张图时
- * 会自动重新下载 —— 所以可恢复性由**重新下载**提供，不必由回收站提供。
- * 那个"移入回收站"的备选因此被有意去掉了，理由详见 `remove.ts`。
+ * 而"为什么不走回收站"：上限的用途是"别让副本把磁盘吃光"，回收站**不解**这个问题 ——
+ * 文件离开了 vault、物理空间却还占着，于是表现成"设了上限，磁盘还是满的"。
+ * 这与用户确认的整理（R17，走回收站）是**两条不同的路**：那条不需要立刻腾空间。
  */
+
 export async function runEviction(deps: MaintenanceDeps, plan: EvictionPlan): Promise<EvictionRunResult> {
 	const result: EvictionRunResult = { evicted: 0, freed: 0, skipped: [], unindexed: 0 };
 	const removedKeys: string[] = [];
@@ -376,22 +297,23 @@ export interface BatchOptions {
  * ⚠️ 站外那趟排在前面，是为了让第二趟的 `planLinkRewrites` 读到**最新**正文
  *（它要重新读每一篇笔记；顺序反过来的话，读到的是外链那趟改写之前的版本）。
  *
- * ## ⭐ 只管被引用的文件；上传成功后**移动**进缓存
+ * ## ⭐ 只管被引用的文件；上传成功后**什么都不搬**
  *
- * 命令的语义与设置项「移入缓存目录」（`localCopy: "cache"`）**一致**：
+ * 命令的语义是"把已有的附件传上去、把笔记里的链接改指云端"，**不改变文件的位置**：
  *
  * 1. **候选只收被笔记引用着的文件**（`options.referencedPaths`，取自宿主的链接索引）。
  *    没有任何笔记引用的文件一概不碰 —— 那种文件多半是废弃的旧图，动了只会让人
- *    以为丢东西，而且"搬走"之后没有任何东西会把用户引到它的新位置。
- * 2. 上传成功后，`ingest` 按 `localCopy` 处置那个文件：`cache` ⇒ **移入缓存目录并改名**
- *    （`rename`，不是复制）。**"引用会被同一条命令改写成远端地址"就是这一步的前提**
- *    —— 被引用 + 会被改写 ⇒ 搬走不会留下死链。
+ *    以为丢东西。
+ * 2. 上传成功后，`ingest` 按 `localCopy` 处置那个文件：**唯一的保留形态就是原地留着**
+ *    （`keep-in-place`，见 `planLocalCopy`）。1.3.0（D-17）取消了缓存目录 ——
+ *    附件本身**就是**本地副本，于是"搬运 + 改名"这一步整个消失；只有 `trash` 档
+ *    才动文件（进回收站）。
  *
  * ⚠️ 另一条配套性质：**不得在原处留下中转副本**。
  * 文件本来就在库里，若把 ingest 的"先落盘再上传"照搬过来，每个文件都会先被写成
- * 一个 `xxx 1.png`（原文件占着名字 ⇒ 另取序号）再搬进缓存 ——
- * 那是"凭空多出来的文件"，搬移失败时还会永久残留。所以这里必须把
- * `existingPath` 指出来，让编排层知道**字节已经在库里**（见 `IngestRequest`）。
+ * 一个 `xxx 1.png`（原文件占着名字 ⇒ 另取序号）—— 那是"凭空多出来的文件"，
+ * 上传失败时还会永久残留。所以这里必须把 `existingPath` 指出来，
+ * 让编排层知道**字节已经在库里**（见 `IngestRequest`）。
  */
 export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOptions): Promise<BatchResult> {
 	const settings = deps.settings();

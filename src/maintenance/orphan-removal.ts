@@ -34,7 +34,6 @@
 import type { App } from "obsidian";
 
 import type { OrphanLocalTarget } from "./orphan-watch";
-import { removeCacheFile } from "./remove";
 
 export interface OrphanRemovalDeps {
 	app: App;
@@ -68,8 +67,10 @@ export async function removeOrphanCopies(
 		if (!file) continue;
 
 		try {
-			if (target.isUserFile) await deps.app.fileManager.trashFile(file);
-			else await removeCacheFile(deps.app, file);
+			// ⚠️ 1.3.0（D-17）起只有这一种：那份副本同时可能就是用户的附件原件，
+			// 而这条路是**用户明确确认**过的、也不需要立刻腾空间 ⇒ 走回收站。
+			// （要立刻腾空间的是上限淘汰那条自动路径，它另有一套更严的前置复核。）
+			await deps.app.fileManager.trashFile(file);
 		} catch (error) {
 			// 纪律 3：删不掉就留着（多一个文件远好过丢一张图），但绝不记成成功
 			deps.onDeleteError?.(error, target.path);
