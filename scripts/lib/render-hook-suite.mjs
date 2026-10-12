@@ -132,15 +132,42 @@ export async function runRenderHookSuite(mod) {
 	}
 
 	// ============================================================
-	// 3. ⭐ 拿不到本地可用地址时**不改**（绝不改成坏链接）
+	// 3. ⭐⭐ 索引记着副本、但那份文件**不在**（拿不到本地可用地址）
 	//
-	// 症状对比：不改 → 在线正常、离线看不到（可接受）；改成空/坏地址 →
-	// 连在线都看不到（明显更糟）。
+	// 症状对比：改写 → 连**在线**都看不到（明显更糟）；什么都不做（旧行为）→
+	// 在线正常、但**离线可用静默失效**、副本永远回不来 —— 真机探针 ②（2026-10-12）
+	// 量到的就是后者。所以判据是**两条一起**：
+	//   ① 同步阶段一个字都不写（绝不改成空/坏地址）；
+	//   ② 但**必须去把副本找回来**（否则"离线可用"这条承诺就此蒸发，且不报错）。
 	// ============================================================
 	const img3 = fakeImage(`${BASE}/cached.png`);
-	const r3 = processImages(fakeContainer([img3]), depsWith({ resourceUrlFor: () => null }));
+	const asked3 = [];
+	// ⚠️ 两条路径要分开：索引记的是**那条已经不在了的旧路径**，而补齐会落到**新的附件目录**
+	//（真机上是 `attachments/<原名>`）。合成一条路径会让"补回来之后能不能写回 src"测不出来。
+	const restored3 = "attachments/cached.png";
+	const r3 = processImages(
+		fakeContainer([img3]),
+		depsWith({
+			// 旧路径取不到地址（文件不在）⇒ 必须走补齐那条路；补回来的那份取得地址。
+			resourceUrlFor: (path) => (path === restored3 ? `app://local/${path}` : null),
+			ensureLocalCopy: async (key, remoteUrl) => {
+				asked3.push([key, remoteUrl]);
+				return restored3;
+			},
+		})
+	);
 	assert.equal(r3.local, 0, "拿不到可用地址时不该计入改写");
 	assert.deepEqual(img3.writes, [], "★ 拿不到可用地址时**一个字都不该写**（不能改成空串或坏地址）");
+	assert.equal(r3.deferred, 1, "★★ 副本不在时**必须去把副本找回来**（否则离线可用静默失效）");
+	assert.deepEqual(asked3, [["cached.png", `${BASE}/cached.png`]], "补齐要用 key 与远端地址");
+
+	// 补上之后才写 src（异步）—— 等一个微任务；写入序列里仍然只有本地地址
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	assert.deepEqual(
+		img3.writes,
+		[`app://local/${restored3}`],
+		"★ 补回来之后才写本地地址，中间从不写远端"
+	);
 
 	// ============================================================
 	// 4. 属于本存储但本地没有 → 交给补齐流程；补上后换成本地地址

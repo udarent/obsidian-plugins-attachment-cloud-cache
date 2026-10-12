@@ -17,9 +17,19 @@ await runMutations({
 			// 后果：把 `src` 写成一个空/坏地址 —— 连**在线**都看不到图了，
 			// 比"不改"明显更糟。
 			name: "★ 拿不到本地可用地址时照样改写（把图写成坏地址）",
-			from: "\t\t\tif (!resourceUrl) continue; // 拿不到可用地址 → 保持原样，别改成坏链接\n",
-			to: "\t\t\t// 变异：拿不到地址也继续\n",
+			from: "\t\t\t\tdeferLocalCopy(img, deps, decision, { result });\n\t\t\t\tcontinue;\n",
+			to: "\t\t\t\t// 变异：不补齐、也不跳出（于是往下写一个空/坏地址）\n",
 			expect: "不该计入改写",
+		},
+		{
+			// 后果（2026-10-12 **真机探针 ② 实测抓到过**）：索引记着副本、而那份文件已被删时，
+			// 渲染**什么都不做** —— 图按远端显示（在线可见），但「离线可用」静默失效、
+			// 副本再也回不来，而且不会有任何报错。
+			// ⚠️ 这一条是补丁的守门人：把 `deferLocalCopy` 拿掉（退回旧的 `continue`）必须变红。
+			name: "★★ 副本不在时不再去补齐（离线可用静默失效，副本永远回不来）",
+			from: "\t\t\t\tdeferLocalCopy(img, deps, decision, { result });\n",
+			to: "\t\t\t\t// 变异：不补齐\n",
+			expect: "必须去把副本找回来",
 		},
 		{
 			// 后果：编辑器重渲染时对**同一个元素**再赋一次同样的远端地址

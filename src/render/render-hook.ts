@@ -176,7 +176,15 @@ export function processImages(
 				continue;
 			}
 			const resourceUrl = deps.resourceUrlFor(decision.localPath);
-			if (!resourceUrl) continue; // 拿不到可用地址 → 保持原样，别改成坏链接
+			if (!resourceUrl) {
+				// ⚠️ **索引记着这条副本，但那份文件此刻不在**（用户把它删了，或换设备带过来的是索引）。
+				// 从前这里直接 `continue`，于是"什么都不发生"：图仍然按远端地址显示（在线看得见），
+				// 但**「离线可用」静默失效**，而且那次下载**永远不会发生** ⇒ 副本再也回不来。
+				// 真机探针 ②（2026-10-12）量到的正是这件事（当时探针 ② 判据不成立，回头来修的）。
+				// 对用户来说"副本被删"与"本地没有副本"是同一件事 ⇒ 走同一条补齐路。
+				deferLocalCopy(img, deps, decision, { result });
+				continue;
+			}
 			wireFallback(img, deps, fallbacks, {
 				remoteUrl: decision.remoteUrl,
 				localPath: decision.localPath,
@@ -190,23 +198,56 @@ export function processImages(
 		}
 
 		// 属于本存储但本地没有副本 → 异步补齐，补上了再换
-		if (deps.ensureLocalCopy) {
-			result.deferred += 1;
-			void deps
-				.ensureLocalCopy(decision.key, decision.remoteUrl)
-				.then((localPath) => {
-					if (!localPath) return;
-					const resourceUrl = deps.resourceUrlFor(localPath);
-					if (!resourceUrl) return;
-					img.setAttribute("src", resourceUrl);
-				})
-				.catch(() => {
-					// 补齐失败不是错误路径：图仍然按远端地址显示着（在线可见）。
-				});
-		}
+		deferLocalCopy(img, deps, decision, { result });
 	}
 
 	return result;
+}
+
+/**
+ * 本地副本拿不到（文件不在 / 换了设备）⇒ **异步把它补回来**，补上了再把 `src` 换成 `app://`。
+ *
+ * ## 为什么两条来路共用这一份
+ *
+ * "索引记着、文件没了"（`local` 分支拿不到可用地址）与"索引里干脆没有"（`fetch`）在
+ * **用户可见行为**上是同一件事：图先按远端地址显示（在线立刻可见、不空一拍），
+ * 同时把副本取回来；成功之后 `src` 改成 `app://`，于是"零请求"从那一刻起成立。
+ * 分成两份实现必然分叉 —— 而这次的缺陷正是"只在一条路上做了补齐"。
+ *
+ * ⚠️ 这里**不 await**：后处理器必须同步跑完（一旦 await，元素可能已经连上 DOM
+ * 并开始加载远端图片，"零请求"就不成立了）。理由见模块头。
+ */
+function deferLocalCopy(
+	img: ImageElementLike,
+	deps: RenderHookDeps,
+	decision: { key: string; remoteUrl: string },
+	options: {
+		/** 阅读视图那条路要计数（`deferred`），实时预览那条路没有结果对象可计数。 */
+		result?: ProcessImagesResult;
+		/**
+		 * 怎么把本地地址写回去。
+		 *
+		 * ⚠️ 两条路的写法**必须不同**：阅读视图直接 `setAttribute`；
+		 * 而实时预览里我们正**处在 `src` setter 内部**，再走一次 setter 会重入，
+		 * 所以那条路要传原来的 setter（`applySrc`）。
+		 */
+		apply?: (element: ImageElementLike, url: string) => void;
+	} = {}
+): void {
+	if (!deps.ensureLocalCopy) return;
+	if (options.result) options.result.deferred += 1;
+	const apply = options.apply ?? ((element, url) => element.setAttribute?.("src", url));
+	void deps
+		.ensureLocalCopy(decision.key, decision.remoteUrl)
+		.then((localPath) => {
+			if (!localPath) return;
+			const resourceUrl = deps.resourceUrlFor(localPath);
+			if (!resourceUrl) return;
+			apply(img, resourceUrl);
+		})
+		.catch(() => {
+			// 补齐失败不是错误路径：图仍然按远端地址显示着（在线可见）。
+		});
 }
 
 /**
@@ -359,18 +400,19 @@ export function installImageSrcPatch(deps: RenderHookDeps, env: SrcPatchEnvironm
 							next = resourceUrl;
 							// 同上：这一份副本刚被用到（实时预览这条路径也一样要记）
 							deps.onLocalCopyUsed?.(decision.key);
+						} else {
+							// ⚠️ 与阅读视图那条路同一条理由（真机探针 ②，2026-10-12）：
+							// 索引记着副本而文件被删时不能什么都不做 —— 只显示远端
+							// 等于「离线可用」静默失效，且副本永远回不来。
+							// ⚠️ 这里必须用**原来的 setter**（`applySrc`）：我们正处在 `src`
+							// 的 setter 内部，再走一次 setter 就是重入。
+							deferLocalCopy(element, deps, decision, { apply: applySrc });
 						}
-					} else if (decision.action === "fetch" && deps.ensureLocalCopy) {
+					} else if (decision.action === "fetch") {
 						// 不属于"已有本地副本"，但属于本存储 → 后台补齐，补上后换成本地。
 						// 这里**不改**当前赋值：线上用户应当立刻看到图（远端加载），
 						// 而不是等我们下载完 —— 那会让整篇笔记的图片都空一拍。
-						void deps
-							.ensureLocalCopy(decision.key, decision.remoteUrl)
-							.then((localPath) => {
-								const resourceUrl = localPath ? deps.resourceUrlFor(localPath) : null;
-								if (resourceUrl) applySrc(element, resourceUrl);
-							})
-							.catch(() => {});
+						deferLocalCopy(element, deps, decision, { apply: applySrc });
 					} else if (deps.onExternalSrc && isHttpUrl(value)) {
 						// 站外图（阅读视图那条路已在后处理器里处理；这里是**实时预览**的唯一入口）。
 						// 同上：这一层不负责措辞与判定，只把候选交出去。
