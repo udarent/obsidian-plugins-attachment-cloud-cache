@@ -101,10 +101,9 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 
 | Command | What it does |
 | --- | --- |
-| **Show cache usage** | How much the cache holds, and how much could be reclaimed. |
+| **Show cache usage** | How much your local copies hold, and how much of it no note refers to any more. That figure is an estimate: nothing is removed before your storage is confirmed to still have the object. |
 | **Repair the local-copy index** | Drops index entries whose files are already gone. |
-| **Clean up unused cache files** | Deletes cache files no note points at any more. Cannot be undone. |
-| **Upload existing attachments** | Uploads what your notes link to, rewrites those links, moves each file into the cache folder. |
+| **Upload existing attachments** | Uploads what your notes link to and rewrites those links. Your files stay where they are — that copy *is* the local copy. |
 | **Cache files from other sites…** | Tick individual off-site files to fetch. Needs the off-site feature turned on. |
 | **Clean up unused objects in the cloud…** | Lists objects no note here refers to — with count and size — then deletes what you confirm. |
 
@@ -123,9 +122,12 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 - **"Do not keep a local copy" turns caching off**, which is the plain-image-host behaviour: files are uploaded and
   the note's link is rewritten, but nothing is kept or fetched back, so nothing is available offline.
 - **The local-copy index repairs itself.** After startup the plugin drops index entries whose files are already
-  gone — it only ever edits the index and never touches a file. If you deleted the cache folder outside Obsidian,
+  gone — it only ever edits the index and never touches a file. If you deleted a copy outside Obsidian,
   or a file never made it across from another device, this is what puts the numbers straight. *Repair the
   local-copy index* does the same thing on demand, and says how many stale entries it found.
+- **Delete a local copy and it comes back when you next view the note** — the plugin keeps the remote address in
+  your notes, notices missing copies while rendering, and fetches them again under their original file name.
+  Nothing is fetched for an image whose link it does not recognise as yours (see above).
 - **Moving to another device: copy the plugin folder, but delete `.cache-index.json` first** — it records where *this*
   device keeps its copies. The secret access key is not in the folder at all (it lives in Obsidian's keychain).
 
@@ -263,10 +265,9 @@ Obsidian version and which storage provider you use; the errors name the step th
 
 | 命令 | 做什么 |
 | --- | --- |
-| **查看缓存占用** | 缓存里有多少、其中多少可以回收。 |
+| **查看缓存占用** | 本地副本占了多少、其中多少已经没有笔记引用了。这个数字是**估算**：真正删除前会先确认你的存储里仍然有这个对象。 |
 | **自检并修复本地副本索引** | 丢掉那些文件已经不在的索引记录。 |
-| **清理未使用的缓存文件** | 删掉已经没有笔记指向的缓存文件。无法撤销。 |
-| **上传已存在的附件** | 上传笔记里引用着的附件、改写链接，并把每个文件移入缓存目录。 |
+| **上传已存在的附件** | 上传笔记里引用着的附件并改写链接。文件**留在原地** —— 那份就是本地副本。 |
 | **缓存站外文件（可挑选）…** | 勾选具体的站外文件去下载。需要先打开站外文件功能。 |
 | **清理云端未使用对象…** | 列出「本库没有笔记引用」的对象（含个数与体积），确认后删除。 |
 
@@ -281,8 +282,11 @@ Obsidian version and which storage provider you use; the errors name the step th
 - **「不留本地副本」这一档等于关闭缓存**，也就是普通图床的行为：文件照常上传、笔记里的链接照样改写，
   但不保留副本、也不把副本取回来，所以断网时什么都看不到。
 - **本地副本索引会自愈。** 启动之后，插件会摘掉那些指向「文件已经不在了」的索引记录 —— 它**只改索引，
-  绝不碰任何文件**。在 Obsidian 外面删过缓存目录、或某个文件没能从别的设备同步过来，靠的就是它把数字
+  绝不碰任何文件**。在 Obsidian 外面删过某份副本、或某个文件没能从别的设备同步过来，靠的就是它把数字
   理顺。「自检并修复本地副本索引」做的是同一件事，供你想立刻核一遍时用，并会告诉你查出多少条失效记录。
+- **删掉一份本地副本，下次打开笔记时它会自己补回来** —— 笔记里存的始终是云端地址，插件在渲染时发现副本
+  不在就会重新取回，并用**原来的文件名**落回附件目录。⚠️ 前提是它认得出那条链接是你自己的存储
+  （认不出的，见上面那条）。
 - **换设备：把插件目录复制过去，但先删掉 `.cache-index.json`** —— 它记的是**这台设备**的副本在哪。秘密访问密钥
   根本不在目录里（它存在 Obsidian 的钥匙串中）。
 
