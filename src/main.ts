@@ -182,7 +182,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	locale = "en";
 
 	/**
-	 * 这份 `data.json` 里带着**已被取消的 key 模板**（1.3.0），且我们已经清理过它。
+	 * 这份 `data.json` 里带着**已被取消的 key 模板**（1.2.0），且我们已经清理过它。
 	 *
 	 * 只在 `loadSettings` 里置位，等文案语种与界面都就绪之后再告诉用户 ——
 	 * 提示要等他看得懂、而不是在插件还在启动时闪一下。
@@ -581,7 +581,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() => {
 			void this.warmUpOrphanWatch();
 
-			// ⭐ 一次性兼容升级的**告知**（1.3.0）：`loadSettings` 已经把遗留的 key 模板
+			// ⭐ 一次性兼容升级的**告知**（1.2.0）：`loadSettings` 已经把遗留的 key 模板
 			// 从 `data.json` 里清掉了，但用户得知道"之后上传的对象命名变了"。
 			// 放在这里而不是 `onload` 里：那时语种与界面都就绪，提示不会被启动过程吞掉。
 			if (this.legacyKeyTemplateUpgraded) {
@@ -784,12 +784,12 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 
 		// ⭐ 清单给的是**图 + 名字**，不是一串 key：老 key 是 `<sha256>.<扩展名>`，
 		// 用户看它认不出是哪张图，而这是不可恢复动作前**唯一能核对**的东西。
-		// ⚠️ 名字的三个来源按序兜底：条目 sourceName → 从 key 反推（C2 新模板的 key 自带名字）
+		// ⚠️ 名字的三个来源按序兜底：条目 sourceName → 从 key 反推（key 自带名字：`<名字>-<哈希>.<扩展名>`）
 		// → 退化成 key 本身；图仍然是可核对的（有副本用副本，没有就用存储里的地址）。
 		const cards = this.fileCards(
 			selection.asks.map((key) => {
 				const entry = index.get(key);
-				// 「不留副本」档没有条目 ⇒ 从 key 反推（C2：默认模板的 key 自带名字）
+				// 「不留副本」档没有条目 ⇒ 从 key 反推（key 自带名字）
 				return { id: key, name: entry?.sourceName || displayNameForKey(key), localPath: entry?.cachePath, remoteKey: key };
 			}),
 			ORPHAN_LIST_MAX
@@ -1508,7 +1508,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 这个文件的**内容**是不是我们早就传过的（同步到达的副本判定，见 `attach-watch` ③）。
 	 *
 	 * 实现只有两步：读字节 → 算 sha256 → 问上传台账（`wasContentUploaded` 会按
-	 * `hashFromKey` 把 key 里的哈希段取出来比较 —— C2 之后 key 里还有名字，
+	 * `hashFromKey` 把 key 里的哈希段取出来比较 —— 1.2.0 起 key 里还有名字，
 	 * 直接拿文件哈希去比 key 会**永远不相等**）。
 	 *
 	 * ⚠️ 任何一步出错都返回 `false`（= 不知道）。方向是刻意的：这一条只用来"提前
@@ -1898,7 +1898,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		const stored: unknown = await this.loadData();
 		this.settings = mergePluginSettings(SETTINGS_DEFAULTS, stored);
 
-		// ⭐ 一次性兼容升级（1.3.0）：老 `data.json` 里的 `objectKeyTemplate` 已被取消。
+		// ⭐ 一次性兼容升级（1.2.0）：老 `data.json` 里的 `objectKeyTemplate` 已被取消。
 		//
 		// 合并结果里本来就不会带上它（字段表只写自己列出的键），所以这一步**不是**在为
 		// "设置生效"做迁移 —— 它做两件别的事：把遗留值从文件里清掉，并让用户**知道**

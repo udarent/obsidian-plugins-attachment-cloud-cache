@@ -42,8 +42,9 @@ once. This does both — the file goes to your bucket, and the copy that renders
 
 - **Any S3-compatible storage** — Cloudflare R2, AWS S3, MinIO, Backblaze B2, self-hosted.
 - **Upload however the file gets in** — pasted, dropped, added from your phone's gallery or camera, shared into
-  Obsidian, or copied into the vault. The note's link is rewritten to the remote URL. Keys are content-addressed
-  (`{hash}.{ext}`), so the same bytes are stored once.
+  Obsidian, or copied into the vault. The note's link is rewritten to the remote URL. An object's key is its file
+  name plus its full content hash, so uploading the same file again stores nothing new — while the same bytes under
+  a different name are a separate object.
 - **Any file type, not just images** — images, audio, video, PDF, archives, documents, extension-less files. Types
   Obsidian can preview (image/audio/video/PDF) are inserted as embeds; everything else becomes a clickable link.
 - **Offline, multi-device, and light to sync** — the rendering copy is local (zero remote requests, always, not
@@ -116,9 +117,9 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 - **Links written before you change the storage URL are not recognised as "ours" on a new device** — they still work
   online, but never render offline and are never downloaded automatically.
 - **When a file you uploaded stops being linked from any note, the plugin asks once whether to clean it up** — keep
-  it, delete just the local copy, or delete it locally *and* from your storage. The default is to keep it. The same
-  content is stored once, so an object may be shared across notes and devices, and a storage deletion cannot be
-  undone; only *this* device's references are visible.
+  it, delete just the local copy, or delete it locally *and* from your storage. The default is to keep it. Uploading
+  the same file twice stores one object, so it may be shared across notes and devices, and a storage deletion cannot
+  be undone; only *this* device's references are visible.
 - **"Do not keep a local copy" turns caching off**, which is the plain-image-host behaviour: files are uploaded and
   the note's link is rewritten, but nothing is kept or fetched back, so nothing is available offline.
 - **The local-copy index repairs itself.** After startup the plugin drops index entries whose files are already
@@ -128,6 +129,8 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 - **Delete a local copy and it comes back when you next view the note** — the plugin keeps the remote address in
   your notes, notices missing copies while rendering, and fetches them again under their original file name.
   Nothing is fetched for an image whose link it does not recognise as yours (see above).
+- **Your file names travel with the objects** — a name is part of each object's key, which is what makes files
+  findable by name in your bucket, and it also means the names show up in your storage provider's logs.
 - **Moving to another device: copy the plugin folder, but delete `.cache-index.json` first** — it records where *this*
   device keeps its copies. The secret access key is not in the folder at all (it lives in Obsidian's keychain).
 
@@ -211,7 +214,7 @@ Obsidian version and which storage provider you use; the errors name the step th
 ## 功能
 
 - **任何 S3 兼容存储** —— Cloudflare R2、AWS S3、MinIO、Backblaze B2、自建端点。
-- **附件怎么进来都行** —— 粘贴、拖入、手机相册或相机、分享到 Obsidian、从别处拷进库，都会被上传，笔记里的链接换成远端地址。key 默认按内容寻址（`{hash}.{ext}`），同一份字节只存一份。
+- **附件怎么进来都行** —— 粘贴、拖入、手机相册或相机、分享到 Obsidian、从别处拷进库，都会被上传，笔记里的链接换成远端地址。对象 key 里带**文件名 + 完整内容哈希**：同一个文件再传一次不会多占空间，而同一份内容换个名字会是另一份对象。
 - **任何类型的附件，不只图片** —— 图片、音频、视频、PDF、压缩包、文档、没有扩展名的文件。Obsidian 能预览的
   类型（图片/音频/视频/PDF）插入为嵌入，其余插入为可点开的普通链接。
 - **离线、多设备、同步轻快** —— 渲染走本地副本（零远端请求，始终如此，不只是「网不通」时）；换新设备时副本按需补回；
@@ -278,7 +281,7 @@ Obsidian version and which storage provider you use; the errors name the step th
 - **拖放文件的链接插在光标处，不是指针落点** —— 公开 API 里没有「指针坐标 → 编辑器位置」的映射。有意取舍。
 - **改了存储地址之后，「新设备」上认不出老链接** —— 那些链接照常在线显示，但离线不显示、也不会被自动下载。
 - **某个已上传的对象在本库不再被任何笔记引用时，会问你一次怎么处理** —— 保留、只删本地副本、或本地与云端一起删；
-  默认保留。相同内容只存一份，所以一个对象可能被多篇笔记、多台设备共用，而云端删除无法撤销；清理只能看到**本设备**的引用。
+  默认保留。同一个文件传两次只存一份，所以一个对象可能被多篇笔记、多台设备共用，而云端删除无法撤销；清理只能看到**本设备**的引用。
 - **「不留本地副本」这一档等于关闭缓存**，也就是普通图床的行为：文件照常上传、笔记里的链接照样改写，
   但不保留副本、也不把副本取回来，所以断网时什么都看不到。
 - **本地副本索引会自愈。** 启动之后，插件会摘掉那些指向「文件已经不在了」的索引记录 —— 它**只改索引，
@@ -287,6 +290,7 @@ Obsidian version and which storage provider you use; the errors name the step th
 - **删掉一份本地副本，下次打开笔记时它会自己补回来** —— 笔记里存的始终是云端地址，插件在渲染时发现副本
   不在就会重新取回，并用**原来的文件名**落回附件目录。⚠️ 前提是它认得出那条链接是你自己的存储
   （认不出的，见上面那条）。
+- **文件名会跟着对象一起走** —— 名字是对象 key 的一部分，这样在桶里能按名字找到文件；相应地，文件名也会出现在你的存储服务商那边。
 - **换设备：把插件目录复制过去，但先删掉 `.cache-index.json`** —— 它记的是**这台设备**的副本在哪。秘密访问密钥
   根本不在目录里（它存在 Obsidian 的钥匙串中）。
 

@@ -31,7 +31,7 @@ import { normalizePath } from "obsidian";
  *   这正是这一版砍掉 5 个参数后**不需要写迁移代码**的原因：旧键自动消失，
  *   新字段拿默认值，而 `localCopy` 这个新字段的默认值（`cache`）恰好等于
  *   旧组合 `cacheEnabled: true + localFileAction: "cache"` 的效果。
- *   ⚠️ 唯一的例外是 1.3.0 取消的 `objectKeyTemplate`：设置同样不需要迁移，
+ *   ⚠️ 唯一的例外是 1.2.0 取消的 `objectKeyTemplate`：设置同样不需要迁移，
  *   但**用户需要被告知**（他的 key 形状固定成 `名字-哈希.扩展名` 了），
  *   而且遗留值该从文件里清掉 ⇒ 见 `hasLegacyObjectKeyTemplate` 与 `main.ts` 的载入流程。
  */
@@ -191,7 +191,7 @@ const S3_FALLBACKS: S3Config = {
 	secretAccessKeyRef: "",
 	// path-style 默认开：R2 的 S3 端点不支持 virtual-host，而其余各家都接受 path-style
 	forcePathStyle: true,
-	// ⚠️ 1.3.0 起这里**没有** key 模板字段了：形状不可配置（理由见 `object-key.ts` 文件头 ——
+	// ⚠️ 1.2.0 起这里**没有** key 模板字段了：形状不可配置（理由见 `object-key.ts` 文件头 ——
 	// 不含完整 `{hash}` 的模板会静默串内容/覆盖对象）。老 `data.json` 里那个遗留键
 	// 由字段表自动丢弃（见下面的 `hasLegacyObjectKeyTemplate` 与文件头第 2 条约束）。
 };
@@ -210,7 +210,7 @@ const S3_SPEC: { [K in keyof S3Config]: FieldReader<S3Config[K]> } = {
 export const S3_DEFAULTS: S3Config = { ...S3_FALLBACKS };
 
 /**
- * 老 `data.json` 里有没有**已被取消的 key 模板**字段（1.3.0）。
+ * 老 `data.json` 里有没有**已被取消的 key 模板**字段（1.2.0）。
  *
  * ## 为什么要单独问一句，而不是"反正字段表会丢掉"
  *

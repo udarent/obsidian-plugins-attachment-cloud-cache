@@ -221,7 +221,7 @@ export function extensionFromUrl(url: unknown): string {
 }
 
 /**
- * 从 URL 里取一个用得上文件名（给对象 key 模板的 `{filename}` 用）。
+ * 从 URL 里取一个用得上文件名（对象 key 里那个"名字"分量的来源）。
  *
  * 取不到就返回 `undefined`，让 `ingestAttachment` 按 MIME 自己造一个 ——
  * 硬凑一个假名字会让 key 变得难以辨认。
@@ -231,7 +231,7 @@ export function fileNameFromUrl(url: unknown): string | undefined {
 	try {
 		const parsed = new URL(url);
 		// ⚠️ 以 `/` 结尾说明最后一段是**目录**，不是文件 —— 把它当文件名会让 key 里
-		// 出现一个目录名（`{filename}` 模板下尤其明显），而且它一定没有扩展名。
+		// 出现一个目录名（对象 key 带名字之后尤其明显），而且它一定没有扩展名。
 		if (parsed.pathname.endsWith("/")) return undefined;
 		const last = parsed.pathname.split("/").filter(Boolean).pop();
 		if (!last) return undefined;

@@ -311,9 +311,9 @@ export class CacheIndex {
 	 * 用途只有一个：库外冒出来的文件（同步到达的副本、从别处拷进来的同一份内容）
 	 * 判断"它的内容是不是已经在云端了"（见 `maintenance/attach-watch.ts` 的第三道闸门）。
 	 *
-	 * ⚠️ 与 `wasUploaded` 的区别就是**必须经 `hashFromKey`**：C2 之后 key 里有名字，
+	 * ⚠️ 与 `wasUploaded` 的区别就是**必须经 `hashFromKey`**：key 里带名字（D-18 起形状固定），
 	 * 直接拿文件哈希去比台账会**永远不相等**（那种"判据恒假"的形状本项目吃过多次亏，
-	 * 例如 N11）。取不到哈希的 key（自定义模板）不参与比较 —— 不能猜。
+	 * 例如 N11）。取不到哈希的 key（**1.2.0 之前**用不含 `{hash}` 的模板传上去的对象）不参与比较 —— 不能猜。
 	 */
 	wasContentUploaded(contentHash: string): boolean {
 		const target = typeof contentHash === "string" ? contentHash.trim().toLowerCase() : "";
