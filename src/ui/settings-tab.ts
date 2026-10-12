@@ -552,8 +552,12 @@ export class SettingsTab extends PluginSettingTab {
 				name: this.t("externalPickName"),
 				desc: this.t("externalPickDesc"),
 				aliases: ["pick", "choose", "select", "选择", "挑选", "缓存"],
-				// 同上：功能关着时连候选都挑不出来（判定层会全部判掉）
-				visible: () => this.plugin.settings.externalImageCache,
+				// ⚠️ **刻意不挂在开关上**：它是显式动作，判定层对它走 `purpose: "manual"` ——
+				// 开关与名单都**只管自动那一路**。关掉自动处理的人照样该能到这里手动挑。
+				// （从前挂过 `visible: externalImageCache`，那依据的是"功能关着时候选会被全部判掉"
+				// 这条**已废弃**的语义；R18 之后候选照旧列得出来。少了这一行，"合并成一个开关"
+				// 会把设置页这个入口一起关掉，而命令 `pick-external-images` 还开着 —— 两个入口
+				// 行为不一致，且文案承诺的"始终可用"就成了空话。）
 				render: (setting) => this.renderExternalPicker(setting),
 			},
 		];
