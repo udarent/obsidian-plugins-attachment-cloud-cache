@@ -44,8 +44,6 @@ import type { MaintenanceDeps } from "./maintenance/run";
 import { createCacheRotator } from "./maintenance/rotation";
 import type { CacheRotator } from "./maintenance/rotation";
 import {
-	referencedPathsFrom,
-	resolveCanvasTargets,
 	selectExternalUploadCandidates,
 	selectUploadCandidates,
 } from "./maintenance/batch";
@@ -64,7 +62,7 @@ import type { DeletedObjectRecord } from "./maintenance/delete-log";
 import { CONFIRM_IMMEDIATELY, createAbsenceConfirmer, runSelfHeal } from "./maintenance/self-heal";
 import type { SelfHealResult } from "./maintenance/self-heal";
 
-import type { ExternalCandidate, NoteTextLike } from "./maintenance/batch";
+import type { ExternalCandidate } from "./maintenance/batch";
 import { ingestAttachment } from "./core/ingest";
 import { confirmWithModal } from "./ui/confirm-modal";
 import type { ConfirmOptions } from "./ui/confirm-modal";
@@ -72,12 +70,21 @@ import { planFileCards } from "./ui/file-cards";
 import { displayNameForKey } from "./object-key";
 import type { FileCard, FileCardInput } from "./ui/file-cards";
 import { keyFromUrl } from "./render/render-target";
-import { createS3Client, publicUrlFor } from "./s3/client";
+import { createS3Client } from "./s3/client";
 import type { S3Client } from "./s3/client";
 import { connectionReadiness, parseCredentialFile } from "./s3/credentials";
 import type { CredentialFileProblem } from "./s3/credentials";
 import { ensureSecretSlot, randomSlotPart } from "./ui/settings-logic";
 import { createLocalCopyEnsurer } from "./core/download";
+import {
+	keyOfUrl,
+	readActiveNoteText,
+	readAllNoteTexts,
+	referencedVaultPaths,
+	remoteUrlForKey,
+	resourceUrlFor,
+	vaultPathExists,
+} from "./plugin/notes-query";
 import type { LocalCopyOutcome } from "./core/download";
 import { installImageSrcPatch, processImages } from "./render/render-hook";
 import { createEmbedRebuildQueue, processEmbeds } from "./render/embed-rebuild";
@@ -392,7 +399,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				if (!(file instanceof TFile)) return null;
 				return { path: file.path, extension: file.extension, stat: { size: file.stat?.size ?? 0 } };
 			},
-			referencedPaths: () => this.referencedVaultPaths(),
+			referencedPaths: () => referencedVaultPaths(this.app),
 			adopt: async (paths) => {
 				// 存储没就绪时**什么都不做**，只把"去哪配"说清楚 —— 与粘贴那条路的口径一致：
 				// 不拦用户、不假装成功，也绝不留下半个动作（文件原地不动、笔记一个字不改）。
@@ -486,7 +493,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			// 存在性用宿主的文件索引回答 —— 它可能滞后，而滞后只会让这一轮少淘汰几个。
 			isPresent: (path) => Boolean(this.app.vault.getAbstractFileByPath(path)),
 			// 扫引用这条仍然复用维护功能那一份实现（只此一处）
-			scanReferencedKeys: async () => (await scanReferences(this.app, (url) => this.keyOfUrl(url))).keys,
+			scanReferencedKeys: async () => (await scanReferences(this.app, (url) => keyOfUrl(this.settings, url))).keys,
 			evict: (plan) => runEviction(this.maintenanceDeps(), plan),
 			notify: (message) => new Notice(message),
 			t: (key, params) => this.t(key, params),
@@ -1236,26 +1243,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		})(url, notePath);
 	}
 
-	/** 本存储 URL → key（判定层的推导，维护功能复用同一套）。 */
-	private keyOfUrl(url: string): string | null {
-		return keyFromUrl(url, this.settings.s3);
-	}
 
-	/**
-	 * key → 它在存储里的地址（`keyOfUrl` 的逆运算）。
-	 *
-	 * 只用于**确认框里的缩略图**：清单上只有一串 sha256 时，用户没法核对
-	 * "这到底是不是我要删的那张图"。推不出来（端点没配好 / key 形状不对）就返回 `null`
-	 * —— 宁可那一行没有图，也不给一个半截地址（那会让用户以为自己看到的就是存储里的东西）。
-	 */
-	private remoteUrlForKey(key: string): string | null {
-		try {
-			return publicUrlFor(this.settings.s3, key);
-		} catch (error) {
-			console.error("[attachment-cloud-cache] 推导对象地址失败，该行不给缩略图", error);
-			return null;
-		}
-	}
 
 	/**
 	 * 把清单里的项算成"怎么展示"（缩略图 + 名字 + 类型标记）。
@@ -1267,8 +1255,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 */
 	private fileCards(items: readonly FileCardInput[], limit: number): FileCard[] {
 		return planFileCards(items.slice(0, Math.max(0, limit)), {
-			resourceUrl: (path) => this.resourceUrlFor(path),
-			remoteUrl: (key) => this.remoteUrlForKey(key),
+			resourceUrl: (path) => resourceUrlFor(this.app, path),
+			remoteUrl: (key) => remoteUrlForKey(this.settings, key),
 		});
 	}
 
@@ -1281,7 +1269,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 */
 	private async reportCacheUsage(): Promise<void> {
 		const deps = this.maintenanceDeps();
-		const { audit } = await inspectLocalCopies(deps, (url) => this.keyOfUrl(url));
+		const { audit } = await inspectLocalCopies(deps, (url) => keyOfUrl(this.settings, url));
 		const mb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1);
 
 		// 上限：0 = 不限制。用一句人话表示，而不是把 0 直接摆给用户看
@@ -1479,7 +1467,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		const silent = options.silent ?? false;
 		return runSelfHeal({
 			entries: () => this.currentIndex().toArray(),
-			exists: (path) => this.vaultPathExists(path),
+			exists: (path) => vaultPathExists(this.app, path),
 			forget: (key) => this.currentIndex().remove(key),
 			persist: () => this.hostContext().persistIndex(),
 			// ⚠️ 命令走 `CONFIRM_IMMEDIATELY`：显式动作、用户正等着结果，让他按两次才是坏体验。
@@ -1496,35 +1484,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		});
 	}
 
-	/**
-	 * 一个 vault 相对路径**确实存在**吗（自愈判"记录是否失效"的唯一依据）。
-	 *
-	 * ## ⚠️ 这里的错误默认值，与 `core/download.ts` 的 `exists` **相反**
-	 *
-	 * 两处的 `false` 含义完全不同：
-	 * - 那边 `false` ⇒ "没有副本，去下载" —— **安全方向**（多下一次而已），所以查询出错返回 `false`；
-	 * - 这边 `false` ⇒ "记录失效了，摘掉它" —— **不安全方向**（那张图的离线可用性被悄悄拿掉），
-	 *   所以查询出错返回 `true`（宁可多留一条记录）。
-	 *
-	 * ⇒ **两处不能合并**：合并必然把其中一边的方向弄反，而两种弄反都不报错。
-	 * 这条判据由 `self-heal-suite` 与 `download-suite` 各自钉住。
-	 *
-	 * ## 为什么"两条路"都要问
-	 *
-	 * 宿主的文件索引是**内存快照**（快，但可能滞后于磁盘：刚同步进来的文件它还没收录）；
-	 * 适配器直接问文件系统（准，但慢）。任一条说"在"就算在 —— 只有两条都说不在才认失效。
-	 */
-	private async vaultPathExists(path: string): Promise<boolean> {
-		if (this.app.vault.getAbstractFileByPath(path)) return true;
-		try {
-			if (await this.app.vault.adapter.exists(path)) return true;
-		} catch (error) {
-			// ⚠️ 查询出错按"存在"处理（见上面那段：误摘的代价不对称）
-			console.error("[attachment-cloud-cache] 查询本地副本是否存在失败", error);
-			return true;
-		}
-		return false;
-	}
 
 	/**
 	 * 上传附件目录里已有的图片（P1 #8）。
@@ -1543,7 +1502,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			.filter((file) => typeof file?.path === "string");
 		// ⭐ 引用集合**算一次、用两次**（确认框的清单 + 真正执行的那趟）——
 		// 两份不一致的话，用户会按清单授权、却按另一份执行。
-		const referencedPaths = await this.referencedVaultPaths();
+		const referencedPaths = await referencedVaultPaths(this.app);
 		const selection = selectUploadCandidates(files, {
 			settings: this.settings,
 			index: this.currentIndex(),
@@ -1556,7 +1515,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		// 回环地址 / 存储未就绪"全都自动一致，不另立一套标准。
 		// ⚠️ 它走 `purpose: "manual"`：**点这个确认框本身就是显式动作**，
 		// 于是功能开关与站点名单都不约束它（关掉开关也照样能跑这条命令）。
-		const external = selectExternalUploadCandidates(await this.readAllNoteTexts(), {
+		const external = selectExternalUploadCandidates(await readAllNoteTexts(this.app), {
 			settings: this.settings,
 			configured: connectionReadiness(this.app.secretStorage, this.settings).ready,
 		});
@@ -1679,7 +1638,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 界面看到的清单与命令要处理的东西永远一致。
 	 */
 	private async externalCandidates(scope: ExternalPickScope): Promise<ExternalCandidate[]> {
-		const notes = scope === "note" ? await this.readActiveNoteText() : await this.readAllNoteTexts();
+		const notes = scope === "note" ? await readActiveNoteText(this.app) : await readAllNoteTexts(this.app);
 		const selection = selectExternalUploadCandidates(notes, {
 			settings: this.settings,
 			configured: connectionReadiness(this.app.secretStorage, this.settings).ready,
@@ -1687,40 +1646,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		return selection.candidates;
 	}
 
-	/**
-	 * 当前笔记的正文（"只挑这一篇"那个范围用）。
-	 *
-	 * 没有打开笔记、或读不到 → 返回空清单（弹窗会显示空态说明）。
-	 * ⚠️ **不用 `getActiveFile()` 猜"用户在看哪篇"来处理别的动作** ——
-	 * 这里只是"列出这一篇里的外链"，列错了最坏也只是清单不对，不会写坏东西。
-	 */
-	private async readActiveNoteText(): Promise<NoteTextLike[]> {
-		const file = this.app.workspace.getActiveFile();
-		if (!file) return [];
-		try {
-			return [{ path: file.path, text: await this.app.vault.read(file) }];
-		} catch {
-			return [];
-		}
-	}
 
-	/**
-	 * 读一遍全库笔记的正文（外链扫描要用）。
-	 *
-	 * 单篇读不到就跳过：这条命令要处理的是**其它**东西，
-	 * 不该因为一篇笔记读不了而整条失败（用户只会看到"什么都没发生"）。
-	 */
-	private async readAllNoteTexts(): Promise<NoteTextLike[]> {
-		const notes: NoteTextLike[] = [];
-		for (const note of this.app.vault.getMarkdownFiles()) {
-			try {
-				notes.push({ path: note.path, text: await this.app.vault.read(note) });
-			} catch {
-				// 跳过这一篇
-			}
-		}
-		return notes;
-	}
 
 	/**
 	 * **被引用着**的文件路径集合（宿主的链接索引 + 我们自己扫的画布文本）。
@@ -1776,26 +1702,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		}
 	}
 
-	private async referencedVaultPaths(): Promise<ReadonlySet<string>> {
-		const referenced = new Set(referencedPathsFrom(this.app.metadataCache?.resolvedLinks));
-
-		const vaultPaths = this.app.vault.getFiles().map((file) => file.path);
-		for (const file of this.app.vault.getFiles()) {
-			if (file.extension !== "canvas") continue;
-			let text: string;
-			try {
-				text = await this.app.vault.read(file);
-			} catch {
-				// 读不到就当它没有引用：这里多一份候选只会多一点工作，
-				// 而"读失败"绝不能变成"把它的引用当成不存在"以外的断言。
-				continue;
-			}
-			for (const path of resolveCanvasTargets(canvasTextTargets(text), vaultPaths)) {
-				referenced.add(path);
-			}
-		}
-		return referenced;
-	}
 
 	/** 抽成方法是为了让测试能替换掉它（真弹窗点不了）。 */
 	private confirmMaintenance(options: ConfirmOptions): Promise<boolean> {
@@ -1945,27 +1851,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		return readiness.ready ? createS3Client(readiness.config) : null;
 	}
 
-	/**
-	 * vault 相对路径 → 能直接放进 `img[src]` 的地址。
-	 *
-	 * ⚠️ 用 `Vault.getResourcePath(file)`（要 `TFile`）而**不是**
-	 * `adapter.getResourcePath(path)`：后者只声明在 `FileSystemAdapter`
-	 * （桌面）与 `CapacitorAdapter`（移动）上，基类 `DataAdapter` **没有**这一项 ——
-	 * 用它在移动端会直接抛错。本项目"不做平台假设"的纪律就是这个意思。
-	 *
-	 * 拿不到文件（不在宿主索引里、或路径不对）时返回 `null`：调用方据此**保持原样**，
-	 * 而不是写一个坏地址进去（那会让在线用户也看不到图）。
-	 */
-	private resourceUrlFor(vaultPath: string): string | null {
-		try {
-			const file = this.app.vault.getAbstractFileByPath(vaultPath);
-			if (file instanceof TFile) return this.app.vault.getResourcePath(file);
-		} catch (error) {
-			// 宿主实现差异不该让整篇笔记渲染失败
-			console.error("[attachment-cloud-cache] 取本地资源地址失败", error);
-		}
-		return null;
-	}
 
 	/** 交给渲染钩子的依赖。 */
 	/**
@@ -2034,7 +1919,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		return {
 			settings: () => this.settings,
 			index: () => this.currentIndex(),
-			resourceUrlFor: (path) => this.resourceUrlFor(path),
+			resourceUrlFor: (path) => resourceUrlFor(this.app, path),
 			ensureLocalCopy: async (key, remoteUrl) => {
 				// ⭐ `sourcePath` 在这里闭包捕获：回退下载的落点要靠它推"附件目录"
 				// （宿主的 `attachmentFolderPath` 取 `./` 时 = 与这篇笔记同目录）。
@@ -2081,7 +1966,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		return {
 			settings: () => this.settings,
 			index: () => this.currentIndex(),
-			resourceUrlFor: (path) => this.resourceUrlFor(path),
+			resourceUrlFor: (path) => resourceUrlFor(this.app, path),
 			// 渲染钩子只关心"补上了没有、在哪"，所以在这里把结果收敛成路径 ——
 			// 让渲染层不必知道下载层那套状态机（downloaded/reused/refused…）。
 			ensureLocalCopy: async (key, remoteUrl) => {
