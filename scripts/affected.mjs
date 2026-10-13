@@ -177,6 +177,19 @@ if (anyTsChanged) {
 }
 
 // ── 阶段 3：eslint（只查改动的 src 文件；全量时查全部）──
+//
+// ⚠️⚠️ **这里有意用 eslint，虽然它比 oxlint 贵得多** —— 别顺手改成 oxlint（2026-10-13 用户确认保留）。
+//
+// 实测账（`test-speed-plan.md` §10.6）：这一步是 **4.5 s/次**，而且**改一个文件也是 4.5 s**
+// —— 因为 eslint 有一个 ≈3.2 s 的地板（加载插件 + 建类型程序），跟查几个文件、剩多少条规则基本无关。
+// 同一件事交给 oxlint 只要 0.2 s。差的 4.3 s 买的是**那 29 条类型感知规则能进内圈**：
+// `unbound-method` / `no-floating-promises` / `no-misused-promises` 这一类的缺陷，
+// **套件测不出来、tsc 也看不见**（`unbound-method` 在重构里真抓到过 `PluginContext` 传值丢 `this`）。
+// 换掉它 = 这类错误要等到发版档 `npm run check` 才暴露，而那时改动面已经大了。
+//
+// ⇒ 想省这 4.5 s 的话，正确改法是**换 lint 而不是删这一步**：
+//   `[join("node_modules","oxlint","bin","oxlint"), ...lintTargets]`（快档的 117 条里包含
+//   项目补的移动端安全那两条），代价就是上面那 29 条退出内圈。
 const lintTargets = FLAG.all
 	? ["."]
 	: changed.filter((f) => f.startsWith("src/") && f.endsWith(".ts") && existsSync(join(REPO_ROOT, f)));
