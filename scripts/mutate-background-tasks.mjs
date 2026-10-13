@@ -27,9 +27,13 @@ await runMutations({
 		{
 			// 后果：卸载时只清掉"延迟一次"那两条，**周期线全都留着** ——
 			// 而周期线正是那个"每隔十分钟去改用户笔记"的东西。
+			// ⚠️ 锚点**只取这一行**（2026-10-13 修）：它上面是三条承重注释（为什么先取快照、
+			// 为什么 `[...keys()]` 看起来多余却必须留）。原来的锚点从 `dispose() {` 一路跨到这一行，
+			// 于是在某次给那段加注释时**静默失效** —— 预检报"找不到目标"，也就是它**从来没在跑**。
+			// 教训：锚点别跨注释块；跨了就会在注释被改的那天无声死掉。
 			name: "★★ dispose 漏掉周期线（卸载后每 10 分钟还会跑一轮）",
-			from: '\t\tdispose() {\n\t\t\tfor (const id of [...handles.keys()]) clear(id);\n\t\t}',
-			to: '\t\tdispose() {\n\t\t\tfor (const [id, entry] of [...handles.entries()]) if (entry.kind === "timeout") clear(id);\n\t\t}',
+			from: '\t\t\tfor (const id of [...handles.keys()]) clear(id);',
+			to: '\t\t\tfor (const id of [...handles.keys()]) if (handles.get(id)?.kind !== "interval") clear(id);',
 			expect: "排上几条就该取消几条",
 		},
 		{
