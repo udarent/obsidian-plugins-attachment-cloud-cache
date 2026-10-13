@@ -46,9 +46,8 @@ import {
 	selectExternalUploadCandidates,
 	selectUploadCandidates,
 } from "./maintenance/batch";
-import { listAllObjects, runCloudCleanup, selectCleanupCandidates } from "./maintenance/cloud-cleanup";
+import { runCloudCleanup } from "./maintenance/cloud-cleanup";
 import type { CloudCleanupResult } from "./maintenance/cloud-cleanup";
-import { externalKeysOf } from "./maintenance/cloud-cleanup";
 import { sha256Hex } from "./s3/hash";
 import { createAttachWatcher, createSelfWriteLedger } from "./maintenance/attach-watch";
 import type { AttachWatcher } from "./maintenance/attach-watch";
@@ -85,6 +84,7 @@ import {
 } from "./plugin/credentials-flow";
 import type { ImportCredentialsOutcome } from "./plugin/credentials-flow";
 import type { PluginContext } from "./plugin/context";
+import { cleanupCloudObjects } from "./plugin/cloud-cleanup-flow";
 import { cloudReferencedKeys, extractStoredKeys, writeDeleteLog } from "./plugin/shared-flows";
 import type { LocalCopyOutcome } from "./core/download";
 import { installImageSrcPatch, processImages } from "./render/render-hook";
@@ -155,9 +155,6 @@ const ORPHAN_ASK_DEBOUNCE_MS = 4000;
  * 每一行现在都带一张缩略图，所以这个数也是"最多同时加载几张图"。
  */
 const ORPHAN_LIST_MAX = 8;
-
-/** 同上，给「清理云端未使用对象」那条命令的确认框用（对象可能很多，列少一点）。 */
-const CLOUD_CLEANUP_LIST_MAX = 10;
 
 /** 同上，给「清理本地占用」（F18）的确认框用。 */
 const RELEASE_SPACE_LIST_MAX = 10;
@@ -682,7 +679,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		this.addCommand({
 			id: "cleanup-cloud",
 			name: this.t("cmdCleanupCloud"),
-			callback: () => void this.cleanupCloudObjects(),
+			callback: () => void cleanupCloudObjects(this.flowContext()),
 		});
 
 		this.addCommand({
@@ -957,110 +954,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 
 
 
-	/**
-	 * **入口 B**：「清理云端未使用对象…」。
-	 *
-	 * 候选公式（见 `cloud-cleanup.ts`）：桶内对象 − 本库引用着的 key − 站外缓存的 key。
-	 * 用户看到的是**清单 + 总体积 + 共享风险**，确认之后才真的删。
-	 *
-	 * ⚠️ 列举有页数上限；中途停下时**如实说**"清单可能不全"
-	 * （假装完整会让用户以为"剩下那些都还有人用"）。
-	 */
-	private async cleanupCloudObjects(): Promise<void> {
-		const client = this.buildClient();
-		if (!client) {
-			new Notice(this.t("maintainNotConfigured"));
-			return;
-		}
-
-		let listed;
-		try {
-			listed = await listAllObjects(client);
-		} catch (error) {
-			new Notice(this.t("cloudCleanupListFailed", { error: describeError(error) }));
-			return;
-		}
-
-		const referenced = await cloudReferencedKeys(this.flowContext());
-		const selection = selectCleanupCandidates({
-			objects: listed.objects,
-			referencedKeys: referenced,
-			externalKeys: externalKeysOf(this.currentIndex()),
-		});
-
-		if (selection.candidates.length === 0) {
-			new Notice(
-				listed.truncated
-					? this.t("cloudCleanupTruncatedNothing")
-					: this.t("cloudCleanupNothing")
-			);
-			return;
-		}
-
-		const index = this.currentIndex();
-		const cards = this.fileCards(
-			selection.candidates.map((object) => {
-				const entry = index.get(object.key);
-				return { id: object.key, name: entry?.sourceName || displayNameForKey(object.key), localPath: entry?.cachePath, remoteKey: object.key };
-			}),
-			CLOUD_CLEANUP_LIST_MAX
-		);
-
-		const lines = [
-			this.t("cloudCleanupSummary", {
-				count: selection.candidates.length,
-				mb: Math.max(1, Math.round(selection.bytes / (1024 * 1024))),
-			}),
-			...(selection.candidates.length > CLOUD_CLEANUP_LIST_MAX
-				? [
-						this.t("maintainMoreItems", {
-							count: selection.candidates.length - CLOUD_CLEANUP_LIST_MAX,
-						}),
-					]
-				: []),
-			// ⚠️ 显著位置：这两句是"多设备盲区"与"不可恢复"的如实告知
-			this.t("cloudCleanupDeviceBlindSpot"),
-			this.t("cloudCleanupCannotUndo"),
-			...(listed.truncated ? [this.t("cloudCleanupTruncatedWarning")] : []),
-		];
-
-		const confirmed = await this.confirmMaintenance({
-			title: this.t("cloudCleanupTitle"),
-			lines,
-			cards,
-			cta: this.t("cloudCleanupCta"),
-			destructive: true,
-		});
-		if (!confirmed) {
-			new Notice(this.t("maintainCancelled"));
-			return;
-		}
-
-		const records: DeletedObjectRecord[] = [];
-		const result = await runCloudCleanup(
-			{
-				client,
-				index: () => this.currentIndex(),
-				persistIndex: () => this.hostContext().persistIndex(),
-				notify: (message) => new Notice(message),
-				// ⚠️ 必须用箭头函数包一层：直接写 `t: this.t` 会把方法从实例上"摘下来"，
-				// 调用时 `this` 就不再是插件实例（lint 的 unbound-method 正是在拦这个）。
-				t: (key, params) => this.t(key, params),
-				onRemoved: (record) => records.push({ ...record, scope: "command" }),
-			},
-			selection.candidates.map((object) => object.key)
-		);
-		await writeDeleteLog(this.flowContext(), records);
-
-		new Notice(
-			this.t("cloudCleanupDone", {
-				deleted: result.deleted,
-				alreadyGone: result.alreadyGone,
-				failed: result.failed,
-				unindexed: result.unindexed,
-			})
-		);
-	}
 
 
 	private maintenanceDeps(): MaintenanceDeps {

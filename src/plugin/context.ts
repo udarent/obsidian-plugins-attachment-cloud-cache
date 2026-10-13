@@ -16,6 +16,14 @@
  *   是**可数的**（这个文件就是那份清单）。
  * - 接口**只声明真正被用到的成员**。加成员前先问"是不是又有一条流程要走捷径"。
  * - `main.ts` 提供实现（多数是薄转发，把实例方法接到这里）。
+ *
+ * ## ⚠️ 为什么这些成员声明成"函数属性"而不是"方法"
+ *
+ * 写成方法签名（`t(key): string`）时，类型上它就是一个**依赖 `this` 的成员** ——
+ * 于是任何把 `ctx.t` 当成一个值传下去的地方（`runCloudCleanup` 的 `t` 参数就是），
+ * 都会被 lint 的 `unbound-method` 拦下，逼着调用方包一层 `(k, p) => ctx.t(k, p)`。
+ * 而 `main.ts` 的实现里这些**全是箭头函数**，本来就已经绑好了 ——
+ * 声明成 `readonly t: (…) => …` 才与事实相符，也把那层多余的包装消掉。
  */
 
 import type { App, PluginManifest } from "obsidian";
@@ -40,15 +48,15 @@ export interface PluginContext {
 	/** 当前设置（**可写**：有的流程就是来改设置的）。 */
 	readonly settings: PluginSettings;
 	/** 文案查询（语种已定）。 */
-	t(key: string, params?: Record<string, unknown>): string;
+	readonly t: (key: string, params?: Record<string, unknown>) => string;
 	/** 当前索引（懒建、可能为空）。 */
-	currentIndex(): CacheIndex;
+	readonly currentIndex: () => CacheIndex;
 	/** 宿主上下文（索引落盘等）。 */
-	hostContext(): HostContext;
+	readonly hostContext: () => HostContext;
 	/** 按当前设置造客户端；没配齐时 `null`。 */
-	buildClient(): S3Client | null;
+	readonly buildClient: () => S3Client | null;
 	/** 把候选算成"怎么展示"（缩略图 + 名字 + 类型标记）。 */
-	fileCards(items: readonly FileCardInput[], limit: number): FileCard[];
+	readonly fileCards: (items: readonly FileCardInput[], limit: number) => FileCard[];
 	/** 统一的确认框（真机探针里被替换掉的那一个）。 */
-	confirmMaintenance(options: ConfirmOptions): Promise<boolean>;
+	readonly confirmMaintenance: (options: ConfirmOptions) => Promise<boolean>;
 }

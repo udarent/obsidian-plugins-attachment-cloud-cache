@@ -7,7 +7,21 @@
  * - `extractStoredKeys`：孤儿监视的取数口，被判定的两个入口共用。
  *
  * 放错地方的后果是具体的：塞进某一条流程里，另一条就得回头 import 它 ——
- * 于是两条流程之间长出一条本不该有的依赖（`plugin/*` 之间**不许**互相 import）。
+ * 于是两条流程之间长出一条本不该有的依赖。
+ *
+ * ## `plugin/` 内的分层（A1 第四批定下）
+ *
+ * ```
+ *  main.ts                    编排：装配 + 事件接线 + 定时器
+ *    └─ plugin/<流程>.ts       一条流程（cloud-cleanup / credentials / …）
+ *         └─ shared-flows.ts  ← 本文件：被 ≥2 条流程共用的动作
+ *              └─ context.ts  流程能看到的宿主能力（最底层，不 import 上面任何东西）
+ * ```
+ *
+ * ⚠️ 规矩的准确说法是**"不许依赖回去"**，不是"互不 import"：流程**可以**用共享层
+ * （它存在的意义就是这个），但**共享层不许** import 任何一条流程，**流程之间也不许**互相 import。
+ * 这样 `plugin/` 永远是一张有向无环图 —— 加第五条流程时不会长出环，也不会出现
+ * "改 A 流程顺手要动 B 流程"。
  */
 
 import type { DeletedObjectRecord } from "../maintenance/delete-log";
