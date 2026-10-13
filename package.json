@@ -26,6 +26,8 @@
     "check:i18n-keys": "node scripts/check-i18n-keys.mjs",
     "check:notice-i18n": "node scripts/check-notice-i18n.mjs",
     "verify:real-storage": "node scripts/verify-real-storage.mjs",
+    "install:demo": "node scripts/install-demo.mjs",
+    "check:demo": "node scripts/install-demo.mjs --check",
     "check:credentials": "node scripts/check-credential-files.mjs",
     "check:lockfile": "node scripts/check-lockfile-platforms.mjs",
     "lint:fast": "oxlint src scripts"
