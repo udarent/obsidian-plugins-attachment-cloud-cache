@@ -67,10 +67,14 @@ const FORBIDDEN = [
 	{ pattern: /\bdetailed-design\.md\b/, what: "引用了仓库外的开发笔记" },
 	{ pattern: /\bverification\.md\b/, what: "引用了仓库外的开发笔记" },
 	{ pattern: /\bmaintainer-handbook\.md\b/, what: "引用了仓库外的开发笔记" },
+	// ── 已删除的开发笔记（2026-10-13 起顶层只剩五份：requirements / detailed-design / verification /
+	//    maintainer-handbook / README）。**仍然守着**：指向一份不存在的文档依然是死链。
+	//    ⚠️ 加新文档或改名时，回来把名字挪到上面那组、或在下面补一行（清单过时不会报错，只会安静地不挡）。
 	{ pattern: /\brefactor-plan\.md\b/, what: "引用了仓库外的开发笔记" },
 	{ pattern: /\brefactor-report\.md\b/, what: "引用了仓库外的开发笔记" },
 	{ pattern: /\btest-speed-plan\.md\b/, what: "引用了仓库外的开发笔记" },
-	// ── 历史名（原在开发笔记目录，2026-10-11 归档、**2026-10-13 随归档区一并删除**；仍然守着：防止有人凭记忆写回去）──
+	{ pattern: /\baudit-2026-10-13-doc-consistency\.md\b/, what: "引用了仓库外的开发笔记" },
+	// ── 更早的历史名（原在开发笔记目录，2026-10-11 归档、**2026-10-13 随归档区一并删除**；仍然守着：防止有人凭记忆写回去）──
 	{ pattern: /docs\/SCOPE\.md/, what: "引用了仓库外的开发笔记" },
 	{ pattern: /docs\/INDEPENDENCE\.md/, what: "引用了仓库外的开发笔记" },
 	{ pattern: /\bSCOPE\.md\b/, what: "引用了仓库外的开发笔记" },
@@ -97,6 +101,7 @@ const FIXTURES = [
 	{ sample: "—— 见 `refactor-plan.md` §7。", want: "引用了仓库外的开发笔记" },
 	{ sample: "见 `refactor-report.md` §9 的建议 #2", want: "引用了仓库外的开发笔记" },
 	{ sample: "（见 `test-speed-plan.md` §10.6）", want: "引用了仓库外的开发笔记" },
+	{ sample: "审计结论见 `audit-2026-10-13-doc-consistency.md` 的 C 节", want: "引用了仓库外的开发笔记" },
 	{ sample: "立项基线见 `docs/SCOPE.md`", want: "引用了仓库外的开发笔记" },
 	{ sample: "见 `INDEPENDENCE.md`", want: "引用了仓库外的开发笔记" },
 	{ sample: "SCOPE 里写明是红线", want: "把开发笔记当权威来引" },
