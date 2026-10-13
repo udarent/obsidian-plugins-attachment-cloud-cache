@@ -41,7 +41,6 @@ import { createCacheRotator } from "./maintenance/rotation";
 import type { CacheRotator } from "./maintenance/rotation";
 import {
 	selectExternalUploadCandidates,
-	selectUploadCandidates,
 } from "./maintenance/batch";
 import { runCloudCleanup } from "./maintenance/cloud-cleanup";
 import type { CloudCleanupResult } from "./maintenance/cloud-cleanup";
@@ -82,6 +81,7 @@ import {
 import type { ImportCredentialsOutcome } from "./plugin/credentials-flow";
 import type { PluginContext } from "./plugin/context";
 import { cleanupCloudObjects } from "./plugin/cloud-cleanup-flow";
+import { uploadExistingAttachments } from "./plugin/upload-existing-flow";
 import { releaseLocalSpace } from "./plugin/release-space-flow";
 import { extractStoredKeys, writeDeleteLog } from "./plugin/shared-flows";
 import type { LocalCopyOutcome } from "./core/download";
@@ -686,7 +686,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		this.addCommand({
 			id: "upload-attachments",
 			name: this.t("cmdUploadAttachments"),
-			callback: () => void this.uploadExistingAttachments(),
+			callback: () => void uploadExistingAttachments(this.flowContext()),
 		});
 
 		// ⭐ 逐张挑选要缓存的外链图。
@@ -1121,103 +1121,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	}
 
 
-	/**
-	 * 上传附件目录里已有的图片（P1 #8）。
-	 *
-	 * 上传前先确认：这条命令会**改用户的笔记**（把本地链接换成远端链接）。
-	 */
-	private async uploadExistingAttachments(): Promise<void> {
-		const deps = this.maintenanceDeps();
-		if (!this.buildClient()) {
-			new Notice(this.t("maintainNotConfigured"));
-			return;
-		}
-
-		const files = this.app.vault
-			.getFiles()
-			.filter((file) => typeof file?.path === "string");
-		// ⭐ 引用集合**算一次、用两次**（确认框的清单 + 真正执行的那趟）——
-		// 两份不一致的话，用户会按清单授权、却按另一份执行。
-		const referencedPaths = await referencedVaultPaths(this.app);
-		const selection = selectUploadCandidates(files, {
-			settings: this.settings,
-			index: this.currentIndex(),
-			referencedPaths,
-		});
-
-		// ⭐ 笔记里的**外链文件**也算候选：这条命令补的是"把还没进你自己存储的搬进去"，
-		// 而指向别处的同样没进存储 —— 只是它们在别人的服务器上。
-		// 判定用的是**同一个纯函数**（`decideExternalCache`），所以"自己的存储 /
-		// 回环地址 / 存储未就绪"全都自动一致，不另立一套标准。
-		// ⚠️ 它走 `purpose: "manual"`：**点这个确认框本身就是显式动作**，
-		// 于是功能开关与站点名单都不约束它（关掉开关也照样能跑这条命令）。
-		const external = selectExternalUploadCandidates(await readAllNoteTexts(this.app), {
-			settings: this.settings,
-			configured: connectionReadiness(this.app.secretStorage, this.settings).ready,
-		});
-
-		if (selection.paths.length === 0 && external.candidates.length === 0) {
-			new Notice(this.t("maintainBatchNothing"));
-			return;
-		}
-
-		const lines = [
-			this.t("maintainBatchSummary", { count: selection.paths.length }),
-			...selection.paths.slice(0, 10),
-			...(selection.paths.length > 10
-				? [this.t("maintainMoreItems", { count: selection.paths.length - 10 })]
-				: []),
-			// ⚠️ 1.2.0（D-17）后这条必须照实说"什么都不搬"：文件留在原处就地当本地副本，
-			// 变的只有笔记里的链接。不写清楚，用户跑完发现文件还在会以为没生效
-			//（旧文案承诺的正是"会被搬进缓存目录"）。
-			this.t("maintainBatchOriginalsStay"),
-		];
-
-		// ⚠️ 也要说清"哪些**不会**被处理" —— 用户跑这条命令的预期往往是"把没搬的全搬"，
-		// 而它只动被笔记引用着的那些（没引用的搬走只会让人以为丢东西）。
-		// 不说的话他会以为漏了，然后反复重跑。
-		if (selection.unreferenced > 0) {
-			lines.push(this.t("maintainBatchSkipsUnreferenced", { count: selection.unreferenced }));
-		}
-
-		if (external.candidates.length > 0) {
-			// ⚠️ 必须把**站点**列出来：这个确认框就是那份授权（点它就是显式同意）。
-			// 只说"还有 3 张站外图"等于让用户盲签一份许可。
-			lines.push(
-				this.t("maintainBatchExternal", {
-					count: external.candidates.length,
-					sites: external.sites.length,
-					hosts: external.sites.map((site) => site.host).join(", "),
-				})
-			);
-		}
-
-		const confirmed = await this.confirmMaintenance({
-			title: this.t("maintainBatchTitle"),
-			lines,
-			cta: this.t("maintainBatchCta"),
-		});
-		if (!confirmed) {
-			new Notice(this.t("maintainCancelled"));
-			return;
-		}
-
-		const result = await runBatchUpload(deps, { external, referencedPaths });
-		new Notice(
-			this.t("maintainBatchDone", {
-				uploaded: result.uploaded,
-				reused: result.reused,
-				failed: result.failed,
-				notes: result.notesChanged,
-				links: result.linksRewritten,
-			})
-		);
-		// ⚠️ 画布里"没敢动"的值要**单独说出来**：它不属于失败，但用户必须知道
-		// 某一处引用可能还指着旧位置（否则他会以为全改好了）。
-		if (result.canvasSkipped > 0) {
-			new Notice(this.t("maintainBatchCanvasSkipped", { count: result.canvasSkipped }));
-		}
-	}
 
 	/**
 	 * 「选择要缓存的外链图片」：弹窗让用户勾，然后只搬他勾中的那些。
