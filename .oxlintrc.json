@@ -1,4 +1,129 @@
 {
 	"$schema": "./node_modules/oxlint/configuration_schema.json",
-	"ignorePatterns": ["main.js", "docs/**", "node_modules/**"]
+	"ignorePatterns": ["main.js", "docs/**", "node_modules/**"],
+	"rules": {
+		"no-alert": "warn",
+		"no-case-declarations": "error",
+		"no-empty": "error",
+		"no-fallthrough": "error",
+		"no-implicit-globals": "warn",
+		"no-implied-eval": "error",
+		"no-prototype-builtins": "error",
+		"no-regex-spaces": "error",
+		"no-self-compare": "warn",
+		"no-unexpected-multiline": "error",
+		"no-var": "error",
+		"prefer-rest-params": "error",
+		"prefer-spread": "error",
+		"no-array-constructor": "error",
+		"no-empty-object-type": "error",
+		"no-explicit-any": "warn",
+		"no-namespace": "error",
+		"no-require-imports": "error",
+		"no-unnecessary-type-constraint": "error",
+		"no-unsafe-function-type": "error"
+	},
+	"overrides": [
+		{
+			"files": ["src/**/*.ts"],
+			"rules": {
+				"no-restricted-imports": [
+					"error",
+					{
+						"paths": [
+							{
+								"name": "fs",
+								"message": "移动端没有 Node 内置模块。请改用 Obsidian 的 vault / adapter / requestUrl，或自带一份实现 —— 本项目承诺移动端可用，平台分支不是可选项。"
+							},
+							{
+								"name": "path",
+								"message": "移动端没有 Node 内置模块。请改用 Obsidian 的 vault / adapter / requestUrl，或自带一份实现 —— 本项目承诺移动端可用，平台分支不是可选项。"
+							},
+							{
+								"name": "os",
+								"message": "移动端没有 Node 内置模块。请改用 Obsidian 的 vault / adapter / requestUrl，或自带一份实现 —— 本项目承诺移动端可用，平台分支不是可选项。"
+							},
+							{
+								"name": "crypto",
+								"message": "移动端没有 Node 内置模块。请改用 Obsidian 的 vault / adapter / requestUrl，或自带一份实现 —— 本项目承诺移动端可用，平台分支不是可选项。"
+							},
+							{
+								"name": "http",
+								"message": "移动端没有 Node 内置模块。请改用 Obsidian 的 vault / adapter / requestUrl，或自带一份实现 —— 本项目承诺移动端可用，平台分支不是可选项。"
+							},
+							{
+								"name": "https",
+								"message": "移动端没有 Node 内置模块。请改用 Obsidian 的 vault / adapter / requestUrl，或自带一份实现 —— 本项目承诺移动端可用，平台分支不是可选项。"
+							},
+							{
+								"name": "zlib",
+								"message": "移动端没有 Node 内置模块。请改用 Obsidian 的 vault / adapter / requestUrl，或自带一份实现 —— 本项目承诺移动端可用，平台分支不是可选项。"
+							},
+							{
+								"name": "stream",
+								"message": "移动端没有 Node 内置模块。请改用 Obsidian 的 vault / adapter / requestUrl，或自带一份实现 —— 本项目承诺移动端可用，平台分支不是可选项。"
+							},
+							{
+								"name": "child_process",
+								"message": "移动端没有 Node 内置模块。请改用 Obsidian 的 vault / adapter / requestUrl，或自带一份实现 —— 本项目承诺移动端可用，平台分支不是可选项。"
+							},
+							{
+								"name": "worker_threads",
+								"message": "移动端没有 Node 内置模块。请改用 Obsidian 的 vault / adapter / requestUrl，或自带一份实现 —— 本项目承诺移动端可用，平台分支不是可选项。"
+							},
+							{
+								"name": "module",
+								"message": "移动端没有 Node 内置模块。请改用 Obsidian 的 vault / adapter / requestUrl，或自带一份实现 —— 本项目承诺移动端可用，平台分支不是可选项。"
+							},
+							{
+								"name": "process",
+								"message": "移动端没有 Node 内置模块。请改用 Obsidian 的 vault / adapter / requestUrl，或自带一份实现 —— 本项目承诺移动端可用，平台分支不是可选项。"
+							},
+							{
+								"name": "buffer",
+								"message": "移动端没有 Node 内置模块。请改用 Obsidian 的 vault / adapter / requestUrl，或自带一份实现 —— 本项目承诺移动端可用，平台分支不是可选项。"
+							},
+							{
+								"name": "util",
+								"message": "移动端没有 Node 内置模块。请改用 Obsidian 的 vault / adapter / requestUrl，或自带一份实现 —— 本项目承诺移动端可用，平台分支不是可选项。"
+							},
+							{
+								"name": "url",
+								"message": "移动端没有 Node 内置模块。请改用 Obsidian 的 vault / adapter / requestUrl，或自带一份实现 —— 本项目承诺移动端可用，平台分支不是可选项。"
+							},
+							{
+								"name": "assert",
+								"message": "移动端没有 Node 内置模块。请改用 Obsidian 的 vault / adapter / requestUrl，或自带一份实现 —— 本项目承诺移动端可用，平台分支不是可选项。"
+							}
+						],
+						"patterns": [
+							{
+								"group": ["node:*"],
+								"message": "移动端没有 Node 内置模块（含 node: 前缀）。请改用 Obsidian 的 vault / adapter / requestUrl，或自带实现。"
+							}
+						]
+					}
+				],
+				"no-restricted-globals": [
+					"error",
+					{
+						"name": "Buffer",
+						"message": "Buffer 是 Node 全局，移动端不存在。请用 Uint8Array / TextEncoder / TextDecoder。"
+					},
+					{
+						"name": "process",
+						"message": "process 是 Node 全局，移动端不存在（平台判断请用 obsidian 的 Platform）。"
+					},
+					{
+						"name": "require",
+						"message": "require 在移动端不可用，且插件产物已是打包后的单文件，不需要动态 require。"
+					},
+					{
+						"name": "__dirname",
+						"message": "__dirname 是 Node 专有；插件里拿 vault 路径要用 adapter.getBasePath()，且它移动端不可用。"
+					}
+				]
+			}
+		}
+	]
 }

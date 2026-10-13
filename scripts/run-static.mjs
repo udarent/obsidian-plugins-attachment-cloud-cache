@@ -33,9 +33,18 @@
  *   node scripts/run-static.mjs --lint=oxlint  # 同上，但 lint 换成 oxlint（快档：7.0 s → 0.37 s）
  *   node scripts/run-static.mjs --gates        # 只跑 11 条门禁（`affected.mjs` 用：它自己管 build/lint/tsc）
  *
- * ⭐ 两个 lint 的分工（2026-10-13）：**oxlint 是快档**（`check:fast`），**eslint 是门禁**
- *（`check` / 发版档）—— 本项目 eslint **启用 142 条**（174 个条目里 32 条 off；其中 43 条 `@typescript-eslint`、**29 条需要类型信息**），
- * oxlint 默认 96 条且类型感知覆盖非等价，**不能替代**：今天就有一处 `unbound-method` 是 eslint 抓到的。
+ * ⭐ 两个 lint 的分工（2026-10-13）：**oxlint 是快档**（`check:fast`），**eslint 是门禁**（`check` / 发版档）。
+ * 两者**不是替代关系而是分工**，因为成本结构完全不同（实测）：
+ *   · eslint 每次运行有一个 **≈3.2 s 的地板**（加载插件 + 建类型程序）—— 一条规则不跑、一个文件不查也是 3.2 s；
+ *     单文件 4.5 s、63 文件 7.0 s（其中 142 条规则本身只占 ~2.2 s，固定开销占 ~5.0 s）。
+ *   · oxlint 跑 **117 条规则 / 227 文件**只要 **0.06 s**（全类别 398 条也只要 0.08 s）。
+ * ⇒ 结论：**规则尽量放 oxlint**（它那侧几乎免费），eslint 只留它做不了的。已落地的是
+ *   `.oxlintrc.json` 补齐它天生就有、但默认关着的 **21 条**，并把**移动端安全那两条**
+ *   （`no-restricted-imports` / `no-restricted-globals`）搬了过去 ⇒ 快档**第一次**能挡住
+ *   `import fs from "fs"`（此前只有 eslint 挡得住，日常档是漏的）。
+ *   eslint 那边剩下：**29 条类型感知** + **37 条 `obsidianmd/*`** + 10 条 oxlint 未实现 + 限制规则的 tseslint 变体。
+ * ⚠️ 类型感知那 29 条搬不走：oxlint `--type-aware` 在本机跑不起来（要 spawn `tsgolint.CMD` ⇒ os error 231）。
+ *   也**别指望"搬规则"能省时间**：实测这 142 条里，非类型感知的 113 条总共只值 **0.73 s**（见 `test-speed-plan.md` §10.6）。
  */
 
 import { spawn } from "node:child_process";
