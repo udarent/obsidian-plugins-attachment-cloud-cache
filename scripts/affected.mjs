@@ -164,23 +164,11 @@ if (FLAG.dryRun) {
 	process.exit(0);
 }
 
-// ── 阶段 1：静态门禁（永远全跑 —— 11 个一共 ~2s，且门禁脚本改动即时生效）──
-const STATIC_GATES = [
-	"check-manifest",
-	"check-api-floor",
-	"check-lockfile-platforms",
-	"check-credential-files",
-	"check-mutate-files",
-	"check-injected-snippets",
-	"check-no-dev-doc-refs",
-	"check-readme",
-	"check-readme-commands",
-	"check-i18n-keys",
-	"check-notice-i18n",
-];
-for (const gate of STATIC_GATES) {
-	await runStep(process.execPath, [join("scripts", `${gate}.mjs`)], `静态门禁 ${gate}`);
-}
+// ── 阶段 1：静态门禁（永远全跑 —— 门禁脚本改动即时生效）──
+// ⚠️ 走 run-static.mjs --gates，而不是在这里逐条串行 spawn：那 11 条互相独立，
+// 但每条都要付一次 Node 进程启动（实测 ~0.8 s）⇒ 串行 ~10 s、并行 ~1 s。
+// 门禁清单的唯一来源也在那边 —— 这里不再抄一份，免得两处漂移。
+await runStep(process.execPath, [join("scripts", "run-static.mjs"), "--gates"], "静态门禁（11 条，并行）");
 
 // ── 阶段 2：tsc（类型错误是全局的，只要有 ts 改动就跑；~2s）──
 const anyTsChanged = FLAG.all || changed.some((f) => /\.(?:ts|mts)$/.test(f));
