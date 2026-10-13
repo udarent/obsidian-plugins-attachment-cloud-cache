@@ -38,13 +38,13 @@
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { installHostGlobals } from "./host-globals.mjs";
-import { bundleEntries, writeObsidianShim } from "./load-ts.mjs";
+import { importFresh } from "./load-ts.mjs";
 
 // 与 load-ts.mjs 同理：变异验证也要在同样的宿主环境下跑套件，
 // 否则"变异前的基线"会因为环境差异而红，结论就不可比了。
@@ -67,21 +67,20 @@ installBrokenPipeGuard();
  * （跨模块 `instanceof` 才不会恒为 false）。
  */
 async function loadFresh(entries, reexportDefault) {
-	const dir = await mkdtemp(join(tmpdir(), "acc-mut-"));
-	const outfile = join(dir, "bundle.mjs");
-
 	// 统一成"相对仓库根、不带扩展名"的写法（`bundleEntries` 的约定）
 	const list = (Array.isArray(entries) ? entries : [entries]).map(stripToEntrySpec);
 	// 入口若是「默认导出型模块」（如 src/main.ts），必须显式再导一次 default ——
 	// `export *` 按规范不含它，否则套件拿到的是模块命名空间而不是插件类。
 	const defaults = reexportDefault ? (Array.isArray(reexportDefault) ? reexportDefault : [reexportDefault]).map(stripToEntrySpec) : undefined;
 
-	await bundleEntries(list, outfile, { reexportDefault: defaults });
-	await writeObsidianShim(dir);
-
-	const mod = await import(`${pathToFileURL(outfile).href}?mut=${Math.random()}`);
-	await rm(dir, { recursive: true, force: true });
-	return mod;
+	// ⭐ 走 `load-ts` 的**共用打包目录**（2026-10-13 起）。
+	//
+	// 这里每条变异都要加载一次，而"每次新建临时目录"在 Windows 上每次要花
+	// ~0.5 秒（实时防护扫描新目录里的新文件）：458 条锚点 + 51 次基线 ≈ 509 次加载，
+	// 那是全量变异里最大的一笔开销，而它与"测什么"毫无关系。
+	// 唯一查询串仍由 `importFresh` 负责（那是**正确性**要求：复用实例会让
+	// "变异后仍然通过"变成假绿）。
+	return importFresh(list, { reexportDefault: defaults });
 }
 
 /** `src/core/ingest.ts` → `src/core/ingest`（barrel 里用不带扩展名的相对写法）。 */

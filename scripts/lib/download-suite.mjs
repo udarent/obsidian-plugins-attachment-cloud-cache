@@ -24,7 +24,8 @@
 
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { rmSync } from "node:fs";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -74,8 +75,48 @@ export async function runDownloadSuite(mod) {
 	// ============================================================
 	// 搭一个完整环境：真实 HTTP 服务 + 真实磁盘上的 vault
 	// ============================================================
+
+/*
+ * ⭐ 夹具根目录：**整个进程复用一个**（2026-10-13 实测后改）。
+ *
+ * 原先每个用例都 `mkdtemp` 建一个新目录。语义上没问题，但在这台机器上极贵 ——
+ * 代价不在目录、在**新建文件**本身（同机实测，10 轮平均）：
+ *
+ *   · 新目录 + 3 个新文件 + 读 + 删 ....... 985 ms/轮
+ *   · 同路径、删掉再建同样的文件 .......... 483 ms/轮
+ *   · 同路径、同文件名，**只覆盖内容** ....   3 ms/轮   ← 差 328 倍
+ *
+ * 差额是 Windows 实时防护对新文件的扫描（它按路径缓存）。
+ *
+ * ⚠️ 复用的正确性依赖两件事：① 每个用例开始前**清空**根目录（这才等价于原先的
+ * "全新目录"）；② 目录**每进程一个**（`mkdtemp` 依旧唯一）⇒ 并行进程之间不互相踩，
+ * 退出时尽力删掉。
+ */
+let sharedRoot = null;
+
+async function harnessRoot() {
+	if (sharedRoot === null) {
+		sharedRoot = await mkdtemp(join(tmpdir(), "acc-download-"));
+		process.once("exit", () => {
+			try {
+				rmSync(sharedRoot, { recursive: true, force: true });
+			} catch {
+				/* 尽力而为：本身在系统临时目录里 */
+			}
+		});
+	}
+	// ①：把上一个用例留下的东西清干净（含子目录）
+	//    ⚠️ 不能假定目录一直在：用例自己可能把它删掉（download-suite 就有一处
+	//    `finally` 里 `rm(h.root)` —— 原先每次都是新目录，所以那样写没问题）。
+	//    ⇒ 目录不在时重建，等价于"全新目录"。
+	const names = await readdir(sharedRoot).catch(() => []);
+	for (const name of names) await rm(join(sharedRoot, name), { recursive: true, force: true });
+	await mkdir(sharedRoot, { recursive: true });
+	return sharedRoot;
+}
+
 	async function makeHarness(options = {}) {
-		const root = await mkdtemp(join(tmpdir(), "acc-download-"));
+		const root = await harnessRoot();
 		const harness = createAppMock(root);
 		const app = harness.app;
 
@@ -177,8 +218,9 @@ export async function runDownloadSuite(mod) {
 				pendingInject = response;
 			},
 			close: async () => {
+				// ⚠️ 只关服务器：根目录**整个进程共用**（见 harnessRoot 的说明），
+				// 由下一个用例开头清空、进程退出时统一删。
 				await server.close();
-				await rm(root, { recursive: true, force: true });
 			},
 		};
 	}

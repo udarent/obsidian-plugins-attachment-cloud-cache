@@ -32,7 +32,8 @@
  */
 
 import { build } from "esbuild";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -111,24 +112,94 @@ export async function bundleEntries(entries, outfile, options = {}) {
  * @param {string | string[]} entries 相对仓库根的路径，如 `["src/core/ingest", "src/s3/client"]`
  * @param {(mod: any) => Promise<any>} fn  模块可用时调用，避免临时目录泄漏
  */
-export async function withLoadedTs(entries, fn) {
-	const dir = await mkdtemp(join(tmpdir(), "acc-load-"));
-	try {
-		const outfile = join(dir, "bundle.mjs");
-		await bundleEntries(entries, outfile);
-		await writeObsidianShim(dir);
-		return await fn(await import(pathToFileURL(outfile).href));
-	} finally {
-		await rm(dir, { recursive: true, force: true });
+/*
+ * ⭐ **打包工作区：整个进程复用同一个临时目录。**
+ *
+ * 原先每次加载都 `mkdtemp` 建一个新目录、把 bundle 与垫片写进去、import 完再删。
+ * 语义上没问题，但在这台机器上慢得离谱（2026-10-13 实测，同一个 bundle）：
+ *
+ *   · 每次新建目录 .............. 546 ms/次
+ *   · 复用同一目录、只覆盖 bundle  16 ms/次   ← 34 倍
+ *
+ * 差额是 Windows 实时防护对**新目录里的新文件**的扫描 —— 它按路径缓存，
+ * 所以只要文件路径不变（覆盖写入），就不再重复付出这笔钱。
+ * 全套件 42 次加载、全量变异约 509 次加载，这就是"看起来每个套件都要 0.5 秒"的真相。
+ *
+ * 边界（为什么这样仍然安全）：
+ *   · 目录**每进程一个**（`mkdtemp` 依旧唯一）⇒ 多个进程并行（变异并行跑、
+ *     两个终端同时跑套件）不会互相踩；进程退出时尽力删掉。
+ *   · 同进程内靠**唯一查询串**保证每次 import 都是全新实例 —— 这正是原先
+ *     "换目录"买到的东西，而它与目录无关（Node 按 URL 缓存模块）。
+ *   · 打包 + import **串行**：两者都写同一个 `bundle.mjs`，交错会互相覆盖。
+ *     ⚠️ 回调 `fn` 在临界区**之外**执行，所以套件内部再调本函数不会自锁。
+ */
+let workspaceDir = null;
+let workspaceShimWritten = false;
+let workspaceQueue = Promise.resolve();
+let bundleSeq = 0;
+
+async function ensureWorkspace() {
+	if (workspaceDir === null) {
+		workspaceDir = await mkdtemp(join(tmpdir(), "acc-load-"));
+		// 尽力清理即可：本身在系统临时目录里、路径唯一，删不掉也不影响正确性
+		process.once("exit", () => {
+			try {
+				rmSync(workspaceDir, { recursive: true, force: true });
+			} catch {
+				/* 留给系统临时目录的清理机制 */
+			}
+		});
 	}
+	if (!workspaceShimWritten) {
+		await writeObsidianShim(workspaceDir);
+		workspaceShimWritten = true;
+	}
+	return workspaceDir;
 }
 
-/** 同上，但不传回调 —— 需要跨多次 import 共享状态时用（调用方负责清理）。 */
+/**
+ * 打包入口并 import 出一个**全新实例**。
+ *
+ * ⚠️ 每次调用递增查询串是**正确性**要求、不是优化：Node 按 URL 缓存模块，
+ * 复用实例会让"变异之后仍然通过"变成假的（跑的还是旧代码）。
+ *
+ * @param {string | string[]} entries 相对仓库根的路径（不带扩展名，见 `bundleEntries`）
+ * @param {{ reexportDefault?: string | string[] }} [options] 透传给 `bundleEntries`
+ */
+export async function importFresh(entries, options = {}) {
+	const task = async () => {
+		const dir = await ensureWorkspace();
+		const outfile = join(dir, "bundle.mjs");
+		await bundleEntries(entries, outfile, options);
+		bundleSeq += 1;
+		return import(`${pathToFileURL(outfile).href}?bundle=${bundleSeq}`);
+	};
+	// 两个分支都接上：前一次失败不该卡住后一次
+	const run = workspaceQueue.then(task, task);
+	workspaceQueue = run.then(
+		() => undefined,
+		() => undefined
+	);
+	return run;
+}
+
+/**
+ * 打包入口并 import 它，然后交给回调（回调返回后不再持有任何东西）。
+ *
+ * @param {string | string[]} entries 相对仓库根的路径，如 `["src/core/ingest", "src/s3/client"]`
+ * @param {(mod: any) => Promise<any> | any} fn 模块可用时调用
+ */
+export async function withLoadedTs(entries, fn) {
+	return fn(await importFresh(entries));
+}
+
+/**
+ * 同上，但不传回调（`affected-map.mjs` 的入口提取器认得这个名字）。
+ *
+ * ⚠️ `cleanup` 自 2026-10-13 起是**空操作**：打包目录整进程共用、退出时统一删，
+ * 所以"用完即删"不再成立（见上面那段）。保留这个形状只是不让调用方改签名。
+ */
 export async function loadTs(entries) {
-	const dir = await mkdtemp(join(tmpdir(), "acc-load-"));
-	const outfile = join(dir, "bundle.mjs");
-	await bundleEntries(entries, outfile);
-	await writeObsidianShim(dir);
-	const mod = await import(pathToFileURL(outfile).href);
-	return { mod, cleanup: () => rm(dir, { recursive: true, force: true }) };
+	const mod = await importFresh(entries);
+	return { mod, cleanup: () => undefined };
 }
