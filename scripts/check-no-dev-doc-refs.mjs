@@ -70,7 +70,7 @@ const FORBIDDEN = [
 	{ pattern: /\brefactor-plan\.md\b/, what: "引用了仓库外的开发笔记" },
 	{ pattern: /\brefactor-report\.md\b/, what: "引用了仓库外的开发笔记" },
 	{ pattern: /\btest-speed-plan\.md\b/, what: "引用了仓库外的开发笔记" },
-	// ── 历史名（原在 `dev-notes/_archive/`，**2026-10-13 已删除**；仍然守着：防止有人凭记忆写回去）──
+	// ── 历史名（原在开发笔记目录，2026-10-11 归档、**2026-10-13 随归档区一并删除**；仍然守着：防止有人凭记忆写回去）──
 	{ pattern: /docs\/SCOPE\.md/, what: "引用了仓库外的开发笔记" },
 	{ pattern: /docs\/INDEPENDENCE\.md/, what: "引用了仓库外的开发笔记" },
 	{ pattern: /\bSCOPE\.md\b/, what: "引用了仓库外的开发笔记" },
