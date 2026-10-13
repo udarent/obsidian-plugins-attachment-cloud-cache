@@ -109,6 +109,18 @@ export function extractStoredKeys(ctx: PluginContext, kind: NoteKind, text: stri
  * 也是文本内容，宿主的索引不保证覆盖 —— 与 `referencedVaultPaths` 同一条理由）。
  * 换算用的是同一个 `keyFromUrl`，也就是**渲染判定用的那个**回算函数：
  * 于是"哪些对象算被引用"与"渲染时认不认这个 URL"永远一致。
+ *
+ * ## ⚠️ 它**抛错**是刻意的，而兜底是**每个调用方自己的事**
+ *
+ * 读不到某一篇（笔记或画布）时它整条抛出去，**不**退回"就当那篇没有引用" ——
+ * 漏掉的那一篇可能正是引用着这些对象的，于是候选会凭空变大（这是唯一
+ * "因为读不到而多删"的方向）。而**跳过继续**看起来更"稳"，实际是把
+ * "不知道"当成了"没有"。
+ *
+ * ⚠️⚠️ 因此**每个调用方都必须自己 try/catch 并如实报错**（不能让它冒泡：
+ * 两条调用路径都在命令/按钮回调里，那里没有兜底，异常会变成一句
+ * **unhandled rejection** —— 用户什么都看不到）。这条义务写在**定义处**，
+ * 因为这里是两个调用方唯一都会读的地方；只在一半路径上做兜底 = 没有兜底。
  */
 export async function cloudReferencedKeys(ctx: PluginContext): Promise<Set<string>> {
 	const urls: string[] = [];
