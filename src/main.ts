@@ -75,6 +75,8 @@ import { cleanupCloudObjects } from "./plugin/cloud-cleanup-flow";
 import { uploadExistingAttachments } from "./plugin/upload-existing-flow";
 import { releaseLocalSpace } from "./plugin/release-space-flow";
 import { createOrphanFlow } from "./plugin/orphan-flow";
+import { startBackgroundTasks } from "./plugin/background-tasks";
+import type { BackgroundTasks } from "./plugin/background-tasks";
 import type { OrphanFlow } from "./plugin/orphan-flow";
 import type { LocalCopyOutcome } from "./core/download";
 import { installImageSrcPatch, processImages } from "./render/render-hook";
@@ -91,41 +93,6 @@ import { pickExternalImagesWithModal } from "./ui/external-picker-modal";
 import type { ExternalCandidateLoader } from "./ui/external-picker-modal";
 import type { ExternalPickItem, ExternalPickScope } from "./ui/external-picker-logic";
 
-/**
- * 启动后延迟多久做第一次缓存上限检查。
- *
- * 延迟是刻意的：超限时那一轮要列缓存目录、还要扫全库笔记（判断哪些副本还被人引用），
- * 直接放在 `onload` 里会让"打开 Obsidian"变慢。3 秒足够让界面先出来。
- */
-const ROTATION_STARTUP_DELAY_MS = 3 * 1000;
-
-/**
- * 周期性兜底检查的间隔。
- *
- * ⚠️ 间隔短不会造成持续 I/O：每一轮先走**便宜的门槛**（索引里的字节求和，
- * 纯内存），没超就立刻返回。真正昂贵的部分（列目录、扫笔记）只在超限时才发生，
- * 而且还有一层分钟级节流。
- */
-const ROTATION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
-
-/**
- * 索引自愈的启动延迟。
- *
- * ⚠️ 比轮换那一次（3 秒）**更晚**：自愈不是"必须马上做"的事，而启动后那几百毫秒里
- * 还有索引加载、渲染钩子挂载、引用快照建立等等要做完 —— 排它们后面，
- * 免得抢同一段启动窗口。
- */
-const SELF_HEAL_STARTUP_DELAY_MS = 8 * 1000;
-
-/**
- * 索引自愈的周期兜底间隔。
- *
- * ⚠️ 这一条是"**两轮确认**"能成立的前提（见 `createAbsenceConfirmer`）：
- * 启动那轮只标记"这次不在"，要等到**下一轮**仍不在才摘。
- * 间隔取 10 分钟与轮换同频 —— 一轮本身几乎零成本（常态下只是查宿主的内存索引），
- * 而会话短于一个间隔时最多"晚一轮修"，不再有任何正确性代价。
- */
-const SELF_HEAL_CHECK_INTERVAL_MS = 10 * 60 * 1000;
 
 
 /**
@@ -241,6 +208,9 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 台账的作用是让后者认出"这是自己刚写的"，别去重复接管。
 	 */
 	private readonly stagedPaths = createSelfWriteLedger();
+
+	/** 后台任务（启动延迟 + 周期兜底）。定时器本身与它们的取消都在 `plugin/background-tasks.ts`。 */
+	private backgroundTasks: BackgroundTasks | null = null;
 
 	/**
 	 * 「选择要缓存的外链图片」那个弹窗的接缝。
@@ -421,43 +391,19 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			onError: (error) => console.error("[attachment-cloud-cache] 缓存轮换出错", error),
 		});
 
-		// 触发 ①：启动后延迟一次。**延迟**是刻意的 —— 超限时这一轮要列目录、
-		// 扫全库笔记，不能挡在插件加载路径上。
-		const startupTimer = window.setTimeout(() => {
-			void this.rotation?.maybeRotate("startup");
-		}, ROTATION_STARTUP_DELAY_MS);
-		this.register(() => window.clearTimeout(startupTimer));
-
-		// 触发 ②：周期性兜底。这一轮先走**便宜的门槛**（内存里求和），
-		// 没超就直接返回 —— 所以间隔短也不会造成持续 I/O。
-		const intervalTimer = window.setInterval(() => {
-			void this.rotation?.maybeRotate("interval");
-		}, ROTATION_CHECK_INTERVAL_MS);
-		this.register(() => window.clearInterval(intervalTimer));
-
-		// 触发 ③（2026-10-11 新增、2026-10-12 扩成两条线）：**索引自愈**。
+		// ── 后台任务（启动延迟 + 周期兜底）──
 		//
-		// 为什么要有它：索引是**派生数据**，它指向的副本随时可能消失（同步漏了一个文件、
-		// `keep` 档下用户自己整理了附件目录、外部工具先删后写）。留着一条指向不存在文件的
-		// 记录会让**占用统计偏高**，并让下次看到那张图时白下载一次。
-		// 而"让用户手动跑一条命令来修插件自己的账本"，是把内部维护成本转嫁给用户。
-		//
-		// ⚠️ 它**只改索引，绝不碰任何文件**（见 `maintenance/self-heal.ts` 的纪律）。
-		// ⚠️ 正确性**不**依赖它，别再把"必须在某时刻前修完"当成前提：
-		//    渲染遇到缺失副本会自己去取回并回写记录；而"统计偏高会导致多删"已由淘汰侧
-		//    只按**存在的**副本来求和兜住（`eviction.ts`）。
-		const selfHealTimer = window.setTimeout(() => {
-			void this.runIndexSelfHeal();
-		}, SELF_HEAL_STARTUP_DELAY_MS);
-		this.register(() => window.clearTimeout(selfHealTimer));
-
-		// 触发 ④：**周期性**兜底。这一条也是"两轮确认"能成立的前提 ——
-		// 启动那轮只标记"这次不在"，要等到下一轮仍不在才摘（见 `createAbsenceConfirmer`）。
-		// 一轮几乎零成本（常态下只是查宿主的内存索引），所以间隔短不心疼。
-		const selfHealIntervalTimer = window.setInterval(() => {
-			void this.runIndexSelfHeal();
-		}, SELF_HEAL_CHECK_INTERVAL_MS);
-		this.register(() => window.clearInterval(selfHealIntervalTimer));
+		// ⚠️ 所有定时器都在 `plugin/background-tasks.ts` 里排队与取消：那里是一张**表**
+		//（id / 种类 / 间隔 / 为什么是这个触发点），于是"漏了一条线"是可数的，
+		// 取消也不再需要在 `onunload` 里手写（每条都登记到 `register`）。
+		// 轮换那四个触发点的全景（哪两个是定时线、哪两个在事件现场）见那张矩阵。
+		this.backgroundTasks = startBackgroundTasks(
+			{
+				rotate: (reason) => void this.rotation?.maybeRotate(reason),
+				selfHeal: () => void this.runIndexSelfHeal(),
+			},
+			(cleanup) => this.register(cleanup)
+		);
 
 		// 重建节点时用的子 Component：挂进插件生命周期，卸载时一并清掉。
 		this.addChild(this.embedComponent);
@@ -921,6 +867,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		// 留着的话插件卸载后还会弹一次"要不要删云端"—— 而那时插件已经卸载了。
 		this.orphanFlow?.dispose();
 		this.orphanFlow = null;
+		this.backgroundTasks?.dispose();
+		this.backgroundTasks = null;
 		this.indexStore = null;
 		this.externalHook = null;
 		this.externalLive = null;
