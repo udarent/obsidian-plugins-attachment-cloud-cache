@@ -34,7 +34,7 @@
  *   node scripts/run-static.mjs --gates        # 只跑 11 条门禁（`affected.mjs` 用：它自己管 build/lint/tsc）
  *
  * ⭐ 两个 lint 的分工（2026-10-13）：**oxlint 是快档**（`check:fast`），**eslint 是门禁**
- *（`check` / 发版档）—— 本项目 eslint 启用 174 条（含 45 条 `@typescript-eslint`、约 21 条类型感知类），
+ *（`check` / 发版档）—— 本项目 eslint **启用 142 条**（174 个条目里 32 条 off；其中 43 条 `@typescript-eslint`、**29 条需要类型信息**），
  * oxlint 默认 96 条且类型感知覆盖非等价，**不能替代**：今天就有一处 `unbound-method` 是 eslint 抓到的。
  */
 
