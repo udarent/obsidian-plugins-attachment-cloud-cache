@@ -124,7 +124,9 @@ assert.ok(
 // （"秘密没被塞进设置"这条另有行为断言钉着 —— 见套件第 11 节。这里守的是
 //  「只有一处实现」与「用完就清」这两件行为断言看不见的事。）
 {
-	const main = read("src/main.ts");
+	// ⚠️ 实现在 2026-10-13 的 A1 重构里从 `main.ts` 搬到了 `plugin/credentials-flow.ts`。
+	// 守卫跟着实现走 —— 它守的是**那条通路**（秘密只进钥匙串），不是某一个文件。
+	const credFlow = read("src/plugin/credentials-flow.ts");
 
 	assert.ok(
 		tab.includes("plugin.importCredentialsFile("),
@@ -141,11 +143,11 @@ assert.ok(
 		"★ 导入成功后必须让设置页重新取值（update()）—— 否则端口/密钥那几栏还显示旧值"
 	);
 	assert.ok(
-		main.includes("secretStorage.setSecret(slot, parsed.secret)"),
+		credFlow.includes("secretStorage.setSecret(slot, parsed.secret)"),
 		"★ 导入时秘密必须写进钥匙串"
 	);
 	assert.ok(
-		!/settings\.s3\.[A-Za-z]*\s*=\s*parsed\.secret/.test(main),
+		!/settings\.s3\.[A-Za-z]*\s*=\s*parsed\.secret/.test(credFlow),
 		"★★ 秘密绝不能被写进 settings —— data.json 是明文，且会随 vault 同步、备份、分享"
 	);
 }

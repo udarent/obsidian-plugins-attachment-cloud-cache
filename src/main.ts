@@ -70,11 +70,8 @@ import { planFileCards } from "./ui/file-cards";
 import { displayNameForKey } from "./object-key";
 import type { FileCard, FileCardInput } from "./ui/file-cards";
 import { keyFromUrl } from "./render/render-target";
-import { createS3Client } from "./s3/client";
 import type { S3Client } from "./s3/client";
-import { connectionReadiness, parseCredentialFile } from "./s3/credentials";
-import type { CredentialFileProblem } from "./s3/credentials";
-import { ensureSecretSlot, randomSlotPart } from "./ui/settings-logic";
+import { connectionReadiness } from "./s3/credentials";
 import { createLocalCopyEnsurer } from "./core/download";
 import {
 	keyOfUrl,
@@ -85,6 +82,11 @@ import {
 	resourceUrlFor,
 	vaultPathExists,
 } from "./plugin/notes-query";
+import {
+	buildClient as buildClientFrom,
+	importCredentialsFile as runCredentialsImport,
+} from "./plugin/credentials-flow";
+import type { ImportCredentialsOutcome } from "./plugin/credentials-flow";
 import type { LocalCopyOutcome } from "./core/download";
 import { installImageSrcPatch, processImages } from "./render/render-hook";
 import { createEmbedRebuildQueue, processEmbeds } from "./render/embed-rebuild";
@@ -177,28 +179,10 @@ function noteKindOf(file: unknown): NoteKind | null {
 /**
  * 导入一份凭据文件的结果。
  *
- * ⚠️ **不含秘密值**，只含"改了哪几项" —— 于是它可以被日志、通知、真机探针随便打印，
- * 而不会把密钥漏到任何地方去。
+ * 定义在 `plugin/credentials-flow.ts`，这里只 re-export —— 它是对外可见的公开形状
+ * （设置页与真机探针都按它取字段），搬实现时把类型一起搬走、留个出口就够了。
  */
-export type ImportCredentialsOutcome =
-	| {
-			ok: true;
-			/** 这次**真的改了**的设置项，值是**文案键**（界面负责翻译）。 */
-			applied: string[];
-			/** 文件里有、但本插件用不上的键（如 MinIO 的 `api`）。 */
-			ignored: string[];
-	  }
-	| {
-			ok: false;
-			/**
-			 * `secretStoreFailed` 是**这一步**特有的失败：文件本身没问题，
-			 * 只是钥匙串写不进去（宿主实现差异、被锁）。它与"这份文件认不出来"
-			 * 是两件该给不同提示的事 —— 前者的修法不是"换一份文件"。
-			 */
-			problem: CredentialFileProblem | "secretStoreFailed";
-			/** 仅 `secretStoreFailed` 时有值：宿主给的原始错误（可能很长，界面自己截）。 */
-			detail?: string;
-	  };
+export type { ImportCredentialsOutcome } from "./plugin/credentials-flow";
 
 export default class AttachmentCloudCachePlugin extends Plugin {
 	settings: PluginSettings = { ...SETTINGS_DEFAULTS };
@@ -1775,80 +1759,30 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	/**
 	 * 从一份**凭据文件**导入连接参数（MinIO 控制台「下载凭据」给的那个 json）。
 	 *
-	 * ## 为什么放在插件上、而不是写在设置页里
-	 *
-	 * 界面只负责"取到文本"，写设置与写钥匙串都在这里 —— 于是**真机探针能直接调它**，
-	 * 不必去点界面（点界面测的是"按钮接对了没有"，而这里测的是"导入到底做了什么"）。
-	 * `cachePickedExternalImages` 是同一个理由下的先例。
-	 *
-	 * ## ⚠️ 顺序：先写钥匙串，再写设置
-	 *
-	 * 反过来的话，钥匙串写入失败就会留下「**ID 换了、秘密还是旧的**」这种组合 ——
-	 * 它能签出一个格式完全正确、但服务端必然拒绝的请求，而用户看到的是
-	 * "凭据被拒"，会去怀疑自己抄错了密钥。所以任何一步失败都**整批不做**。
-	 *
-	 * ## 秘密的去向只有一处
-	 *
-	 * `parseCredentialFile` 把外来的 json 拆成「要写设置的字段」与「秘密」两半，
-	 * 这里也照着这个边界落：`patch` 里的字段进 `settings`，秘密只进钥匙串。
-	 * 秘密**永远不进** `data.json`（那个文件会随 vault 同步、备份、分享出去）。
-	 *
-	 * @returns 结果里**不含秘密值**，只含"改了哪几项"，供界面如实报告。
+	 * ⚠️ 这里是**薄转发**，实现在 `plugin/credentials-flow.ts`。保留这个公开方法，是因为
+	 * 有**两条**路径指着它：设置页（`ui/settings-tab.ts`）与**真机探针**
+	 * —— 探针直接调它而不去点界面（点界面测的是"按钮接对了没有"，调它测的是"导入做了什么"）。
 	 */
 	async importCredentialsFile(text: string): Promise<ImportCredentialsOutcome> {
-		const parsed = parseCredentialFile(text);
-		if (!parsed.ok) return { ok: false, problem: parsed.problem };
-
-		const s3 = this.settings.s3;
-		const patch = parsed.patch;
-
-		// ① 秘密先进钥匙串（失败则什么都不改 —— 见上面那段）
-		let secretStored = false;
-		if (parsed.secret !== null) {
-			const slot = ensureSecretSlot(s3.secretAccessKeyRef, randomSlotPart());
-			try {
-				this.app.secretStorage.setSecret(slot, parsed.secret);
-			} catch (error) {
-				return {
-					ok: false,
-					problem: "secretStoreFailed",
-					detail: error instanceof Error ? error.message : String(error),
-				};
-			}
-			// ⚠️ 槽位名沿用已有的（`ensureSecretSlot` 从不改名）—— 改名会把已存的秘密孤儿化
-			s3.secretAccessKeyRef = slot;
-			secretStored = true;
-		}
-
-		// ② 其余字段进设置。**只有文件里真的有的那一项**才动：
-		// 一份只有秘密的文件不该顺手把服务地址清空。
-		if (patch.endpoint !== undefined) s3.endpoint = patch.endpoint;
-		if (patch.accessKeyId !== undefined) s3.accessKeyId = patch.accessKeyId;
-		if (patch.forcePathStyle !== undefined) s3.forcePathStyle = patch.forcePathStyle;
-
-		await this.saveSettings();
-
-		// 报告的次序与设置页上那几栏的次序一致（服务地址 → 访问密钥 → 秘密 → 寻址），
-		// 于是用户能把通知里的清单直接对着界面核。
-		const applied: string[] = [];
-		if (patch.endpoint !== undefined) applied.push("s3Endpoint");
-		if (patch.accessKeyId !== undefined) applied.push("s3AccessKey");
-		if (secretStored) applied.push("s3SecretKey");
-		if (patch.forcePathStyle !== undefined) applied.push("forcePathStyle");
-
-		return { ok: true, applied, ignored: parsed.ignored };
+		return runCredentialsImport(
+			{
+				secretStorage: this.app.secretStorage,
+				settings: this.settings,
+				saveSettings: () => this.saveSettings(),
+			},
+			text
+		);
 	}
 
 	/**
-	 * 按**当前**设置与钥匙串造一个客户端；还没配齐时返回 `null`。
+	 * 按**当前**设置与钥匙串造一个客户端（薄转发，实现在 `plugin/credentials-flow.ts`）。
 	 *
 	 * 复用 `connectionReadiness`（设置页的"测试连接"用的是同一个判定）⇒
 	 * 界面上说"能连"和实际上传/下载用的是同一套判据，不会出现
 	 * "测试连接成功但粘贴报未配置"这种自相矛盾的表现。
 	 */
 	private buildClient(): S3Client | null {
-		const readiness = connectionReadiness(this.app.secretStorage, this.settings);
-		return readiness.ready ? createS3Client(readiness.config) : null;
+		return buildClientFrom(this.app.secretStorage, this.settings);
 	}
 
 
