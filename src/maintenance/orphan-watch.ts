@@ -289,8 +289,7 @@ export interface OrphanLocalTarget {
  *
  * 这里只处理**索引登记过**的副本。一份**从未上传成功**的本地附件（笔记里是
  * `![[x.png]]` 这种库内链接 ⇒ 提取不出对象 key）变成孤儿时，这个入口**看不见它** ——
- * 那是另一类问题（本插件的职责是"围绕已上传对象"，不是通用的附件管家），
- * 见 `requirements.md` R17 的边界说明。
+ * 那是另一类问题（本插件的职责是"围绕已上传对象"，不是通用的附件管家）。
  */
 export function planOrphanLocalRemoval(
 	keys: readonly string[],

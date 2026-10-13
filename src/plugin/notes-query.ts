@@ -126,7 +126,7 @@ export async function readAllNoteTexts(app: App): Promise<NoteTextLike[]> {
  *
  * ⚠️ 本次搬迁时补上本注释：这段说明原先**漂移到了邻近的另一个方法上**
  * （`main.ts` 里 `readAllNoteTexts` 与 `isKnownCloudCopy` 之间），
- * 而方法自己一行注释也没有 —— 见 `refactor-plan.md` §7。
+ * 而方法自己一行注释也没有（2026-10-13 已归位）。
  */
 export async function referencedVaultPaths(app: App): Promise<ReadonlySet<string>> {
 	const referenced = new Set(referencedPathsFrom(app.metadataCache?.resolvedLinks));

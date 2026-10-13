@@ -613,7 +613,7 @@ export function runMaintenanceSuite(mod) {
 
 	// ⭐ 「被引用」这个集合的取法：把宿主的链接索引换算成"目标路径"集合。
 	// 形状与"画布也会进索引"这两条都来自真机取证
-	//（`dev-notes/_archive/.probe-referenced-links.mjs`）。
+	//（2026-10-09 的真机探针原始输出）。
 	const { referencedPathsFrom } = mod;
 	const linked = referencedPathsFrom({
 		"notes/a.md": { "attachments/used.png": 2, "notes/b.md": 1 },

@@ -385,8 +385,7 @@ export class SecretComponent {
  * 按钮组件替身（`ButtonComponent`）—— 设置页「从凭据文件导入」那行用它当**皮肤**。
  *
  * ⚠️ 这里的语义**取自真机取证**，不是照类型定义推的（本项目明确要求：给宿主 API 写替身
- * 必须先量真机）。实测到的事实（`dev-notes/_archive/.probe-file-chooser-truth.mjs` 与
- * `.probe-import-credentials.mjs` 的原始输出）：
+ * 必须先量真机）。实测到的事实（2026-10-09 两个真机探针的原始输出）：
  *
  * - `new ButtonComponent(容器)` 会往容器里挂一个 `<button>`（标签名就是 `button`，
  *   **类名为空** —— 宿主那些按钮样式是按元素名生效的）；`buttonEl` 就是它；
@@ -912,7 +911,7 @@ export function createAppMock(rootDir, opts = {}) {
 		workspace,
 		secretStorage: createSecretStorage(),
 		/**
-		 * 宿主的链接索引。形状取自**真机取证**（`dev-notes/_archive/.probe-referenced-links.mjs`）：
+		 * 宿主的链接索引。形状取自**真机取证**（2026-10-09）：
 		 * `{ 来源文件路径: { 目标文件路径: 引用次数(number) } }`。
 		 *
 		 * ⚠️ **内容由测试填**（`helpers.setResolvedLinks(...)`），替身不自己解析笔记 ——

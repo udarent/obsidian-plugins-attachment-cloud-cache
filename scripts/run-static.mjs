@@ -44,7 +44,7 @@
  *   `import fs from "fs"`（此前只有 eslint 挡得住，日常档是漏的）。
  *   eslint 那边剩下：**29 条类型感知** + **37 条 `obsidianmd/*`** + 10 条 oxlint 未实现 + 限制规则的 tseslint 变体。
  * ⚠️ 类型感知那 29 条搬不走：oxlint `--type-aware` 在本机跑不起来（要 spawn `tsgolint.CMD` ⇒ os error 231）。
- *   也**别指望"搬规则"能省时间**：实测这 142 条里，非类型感知的 113 条总共只值 **0.73 s**（见 `test-speed-plan.md` §10.6）。
+ *   也**别指望"搬规则"能省时间**：实测这 142 条里，非类型感知的 113 条总共只值 **0.73 s**。
  */
 
 import { spawn } from "node:child_process";
@@ -57,7 +57,7 @@ const REPO_ROOT = resolve(HERE, "..");
 
 /**
  * 11 条静态门禁 —— **清单的唯一来源**（`affected.mjs` 走 `--gates`，不再抄一份）。
- * ⚠️ 条数在 `verification.md` 顶部只记一处；手册里有同一份清单。
+ * ⚠️ 不要在别处再抄一份 —— 这里就是唯一来源。
  */
 const GATES = [
 	"check-manifest",

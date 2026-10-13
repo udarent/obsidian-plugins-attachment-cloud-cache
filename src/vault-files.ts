@@ -40,8 +40,8 @@ import { normalizePath } from "obsidian";
  *
  * ## 证据与重推方法（进维护手册）
  *
- * 来源：`Obsidian 1.14.4` 的 `app.asar` 载荷复核（2026-10-09，见 `dev-notes/maintainer-handbook.md`
- * 的"可嵌入类型表"一节）。复核时注意**认载荷**：宿主自更新会把新 asar 放进
+ * 来源：`Obsidian 1.14.4` 的 `app.asar` 载荷复核（2026-10-09）
+ * 复核时注意**认载荷**：宿主自更新会把新 asar 放进
  * `%APPDATA%\obsidian\` 运行时加载，只看 `Program Files` 下那份会得到过期结论。
  *
  * ⚠️ `tiff` / `heic` / `ico` **确认不可嵌入**（在 `1.14.4` 上实测）——

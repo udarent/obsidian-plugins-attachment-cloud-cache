@@ -223,7 +223,7 @@ export class SettingsTab extends PluginSettingTab {
 	 *     Chromium 只对**在文档里的**文件控件打开选择器。取证：真实鼠标点击那个按钮，
 	 *     点击确实到达了按钮、`input.click()` 也确实调了，但 `Page.fileChooserOpened`
 	 *     **一次都不来**；把同一个 input 挂进文档，同一条中继路径立刻正常
-	 *     （`dev-notes/_archive/.probe-file-chooser-truth.mjs` 的 A/B 对照）。
+	 *     （2026-10-09 的真机 A/B 对照）。
 	 *
 	 * ⇒ 现在它**在文档里**，而且就是被点的那个东西：**没有 `input.click()` 这条会静默失效的中继**。
 	 *
