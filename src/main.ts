@@ -38,7 +38,6 @@ import { inspectLocalCopies, readCopies, runBatchUpload, runEviction, runRelease
 import { formatMegabytes } from "./maintenance/eviction";
 import { planReleaseSpace } from "./maintenance/release-space";
 import type { ReleaseSpaceSelection } from "./maintenance/release-space";
-import { canvasTextTargets, keysInText } from "./maintenance/references";
 import { describeError } from "./error-text";
 import type { MaintenanceDeps } from "./maintenance/run";
 import { createCacheRotator } from "./maintenance/rotation";
@@ -49,7 +48,7 @@ import {
 } from "./maintenance/batch";
 import { listAllObjects, runCloudCleanup, selectCleanupCandidates } from "./maintenance/cloud-cleanup";
 import type { CloudCleanupResult } from "./maintenance/cloud-cleanup";
-import { externalKeysOf, referencedKeysFromUrls } from "./maintenance/cloud-cleanup";
+import { externalKeysOf } from "./maintenance/cloud-cleanup";
 import { sha256Hex } from "./s3/hash";
 import { createAttachWatcher, createSelfWriteLedger } from "./maintenance/attach-watch";
 import type { AttachWatcher } from "./maintenance/attach-watch";
@@ -57,7 +56,6 @@ import { askOrphanCloudDelete } from "./ui/cloud-delete-modal";
 import { createOrphanWatcher, planOrphanLocalRemoval, selectOrphanAsks } from "./maintenance/orphan-watch";
 import type { NoteKind, OrphanLocalTarget, OrphanWatcher } from "./maintenance/orphan-watch";
 import { removeOrphanCopies } from "./maintenance/orphan-removal";
-import { deleteLogTargetPath, recordDeletions } from "./maintenance/delete-log";
 import type { DeletedObjectRecord } from "./maintenance/delete-log";
 import { CONFIRM_IMMEDIATELY, createAbsenceConfirmer, runSelfHeal } from "./maintenance/self-heal";
 import type { SelfHealResult } from "./maintenance/self-heal";
@@ -69,7 +67,6 @@ import type { ConfirmOptions } from "./ui/confirm-modal";
 import { planFileCards } from "./ui/file-cards";
 import { displayNameForKey } from "./object-key";
 import type { FileCard, FileCardInput } from "./ui/file-cards";
-import { keyFromUrl } from "./render/render-target";
 import type { S3Client } from "./s3/client";
 import { connectionReadiness } from "./s3/credentials";
 import { createLocalCopyEnsurer } from "./core/download";
@@ -87,6 +84,8 @@ import {
 	importCredentialsFile as runCredentialsImport,
 } from "./plugin/credentials-flow";
 import type { ImportCredentialsOutcome } from "./plugin/credentials-flow";
+import type { PluginContext } from "./plugin/context";
+import { cloudReferencedKeys, extractStoredKeys, writeDeleteLog } from "./plugin/shared-flows";
 import type { LocalCopyOutcome } from "./core/download";
 import { installImageSrcPatch, processImages } from "./render/render-hook";
 import { createEmbedRebuildQueue, processEmbeds } from "./render/embed-rebuild";
@@ -583,7 +582,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				if (!file || !(file instanceof TFile)) throw new Error(`不是文件：${path}`);
 				return await this.app.vault.cachedRead(file);
 			},
-			extractKeys: (kind, text) => this.extractStoredKeys(kind, text),
+			extractKeys: (kind, text) => extractStoredKeys(this.flowContext(), kind, text),
 			onError: (error) => {
 				// 读不到某一篇只是"这一篇这一趟没算进来"，下一轮事件会重新算它
 				console.error("[attachment-cloud-cache] 建立引用快照时读文件失败", error);
@@ -917,7 +916,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			}
 		}
 		// 留痕：这条询问是**自动出现**的，而删除不可恢复 ⇒ 至少要让"删过什么"事后可查
-		await this.writeDeleteLog(logRecords);
+		await writeDeleteLog(this.flowContext(), logRecords);
 
 		const removed = await this.removeOrphanCopies(localTargets);
 
@@ -956,73 +955,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		});
 	}
 
-	/**
-	 * 删除留痕：把这一批**云端删除**追加写到插件目录下的日志里。
-	 *
-	 * ## 为什么要留痕
-	 *
-	 * 删云端对象是**不可恢复**的，而这条询问自 2026-10-11 起是**自动出现**的。
-	 * 「自动触发」+「不可恢复」+「不留痕迹」三件事叠在一起，是本产品风险最集中的一处 ——
-	 * 至少要让"删了什么、什么时候删的、走哪条入口"事后查得到。
-	 *
-	 * ## 两条刻意的选择
-	 *
-	 * ① **写在插件目录，不写本地副本所在处**：本地副本（附件目录里那份、或用户选的
-	 *   缓存目录）是承诺过"可以整体删除"的 —— 留痕写在那里，用户清理一次副本
-	 *   就把证据一起抹掉了，等于白留。
-	 * ② **写失败绝不抛错**：见 `maintenance/delete-log.ts`。为一个附属功能
-	 *   炸断一条不可恢复的主流程，代价完全不成比例。
-	 *
-	 * ⚠️ 它**不是回收站**：日志里的对象恢复不了。真正的宽限期是另一件事（尚未做）。
-	 */
-	private async writeDeleteLog(records: readonly DeletedObjectRecord[]): Promise<void> {
-		if (records.length === 0) return;
-		// ⚠️ 插件目录未知 ⇒ **不写**（见 `deleteLogTargetPath`：兜底名会落到 vault 根）。
-		// 这只在开发/探针环境发生，删除本身照常已经完成，所以只留一行开发者可见的说明。
-		const path = deleteLogTargetPath(this.manifest.dir);
-		if (!path) {
-			console.warn("[attachment-cloud-cache] 插件目录未知，跳过写删除日志", records.length);
-			return;
-		}
-		const adapter = this.app.vault.adapter;
-		await recordDeletions(
-			{
-				append: async (text) => {
-					// ⚠️ 不依赖 `append` 的"文件不存在就创建"这条约定：先看一眼，
-					// 没有就 `write`。多一次 `exists` 换掉一个宿主行为假设，划算 ——
-					// 假设不成立时这条链会**静默**什么都不写。
-					if (await adapter.exists(path)) await adapter.append(path, text);
-					else await adapter.write(path, text);
-				},
-				onError: (error) => {
-					// 只说给开发者看（控制台）：用户此刻刚看到"已删除 N 个"，
-					// 再弹一条"日志写不进去"只会让人以为删除失败了。
-					console.error("[attachment-cloud-cache] 写删除日志失败", error);
-				},
-			},
-			records
-		);
-	}
 
-	/**
-	 * 从一篇正文里取出"属于本存储的对象 key"（孤儿监视的取数口）。
-	 *
-	 * 复用 `keysInText`（与入口 B 的引用扫描、与渲染判定共用同一个 `keyFromUrl`）
-	 * ⇒ "哪些对象算被引用"与"渲染时认不认这条 URL"永远是同一套规则。
-	 *
-	 * 画布的引用藏在 JSON 字符串里：先按画布规则把文本目标取出来，再走同一套 URL 识别
-	 *（`canvasTextTargets` 已处理"转义解不开就跳过那一条"的纪律）。
-	 */
-	private extractStoredKeys(kind: NoteKind, text: string): Set<string> {
-		const keyOf = (url: string): string | null => keyFromUrl(url, this.settings.s3);
-		if (kind !== "canvas") return keysInText(text, keyOf);
-
-		const keys = new Set<string>();
-		for (const raw of canvasTextTargets(text)) {
-			for (const key of keysInText(raw, keyOf)) keys.add(key);
-		}
-		return keys;
-	}
 
 	/**
 	 * **入口 B**：「清理云端未使用对象…」。
@@ -1048,7 +981,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			return;
 		}
 
-		const referenced = await this.cloudReferencedKeys();
+		const referenced = await cloudReferencedKeys(this.flowContext());
 		const selection = selectCleanupCandidates({
 			objects: listed.objects,
 			referencedKeys: referenced,
@@ -1117,7 +1050,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			},
 			selection.candidates.map((object) => object.key)
 		);
-		await this.writeDeleteLog(records);
+		await writeDeleteLog(this.flowContext(), records);
 
 		new Notice(
 			this.t("cloudCleanupDone", {
@@ -1129,44 +1062,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		);
 	}
 
-	/**
-	 * 笔记与画布里**属于本存储**的对象 key 集合（云端清理的"仍被引用"判据）。
-	 *
-	 * 两处来源都扫：Markdown 笔记的正文，加上**画布的原始文本**（画布里的链接
-	 * 也是文本内容，宿主的索引不保证覆盖 —— 与 `referencedVaultPaths` 同一条理由）。
-	 * 换算用的是注入的 `keyFromUrl`，也就是**渲染判定用的同一个**回算函数：
-	 * 于是"哪些对象算被引用"与"渲染时认不认这个 URL"永远一致。
-	 */
-	private async cloudReferencedKeys(): Promise<Set<string>> {
-		const urls: string[] = [];
-		const collect = (text: string): void => {
-			for (const key of keysInText(text, (url) => keyFromUrl(url, this.settings.s3))) {
-				urls.push(key);
-			}
-		};
-
-		for (const note of this.app.vault.getMarkdownFiles()) {
-			try {
-				collect(await this.app.vault.read(note));
-			} catch {
-				// 读不到就当它没有引用 —— 但这一侧是**危险**的方向，
-				// 所以下面补一层：拿不到正文时**整体放弃**这次清理（见 return 前的判断）。
-				throw new Error(this.t("cloudCleanupUnreadableNote", { path: note.path }));
-			}
-		}
-		for (const file of this.app.vault.getFiles()) {
-			if (file.extension !== "canvas") continue;
-			try {
-				collect(await this.app.vault.read(file));
-			} catch {
-				throw new Error(this.t("cloudCleanupUnreadableNote", { path: file.path }));
-			}
-		}
-
-		// ⚠️ 这里收到的其实是 key（`keysInText` 已经把 URL 换算过了），
-		// 所以只是去重成一个集合 —— 再换算一次是多余的，也会引入第二套规则。
-		return referencedKeysFromUrls(urls, (value) => value);
-	}
 
 	private maintenanceDeps(): MaintenanceDeps {
 		return {
@@ -1294,7 +1189,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			this.app,
 			entries.map((entry) => entry.cachePath)
 		);
-		const referencedKeys = await this.cloudReferencedKeys();
+		const referencedKeys = await cloudReferencedKeys(this.flowContext());
 
 		return planReleaseSpace({
 			entries,
@@ -1937,6 +1832,27 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	/** 供各模块统一的文案查询入口。 */
 	t(key: string, params?: Record<string, unknown>): string {
 		return translate(this.locale, key, params ?? {});
+	}
+
+	/**
+	 * 把实例能力组装成流程能吃的上下文（见 `plugin/context.ts`）。
+	 *
+	 * ⚠️ 每次调用**新建**一个：`settings` 是字段、`loadSettings` 会整体替换它，
+	 * 缓存下来会拿到上一份（设置页改完立刻用到的那条路径就会用到旧值）。
+	 * 它只是一层转发，开销可忽略。
+	 */
+	private flowContext(): PluginContext {
+		return {
+			app: this.app,
+			manifest: this.manifest,
+			settings: this.settings,
+			t: (key, params) => this.t(key, params),
+			currentIndex: () => this.currentIndex(),
+			hostContext: () => this.hostContext(),
+			buildClient: () => this.buildClient(),
+			fileCards: (items, limit) => this.fileCards(items, limit),
+			confirmMaintenance: (options) => this.confirmMaintenance(options),
+		};
 	}
 
 	async loadSettings(): Promise<void> {
