@@ -171,7 +171,6 @@ function fetchRequest(options = {}) {
 
 export async function runExternalCacheSuite(mod) {
 	const {
-		MAX_EXTERNAL_BYTES,
 		shouldReportExternalFailure,
 		isAttachmentResponse,
 		headerOf,

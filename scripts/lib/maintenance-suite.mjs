@@ -23,7 +23,6 @@ export function runMaintenanceSuite(mod) {
 	} = mod;
 	const { selectUploadCandidates } = mod;
 
-	const CACHE = "_attachment-cache";
 	const entry = (key, cachePath, size = 100) => ({
 		key,
 		cachePath,
@@ -647,7 +646,6 @@ export function runMaintenanceSuite(mod) {
 	// 与"看笔记时问不问"永远一致 —— 不另立一套标准。
 	// ============================================================
 	const { externalFileUrlsIn, selectExternalUploadCandidates } = mod;
-	const { SiteDecisions } = mod;
 
 	// ── 1. 只认**图片**写法 ──
 	assert.deepEqual(externalFileUrlsIn("![a](https://x.test/a.png)"), ["https://x.test/a.png"], "Markdown 图片要认");

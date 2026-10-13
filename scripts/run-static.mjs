@@ -29,8 +29,13 @@
  * 见 `lib/mutate.mjs` 与手册「为什么测试不能并行（实测否决，别再试）」。
  *
  * 用法：
- *   node scripts/run-static.mjs           # tsc ∥ esbuild ∥ eslint，然后 11 条门禁 ∥
- *   node scripts/run-static.mjs --gates   # 只跑 11 条门禁（`affected.mjs` 用：它自己管 build/lint/tsc）
+ *   node scripts/run-static.mjs                # tsc ∥ esbuild ∥ **eslint**，然后 11 条门禁 ∥（发版档）
+ *   node scripts/run-static.mjs --lint=oxlint  # 同上，但 lint 换成 oxlint（快档：7.0 s → 0.37 s）
+ *   node scripts/run-static.mjs --gates        # 只跑 11 条门禁（`affected.mjs` 用：它自己管 build/lint/tsc）
+ *
+ * ⭐ 两个 lint 的分工（2026-10-13）：**oxlint 是快档**（`check:fast`），**eslint 是门禁**
+ *（`check` / 发版档）—— 本项目 eslint 启用 174 条（含 45 条 `@typescript-eslint`、约 21 条类型感知类），
+ * oxlint 默认 96 条且类型感知覆盖非等价，**不能替代**：今天就有一处 `unbound-method` 是 eslint 抓到的。
  */
 
 import { spawn } from "node:child_process";
@@ -99,10 +104,11 @@ async function runGroup(steps) {
  * （两条互不依赖的命令，所以这里把它们拆开并行）；`lint` 是 `eslint .`。
  * 一旦哪天被改写成别的形态，就退回 `npm run <name>` —— **宁可慢，也别悄悄少跑了一步**。
  */
-function firstGroupSteps() {
+function firstGroupSteps(useOxlint) {
 	const NODE = process.execPath;
 	const tscBin = join("node_modules", "typescript", "bin", "tsc");
 	const eslintBin = join("node_modules", "eslint", "bin", "eslint.js");
+	const oxlintBin = join("node_modules", "oxlint", "bin", "oxlint");
 	const steps = [];
 
 	if (PKG.scripts.build === "tsc --noEmit && node esbuild.config.mjs production") {
@@ -113,8 +119,15 @@ function firstGroupSteps() {
 		steps.push({ label: "build（npm run build）", command: "npm", argv: ["run", "build"], shell: true });
 	}
 
-	if (PKG.scripts.lint === "eslint .") {
-		steps.push({ label: "eslint .", command: NODE, argv: [eslintBin, "."] });
+	if (useOxlint) {
+		if (PKG.scripts["lint:fast"] === "oxlint src scripts") {
+			steps.push({ label: "oxlint src scripts（快档）", command: NODE, argv: [oxlintBin, "src", "scripts"] });
+		} else {
+			console.log("⚠️ package.json 的 lint:fast 形态变了 —— 退回 `npm run lint:fast`");
+			steps.push({ label: "lint:fast（npm run lint:fast）", command: "npm", argv: ["run", "lint:fast"], shell: true });
+		}
+	} else if (PKG.scripts.lint === "eslint .") {
+		steps.push({ label: "eslint .（门禁档）", command: NODE, argv: [eslintBin, "."] });
 	} else {
 		console.log("⚠️ package.json 的 lint 形态变了 —— 退回 `npm run lint`");
 		steps.push({ label: "lint（npm run lint）", command: "npm", argv: ["run", "lint"], shell: true });
@@ -126,8 +139,10 @@ function firstGroupSteps() {
 const startedAll = Date.now();
 console.log(`── 静态层（并行）${"─".repeat(48)}`);
 
+const useOxlint = process.argv.includes("--lint=oxlint");
+
 if (!process.argv.includes("--gates")) {
-	const first = await runGroup(firstGroupSteps());
+	const first = await runGroup(firstGroupSteps(useOxlint));
 	if (!first.ok) {
 		console.error(
 			`\n✗ 静态层失败：${first.failed.map((r) => r.label).join(" / ")} —— ` +

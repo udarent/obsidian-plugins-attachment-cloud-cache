@@ -65,7 +65,7 @@ const CALL_RE = /(?:\bnew\s+Notice|\bnotify\s*\??\.?)\s*\(/g;
  * 扫不到（漏报一侧，可以接受），换来的是不必实现完整表达式解析。
  */
 function scan(text) {
-	const isCode = new Array(text.length).fill(true);
+	const isCode = Array.from({ length: text.length }, () => true);
 	const strings = [];
 	let i = 0;
 

@@ -166,7 +166,7 @@ export function runS3ErrorsSuite(mod) {
 	assert.equal(leaky.retryable, false, "403 不可重试");
 	assert.equal(leaky.attempts, 1, "attempts 应保留");
 	assert.equal(leaky.hintKey, "s3HintSignature", "SignatureDoesNotMatch 应给出针对性的建议键");
-	assert.ok(/^PUT \[a\.png\] → HTTP 403/.test(leaky.message), `消息应以 方法 [key] → 状态开头，实际：${leaky.message}`);
+	assert.ok(leaky.message.startsWith("PUT [a.png] → HTTP 403"), `消息应以 方法 [key] → 状态开头，实际：${leaky.message}`);
 
 	assert.equal(
 		new S3Error({ kind: "notFound", status: 404, code: "NoSuchBucket", message: "m", requestId: "", operation: "GET", key: "", attempts: 1 }).hintKey,

@@ -306,7 +306,7 @@ function nameOf(key, locale) {
 // ────────────────────────────────────────────────────────────
 const readme = readFileOrDie(README_FILE, "README.md");
 
-for (const [locale, marker] of Object.entries(MARKERS)) {
+for (const marker of Object.values(MARKERS)) {
 	if (!readme.includes(marker)) {
 		console.error(`✗ README.md 里没有 ${marker} —— 本门禁要靠它切分两半。`);
 		process.exit(1);

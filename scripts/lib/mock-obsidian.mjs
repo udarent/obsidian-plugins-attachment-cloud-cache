@@ -739,17 +739,6 @@ export function createAppMock(rootDir, opts = {}) {
 			if (!existsSync(abs)) return null;
 			return p.includes(".") ? new TFile(p, vault) : new TFolder(p, vault);
 		},
-		/**
-		 * 宿主给 `TFile` 造一个可直接放进 `img[src]` 的地址（桌面是 `app://…`）。
-		 *
-		 * ⚠️ 替身必须有它：确认框里的缩略图走的就是这条路（`resourceUrlFor`）。
-		 * 少了它，那一处在套件里**永远**退回"没有图" —— 于是"本地副本优先"这条规则
-		 * 在测试里根本跑不到，真机上才是第一次执行（本项目的老教训：替身要能反映真实形状）。
-		 */
-		getResourcePath(file) {
-			const path = typeof file === "string" ? file : (file?.path ?? "");
-			return `app://local/${path}`;
-		},
 		async create(path, data) {
 			calls.writes.push(path);
 			await mkdir(dirname(toAbs(rootDir, path)), { recursive: true });
@@ -800,6 +789,13 @@ export function createAppMock(rootDir, opts = {}) {
 			calls.deleteForce = force;
 			await rm(toAbs(rootDir, file.path), { force: true });
 		},
+		/**
+		 * 宿主给 `TFile` 造一个可直接放进 `img[src]` 的地址（桌面是 `app://…`）。
+		 *
+		 * ⚠️ 替身必须有它：确认框里的缩略图走的就是这条路（`resourceUrlFor`）。
+		 * 少了它，那一处在套件里**永远**退回"没有图" —— 于是"本地副本优先"这条规则
+		 * 在测试里根本跑不到，真机上才是第一次执行（本项目的老教训：替身要能反映真实形状）。
+		 */
 		getResourcePath(file) {
 			return `app://local/${normalizePath(file.path)}`;
 		},

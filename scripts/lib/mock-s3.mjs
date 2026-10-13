@@ -33,23 +33,6 @@ import { createServer } from "node:http";
 const sha256 = (data) => createHash("sha256").update(data).digest();
 const hmac = (key, data) => createHmac("sha256", key).update(data).digest();
 
-/** 与 `src/s3/sigv4.ts` 同规则、**不同写法**：按字节判定 unreserved。 */
-function uriEncode(value) {
-	const bytes = Buffer.from(String(value), "utf8");
-	let out = "";
-	for (const byte of bytes) {
-		const unreserved =
-			(byte >= 0x41 && byte <= 0x5a) ||
-			(byte >= 0x61 && byte <= 0x7a) ||
-			(byte >= 0x30 && byte <= 0x39) ||
-			byte === 0x2d ||
-			byte === 0x5f ||
-			byte === 0x2e ||
-			byte === 0x7e;
-		out += unreserved ? String.fromCharCode(byte) : `%${byte.toString(16).toUpperCase().padStart(2, "0")}`;
-	}
-	return out;
-}
 
 /** 签名密钥：用**循环折叠**推出，而不是四个具名中间量。 */
 function signingKey(secretAccessKey, dateStamp, region, service) {
@@ -559,12 +542,12 @@ export function createMockS3(options) {
  */
 export function nodeTransport() {
 	return async ({ url, method, headers, body }) => {
-		const response = await fetch(url, {
-			method,
-			headers,
-			body: body ? Buffer.from(body) : undefined,
-			redirect: "manual",
-		});
+		// ⚠️ `body` 只在**确实有**且该方法允许带 body 时才放进 options：
+		// 真 `fetch` 对 GET/HEAD 带 body 会抛错，而把 `body: undefined` 也写进去会被 lint 静态报出来
+		//（替身只该做真机允许的事）。
+		const options = { method, headers, redirect: "manual" };
+		if (body && method !== "GET" && method !== "HEAD") options.body = Buffer.from(body);
+		const response = await fetch(url, options);
 		const buffer = Buffer.from(await response.arrayBuffer());
 		const out = {};
 		response.headers.forEach((value, name) => {

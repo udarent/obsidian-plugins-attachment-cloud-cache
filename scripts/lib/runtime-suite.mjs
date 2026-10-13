@@ -96,10 +96,9 @@ export async function runRuntimeSuite(mod) {
 				// 那既慢又没法断言"到底排了几次"。
 				defer: (task, ms) => {
 					scheduled.push({ task, ms });
-					let cancelled = false;
-					return () => {
-						cancelled = true;
-					};
+					// 取消在这里是**空操作**：本套件直接驱动 `runScheduled`（不靠真等），
+					// 于是「取消」没有可断言的后果。保留这个形状只是为了满足 `defer` 的契约。
+					return () => {};
 				},
 				onError: (error) => errors.push(error),
 			});

@@ -34,14 +34,6 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..");
 
-/** 读一个文件；不存在返回 null（用于"列出的文件必须存在"那项检查）。 */
-async function tryRead(path) {
-	try {
-		return await readFile(path, "utf8");
-	} catch {
-		return null;
-	}
-}
 
 /** 数某个子串出现的次数。 */
 function countOccurrences(text, needle) {
@@ -64,7 +56,7 @@ const entries = await readdir(HERE);
 const mutateFiles = entries.filter((name) => /^mutate-.*\.mjs$/.test(name)).sort();
 const testFiles = entries.filter((name) => /^test-.*\.mjs$/.test(name)).sort();
 const suiteDir = join(HERE, "lib");
-const suiteFiles = (await readdir(suiteDir)).filter((name) => /-suite\.mjs$/.test(name)).sort();
+const suiteFiles = (await readdir(suiteDir)).filter((name) => name.endsWith("-suite.mjs")).sort();
 
 if (mutateFiles.length === 0) problems.push("找不到任何 scripts/mutate-*.mjs");
 

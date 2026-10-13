@@ -80,7 +80,7 @@ function makeClient(mod, endpoint, overrides = {}, deps = {}) {
 }
 
 export async function runS3ClientSuite(mod) {
-	const { S3Client, S3Error, requestTargetFor, bucketTargetFor, publicUrlFor, objectBaseFor, probePublicLink, objectUrl, normalizeEndpoint } = mod;
+	const { S3Error, requestTargetFor, bucketTargetFor, publicUrlFor, objectBaseFor, probePublicLink, objectUrl, normalizeEndpoint } = mod;
 
 	// ============================================================
 	// 0. 端点规范化（纯函数，先把输入的口子堵上）

@@ -48,16 +48,13 @@
 
 import { readdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join, dirname, posix, relative, resolve } from "node:path";
+import {join, dirname, posix, resolve} from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(join(HERE, "..", ".."));
 
 /** 统一成 posix 相对路径（仓库根为基准）—— 所有集合的键都用这个形状。 */
-function rel(absPath) {
-	return relative(REPO_ROOT, absPath).split("\\").join("/");
-}
 
 async function listFiles(dirAbs, prefix, predicate) {
 	const out = [];

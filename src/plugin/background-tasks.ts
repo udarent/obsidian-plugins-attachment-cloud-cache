@@ -189,6 +189,10 @@ export function startBackgroundTasks(
 	return {
 		started: [...handles.keys()],
 		dispose() {
+			// ⚠️ 先取快照再迭代是**故意**的：clear() 从同一个 Map 上删键。按规范，删"当前访问到的那个键"
+			// 不会漏访后面的键 —— 但那是**依赖规范的细节**，而这段代码的全部价值就是"一条都不许漏"。
+			// 宁可多一次拷贝。（oxlint 的 no-useless-spread 在这里是误报，见 .oxlintrc.json 的说明。）
+			// oxlint-disable-next-line unicorn/no-useless-spread -- 见上一行：快照是承重的
 			for (const id of [...handles.keys()]) clear(id);
 		},
 	};

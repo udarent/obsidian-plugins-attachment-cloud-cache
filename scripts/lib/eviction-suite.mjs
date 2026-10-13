@@ -43,10 +43,6 @@ function entryFor(key, options = {}) {
 	};
 }
 
-/** 造一个磁盘文件。 */
-function diskFor(path, bytes) {
-	return { path, bytes };
-}
 
 /** 直接造一个候选（绕过 buildEvictionCandidates，专注测挑受害者的规则）。 */
 function candidateFor(key, options = {}) {

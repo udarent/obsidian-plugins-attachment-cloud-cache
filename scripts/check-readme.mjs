@@ -66,7 +66,7 @@ const canonical = read(CANONICAL);
 if (canonical === null) {
 	problems.push(`缺少 ${CANONICAL}`);
 } else {
-	for (const [lang, marker] of Object.entries(MARKERS)) {
+	for (const marker of Object.values(MARKERS)) {
 		const hits = canonical.split(marker).length - 1;
 		if (hits !== 1) {
 			problems.push(`${CANONICAL} 里 ${marker} 应恰好出现一次（实际 ${hits} 次）—— 中英两半各要一个。`);

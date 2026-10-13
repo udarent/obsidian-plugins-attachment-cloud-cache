@@ -16,7 +16,7 @@
     "check:mutate-files": "node scripts/check-mutate-files.mjs",
     "check": "node scripts/run-static.mjs && npm run test:unit",
     "version": "node version-bump.mjs && git add manifest.json versions.json",
-    "check:fast": "node scripts/run-static.mjs && node scripts/run-tests.mjs --exclude=ingest,transfer,download",
+    "check:fast": "node scripts/run-static.mjs --lint=oxlint && node scripts/run-tests.mjs --exclude=ingest,transfer,download",
     "check:affected": "node scripts/affected.mjs",
     "verify:real": "node scripts/verify-obsidian-smoke.mjs",
     "check:injected": "node scripts/check-injected-snippets.mjs",
@@ -27,7 +27,8 @@
     "check:notice-i18n": "node scripts/check-notice-i18n.mjs",
     "verify:real-storage": "node scripts/verify-real-storage.mjs",
     "check:credentials": "node scripts/check-credential-files.mjs",
-    "check:lockfile": "node scripts/check-lockfile-platforms.mjs"
+    "check:lockfile": "node scripts/check-lockfile-platforms.mjs",
+    "lint:fast": "oxlint src scripts"
   },
   "keywords": [
     "s3",
@@ -57,6 +58,7 @@
     "globals": "^17.13.0",
     "jiti": "^2.7.0",
     "obsidian": "1.13.0",
+    "oxlint": "1.87.0",
     "typescript": "5.3.3",
     "typescript-eslint": "^8.71.0"
   }

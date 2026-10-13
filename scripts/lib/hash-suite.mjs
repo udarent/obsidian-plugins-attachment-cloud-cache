@@ -21,7 +21,6 @@
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 
-const toHex = (bytes) => Buffer.from(bytes).toString("hex");
 
 /**
  * 确定性伪随机字节。
