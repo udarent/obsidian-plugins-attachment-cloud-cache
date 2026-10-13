@@ -171,22 +171,11 @@ await runMutations({
 			to: "\t\tif (false) {",
 			expect: "切档时**问一次**",
 		},
-		{
-			// 后果：候选不再要求"该对象**被笔记引用着**" ⇒ 连**孤儿**一起清 ——
-			// 而孤儿正是"用户可能还想留着"的那一类（笔记删了、图还在），
-			// 且它越过了与 R17 三档询问的分工线（那条线是**逐次询问**）。
-			name: "★ 存量清理不再要求「带远端链接」（孤儿也被一起清掉）",
-			from: "\t\t\treferencedKeys,\n\t\t});",
-			to: "\t\t\treferencedKeys: new Set(entries.map((entry) => entry.key)),\n\t\t});",
-			expect: "孤儿（没有任何笔记引用）不归它管",
-		},
-		{
-			// 后果：候选不再要求"这个对象是我们传上去的" ⇒ 一个**从没上传成功**的
-			// 本地附件也会被删，而它云端可能根本没有 —— 那是真正丢数据的一条。
-			name: "★★ 存量清理不再查上传台账（没传成功过的本地文件也会被删）",
-			from: "\t\t\tuploaded: new Set(index.uploadedKeys()),",
-			to: "\t\t\tuploaded: new Set(entries.map((entry) => entry.key)),",
-			expect: "台账里没有的对象不得删",
-		},
+		// ⚠️ 这里原有两条盯着"存量清理的两条准入判据"（台账 / 带远端链接）的锚点 ——
+		// 2026-10-13（A1 第四批）它们随 `localSpaceSelection` 搬进
+		// `src/plugin/release-space-flow.ts` 时**一并搬走了**（见 `mutate-release-space-flow.mjs`）。
+		// ⚠️ 这不是锚点失效，而是锚点当时**指向了文件**（main.ts）而不是**通路**：
+		// 实现搬到哪，锚点就跟到哪；原地留着只会变成"找不到目标"（假绿）。
+		// 本文件（入口接线）继续管它自己那摊事。
 	],
 });

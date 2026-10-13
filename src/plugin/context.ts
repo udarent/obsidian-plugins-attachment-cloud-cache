@@ -29,6 +29,7 @@
 import type { App, PluginManifest } from "obsidian";
 import type { CacheIndex } from "../cache/index";
 import type { HostContext } from "../host/runtime";
+import type { MaintenanceDeps } from "../maintenance/run";
 import type { S3Client } from "../s3/client";
 import type { PluginSettings } from "../types";
 import type { ConfirmOptions } from "../ui/confirm-modal";
@@ -59,4 +60,15 @@ export interface PluginContext {
 	readonly fileCards: (items: readonly FileCardInput[], limit: number) => FileCard[];
 	/** 统一的确认框（真机探针里被替换掉的那一个）。 */
 	readonly confirmMaintenance: (options: ConfirmOptions) => Promise<boolean>;
+	/**
+	 * 维护类流程共用的依赖装配（`maintenance/run.ts` 那一家）。
+	 *
+	 * ⚠️ 它进这里而不是进某一条流程的文件：**四条**流程都要它
+	 * （批量上传、淘汰、上传已有附件、空间回收）—— 按本项目的归位判据
+	 * （"一个东西进哪个文件看谁在用"），共用的就得放在共用层。
+	 *
+	 * ⚠️ 与 `PluginContext` 的其它成员一样是**函数**而不是字段：它读 `settings`
+	 * 与 `currentIndex()`（两者都会被整体替换），缓存下来的话会拿到上一份。
+	 */
+	readonly maintenanceDeps: () => MaintenanceDeps;
 }

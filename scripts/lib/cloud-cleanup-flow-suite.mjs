@@ -167,7 +167,7 @@ export async function runCloudCleanupFlowSuite(mod) {
 	// ============================================================
 	// 1. ⭐ 读不到笔记 / 画布 ⇒ 整体放弃（一次都不删）
 	//
-	// 这条判据与 `main.ts::releaseLocalSpace` **成对存在**：两条路径共用
+	// 这条判据与 `plugin/release-space-flow.ts::releaseLocalSpace` **成对存在**：两条路径共用
 	// `cloudReferencedKeys`，而它抛错的唯一原因就是"有东西读不到"。
 	// 2026-10-13 之前这条路径**没有兜底** ⇒ 抛出的错误变成一句
 	// unhandled rejection，用户什么都看不到，而文案里写着"因此取消了这次清理"。

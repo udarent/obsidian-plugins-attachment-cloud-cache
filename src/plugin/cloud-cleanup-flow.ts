@@ -63,7 +63,7 @@ export async function cleanupCloudObjects(ctx: PluginContext): Promise<void> {
 	// **不能**"跳过那篇笔记继续"：漏掉的那篇可能正是引用着这些对象的笔记，
 	// 于是候选会凭空变大 —— 这是这条流程唯一能**因为读不到而多删**的方向。
 	//
-	// ⚠️⚠️ 这条兜底必须与 `main.ts::releaseLocalSpace` 那份**成对存在**：
+	// ⚠️⚠️ 这条兜底必须与 `plugin/release-space-flow.ts` 那份**成对存在**：
 	// 两条路径共用 `cloudReferencedKeys`，而它抛错的唯一原因就是"有笔记读不到"。
 	// 只在一半路径上做兜底 = 没有兜底 —— 另一半会静默变成一句
 	// unhandled rejection（用户什么都看不到，而 i18n 里那句文案写着"因此取消了这次清理"）。
