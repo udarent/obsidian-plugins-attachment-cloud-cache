@@ -8,28 +8,22 @@
   <a href="https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/blob/main/LICENSE"><img alt="license: MIT" src="https://img.shields.io/github/license/udarent/obsidian-plugins-attachment-cloud-cache?color=97ca00" vspace="6"></a>
 </p>
 
-**English** · [简体中文](#attachment-cloud-cache附件云端缓存) —— 中文版在本文下方
+**English** · [简体中文](#attachment-cloud-cache附件云端缓存)
 
-> **中文摘要** —— 把笔记附件上传到**你自己的** S3 兼容存储，本地留一份**可随时丢弃的副本**：断网、存储停机也能看。
-> 需要 Obsidian **1.13.0+**；界面跟随系统语言；**完整中文说明见下方「中文版」**。
-
-Upload your attachments to **your own** S3-compatible storage — Cloudflare R2, AWS S3, MinIO, Backblaze B2 or any other
-S3 endpoint — and keep a local copy that does the rendering. Paste a file and it uploads; the note keeps a portable,
-shareable link while the copy stays behind, so files render with **zero remote requests**.
+**Your attachments live in your own storage — and still render offline.** Paste a file: it uploads to **your**
+S3-compatible bucket (Cloudflare R2, AWS S3, MinIO, Backblaze B2, self-hosted), the note keeps a portable link, and a
+copy stays in your vault to do the rendering. **Zero remote requests, always.**
 
 [Install](#installation) · [Releases](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases) · [Report a problem](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues) · Requires Obsidian **1.13.0+** ([why](#requirements))
 
 ![Paste an image, a PDF and an audio clip into a note: each one uploads to your own storage, a copy of each stays in your vault, and all three still render after the storage goes offline](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
 
-*Recorded from the plugin running in Obsidian: paste an image, a PDF and an audio clip → each one uploads → the note keeps a link, and each file stays in your vault as its own offline copy. The last step stops the storage to show that all three still work — the image, the PDF page, and an audio player.*
-
-> **Everything here has been exercised for real** — see [How far it is verified](#how-far-it-is-verified).
-> **Not proven yet:** iOS never run; Android never run on a real device.
+*Paste an image, a PDF and an audio clip → each uploads → the note keeps a link, each file stays as its own offline copy. Then the storage is stopped, and all three still work.*
 
 ## Why use it
 
-Upload plugins break your notes the moment you are offline; "localize" plugins only help *after* you have been online
-once. This does both — the file goes to your bucket, and the copy that renders stays behind:
+Upload-only plugins break your notes the moment you are offline; "localize" plugins only help *after* one online pass.
+This does both — the file goes to your bucket, the copy that renders stays behind.
 
 |  | Upload-only | Localize-only | This plugin |
 | --- | --- | --- | --- |
@@ -40,111 +34,81 @@ once. This does both — the file goes to your bucket, and the copy that renders
 
 ## Features
 
-- **Any S3-compatible storage** — Cloudflare R2, AWS S3, MinIO, Backblaze B2, self-hosted.
-- **Upload however the file gets in** — pasted, dropped, added from your phone's gallery or camera, shared into
-  Obsidian, or copied into the vault. The note's link is rewritten to the remote URL. An object's key is its file
-  name plus its full content hash, so uploading the same file again stores nothing new — and if the same image is
-  added twice (even when Obsidian has to name the newcomer `photo 1.png` next to `photo.png`), it is recognised as
-  the same image: one object, one address in your notes, and the link text keeps the original name — never the ` 1`
-  Obsidian had to append — and once the links are rewritten the extra local copy is cleaned up.
-- **Any file type, not just images** — images, audio, video, PDF, archives, documents, extension-less files. Types
-  Obsidian can preview (image/audio/video/PDF) are inserted as embeds; everything else becomes a clickable link.
-- **Offline, multi-device, and no second copy** — the rendering copy is local (zero remote requests, always, not
-  just when the network is down), and a new device back-fills copies on demand. The copy *is* the file you already
-  had, so the vault never carries two copies of the same attachment. The trade-off: attachments stay in your vault
-  and therefore sync. If you would rather the vault hold nothing but text, switch to "delete the local file after
-  uploading" — at the cost of offline viewing.
-- **Canvas references count the same as note references** — a file placed on a canvas is uploaded, and its canvas
-  reference keeps working.
-- **Bulk-upload what you already have** — one command handles the files your notes link to and leaves the rest alone.
-- **Cloud space cleanup** — lists the objects in your storage no note refers to, with the count and the size, and
-  deletes only what you confirm.
-- **Two optional features, both off by default** — treating files from other sites like ordinary files (with a site
-  list to include or exclude hosts), and a local copy limit that trims least-recently-used copies in the background.
+- **Any S3-compatible storage, any file type** — images, audio, video, PDF, archives, documents, extension-less files.
+  What Obsidian can preview becomes an embed; everything else, a clickable link.
+- **Upload however the file gets in** — pasted, dropped, from your phone's gallery or camera, shared into Obsidian, or
+  copied into the vault.
+- **The same file twice is one object.** The key is the file name plus its full content hash, so re-uploading stores
+  nothing new — and even `photo 1.png` next to `photo.png` is recognised as one image: one address, the original name
+  in the link text, and the extra local copy cleaned up.
+- **Offline and multi-device** — rendering always uses the local copy, and a new device back-fills copies on demand.
+  The copy *is* the file you already had.
+- **Canvas references count too**, and one command bulk-uploads what your notes already link.
+- **Cloud space cleanup** — lists the objects no note refers to, and deletes only what you confirm.
+- **Two optional extras, both off by default** — off-site files treated as ordinary files (with a site list), and a
+  local copy limit that trims least-recently-used copies in the background.
 
 ## Requirements
 
-- **Obsidian 1.13.0 or newer**, desktop and mobile. Older versions see *No appropriate version found.* in the community
-  catalogue — that is Obsidian's installer refusing, not a broken plugin.
-- **An S3-compatible bucket you control**, plus an access key pair for it.
-- **The bucket must allow anonymous reads**, or you must set a public URL prefix (CDN or custom domain) — otherwise the
-  links in your notes open for you but not for anyone else. **Test connection** checks exactly this.
+- **Obsidian 1.13.0 or newer**, desktop and mobile. Older versions see *No appropriate version found.* in the
+  catalogue — the installer refusing, not a broken plugin.
+- **An S3-compatible bucket you control**, plus an access key pair.
+- **The bucket must allow anonymous reads**, or you set a public URL prefix (CDN or custom domain) — otherwise the
+  links open for you but not for others. **Test connection** checks exactly this.
 
 ## Installation
 
-**From inside Obsidian:** Settings → Community plugins → Browse → search `Attachment Cloud Cache` → Install → Enable.
+**From Obsidian:** Settings → Community plugins → Browse → search `Attachment Cloud Cache` → Install → Enable.
 
 **Manually:** put `main.js`, `manifest.json` and `styles.css` from the
 [latest release](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases/latest) into
 `<vault>/.obsidian/plugins/attachment-cloud-cache/` (⚠️ the folder name must equal the plugin id).
 
-Then fill in the storage settings below.
-
 ## Settings
 
-In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文版](#attachment-cloud-cache附件云端缓存) half):
+In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#attachment-cloud-cache附件云端缓存) below):
 
 | Setting | What it does |
 | --- | --- |
 | **Endpoint · Bucket · Region** | Where your storage lives (`us-east-1` is the usual filler for self-hosted). |
-| **Access key ID** | A plain text field; capitals are normal. |
-| **Secret access key** | Goes into the OS keychain, never into `data.json`. |
+| **Access key ID · Secret access key** | The secret goes into the OS keychain, never `data.json`. **Import from a credentials file** fills these in from MinIO's JSON and keeps no copy. |
 | **Public URL prefix** | Optional. Empty means `endpoint/bucket/key`, which requires anonymous reads. |
 | **Test connection** | One signed request, then one **credential-free** request to the address your links would use. |
-| **Import from a credentials file** | MinIO's "Download credentials" JSON fills in endpoint, key and addressing mode; no copy is kept. |
-| **Upload new attachments automatically** | On by default; off returns all of it to Obsidian, leaving files local only. |
-| **Where the local copy goes** | Keep the file where it is (default), or delete it after uploading. The file itself is the copy — nothing is moved into a separate folder. "Delete the local file" turns caching off: the plugin uploads and rewrites links, and never fetches a copy back — so nothing works offline. Switching to it asks once whether to also clear the copies already on disk. |
-| **Free up local space** | Appears only when "delete the local file" is selected: clears the copies of attachments that were uploaded earlier and are still linked from a note. Those files are deleted for good, not trashed, so the space comes back at once — a copy you remove is downloaded again next time a note shows it. |
-| **Local copy limit (MB)** | Trims least-recently-used copies past this; `0` means no limit. Only copies the index knows about are counted, and one is only deleted after confirming the object is still in your storage. |
-| **Download missing copies** | Auto-downloads the objects in your own storage that have no local copy (for example after switching devices). Hidden when "delete the local file" is selected above, because caching is off then. |
-| **Handle files from other sites like ordinary files** | On: an off-site file is downloaded, uploaded to your storage and the link rewritten — the same as pasting a local file, "where the local copy goes" included. Off by default; while it is off, nothing off-site is touched automatically. |
-| **Which sites to handle** | `All sites` (default, no filter), `All except the ones listed`, or `Only the ones listed`. This filters the automatic handling above — picking files by hand is never restricted by it. |
-| **Site list** | One domain per line. `example.com` also matches `img.example.com`; write `example.com:8080` to match that exact host. With "Only the ones listed", an empty list means nothing is handled automatically. |
+| **Upload new attachments automatically** | On by default; off leaves new files local only. |
+| **Where the local copy goes** | Keep the file where it is (default) or delete it after uploading — the file itself is the copy. ⚠️ Delete turns caching off: uploads and link rewriting still happen, but nothing is fetched back, so **nothing works offline**. |
+| **Free up local space** | Shown for "delete" only: clears the local copies of attachments still linked from a note. Deleted **for good, not trashed**, so the space comes back at once. |
+| **Local copy limit (MB) · Download missing copies** | `0` = no limit. Least-recently-used copies are trimmed first, and only after confirming the object is still in your storage. Auto-download stays off while "delete" is selected. |
+| **Handle files from other sites** | Off by default; while off, nothing off-site is touched automatically. On, an off-site file is downloaded, uploaded and its link rewritten exactly like a local paste — the copy setting included. **Which sites to handle** (`All` / `All except the ones listed` / `Only the ones listed`) filters the automatic handling only — picking files by hand is never restricted. `example.com` also matches `img.example.com`. |
 | **Pick specific files** | Tick individual off-site files; only those are fetched. Works whether or not the switch above is on. |
-| **When an attachment is no longer linked** | Once an uploaded file loses its last link from any note or canvas: ask (default) / just show a notice / do nothing. Cleaning up always needs your explicit confirmation — this only decides whether you are told, and how. |
+| **When an attachment is no longer linked** | Once an uploaded file loses its last link from any note or canvas: ask (default) / just show a notice / do nothing. Cleanup always needs your explicit confirmation — this only decides whether you are told, and how. |
 | **Compatibility mode** | Advanced. Addresses objects as `endpoint/bucket/key`: keep it on for Cloudflare R2, MinIO and most self-hosted services. |
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| **Show cache usage** | How much your local copies hold, and how much of it no note refers to any more. That figure is an estimate: nothing is removed before your storage is confirmed to still have the object. |
+| **Show cache usage** | What your local copies hold, and how much of it no note refers to any more — an estimate: nothing is removed before your storage is confirmed to still have the object. |
 | **Repair the local-copy index** | Drops index entries whose files are already gone. |
 | **Upload existing attachments** | Uploads what your notes link to and rewrites those links. Your files stay where they are — that copy *is* the local copy. |
-| **Cache files from other sites…** | Tick individual off-site files to fetch. Works whether or not the off-site switch is on — picking them is the consent. |
-| **Clean up unused objects in the cloud…** | Lists objects no note here refers to — with count and size — then deletes what you confirm. |
-| **Check for unreferenced attachments in the cloud…** | Re-runs the "these are no longer linked" prompt on demand: everything this vault uploaded, minus everything still linked. Nothing is touched until you choose an option. |
+| **Cache files from other sites…** | Tick individual off-site files to fetch — picking them is the consent. |
+| **Clean up unused objects in the cloud…** | Lists objects no note here refers to, then deletes what you confirm. |
+| **Check for unreferenced attachments in the cloud…** | Re-runs the "these are no longer linked" prompt on demand: everything this vault uploaded, minus everything still linked. |
 
 ## Good to know
 
+- **A lost local copy comes back when you next view the note**, under its original file name. This needs the link to be
+  recognised as yours: after you change the storage URL, links written *before* the change still work online on a new
+  device, but never render offline and are never downloaded automatically.
+- **Uploading one file twice stores one object**, so an object can be shared by several notes and devices — and a
+  storage deletion cannot be undone. Cleanup sees **this device's** references only, and always asks first.
 - **`tiff`, `heic` and `ico` are inserted as plain links, not embeds** — Obsidian cannot preview them in an embed, so a
-  remote `![]()` would be a broken image. Your files are untouched; only the link shape changed in this release.
-- **A dropped file's link lands at the caret, not at the pointer** — no public API maps pointer coordinates to an editor
-  position. Deliberate.
-- **Links written before you change the storage URL are not recognised as "ours" on a new device** — they still work
-  online, but never render offline and are never downloaded automatically.
-- **When a file you uploaded stops being linked from any note or canvas, the plugin asks once whether to clean it up** — keep
-  it, delete just the local copy, or delete it locally *and* from your storage. The default is to keep it. Uploading
-  the same file twice stores one object, so it may be shared across notes and devices, and a storage deletion cannot
-  be undone; only *this* device's references are visible.
-- **"Do not keep a local copy" turns caching off**, which is the plain-image-host behaviour: files are uploaded and
-  the note's link is rewritten, but nothing is kept or fetched back, so nothing is available offline.
-- **Switching to "delete" asks once about the copies already on disk** — it offers to clear the local copies of
-  attachments that were uploaded before and are still linked from a note, and says how much room that frees.
-  Those files are deleted **for good, not moved to the trash**, so the space comes back at once; your storage
-  objects and the note's links are untouched, and a copy you remove is downloaded again next time a note shows it.
-  Each one is only deleted after confirming the object is still in your storage, and copies no note links to are left alone.
-- **The local-copy index repairs itself.** Shortly after startup, and periodically afterwards, the plugin drops index
-  entries whose files are already gone — it only ever edits the index and never touches a file. If you deleted a copy outside Obsidian,
-  or a file never made it across from another device, this is what puts the numbers straight. *Repair the
-  local-copy index* does the same thing on demand, and says how many stale entries it found.
-- **Delete a local copy and it comes back when you next view the note** — the plugin keeps the remote address in
-  your notes, notices missing copies while rendering, and fetches them again under their original file name.
-  Nothing is fetched for an image whose link it does not recognise as yours (see above).
-- **Your file names travel with the objects** — a name is part of each object's key, which is what makes files
-  findable by name in your bucket, and it also means the names show up in your storage provider's logs.
+  remote `![]()` would be a broken image.
+- **A dropped file's link lands at the caret, not at the pointer** — no public API maps pointer coordinates to an
+  editor position. Deliberate.
+- **The local-copy index repairs itself** shortly after startup and periodically afterwards — it only ever edits the
+  index, never a file. *Repair the local-copy index* does the same on demand.
 - **Moving to another device: copy the plugin folder, but delete `.cache-index.json` first** — it records where *this*
-  device keeps its copies. The secret access key is not in the folder at all (it lives in Obsidian's keychain).
+  device keeps its copies. The secret access key is not in the folder at all.
 
 **Common failures**
 
@@ -157,35 +121,30 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 
 ## Privacy & security
 
-- **It normally talks only to your storage**, and touches nothing outside your vault. No telemetry, no analytics.
-- **One optional feature reaches other sites — and it never turns itself on.** It is off by default; turning it on is
-  the consent, and the site list narrows it further. Picking files by hand works without the switch.
-  The request carries nothing beyond the file's own address.
+- **It normally talks only to your storage** — no telemetry, no analytics, nothing outside your vault.
+- **One optional feature reaches other sites, and it never turns itself on** — off by default; turning it on is the
+  consent, and the site list narrows it further. The request carries nothing beyond the file's own address.
 - **A web page is never stored** — `text/html` and other `text/*` answers are refused rather than uploaded.
-- **The secret access key lives in the OS keychain**, never in `data.json`. The **access key ID is** written to
-  `data.json`: an identifier, not a secret, and Obsidian's keychain accepts only lowercase IDs.
-- **Importing a credentials file reads that file and nothing else**, where it already sits.
+- **The secret access key lives in the OS keychain**, never in `data.json`; the access key ID *is* written there (an
+  identifier, and Obsidian's keychain accepts only lowercase IDs). File names are part of each object's key, so they
+  show up in your storage provider's logs.
 
 ## How far it is verified
 
-- **Automated tests** cover signing, key and path derivation, settings merging, the local-copy index, the upload chain
-  (byte-identical, exactly one PUT, zero GETs), paste/drop decisions, canvas rewriting and cleanup safety — then a
-  **mutation check** breaks each rule on purpose. An assertion that cannot fail is not an assertion.
-- **Real host, real storage:** the shipped build ran in real Obsidian against a real MinIO instance — eight file types
-  checked down to the uploaded bytes and Content-Type, canvas rewriting for both node kinds, audio/video/PDF previewed
-  offline in both view modes with the remote address never reaching an element, both cloud-cleanup entry points, and a
-  full round trip whose key is recomputed from the bytes and whose link opens **anonymously**. Reproduce with
-  `npm run verify:real-storage`.
-- **Real phone, not just the desktop:** Android has been run on a real device by hand — the fixes for adding the
-  same image twice came straight out of those runs. **iOS has never been run on a real device** (the code avoids
-  APIs known to be missing there, but that is reasoning, not evidence), and non-ASCII object keys have tests but
-  no real-provider run.
+- **Automated tests** cover signing, key and path derivation, settings merging, the index, the upload chain
+  (byte-identical, one PUT, zero GETs), paste/drop decisions and canvas rewriting — then a **mutation check** breaks
+  each rule on purpose. An assertion that cannot fail is not an assertion.
+- **Real Obsidian, real MinIO:** eight file types checked down to the uploaded bytes, both canvas node kinds, offline
+  audio/video/PDF with the remote address never reaching an element, both cleanup entry points, and a full round trip
+  whose link opens **anonymously**. Reproduce: `npm run verify:real-storage`.
+- **Real phone:** Android has been run on a real device — the fixes for adding the same image twice came out of it.
+  **Not verified:** iOS never ran on a device; non-ASCII object keys are tested but not run against a real provider.
 
 ## Getting help
 
 Open an issue: <https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues> — say what you saw, your
-Obsidian version and which storage provider you use; the errors name the step that failed. Working on the plugin?
-`npm install`, then `npm run dev` (watch build) or `npm test` (build + suites).
+Obsidian version and which storage provider you use; the errors name the step that failed.
+Working on the plugin? `npm install`, then `npm run dev` (watch build) or `npm test` (build + all suites). MIT licensed.
 
 ---
 
@@ -201,23 +160,20 @@ Obsidian version and which storage provider you use; the errors name the step th
 
 [English](#attachment-cloud-cache) · **简体中文**
 
-把笔记附件上传到**你自己的** S3 兼容存储 —— Cloudflare R2、AWS S3、MinIO、Backblaze B2 或任何 S3 端点 —— 同时在
-本地留一份**负责渲染的副本**。粘贴一个文件就自动上传，笔记里留下一条可迁移、可分享的链接，而渲染走本地副本，
-**零远端请求**。
+**附件存在你自己的存储里，断网也能看。** 往笔记里粘贴一个文件：它上传到**你自己的** S3 兼容存储桶（Cloudflare R2、
+AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移的链接，渲染走留在 vault 里的那份副本。
+**始终零远端请求。**
 
 [安装](#安装) · [版本发布](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases) · [反馈问题](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues) · 需要 Obsidian **1.13.0+**（[为什么](#环境要求)）
 
 ![演示：往笔记里粘贴一张图片、一个 PDF 和一段音频 —— 它们各自上传到你的存储，文件留在库中作为离线副本；随后把存储整个停掉，三者仍然正常显示与播放](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
 
-*动图取自真实运行中的 Obsidian：粘贴图片、PDF 和音频 → 各自上传 → 笔记里各留一条链接，文件留在库中作为离线副本。最后一步把存储整个停掉，用来证明图片、PDF 页和音频播放器都照常工作。*
-
-> **下面写的每条行为都真机跑过** —— 见[已验证到什么程度](#已验证到什么程度)。
-> **还没验证的：** iOS 从未运行过；Android 也没在真机上跑过。
+*粘贴图片、PDF 和音频 → 各自上传 → 笔记里各留一条链接，文件留在库中作为离线副本。随后把**存储整个停掉**，三者照常工作。*
 
 ## 为什么用它
 
-上传类插件一断网就让笔记裂图；「本地化」类插件只有在**联网一次之后**才有用。本插件两件都做 —— 文件进你的桶，
-负责渲染的副本留在本地：
+只会上传的插件一断网就让笔记裂图；只会「本地化」的插件得先联网一次才管用。本插件两件都做 —— 文件进你的桶，
+负责渲染的副本留在本地。
 
 |  | 只上传 | 只本地化 | 本插件 |
 | --- | --- | --- | --- |
@@ -228,24 +184,23 @@ Obsidian version and which storage provider you use; the errors name the step th
 
 ## 功能
 
-- **任何 S3 兼容存储** —— Cloudflare R2、AWS S3、MinIO、Backblaze B2、自建端点。
-- **附件怎么进来都行** —— 粘贴、拖入、手机相册或相机、分享到 Obsidian、从别处拷进库，都会被上传，笔记里的链接换成远端地址。对象 key 里带**文件名 + 完整内容哈希**：同一个文件再传一次不会多占空间；而**同一张图被重复添加时**（哪怕 Obsidian 只能把它另存成 `照片 1.png`）也认得出是同一张 —— 云端一个对象、笔记里两处引用**同一个地址**（链接文字里也不会留下宿主的「 1」），链接改好之后多出来的那份本地副本会被清掉。
-- **任何类型的附件，不只图片** —— 图片、音频、视频、PDF、压缩包、文档、没有扩展名的文件。Obsidian 能预览的
-  类型（图片/音频/视频/PDF）插入为嵌入，其余插入为可点开的普通链接。
-- **离线、多设备、不多留一份** —— 渲染走本地副本（零远端请求，始终如此，不只是「网不通」时）；换新设备时副本按需补回。
-  **副本就是你已经有的那份文件**，vault 里不会为同一份附件存两份。代价是：附件留在库里，于是会跟着同步 ——
-  想让 vault 保持纯文本，就把档位换成「上传后删除本地文件」（代价是离线看不了）。
-- **画布引用与笔记引用同等算数** —— 摆在画布上的文件同样会被上传，画布里的引用会继续有效。
-- **存量附件一条命令搬完** —— 只处理笔记引用着的文件，其余的绝不碰。
-- **云端空间清理** —— 列出你存储里「本库没有笔记引用」的对象（连同个数与体积），只删你确认过的那些。
-- **两个可选功能，默认都关** —— 站外文件按普通附件处理（可配站点名单：只处理、或跳过指定站点）；本地副本上限（超限时后台按最近最少使用清理）。
+- **任何 S3 兼容存储，任何类型的附件** —— 图片、音频、视频、PDF、压缩包、文档、没有扩展名的文件。Obsidian 能
+  预览的插入为嵌入，其余插入为可点开的普通链接。
+- **附件怎么进来都行** —— 粘贴、拖入、手机相册或相机、分享到 Obsidian、从别处拷进库。
+- **同一个文件传两次只存一份。** 对象 key 里带文件名 + 完整内容哈希，所以重复上传不多占空间；哪怕 Obsidian 只能把
+  新来的另存成 `照片 1.png`，两份也认得出是同一张：一个地址、链接文字用原名、多出来的本地副本会被清掉。
+- **离线、多设备** —— 渲染始终走本地副本，换新设备时副本按需补回。**副本就是你已经有的那份文件**。
+- **画布引用同等算数**；存量附件一条命令搬完（只处理笔记引用着的文件）。
+- **云端空间清理** —— 列出「本库没有笔记引用」的对象，只删你确认过的。
+- **两个可选功能，默认都关** —— 站外文件按普通附件处理（可配站点名单）；本地副本上限（超限时后台按最近最少
+  使用清理）。
 
 ## 环境要求
 
 - **Obsidian 1.13.0 或更新**，桌面端与移动端。更低的版本在社区目录里只回一句 *No appropriate version found.* ——
   那是 Obsidian 的安装机制在拒绝，不是插件坏了。
 - **一个你自己控制的 S3 兼容存储桶**，以及一对访问密钥。
-- **存储桶要允许匿名读取**，或者你得填一个公开访问前缀（CDN 或自定义域名）。否则写进笔记的链接你自己打得开、
+- **存储桶要允许匿名读取**，或者填一个公开访问前缀（CDN 或自定义域名）。否则写进笔记的链接你自己打得开、
   别人打不开 —— **测试连接** 检查的正是这件事。
 
 ## 安装
@@ -256,8 +211,6 @@ Obsidian version and which storage provider you use; the errors name the step th
 下载 `main.js`、`manifest.json`、`styles.css`，放进 `<vault>/.obsidian/plugins/attachment-cloud-cache/`
 （⚠️ 目录名必须等于插件 id）。
 
-然后填下面的存储设置。
-
 ## 设置
 
 在 **设置 → Attachment Cloud Cache** 里（英文名见本文英文半）：
@@ -265,19 +218,14 @@ Obsidian version and which storage provider you use; the errors name the step th
 | 设置项 | 说明 |
 | --- | --- |
 | **服务地址 · 存储桶 · 区域** | 你的存储在哪（自建服务填 `us-east-1` 之类的占位值即可）。 |
-| **访问密钥 ID** | 普通输入框，含大写是正常的。 |
-| **秘密访问密钥** | 进系统钥匙串，绝不写进 `data.json`。 |
+| **访问密钥 ID · 秘密访问密钥** | 秘密密钥进系统钥匙串，绝不写进 `data.json`。**从凭据文件导入**会用 MinIO 的 JSON 填好这些，且不留副本。 |
 | **公开访问前缀** | 可留空。留空就用 `服务地址/存储桶/键`，那要求存储桶允许匿名读取。 |
 | **测试连接** | 先发一次签名请求，再**不带凭据**请求一次「你笔记里会写的那条地址」。 |
-| **从凭据文件导入** | MinIO「下载凭据」的 JSON 会填好服务地址、密钥与寻址方式；不留副本。 |
-| **新增附件自动上传** | 默认开启；关闭后这些全交回 Obsidian，文件只存在本地。 |
-| **本地副本的处理** | 留在原处（默认）或上传后删除。**那份文件本身就是**本地副本，不会搬去别的目录。选「不留本地副本」等于关闭缓存：只上传并改写链接，也不会把副本补回来，所以离线不可用。切到它会问一次，要不要把盘上已有的副本也一起清掉。 |
-| **释放本地空间** | 只在选「不留本地副本」时显示：把此前已上传、且笔记里仍引用着云端地址的附件本地副本清掉。那些文件会被永久删除（不进回收站），所以空间立刻释放 —— 删掉的那份下次看图时会自动重新下载。 |
-| **本地副本上限（MB）** | 超过后按最近最少使用清理；`0` 表示不限制。只统计索引里记过的副本，且只有在确认你的存储里仍有那个对象之后才会删。 |
-| **缺本地副本时自动下载** | 只自动下载**你自己的存储**里没有本地副本的对象（例如从另一台设备同步来的）。上面选「不留本地副本」时这一项不显示（那一档已关闭缓存）。 |
-| **站外文件按普通附件处理** | 打开后，站外文件会被下载、上传到你的存储并改写链接 —— 与粘贴一张本地附件完全一样（连「本地副本的处理」那一档也一样适用）。默认关闭；关着时站外的东西一步都不会被自动碰。 |
-| **处理哪些站点** | `所有站点`（默认，不过滤）、`除名单外的站点`、`仅名单内的站点`。它**只筛自动处理**；手动挑选不受它限制。 |
-| **站点名单** | 一行一个域名。写 `example.com` 也会命中 `img.example.com`；写 `example.com:8080` 则只匹配含那个端口的地址。选「仅名单内的站点」时，留空表示什么都不自动处理。 |
+| **新增附件自动上传** | 默认开启；关闭后新文件只存在本地。 |
+| **本地副本的处理** | 留在原处（默认）或上传后删除 —— **那份文件本身就是**副本。⚠️ 选「删除」等于关闭缓存：照常上传、照常改写链接，但不取回副本，所以**离线什么都看不到**。 |
+| **释放本地空间** | 只在选「删除」时显示：清掉笔记里仍引用着的附件本地副本。**永久删除、不进回收站**，空间立刻释放。 |
+| **本地副本上限（MB） · 缺本地副本时自动下载** | `0` 表示不限制。超限时按最近最少使用清理，且只有确认你的存储里仍有那个对象之后才会删。选「删除」时自动下载不生效。 |
+| **站外文件按普通附件处理** | 默认关闭；关着时站外的东西一步都不会被自动碰。打开后，站外文件会被下载、上传并改写链接 —— 与粘贴一张本地附件完全一样（副本那一档也一样适用）。**处理哪些站点**（`所有站点` / `除名单外` / `仅名单内`）只筛自动处理 —— 手动挑选不受限制。写 `example.com` 也会命中 `img.example.com`。 |
 | **挑选要缓存的文件** | 勾选具体的站外文件，只有勾中的会被取。开关关着也能用。 |
 | **附件没人引用时** | 某个已上传的附件失去笔记或画布里的最后一条引用之后：弹窗问我（默认）/ 只给一条通知 / 什么都不做。清理永远需要你明确确认 —— 这一项只决定要不要告诉你、用哪种方式。 |
 | **兼容模式** | 高级。按「地址/桶/键」寻址：Cloudflare R2、MinIO 与多数自建服务都要开着。 |
@@ -286,36 +234,23 @@ Obsidian version and which storage provider you use; the errors name the step th
 
 | 命令 | 做什么 |
 | --- | --- |
-| **查看缓存占用** | 本地副本占了多少、其中多少已经没有笔记引用了。这个数字是**估算**：真正删除前会先确认你的存储里仍然有这个对象。 |
+| **查看缓存占用** | 本地副本占了多少、其中多少已经没有笔记引用了 —— 这是**估算**：真正删除前会先确认你的存储里仍然有这个对象。 |
 | **自检并修复本地副本索引** | 丢掉那些文件已经不在的索引记录。 |
 | **上传已存在的附件** | 上传笔记里引用着的附件并改写链接。文件**留在原地** —— 那份就是本地副本。 |
-| **缓存站外文件（可挑选）…** | 勾选具体的站外文件去下载。开关关着也能用 —— 勾选本身就是同意。 |
-| **清理云端未使用对象…** | 列出「本库没有笔记引用」的对象（含个数与体积），确认后删除。 |
-| **检查未被引用的云端附件…** | 随时重新问一次「这些附件已经没人引用了」：候选 = 本库上传过的、减去仍被笔记或画布引用的。选之前不动任何东西。 |
+| **缓存站外文件（可挑选）…** | 勾选具体的站外文件去下载 —— 勾选本身就是同意。 |
+| **清理云端未使用对象…** | 列出「本库没有笔记引用」的对象，确认后删除。 |
+| **检查未被引用的云端附件…** | 随时重新问一次「这些附件已经没人引用了」：候选 = 本库上传过的、减去仍被笔记或画布引用的。 |
 
 ## 需要注意的
 
-- **`tiff`、`heic`、`ico` 插入的是普通链接，不再嵌入** —— 宿主无法在嵌入里预览它们，写 `![]()` 只会得到一个坏图。
-  你的文件没被动；这一版变的只是链接形态。
+- **删掉的本地副本，下次打开笔记时会自己补回来**，用**原来的文件名**。前提是插件认得出那条链接是你自己的存储：
+  **改过存储地址之后**，改动**之前**写下的链接在新设备上照常在线显示，但离线不显示、也不会被自动下载。
+- **同一个文件传两次只存一份** —— 一个对象可能被多篇笔记、多台设备共用，而云端删除无法撤销。清理只能看到
+  **本设备**的引用，且永远先问你一次。
+- **`tiff`、`heic`、`ico` 插入的是普通链接，不是嵌入** —— 宿主无法在嵌入里预览它们，写 `![]()` 只会得到一个坏图。
 - **拖放文件的链接插在光标处，不是指针落点** —— 公开 API 里没有「指针坐标 → 编辑器位置」的映射。有意取舍。
-- **改了存储地址之后，「新设备」上认不出老链接** —— 那些链接照常在线显示，但离线不显示、也不会被自动下载。
-- **某个已上传的对象在本库不再被任何笔记或画布引用时，会问你一次怎么处理**（默认如此，可在设置里改成只通知或什么都不做） —— 保留、只删本地副本、或本地与云端一起删；
-  默认保留。同一个文件传两次只存一份，所以一个对象可能被多篇笔记、多台设备共用，而云端删除无法撤销；清理只能看到**本设备**的引用。
-- **「不留本地副本」这一档等于关闭缓存**，也就是普通图床的行为：文件照常上传、笔记里的链接照样改写，
-  但不保留副本、也不把副本取回来，所以断网时什么都看不到。
-- **切到「不留本地副本」时会问你一次：盘上已有的副本要不要一起清掉** —— 清的是**已经上传过、且笔记里仍
-  引用着你存储地址**的那些附件本地副本，并告诉你能腾出多少空间。这些文件**会被永久删除，不进回收站**
-  （所以空间立刻释放）；云端对象与笔记里的链接都不动，删掉的那份下次看图时会自动重新下载。每一份都是在
-  确认云端仍然有它之后才会删；没有任何笔记引用的那些不归它管。
-- **本地副本索引会自愈。** 启动后不久、以及之后定期，插件会摘掉那些指向「文件已经不在了」的索引记录 —— 它**只改索引，
-  绝不碰任何文件**。在 Obsidian 外面删过某份副本、或某个文件没能从别的设备同步过来，靠的就是它把数字
-  理顺。「自检并修复本地副本索引」做的是同一件事，供你想立刻核一遍时用，并会告诉你查出多少条失效记录。
-- **删掉一份本地副本，下次打开笔记时它会自己补回来** —— 笔记里存的始终是云端地址，插件在渲染时发现副本
-  不在就会重新取回，并用**原来的文件名**落回附件目录。⚠️ 前提是它认得出那条链接是你自己的存储
-  （认不出的，见上面那条）。
-- **文件名会跟着对象一起走** —— 名字是对象 key 的一部分，这样在桶里能按名字找到文件；相应地，文件名也会出现在你的存储服务商那边。
-- **换设备：把插件目录复制过去，但先删掉 `.cache-index.json`** —— 它记的是**这台设备**的副本在哪。秘密访问密钥
-  根本不在目录里（它存在 Obsidian 的钥匙串中）。
+- **本地副本索引会自愈** —— 启动后不久、以及之后定期，它会摘掉指向「文件已经不在了」的记录；**只改索引、绝不碰文件**。「自检并修复本地副本索引」做的是同一件事，供你想立刻核一遍时用。
+- **换设备：把插件目录复制过去，但先删掉 `.cache-index.json`** —— 它记的是**这台设备**的副本在哪。秘密访问密钥根本不在目录里。
 
 **常见故障**
 
@@ -328,28 +263,25 @@ Obsidian version and which storage provider you use; the errors name the step th
 
 ## 隐私与安全
 
-- **默认只连你自己的存储**，也不碰 vault 之外的文件。不含遥测、统计。
-- **有一个可选功能会访问其它站点，而且它不会自己启动**：默认关闭，打开它就是同意，站点名单再把范围收窄；
-  手动勾选不需要打开它。请求里除文件地址本身不带任何其它内容。
+- **默认只连你自己的存储** —— 不含遥测、统计，也不碰 vault 之外的文件。
+- **有一个可选功能会访问其它站点，而且它不会自己启动** —— 默认关闭，打开它就是同意，站点名单再把范围收窄；
+  请求里除文件地址本身不带任何其它内容。
 - **网页永远不会被存下来** —— `text/html` 与其它 `text/*` 一律拒收，而不是传上去。
-- **秘密访问密钥存在系统钥匙串里**，绝不写进 `data.json`。**访问密钥 ID 会**写进 `data.json`：它是标识符而不是
-  秘密，而且 Obsidian 的钥匙串只接受小写 ID。
-- **导入凭据文件只读那一份文件**，就在它原来的位置读。
+- **秘密访问密钥存在系统钥匙串里**，绝不写进 `data.json`；**访问密钥 ID 会**写进去（它是标识符，而且 Obsidian
+  的钥匙串只接受小写 ID）。文件名是对象 key 的一部分，所以会出现在你的存储服务商那边。
 
 ## 已验证到什么程度
 
 - **自动化测试**覆盖签名、key 与路径推导、设置合并、缓存索引、上传链路（字节一致、恰好 1 次 PUT、0 次 GET）、
-  粘贴/拖放判定、画布改写与清理安全性质 —— 之后还有一道**变异验证**：把每条规则故意改坏。不会失败的断言等于没有断言。
-- **真实宿主与真实存储：** 构建产物在真实 Obsidian 里对着真实 MinIO 跑过 —— 八种类型的文件逐项核对上传字节与
-  Content-Type；画布两类节点的改写；音频、视频、PDF 在两种视图模式下离线预览，且**远端地址从未落进任何元素**；
-  云端清理两条入口；以及一次完整回环 —— key 由脚本从字节独立重算，链接**匿名**能打开。可用
-  `npm run verify:real-storage` 复现。
-- **真手机，不只是桌面端：** Android 已在真机上手动跑过 —— 重复添加同一张图的三个修复就是它逼出来的。
-  **iOS 从未在真机上跑过**（代码避开了已知缺失的 API，但那是推理不是证据）；含非 ASCII 字符的对象 key
-  有测试覆盖，但没在真实服务商上跑过。
+  粘贴/拖放判定与画布改写 —— 之后还有一道**变异验证**：把每条规则故意改坏。不会失败的断言等于没有断言。
+- **真实 Obsidian、真实 MinIO：** 八种类型的文件逐项核对到上传字节；画布两类节点；音频、视频、PDF 离线预览，
+  且**远端地址从未落进任何元素**；云端清理两条入口；一次完整回环 —— 链接**匿名**能打开。
+  可用 `npm run verify:real-storage` 复现。
+- **真手机：** Android 已在真机上跑过 —— 重复添加同一张图的修复就是它逼出来的。
+  **未验证：** iOS 从未在真机上跑过；含非 ASCII 字符的对象 key 有测试，但没在真实服务商上跑过。
 
 ## 遇到问题
 
 到 <https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues> 提 issue —— 请说清你看到的、你的
 Obsidian 版本和用的哪家存储；插件的报错都写明了失败在哪一步。
-想改插件本身？`npm install`，然后 `npm run dev`（监听构建）或 `npm test`（构建 + 全部套件）。
+想改插件本身？`npm install`，然后 `npm run dev`（监听构建）或 `npm test`（构建 + 全部套件）。MIT 许可。
