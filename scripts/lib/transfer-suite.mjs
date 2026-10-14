@@ -810,14 +810,41 @@ export async function runTransferSuite(mod) {
 			makeFile("a-copy.png", "image/png", IMAGE_BYTES),
 		]);
 
-		// ⚠️ 1.2.0 起这条的**口径变了**，两侧都钉住才不会让人误读：
-		// 名字进了 key ⇒ 同一份字节配不同名字是**两个对象**（跨名去重失效，C2 的已知代价），
-		// 于是"两张图"在结果上也确实是两条链接（不会被上游按 key 合并掉）。
-		// 「同内容同名字只插一条」由 §7a2 单独钉（那才是用户报的重复插入）。
-		assert.equal(outcome.uploaded, 2, "名字不同 ⇒ 两个 key ⇒ 真的传了两份");
-		assert.equal(outcome.reused, 0, "跨名不再复用");
-		assert.equal(h.server.countByMethod("PUT"), 2, "两次 PUT（字节完全一样，但身份不同）");
+		// ⚠️ 2026-10-14（D-24）：这条的口径**又变了一次**，两侧都要钉住才不会让人误读。
+		// 1.2.0 起名字进 key ⇒ 同一份字节配不同名字曾是**两个对象**（"跨名去重失效"，
+		// 当时记作 C2 的已知代价）；D-24 之后同内容异名**复用同一个对象**（不 PUT 第二份）——
+		// 用户的直觉始终是"同一张图不该存两次"。
+		assert.equal(outcome.uploaded, 1, "★ 同内容换名字不再另传一份（跨名复用，D-24）");
+		assert.equal(outcome.reused, 1, "第二次走的是复用");
+		assert.equal(h.server.countByMethod("PUT"), 1, "★ 只 PUT 一次（字节一样 ⇒ 同一个对象）");
 		assert.equal(calls.selection[0].split("\n").length, 2, "⭐ 两张图都要插入链接（不能因为复用就少插一条）");
+
+		// ⭐⭐ 2026-10-14（用户第五份真机报告）：两条链接**逐字相同**才对 ——
+		// 同一个地址，且显示名都是 `a.png`（不是 `a-copy.png`：那是宿主撞名另落的序号，
+		// 显示位用它就会变成"链接文字与地址里的名字不一样"）。
+		const lines = calls.selection[0].split("\n");
+		assert.equal(
+			lines[0],
+			lines[1],
+			`★ 两处引用必须同址、同显示名（实际 ${JSON.stringify(lines)}）`
+		);
+		assert.ok(lines[0].startsWith("![a.png]("), `★ 显示名用主干名字，实际 ${lines[0]}`);
+	});
+
+	// 7f-3. 同一个文件的**两个包装**（名字/大小/类型全一样）⇒ 只插一条链接
+	//
+	// 这是 `pushPart` 存在的意义（剪贴板常把同一张图给成 `files[0]` 与 `items[i]` 两份）。
+	// ⚠️ 它的判据必须是**输入身份**：改成"产出文本相同就合并"会误伤 7f-2
+	//（两份**不同**文件、内容相同 ⇒ 链接逐字相同，但用户确实要两张图）。
+	await withHarness(mod, {}, async (h) => {
+		const { editor, calls } = makeEditor();
+		const outcome = await processTransfer(h.deps, editor, [
+			makeFile("shot.png", "image/png", IMAGE_BYTES),
+			makeFile("shot.png", "image/png", IMAGE_BYTES),
+		]);
+		assert.equal(calls.selection.length, 1, "★ 同一张图给两份 ⇒ 只插一条链接");
+		assert.equal(calls.selection[0].split("\n").length, 1, "★ 而且只占一行");
+		assert.equal(outcome.uploaded + outcome.reused, 2, "两份都各自走完（第二条命中复用）");
 	});
 
 	// 7g. 复用的那一张不该再发 PUT（内容寻址在粘贴路径上同样生效）

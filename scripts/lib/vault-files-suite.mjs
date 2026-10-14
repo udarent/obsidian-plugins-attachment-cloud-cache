@@ -39,6 +39,7 @@ export async function runVaultFilesSuite(mod) {
 		resolveExtension,
 		uniqueVaultPath,
 		normalizeVaultPath,
+		baseNameForDuplicate,
 	} = mod;
 
 	// ============================================================
@@ -287,6 +288,37 @@ export async function runVaultFilesSuite(mod) {
 	assert.equal(await uniqueVaultPath("a.png", almostAllTaken), "a 7.png", "应在有限的尝试内找到唯一的空位");
 
 	// ============================================================
+	// ⭐ 宿主撞名那条约定（`名字 1.ext`）的**读法**（`baseNameForDuplicate`）
+	//
+	// 2026-10-14（Android 用户直报）：同一张图插第二次时，**宿主自己**会把新文件叫
+	// `照片 1.png`（它的唯一化规矩，与上面的 `uniqueVaultPath` 同一形状）
+	// ⇒ 名字不同 ⇒ key 不同 ⇒ 云端多存一份**完全相同**的内容，笔记里两处引用指着两个对象。
+	// 这个函数就是那条约定的**解析侧**（`uniqueVaultPath` 是写入侧），两侧必须逐字一致。
+	//
+	// ⚠️ 它只判**形状**：`照片 1.png` 完全可能是用户自己的命名。所以"要不要归一"
+	// 还要看同目录下 `照片.png` 在不在、内容一不一样（见 `core/ingest.ts`）。
+	// ============================================================
+	assert.equal(baseNameForDuplicate("照片 1.png"), "照片.png", "⭐ 空格 + 序号要认出来");
+	assert.equal(baseNameForDuplicate("photo 1.png"), "photo.png");
+	assert.equal(baseNameForDuplicate("照片 2.png"), "照片.png", "序号是几都要认（宿主会一直加下去）");
+	assert.equal(baseNameForDuplicate("无名 12 3.zip"), "无名 12.zip", "⭐ 只剥**最后**一段序号（中间那个「 12」是名字的一部分）");
+	assert.equal(baseNameForDuplicate("dir/sub/a 1.png"), "a.png", "带目录的路径也能认（只取最后一段）");
+	assert.equal(baseNameForDuplicate("dir\\sub\\a 1.png"), "a.png", "反斜杠同样要认");
+	assert.equal(baseNameForDuplicate("存档.v2 1.pdf"), "存档.v2.pdf", "点在名字里（v2）时，剥的是最后一段");
+	assert.equal(baseNameForDuplicate("照片 1"), "照片", "没有扩展名时只剥序号");
+
+	// ⚠️ 反向守护：认不出来一律给空串，**绝不"顺手改一下"** ——
+	// 放宽判据的后果是"用户真叫 `名字-1` 的文件在云端被改名"，而那种错不报错、只改名。
+	assert.equal(baseNameForDuplicate("照片.png"), "", "没有序号 ⇒ 认不出来（绝不能返回自己）");
+	assert.equal(baseNameForDuplicate("照片-1.png"), "", "`-1` 不是我们的约定（不猜）");
+	assert.equal(baseNameForDuplicate("照片(1).png"), "", "`(1)` 同理（不猜）");
+	assert.equal(baseNameForDuplicate("照片 1x.png"), "", "序号后面还有东西 ⇒ 不是宿主的形状");
+	assert.equal(baseNameForDuplicate(" 1.png"), "", "没有主干的名字没有意义");
+	assert.equal(baseNameForDuplicate("照片 1.png/"), "", "⭐ 目录（以斜杠结尾）不是文件名，不认");
+	assert.equal(baseNameForDuplicate(""), "");
+	assert.equal(baseNameForDuplicate(null), "", "非字符串不应抛错");
+
+	// ============================================================
 	// ⭐ 路径归一（`normalizeVaultPath`）
 	//
 	// 审计与淘汰都要拿"索引里记的路径"与"磁盘上枚举到的路径"做**字符串比较**，
@@ -365,5 +397,6 @@ export async function runVaultFilesSuite(mod) {
 	return {
 		extensionCases: 12 + 9 + 6 + 9 + 6,
 		placementCases: 8,
+		duplicateNameCases: 16,
 	};
 }

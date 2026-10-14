@@ -26,6 +26,7 @@ import {
 	buildLocalLink,
 	buildRemoteLink,
 	displayNameOf,
+	fileIdentity,
 	type TransferFileLike,
 } from "../editor/editor-hooks";
 import type { IngestRequest, IngestResult } from "./ingest";
@@ -100,21 +101,29 @@ export async function processTransfer(
 	const outcome: TransferOutcome = { text: "", uploaded: 0, reused: 0, fallback: 0, lost: 0 };
 
 	/**
-	 * 插入去重：**同一次粘贴里，同一张图只插一条链接**。
+	 * 插入去重：**同一次粘贴里，同一个文件只插一条链接**。
 	 *
 	 * 剪贴板完全可能把同一张图给成多份：`files` 里一份、`items` 里一份，甚至多个"表示"。
-	 * 上游（`filesFromTransfer`）已经按内容身份去过一次重，但那是**元数据**判据
-	 * （名字 + 大小 + 类型）—— 宿主给的元数据一旦有出入，去重就会漏。
+	 * 上游（`filesFromTransfer`）已经按内容身份去过一次重，但那一步只认**元数据**；
+	 * 这里再兜一次，避免"用户粘了一次，出现两张一样的图"。
 	 *
-	 * 这里的判据是**结果**：同一份字节 ⇒ 同一个 key ⇒ 同一个 URL ⇒ 同一条文本。
-	 * 于是它不依赖剪贴板长什么样；用户看到的就是"粘了一次，出现一张图"。
-	 * ⚠️ 反过来，两张**内容不同**的图各有各的 URL，即使同名同大小也不会被合并 ——
-	 * "少插一张"比"多插一张"更坏（用户会以为图丢了）。
+	 * ## ⚠️ 判据是**输入的文件身份**，不是产出的文本（2026-10-14 改）
+	 *
+	 * 原判据是"产出的链接文本相同就合并"。D-24 之后它**第一次会造成误伤**：
+	 * 同内容异名的两份文件（`a.png` 与 `a-copy.png`）复用同一个对象
+	 * ⇒ 显示名同为 `a.png`、地址也相同 ⇒ 两条链接**逐字相同** ⇒ 第二份被当成
+	 * "同一张图又给了一份"直接吞掉，用户少一张图。
+	 *
+	 * 而这两件事在**输入**上是可分的：同一张图的两个包装有同一个身份
+	 * （`fileIdentity` = 名字+大小+类型，见它的注释），而两份**不同文件**身份不同。
+	 * 代价（如实记）：元数据有出入的同一张图现在可能插两条 —— "多插一张"用户看得见、
+	 * 删掉即可；"少插一张"用户会以为图丢了。
 	 */
 	const inserted = new Set<string>();
-	const pushPart = (text: string): void => {
-		if (inserted.has(text)) return;
-		inserted.add(text);
+	const pushPart = (text: string, file: TransferFileLike): void => {
+		const id = fileIdentity(file) ?? text;
+		if (inserted.has(id)) return;
+		inserted.add(id);
 		parts.push(text);
 	};
 
@@ -149,7 +158,7 @@ export async function processTransfer(
 			if (result.localPath) {
 				// 降级链接：形态交回宿主（按用户的「新链接格式」设置），`!` 由我们按类型表加。
 				const generated = deps.generatedLocalLink ? deps.generatedLocalLink(result.localPath) : null;
-				pushPart(buildLocalLink(generated, result.localPath, result.ext));
+				pushPart(buildLocalLink(generated, result.localPath, result.ext), file);
 				outcome.fallback += 1;
 				deps.notify(
 					deps.t("hookUploadFailedKeptLocal", { error: describeError(result.error ?? "unknown") })
@@ -163,7 +172,11 @@ export async function processTransfer(
 			continue;
 		}
 
-		pushPart(buildRemoteLink(result.remoteUrl, displayName || result.name, result.ext));
+		// ⭐ 链接的显示位优先用编排层算定的 `displayName`（= key 里的名字，与**链接目标**逐字一致）：
+		// 宿主撞名另落的 `照片 1.png` 会被归一到主干名字，显示位跟着走才不会出现
+		// "链接文字是 `照片 1.png`、地址里是 `照片-<哈希>.png`"这种同一链接两个名字。
+		// 它取不到时（老形状的 key）才退回文件原名 / 编排层造的可读名。
+		pushPart(buildRemoteLink(result.remoteUrl, result.displayName || displayName || result.name, result.ext), file);
 		if (result.status === "reused") outcome.reused += 1;
 		else outcome.uploaded += 1;
 	}

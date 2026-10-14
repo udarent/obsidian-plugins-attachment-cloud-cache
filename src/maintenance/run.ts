@@ -27,7 +27,7 @@ import type { CacheAudit, DiskFile } from "./audit";
 import { removeCacheFile } from "./remove";
 import type { EvictionOutcome, EvictionPlan } from "./eviction";
 import type { ReleaseSpaceSelection } from "./release-space";
-import { keysInText, planCanvasRewrites, planLinkRewrites } from "./references";
+import { canvasStillMentionsPath, keysInText, stillMentionsPath, planCanvasRewrites, planLinkRewrites } from "./references";
 import type { RewriteRule } from "./references";
 import { selectUploadCandidates } from "./batch";
 import type { ExternalSelection, VaultFileLike } from "./batch";
@@ -328,6 +328,13 @@ export interface BatchResult {
 	 * 而用户需要知道某张图可能还指着旧位置（否则他会以为全改好了）。
 	 */
 	canvasSkipped: number;
+	/**
+	 * ⭐ 删掉的"宿主撞名另落的重复副本"份数（见 `dropRedundantCopies`）。
+	 *
+	 * 单独一个数字而不是并进 `uploaded`：用户要能对账 —— 他看到的可能是"清单里 10 个文件，
+	 * 上传 10 个、却少了 1 个"。这一栏就是他少掉那个的去向。
+	 */
+	redundantRemoved: number;
 	skipped: { reason: string; count: number }[];
 }
 
@@ -391,7 +398,33 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 		notesChanged: 0,
 		linksRewritten: 0,
 		canvasSkipped: 0,
+		redundantRemoved: 0,
 		skipped: [],
+	};
+
+	/**
+	 * "宿主撞名另落的重复副本"：路径 → 留下来那一份（主干）的路径。
+	 *
+	 * 收尾时按 `dropRedundantCopies` 的条件删掉这些路径（链接改写成功 + 改写之后没人指着它）。
+	 */
+	const redundantCopies: { path: string; twinPath: string }[] = [];
+
+	/**
+	 * ⭐ **改写之后**正文里仍有链接指向的那些候选（判据是**当场读到的正文**，见 `stillMentionsPath`）。
+	 *
+	 * 填它的地方就是两趟改写循环本身 —— 那里正文已经在手上，不必再扫一遍库；
+	 * 而"有没有人还指着它"正是删它之前的最后一道复核。
+	 */
+	const stillMentioned = new Set<string>();
+
+	/** 这一份正文（笔记或画布，**改写之后**的）里还有指向候选的链接吗。 */
+	const noteMentions = (text: string, forCanvas: boolean): void => {
+		if (redundantCopies.length === 0) return;
+		for (const candidate of redundantCopies) {
+			if (stillMentioned.has(candidate.path)) continue;
+			const mentions = forCanvas ? canvasStillMentionsPath(text, candidate.path) : stillMentionsPath(text, candidate.path);
+			if (mentions) stillMentioned.add(candidate.path);
+		}
 	};
 
 	/**
@@ -504,7 +537,7 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 		if (ingestResult.status === "reused") result.reused += 1;
 		else result.uploaded += 1;
 
-		rules.push({ from: path, to: ingestResult.remoteUrl });
+		rules.push({ from: path, to: ingestResult.remoteUrl, display: ingestResult.displayName });
 
 		// ⚠️⚠️ **移动会让宿主自己顺手改笔记**（2026-10-09 真机实测）：
 		// `fileManager.renameFile` 不只是改名，它还会把**别的笔记里指向这个文件的链接**
@@ -515,13 +548,25 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 		// 就看不到图，而且笔记不再指向存储 —— 这条命令的承诺没兑现）。
 		// ⇒ 把"搬完之后的新路径"也当成一条改写规则：谁先谁后都会收敛到远端地址。
 		if (ingestResult.localPath && ingestResult.localPath !== path) {
-			rules.push({ from: ingestResult.localPath, to: ingestResult.remoteUrl });
+			rules.push({ from: ingestResult.localPath, to: ingestResult.remoteUrl, display: ingestResult.displayName });
 		}
 
 		// 画布 file 节点：旧路径 → 搬移后的真实位置（拿不到真实位置时不登记 ——
 		// 那样画布保持原样，是本设备仍然能显示的那一侧）。
+		//
+		// ⚠️ **宿主撞名另落的那一份例外**：它稍后会被删掉（见 `dropRedundantCopies`），
+		// 所以画布必须改指向**留下来的主干那一份**（内容逐字节相同）——
+		// 否则画布上会留下一个指向已被删除文件的节点（用户看到的就是"画布上这张图没了"）。
+		// 两个 rule 只登记**一条**：同一个 `from` 上挂两条互相矛盾的规则，谁生效取决于顺序。
 		if (ingestResult.localPath) {
-			fileRules.push({ from: path, to: ingestResult.localPath });
+			fileRules.push({
+				from: path,
+				to: ingestResult.redundantDuplicateOf ?? ingestResult.localPath,
+			});
+		}
+
+		if (ingestResult.redundantDuplicateOf) {
+			redundantCopies.push({ path, twinPath: ingestResult.redundantDuplicateOf });
 		}
 	}
 
@@ -549,6 +594,9 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 
 		const rewritten = planCanvasRewrites(text, { linkRules: rules, fileRules });
 		result.canvasSkipped += rewritten.skipped;
+		// ⭐ 删重复副本之前的复核要用**改写之后**的正文：改写没认出来的形态会原样留下，
+		// 那才是"它还指着这一份"（见 `canvasStillMentionsPath`）。
+		noteMentions(rewritten.count > 0 ? rewritten.text : text, true);
 		if (rewritten.count === 0) continue;
 
 		try {
@@ -573,6 +621,8 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 		if (text === "") continue;
 
 		const rewritten = planLinkRewrites(text, rules);
+		// ⭐ 同上：复核用的是**改写之后**的正文（没认出来的形态会原样留下）
+		noteMentions(rewritten.count > 0 ? rewritten.text : text, false);
 		if (rewritten.count === 0) continue;
 
 		try {
@@ -585,6 +635,101 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 	}
 
 	result.notesChanged = changedNotes.size;
+
+	// ── 收尾：删掉"宿主撞名另落的重复副本"（在**改写全部做完之后**）──
+	//
+	// ⚠️ 顺序是这个功能的正确性条件：删文件**必须**排在链接改写之后 ——
+	// 反过来会先留出一条指向刚被删掉文件的链接（用户视角就是"图丢了"）。
+	await dropRedundantCopies(deps, redundantCopies, stillMentioned, result);
+
 	return result;
+}
+
+/**
+ * 删掉"宿主撞名另落的重复副本"（用户 2026-10-14 的要求：**链接 ok 以后就可以删掉**，
+ * 而且**不用放回收站**）。
+ *
+ * ## 这是个什么东西
+ *
+ * 同一张图插第二次时，**宿主自己**会把新文件叫 `照片 1.png`（它的唯一化规矩，我们拦不住），
+ * 并写一条指向它的链接。于是磁盘上留下两份逐字节相同的文件，而我们刚把链接改写成
+ * **同一个云端地址**（见 `IngestResult.redundantDuplicateOf`）—— 那一份重复文件此后
+ * 没有任何笔记引用它，只是占着磁盘（而且插件看不见它：它没进索引）。
+ *
+ * ## 为什么可以删
+ *
+ * ① **上传成功了** —— 那份字节已经在云端，删本地副本不会丢内容（与「不留副本」档同一条理由，
+ *    而这里连"重新拿到"都是确定的：同一个对象，别的引用也指着它）；
+ * ② **"还有没有人指着它"由 `stillMentioned` 说话** —— 那个集合来自**改写时当场读到的正文**
+ *    （见 `stillMentionsPath`），不是宿主的链接索引（索引滞后于刚写下的笔记，用它当判据
+ *    会变成"永远删不掉"，验收套件当场抓到过）；
+ * ③ **主干那一份还在**（否则这一份就是最后一份，删了本地就没副本可看了）。
+ *
+ * ## 为什么**直接删**、不进回收站
+ *
+ * ⚠️ 这是本项目的**有意偏离**（与 D-21 的 ①③ 同类：②⑤ 与社区一致走回收站）。
+ * 用户 2026-10-14 明确要求"不用放回收站"：这一份与仍在原地的那一份**逐字节相同**，
+ * 进回收站 = 把同样的垃圾从附件目录挪到回收站，用户还得自己去清一次。
+ * 删除动作走 `removeCacheFile`（与淘汰、存量清理**同一处**删除原语），
+ * 不是绕开宿主自己删。
+ */
+async function dropRedundantCopies(
+	deps: MaintenanceDeps,
+	candidates: readonly { path: string; twinPath: string }[],
+	stillMentioned: ReadonlySet<string>,
+	result: BatchResult
+): Promise<void> {
+	if (candidates.length === 0) return;
+
+	/** 按原因汇总（逐个 push 会让 `skipped` 变成一长串同义条目）。 */
+	const skipped = new Map<string, number>();
+	const countSkip = (reason: string): void => {
+		skipped.set(reason, (skipped.get(reason) ?? 0) + 1);
+	};
+
+	if (result.failed > 0 || result.canvasSkipped > 0) {
+		// ⚠️ 这一趟**有改写没落地**（笔记/画布写失败，或画布里解不开的值被跳过）。
+		//
+		// 那时"谁还指着它"问不出完整答案：画布 `file` 节点走的是另一条路（`fileRules`），
+		// 它没改写成功时那个节点仍指着这一份，而正文里也看不出来（那个值解不开）。
+		//
+		// 判据刻意粗：**一处失败就一个都不删**。方向由代价不对称决定 ——
+		// 少删一份只是多占一点磁盘（下次运行还会再来一次），错删一份是用户的东西不见了。
+		countSkip(`这一趟有引用没能改写（写入失败 ${result.failed}、画布值跳过 ${result.canvasSkipped}）`);
+		for (const [reason, count] of skipped) result.skipped.push({ reason, count });
+		return;
+	}
+
+	for (const { path, twinPath } of candidates) {
+		if (stillMentioned.has(path)) {
+			countSkip("改写之后正文里仍有链接指着它");
+			continue;
+		}
+		// ⚠️ 变量名刻意与淘汰循环里那个不同（`duplicate` 而不是 `file`）：
+		// 两处的删除调用**逐字相同**会让变异锚点无法唯一指向这一处
+		//（锚点必须唯一，否则它打坏的是别人那一行）。
+		const duplicate = deps.app.vault.getAbstractFileByPath(path);
+		// 已经不在了（用户自己删了、或同步把它撤了）⇒ 没什么可做，也不算跳过
+		if (!duplicate) continue;
+		if (!deps.app.vault.getAbstractFileByPath(twinPath)) {
+			countSkip("留下来的那一份不在了");
+			continue;
+		}
+		try {
+			await removeCacheFile(deps.app, duplicate);
+			result.redundantRemoved += 1;
+			// 索引若还指着这一份（老版本登记过的条目），顺手摘掉 ——
+			// 否则它会一直"指向一个不存在的文件"，等自愈那一轮才被清理。
+			// ⚠️ **只摘条目、不动上传台账**：对象还在云端（见 `forgetUploaded` 的说明）。
+			const stale = deps.index().findByCachePath(path);
+			if (stale && deps.index().remove(stale.key)) {
+				await deps.persistIndex();
+			}
+		} catch (error) {
+			countSkip(`删除失败（${describeError(error)}）`);
+		}
+	}
+
+	for (const [reason, count] of skipped) result.skipped.push({ reason, count });
 }
 

@@ -46,8 +46,16 @@ import type { App } from "obsidian";
 import { renderFileCards } from "./file-cards";
 import type { FileCard } from "./file-cards";
 
-/** 用户的选择。**关掉弹窗与 `keep` 同义**（不动作永远是最安全的那一侧）。 */
-export type OrphanCloudChoice = "keep" | "local" | "both";
+/**
+ * 用户的选择。
+ *
+ * ⚠️ `dismissed` 与 `keep` **不是一回事**（2026-10-14 用户 Android 报告）：
+ * 用户报的是"弹窗出现后**点一下边上就不见了**" —— 那是**误关**，不是"我决定保留"。
+ * 两者对**动作**的要求相同（都不删，安全），但对**沟通**的要求相反：
+ * 误关的人需要知道"什么都没发生、以及想再问一次该去哪"，而主动点保留的人不需要再被告知。
+ * ⇒ 关掉时返回 `dismissed`，调用方据此给一条**指路**提示。
+ */
+export type OrphanCloudChoice = "keep" | "local" | "both" | "dismissed";
 
 export interface OrphanCloudPrompt {
 	title: string;
@@ -68,7 +76,7 @@ export interface OrphanCloudPrompt {
 	bothCta: string;
 }
 
-/** 问用户一次；关掉弹窗等同 `keep`。 */
+/** 问用户一次；**没做选择就关掉**（点背景 / ESC）⇒ `dismissed`（不动作，但调用方要指路）。 */
 export function askOrphanCloudDelete(app: App, options: OrphanCloudPrompt): Promise<OrphanCloudChoice> {
 	return new Promise((resolve) => {
 		let answered = false;
@@ -110,7 +118,9 @@ export function askOrphanCloudDelete(app: App, options: OrphanCloudPrompt): Prom
 				})
 			);
 
-		modal.onClose = () => finish("keep");
+		// ⚠️ 只有"没点任何按钮就关闭"才会走到这里（点按钮时 `finish` 已经先跑过）。
+		// 不动作仍然是最安全的那一侧 —— 但**如实回报它是"被关掉"**，见 `OrphanCloudChoice`。
+		modal.onClose = () => finish("dismissed");
 		modal.open();
 	});
 }

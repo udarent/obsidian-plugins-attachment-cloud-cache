@@ -69,6 +69,56 @@ await runMutations({
 			to: "\tif (false) {",
 			expect: "外链图被下载、上传，笔记里的链接被改写",
 		},
+
+		// ── ⭐ 收尾删"宿主撞名另落的重复副本"（D-24 ④，2026-10-14 用户要求）──
+		{
+			// 后果：这一步整个不跑 ⇒ 同一张图插第二次之后，本地永远留两份
+			//（云端与链接都已经是一份，只有磁盘上多一份）。
+			name: "★ 重复副本的收尾整个不跑（本地永远留着两份）",
+			from: "\tawait dropRedundantCopies(deps, redundantCopies, stillMentioned, result);",
+			to: "\tvoid redundantCopies; void stillMentioned;",
+			expect: "宿主撞名另落的那一份被删掉",
+		},
+		{
+			// 后果：这一趟里**有过改写失败**却照删 ⇒ 那些"没改掉、还指着它"的引用
+			// 会指向一个刚被删掉的文件（用户视角就是"图丢了"）。
+			name: "★★ 有引用没能改写也照删（把还被指着的那份删掉）",
+			from: "\tif (result.failed > 0 || result.canvasSkipped > 0) {",
+			to: "\tif (false) {",
+			expect: "一份都不删",
+		},
+		{
+			// 后果：正文里那条**认不出来**的引用（URL 编码）被无视 ⇒ 删掉之后
+			// 笔记里留下一条指向不存在文件的链接。
+			name: "★★ 删除前不看正文里还留着的那条引用（删掉还被指着的文件）",
+			from: "\t\tif (stillMentioned.has(path)) {",
+			to: "\t\tif (false) {",
+			expect: "认不出来的引用", /* TEMP */
+		},
+		{
+			// 后果：删法绕开删除原语、改走回收站 ⇒ 文件离开 vault 而**空间不释放**
+			//（用户明确说过"不用放回收站"：同内容的副本进回收站只是把垃圾挪个地方）。
+			// 后果：删法绕开删除原语、改走回收站 ⇒ 文件离开 vault 而**空间不释放**
+			//（用户明确说过"不用放回收站"：同内容的副本进回收站只是把垃圾挪个地方）。
+			// 症状：文件确实不见了（所以"被删掉"那次等待能过），但它**不是**走 `vault.delete`
+			// 删的 —— 8d 那条"要被真的删掉"当场抓住，紧接着还有一条 `calls.trash` 断言守着同一件事。
+			// ⚠️ `duplicate` 这个变量名是**故意**与淘汰循环里那个 `file` 区分开的 ——
+			// 两处调用逐字相同会让锚点不唯一，而"锚点必须唯一"是本项目的硬纪律
+			//（不唯一的锚点打坏的是别人那一行，报出来的红会指向错误的原因）。
+			name: "★ 重复副本被送进回收站（空间不释放 ⇒ 与用户的要求相反）",
+			from: "\t\t\tawait removeCacheFile(deps.app, duplicate);",
+			to: "\t\t\tawait deps.app.fileManager.trashFile(duplicate);",
+			expect: "重复副本要被真的删掉",
+		},
+		{
+			// 后果：改写规则**不带显示名** ⇒ wikilink 整条换形态时显示位退回"原路径最后一段"
+			// ⇒ 宿主撞名另落的重复副本会把序号留在链接文字里（`![dup 1.png](…/dup-<哈希>.png)`），
+			// 而地址里是主干名字。用户 2026-10-14 报的第五件事：同一个链接两个名字。
+			name: "★ 改写规则不带显示名（链接文字里留着宿主的「 1」）",
+			from: "\t\trules.push({ from: path, to: ingestResult.remoteUrl, display: ingestResult.displayName });",
+			to: "\t\trules.push({ from: path, to: ingestResult.remoteUrl });",
+			expect: "★ 显示名必须用主干名字（宿主的「 1」不许出现在链接文字里）",
+		},
 		// ⚠️ 这里原本还有一条**完全重复**的锚点（"后台淘汰绕过删除原语"），锚的是同一行 ——
 		// 重复锚点不会增加覆盖，只会让"全部被捕获"这句话贬值。两条路径（自动淘汰 /
 		// 存量清理）现在共用同一段循环，所以上面那一条就够。纪律：**锚点必须唯一**。

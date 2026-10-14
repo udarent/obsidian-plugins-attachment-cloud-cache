@@ -798,8 +798,44 @@ export function createAppMock(rootDir, opts = {}) {
 		getResourcePath(file) {
 			return `app://local/${normalizePath(file.path)}`;
 		},
-		on() {
-			return {};
+		/**
+		 * ⚠️ **必须真的记账**（与 `workspace.on` 同一个理由，这份是后来才补上的）。
+		 *
+		 * 原来这里是 `on() { return {}; }` —— 注册被静默吞掉。后果不只是"测不了"：
+		 * 插件的**三条 vault 事件接线**（`create` → 新增附件自动接管；`modify`/`create`/`delete`/`rename`
+		 * → 孤儿询问的引用快照）**一条都跑不到**，而插件入口若忘了注册它们，
+		 * 全套测试照样全绿 —— 一个"装上去什么都不做"的插件也能过。
+		 * 2026-10-14 用户报"删掉最后一个副本后没问要不要删云端"时，本地无法证伪，
+		 * 正是因为这里没有账本。
+		 *
+		 * `registered` 按事件名分组（断言"注册了哪几类"），`onCalls` 保持调用顺序，
+		 * `refs` 供 `offref` 用（卸载那一条线）。
+		 */
+		registered: new Map(),
+		onCalls: [],
+		refs: [],
+		on(name, callback) {
+			vault.onCalls.push(name);
+			if (!vault.registered.has(name)) vault.registered.set(name, []);
+			vault.registered.get(name).push(callback);
+			const ref = { name, callback };
+			vault.refs.push(ref);
+			return ref;
+		},
+		offref(ref) {
+			const list = vault.registered.get(ref?.name);
+			if (list) {
+				const i = list.indexOf(ref.callback);
+				if (i >= 0) list.splice(i, 1);
+			}
+			const j = vault.refs.indexOf(ref);
+			if (j >= 0) vault.refs.splice(j, 1);
+		},
+		/** 触发某个事件，返回处理器被调用的次数。 */
+		trigger(name, ...args) {
+			const list = vault.registered.get(name) ?? [];
+			for (const cb of list) cb(...args);
+			return list.length;
 		},
 	};
 

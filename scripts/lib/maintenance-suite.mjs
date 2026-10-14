@@ -20,6 +20,7 @@ export function runMaintenanceSuite(mod) {
 		canvasTextTargets,
 		resolveCanvasTargets,
 		keysInText,
+		stillMentionsPath,
 	} = mod;
 	const { selectUploadCandidates } = mod;
 
@@ -202,6 +203,95 @@ export function runMaintenanceSuite(mod) {
 		noAlias.text,
 		"![photo2.png](https://img.example.com/abc.png)",
 		"★ 无别名时 alt 取文件名"
+	);
+
+	// ⭐ `RewriteRule.display` ⇒ 整条换形态时，alt 用**规则给的名字**（= 链接目标里的名字）。
+	//
+	// 用户 2026-10-14 在 Android 上报的第五件事：重复插图时宿主另落的那一份叫
+	// `照片 1.png`，而我们算 key 用的是**主干名字** ⇒ 链接成了
+	// `![照片 1.png](…/照片-<哈希>.png)` —— 同一个链接里两个名字不一样，
+	// 而那个 ` 1` 是宿主的去重序号、根本不是用户的东西。
+	const displayRule = [{ from: "照片 1.png", to: "https://img.example.com/照片-abc.png", display: "照片.png" }];
+	const named = planLinkRewrites("![[照片 1.png]]", displayRule);
+	assert.equal(
+		named.text,
+		"![照片.png](https://img.example.com/照片-abc.png)",
+		"★ 显示位必须与**链接目标**一致，不能用原文件名（它带着宿主的序号）"
+	);
+
+	// ⚠️ 反向：原文本来就是 Markdown 形态时，`[]` 里那串是**用户自己写的**显示文字 ——
+	// 这条路径只换"路径那一段"，显示文字一个字都不许动（也许他写的就是想显示的东西）。
+	const userAlt = planLinkRewrites("![我的照片](attachments/照片 1.png)", displayRule);
+	assert.equal(
+		userAlt.text,
+		"![我的照片](https://img.example.com/照片-abc.png)",
+		"★ 用户自己写的显示文字不许被改"
+	);
+
+	// 规则没给 `display` ⇒ 退回原行为（原路径最后一段）：不关心名字的调用方一字不变。
+	const noDisplay = planLinkRewrites("![[照片 1.png]]", [
+		{ from: "照片 1.png", to: "https://img.example.com/x.png" },
+	]);
+	assert.equal(
+		noDisplay.text,
+		"![照片 1.png](https://img.example.com/x.png)",
+		"★ 没给名字就用原文件名（老行为，不许因为新增字段而变）"
+	);
+
+	// ⭐ 同一个 `from` 上挂两条目标相同、显示名不同的规则（"主干"与"重复副本"指向同一地址）：
+	// 这**不是**同名歧义 —— 歧义判据只看目标（把显示名也算进去会让链接整条改写失败）。
+	const twinRules = [
+		{ from: "attachments/照片.png", to: "https://img.example.com/照片-abc.png", display: "照片.png" },
+		{ from: "attachments/照片 1.png", to: "https://img.example.com/照片-abc.png", display: "照片.png" },
+	];
+	const twinShort = planLinkRewrites("![[照片 1.png]]", twinRules);
+	assert.equal(
+		twinShort.text,
+		"![照片.png](https://img.example.com/照片-abc.png)",
+		"★ 短名匹配到两条同目标规则仍要改写（显示名不同不算歧义）"
+	);
+
+	// ⚠️⚠️ **含空格的目标没加尖括号**（Obsidian 容忍这种写法，用户手写或从别处复制很常见）
+	// ⇒ 整段都算目标。用"第一个空白"当分界会把目标截成 `attachments/照片`：
+	// 既不会改写它，也会让"这份文件还有人引用吗"判成**没人引用**（那会删掉仍被引用的文件）。
+	const spaceyRule = [{ from: "照片 1.png", to: "https://img.example.com/照片-abc.png", display: "照片.png" }];
+	const spaceyMd = planLinkRewrites("![](attachments/照片 1.png)", spaceyRule);
+	assert.equal(
+		spaceyMd.text,
+		"![](https://img.example.com/照片-abc.png)",
+		"★ 含空格的 Markdown 目标必须整段认出来（不能截成 `attachments/照片`）"
+	);
+	assert.equal(spaceyMd.count, 1, "★ 而且必须真的改写它");
+
+	// 同类：含空格的目标**加标题** —— 分界只能是"引号前那个空白"，title 照样要留住。
+	const spaceyTitle = planLinkRewrites('![](attachments/照片 1.png "标题")', spaceyRule);
+	assert.equal(
+		spaceyTitle.text,
+		'![](https://img.example.com/照片-abc.png "标题")',
+		"★ 含空格的目标 + 标题：只换目标那一段，标题原样留着"
+	);
+
+	// 含空格的路径 + 尖括号（Markdown 规范写法）也必须认。
+	// ⚠️ 改写后**尖括号照留**：这条路径只换"目标那一段"，而尖括号是原文的写法
+	//（含空格的 URL 正需要它）—— 顺手去掉它等于替用户改了他没要求改的东西。
+	const angle = planLinkRewrites("![](<attachments/照片 1.png>)", spaceyRule);
+	assert.equal(
+		angle.text,
+		"![](<https://img.example.com/照片-abc.png>)",
+		"★ 尖括号形式的含空格目标：只换路径、尖括号留着"
+	);
+
+	// ⭐ 同一个解析器还管着"这份文件还有人引用吗"（`stillMentionsPath`）——
+	// 上面那条截断要是发生了，这里的答案就会从 `true` 变成 `false`（文件被误删）。
+	assert.equal(
+		stillMentionsPath("![](attachments/照片 1.png)", "attachments/照片 1.png"),
+		true,
+		"★ 含空格的 Markdown 引用要算“还指着它”（判错会删掉仍被引用的文件）"
+	);
+	assert.equal(
+		stillMentionsPath("![](attachments/照片 1.png)", "attachments/别的.png"),
+		false,
+		"★ 反向：不是它就不算（别把判据放宽成“看着像就算”）"
 	);
 
 	// ⭐ 反向：目标是**库内路径**时形态一个字都不动（只换路径那一段）。

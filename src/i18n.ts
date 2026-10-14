@@ -77,6 +77,10 @@ export const I18N: Record<string, Locale> = {
 		autoUploadDesc:
 			"Covers every way a file ends up in your vault: pasting, dropping, adding one from your phone's gallery or camera, sharing into Obsidian, or copying files in. Uploaded files are linked from your note as remote URLs. Turn it off and all of that goes back to Obsidian, leaving files local only.",
 		attachAutoUploaded: "Uploaded {count} attachment(s) that had just been added to your vault.",
+		// ⚠️ 与上一条**必须分开说**：这一条的动作是"链接换成已有对象的地址"，**没有上传**。
+		// 合成一句"已上传 N 个"会让用户以为自己的流量/仓库又花了一份（他 2026-10-14 就是这么报的）。
+		attachAutoReused:
+			"Already in your storage: {count} attachment(s) — links updated, nothing re-uploaded.",
 		attachAutoFailed: "{count} newly added attachment(s) could not be uploaded — the files are still in your vault.",
 
 		// ── 离线副本 ──
@@ -124,6 +128,7 @@ export const I18N: Record<string, Locale> = {
 		// ── 维护命令 ──
 		// ── 云端空间清理（F15）──
 		cmdCleanupCloud: "Clean up unused objects in the cloud…",
+		cmdCheckOrphans: "Check for unreferenced attachments in the cloud…",
 		cloudCleanupTitle: "Clean up the cloud",
 		cloudCleanupSummary:
 			"{count} object(s), about {mb} MB, are not referenced by any note in this vault:",
@@ -174,6 +179,10 @@ export const I18N: Record<string, Locale> = {
 			"Removed {removed} local copy(ies). Storage: {deleted} deleted, {alreadyGone} already gone, {failed} failed.",
 		orphanNotice:
 			"{count} uploaded attachment(s) are no longer linked from any note or canvas. Run “{command}” to review and clean up.",
+		orphanDismissed:
+			"Nothing was deleted. To ask again, run “{command}”.",
+		orphanNoneToCheck:
+			"No unreferenced attachments found — everything we have uploaded is still linked from a note or canvas.",
 		cloudDeleteFailed: "Could not delete the object: {error}",
 		cmdAuditCache: "Show cache usage",
 		cmdRepairIndex: "Repair the local-copy index",
@@ -181,6 +190,10 @@ export const I18N: Record<string, Locale> = {
 
 		maintainUsageReport:
 			"Local copies: {totalMb} MB in {count} files. Not linked from any note: {unused} ({reclaimableMb} MB — an estimate: nothing is removed before your storage is confirmed to still have it). {missing} index entr(ies) point at files that are gone. Limit: {limit}.",
+		// ⚠️ 只在真有失效记录时单独弹这一句（见 `auditCache` 命令的接线）：
+		// 那行数字本身不带处置办法，用户 2026-10-14 在 Android 上把它读成了"索引坏了"。
+		maintainUsageMissingHint:
+			"Those {count} stale record(s) are harmless — the background check drops them on its own. To clear them right now, run “{command}”.",
 		selfHealRepaired:
 			"Cache index repaired automatically: {count} record(s) pointed at files that are no longer there.",
 		legacyKeyTemplateUpgraded:
@@ -211,6 +224,10 @@ export const I18N: Record<string, Locale> = {
 			"Nothing is moved or renamed: the file stays in your attachments folder and remains the local copy — only the links in your notes are rewritten. Files that no note refers to are left alone.",
 		maintainBatchSkipsUnreferenced:
 			"{count} file(s) in your vault are not linked from any note, so they are left alone.",
+		maintainBatchDuplicates:
+			"{count} of them look like the copy the host leaves behind when a name collides (photo 1.png next to photo.png). Once its link is rewritten that copy is deleted — its bytes are identical to the one that stays.",
+		maintainBatchDuplicatesRemoved:
+			"Deleted {count} duplicate copy(ies) the host had left behind on a name collision (same content as the copy that stays).",
 		maintainBatchCanvasSkipped:
 			"{count} reference(s) in canvases could not be rewritten (the file is not readable JSON), so they still point to their old location.",
 		maintainBatchCta: "Upload and rewrite links",
@@ -338,6 +355,9 @@ export const I18N: Record<string, Locale> = {
 		autoUploadDesc:
 			"覆盖附件进入库的所有方式：粘贴、拖入、手机相册或相机、分享到 Obsidian、从别处拷进库。上传后笔记里的链接会换成远端地址。关闭后这些全部交回 Obsidian 处理，文件只存在本地。已经缓存的附件仍然离线可见。",
 		attachAutoUploaded: "已自动上传刚加入库的 {count} 个附件。",
+		// ⚠️ 与上一条**必须分开说**：这一条的动作是"链接换成已有对象的地址"，**没有上传**。
+		// 用户 2026-10-14 在 Android 上报的就是这个：重复插同一张图，提示却说"上传成功"。
+		attachAutoReused: "刚加入库的 {count} 个附件此前已经上传过 —— 只更新了链接，没有重复上传。",
 		attachAutoFailed: "刚加入库的 {count} 个附件上传失败 —— 文件仍然留在你的库里。",
 
 		localCopy: "本地副本的处理",
@@ -371,6 +391,7 @@ export const I18N: Record<string, Locale> = {
 
 		// ── 云端空间清理（F15）──
 		cmdCleanupCloud: "清理云端未使用对象…",
+		cmdCheckOrphans: "检查未被引用的云端附件…",
 		cloudCleanupTitle: "清理云端空间",
 		cloudCleanupSummary: "有 {count} 个对象没有被本库任何笔记引用，约占 {mb} MB：",
 		cloudCleanupCta: "删除这些对象",
@@ -417,6 +438,10 @@ export const I18N: Record<string, Locale> = {
 			"已删掉 {removed} 个本地副本；云端：删除 {deleted} 个、本来就不存在 {alreadyGone} 个、失败 {failed} 个。",
 		orphanNotice:
 			"有 {count} 个已上传的附件不再被任何笔记或画布引用。运行「{command}」可以查看并清理。",
+		orphanDismissed:
+			"什么都没删。想再问一次：运行「{command}」。",
+		orphanNoneToCheck:
+			"没有发现未被引用的云端附件 —— 我们记录里每一个已上传的附件，都还有笔记或画布在引用它。",
 		cloudDeleteFailed: "删除对象失败：{error}",
 		cmdAuditCache: "查看缓存占用",
 		cmdRepairIndex: "自检并修复本地副本索引",
@@ -424,6 +449,9 @@ export const I18N: Record<string, Locale> = {
 
 		maintainUsageReport:
 			"本地副本共 {count} 个文件、{totalMb} MB。其中没有任何笔记引用的 {unused} 个（{reclaimableMb} MB —— 这是估算：真正删除前会先确认你的存储里仍然有它）。索引指向的文件已不在 {missing} 条。上限：{limit}。",
+		// ⚠️ 同上：只在真有失效记录时弹（那行数字不带处置办法，会被读成"索引坏了"）。
+		maintainUsageMissingHint:
+			"那 {count} 条失效记录无害 —— 后台自检会自己摘掉；想立刻清掉就跑一次「{command}」。",
 		selfHealRepaired: "缓存索引已自动修复：{count} 条记录指向的本地副本已经不在了。",
 		legacyKeyTemplateUpgraded:
 			"「对象 key 模板」设置已取消：之后上传的对象固定命名为「原文件名-内容哈希.扩展名」，存储里可以按名字找到文件（文件名因此也会出现在你的存储服务商那边）。已有链接不受影响；按旧命名传过的内容若再贴一次，会在云端多存一份。",
@@ -452,6 +480,10 @@ export const I18N: Record<string, Locale> = {
 		maintainBatchOriginalsStay:
 			"不会移动或改名：文件留在附件目录里，就地作为本地副本 —— 只有笔记里的链接会被改写。没有任何笔记引用的文件不会被碰。",
 		maintainBatchSkipsUnreferenced: "另有 {count} 个文件没有被任何笔记引用，不会被处理。",
+		maintainBatchDuplicates:
+			"其中 {count} 个看起来是宿主撞名时另落下的副本（照片.png 旁边的 照片 1.png）：链接改写成功后那份会被删掉 —— 它与留下来的那份内容完全一样。",
+		maintainBatchDuplicatesRemoved:
+			"已删掉 {count} 份宿主撞名留下的重复副本（内容与留下的那份完全相同）。",
 		maintainBatchCanvasSkipped:
 			"画布里有 {count} 处引用没能改写（画布文件不是可读的 JSON），它们仍指向旧位置。",
 		maintainBatchCta: "上传并改写链接",

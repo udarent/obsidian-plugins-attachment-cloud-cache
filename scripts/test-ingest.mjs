@@ -36,7 +36,14 @@ await withLoadedTs(
 				"vault leaves no stray staging copy behind and does not move the user's file, " +
 				"the upload ledger records every successful upload no matter whether a local copy " +
 				"was kept (that is what keeps cloud cleanup working in the " +
-				"'keep no local copy' setting), and a corrupt index degrades to empty instead of throwing)."
+				"'keep no local copy' setting), a name the host invents on a collision " +
+				"(\"photo 1.png\") keys to the same object as \"photo.png\" when the bytes are " +
+				"identical - so a second insert of the same image adds no second object and no " +
+				"second address even on a device whose own index never recorded the first upload, " +
+				"and when that object is in fact already up there the second insert sends **no " +
+				"bytes at all** (it asks the cloud once instead of re-uploading) - " +
+				"while files whose contents genuinely differ, or whose \" 1\" the user chose " +
+				"themselves, are never merged, and a corrupt index degrades to empty instead of throwing)."
 		);
 	}
 );

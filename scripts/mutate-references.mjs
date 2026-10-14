@@ -85,5 +85,26 @@ await runMutations({
 			to: "\t\t\t\tcontinue;",
 			expect: "跳过要**计数**",
 		},
+		{
+			// 后果：wikilink 整条换形态时**不把显示名传下去** ⇒ 显示位退回"原路径最后一段"：
+			// 宿主撞名另落的重复副本（`照片 1.png`）会把序号留在链接文字里，而地址里是
+			// 主干名字 —— 用户 2026-10-14 报的第五件事（同一个链接两个名字）。
+			name: "★ 换形态时不传显示名（链接文字里留着宿主的「 1」）",
+			from: "wikilinkToMarkdown(span, replacement, resolved.display);",
+			to: "wikilinkToMarkdown(span, replacement);",
+			expect: "★ 显示位必须与**链接目标**一致，不能用原文件名（它带着宿主的序号）",
+		},
+		{
+			// 后果：Markdown 目标的"分界"退回**第一个空白** ⇒ 含空格、又没加尖括号的目标
+			// （`![](attachments/照片 1.png)`，很常见的写法）被截成 `attachments/照片`：
+			// ① 这条链接不会被改写；② `stillMentionsPath` 判它**不存在** ⇒ 那个文件
+			// 哪怕还有人指着也可能被删（两个后果都不报错）。
+			name: "★★ 目标按第一个空白切（含空格的链接既不改写、也被当成没人引用）",
+			from: "\t\tconst quoteAt = firstIndexOf(body, ['\"', \"'\"]);",
+			to: "\t\tconst quoteAt = firstIndexOf(body, [\" \", '\"', \"'\"]);",
+			// ⚠️ 实际先说话的是 §3 那条**既有**断言（"五种链接写法的路径段都要取对…"）——
+			// 目标被截短，第一个表现出来的就是路径段取错了。
+			expect: "五种链接写法的路径段都要取对",
+		},
 	],
 });

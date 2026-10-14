@@ -411,6 +411,36 @@ export async function uniqueVaultPath(
 }
 
 /**
+ * `uniqueVaultPath` / 宿主撞名那条约定（`名字 1.ext`）的**读法**。
+ *
+ * 传进来的是"带序号的那一份"时，返回它对应的**原始名字**（`照片 1.png` → `照片.png`）；
+ * 认不出来返回空串。纯字符串判定，**不做任何 I/O**。
+ *
+ * ## 为什么需要它（2026-10-14，Android 直报）
+ *
+ * 同一张图插第二次时，**宿主自己**会把新文件叫 `照片 1.png`（它的唯一化规矩，
+ * 与 {@link uniqueVaultPath} 同一形状），于是文件名不同 ⇒ key 不同 ⇒
+ * 云端多存一份完全相同的内容，笔记里两处引用还指着两个不同对象。
+ *
+ * ⚠️ 名字形状只是**必要条件**：`照片 1.png` 完全可能是用户自己的命名。
+ * 所以调用方还必须确认"同目录下 `照片.png` 真的在、且内容一致"才做归一 ——
+ * 与 `download-target.ts` 的"先比内容，再加序号"是同一条纪律的两个方向。
+ */
+export function baseNameForDuplicate(name: unknown): string {
+	if (typeof name !== "string") return "";
+	const base = name.trim().split(/[\\/]/).pop() ?? "";
+	const [stem, ext] = splitExtension(base);
+	// 只认"空格 + 数字"这一种（与 `uniqueVaultPath` 的写法逐字一致）：
+	// `照片-2.png`、`照片(1).png` 是别人的约定，不该被我们改写。
+	const match = /^(.*) (\d+)$/.exec(stem);
+	if (!match) return "";
+	const original = match[1];
+	// ` 1.png` 这种"没有主干"的名字不算（`. trim()` 之后什么都不剩 ⇒ 归一没有意义）
+	if (!/[^\s._]/.test(original)) return "";
+	return `${original}${ext}`;
+}
+
+/**
  * 归一一个目录设置：统一分隔符、去掉首尾斜杠。空串 = **没填**（而不是"根目录"）。
  *
  * ⚠️ 非字符串一律当"没填"：`data.json` 是被逐字段校验过的，但这条函数也会被

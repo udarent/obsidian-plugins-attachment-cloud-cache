@@ -43,8 +43,10 @@ once. This does both — the file goes to your bucket, and the copy that renders
 - **Any S3-compatible storage** — Cloudflare R2, AWS S3, MinIO, Backblaze B2, self-hosted.
 - **Upload however the file gets in** — pasted, dropped, added from your phone's gallery or camera, shared into
   Obsidian, or copied into the vault. The note's link is rewritten to the remote URL. An object's key is its file
-  name plus its full content hash, so uploading the same file again stores nothing new — while the same bytes under
-  a different name are a separate object.
+  name plus its full content hash, so uploading the same file again stores nothing new — and if the same image is
+  added twice (even when Obsidian has to name the newcomer `photo 1.png` next to `photo.png`), it is recognised as
+  the same image: one object, one address in your notes, and the link text keeps the original name — never the ` 1`
+  Obsidian had to append — and once the links are rewritten the extra local copy is cleaned up.
 - **Any file type, not just images** — images, audio, video, PDF, archives, documents, extension-less files. Types
   Obsidian can preview (image/audio/video/PDF) are inserted as embeds; everything else becomes a clickable link.
 - **Offline, multi-device, and no second copy** — the rendering copy is local (zero remote requests, always, not
@@ -111,6 +113,7 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
 | **Upload existing attachments** | Uploads what your notes link to and rewrites those links. Your files stay where they are — that copy *is* the local copy. |
 | **Cache files from other sites…** | Tick individual off-site files to fetch. Works whether or not the off-site switch is on — picking them is the consent. |
 | **Clean up unused objects in the cloud…** | Lists objects no note here refers to — with count and size — then deletes what you confirm. |
+| **Check for unreferenced attachments in the cloud…** | Re-runs the "these are no longer linked" prompt on demand: everything this vault uploaded, minus everything still linked. Nothing is touched until you choose an option. |
 
 ## Good to know
 
@@ -173,8 +176,10 @@ In **Settings → Attachment Cloud Cache** (the Chinese names are in the [中文
   offline in both view modes with the remote address never reaching an element, both cloud-cleanup entry points, and a
   full round trip whose key is recomputed from the bytes and whose link opens **anonymously**. Reproduce with
   `npm run verify:real-storage`.
-- **Not verified:** iOS and Android have never been run on a real device (the code avoids APIs known to be missing
-  there, but that is reasoning, not evidence); non-ASCII object keys have tests but no real-provider run.
+- **Real phone, not just the desktop:** Android has been run on a real device by hand — the fixes for adding the
+  same image twice came straight out of those runs. **iOS has never been run on a real device** (the code avoids
+  APIs known to be missing there, but that is reasoning, not evidence), and non-ASCII object keys have tests but
+  no real-provider run.
 
 ## Getting help
 
@@ -224,7 +229,7 @@ Obsidian version and which storage provider you use; the errors name the step th
 ## 功能
 
 - **任何 S3 兼容存储** —— Cloudflare R2、AWS S3、MinIO、Backblaze B2、自建端点。
-- **附件怎么进来都行** —— 粘贴、拖入、手机相册或相机、分享到 Obsidian、从别处拷进库，都会被上传，笔记里的链接换成远端地址。对象 key 里带**文件名 + 完整内容哈希**：同一个文件再传一次不会多占空间，而同一份内容换个名字会是另一份对象。
+- **附件怎么进来都行** —— 粘贴、拖入、手机相册或相机、分享到 Obsidian、从别处拷进库，都会被上传，笔记里的链接换成远端地址。对象 key 里带**文件名 + 完整内容哈希**：同一个文件再传一次不会多占空间；而**同一张图被重复添加时**（哪怕 Obsidian 只能把它另存成 `照片 1.png`）也认得出是同一张 —— 云端一个对象、笔记里两处引用**同一个地址**（链接文字里也不会留下宿主的「 1」），链接改好之后多出来的那份本地副本会被清掉。
 - **任何类型的附件，不只图片** —— 图片、音频、视频、PDF、压缩包、文档、没有扩展名的文件。Obsidian 能预览的
   类型（图片/音频/视频/PDF）插入为嵌入，其余插入为可点开的普通链接。
 - **离线、多设备、不多留一份** —— 渲染走本地副本（零远端请求，始终如此，不只是「网不通」时）；换新设备时副本按需补回。
@@ -286,6 +291,7 @@ Obsidian version and which storage provider you use; the errors name the step th
 | **上传已存在的附件** | 上传笔记里引用着的附件并改写链接。文件**留在原地** —— 那份就是本地副本。 |
 | **缓存站外文件（可挑选）…** | 勾选具体的站外文件去下载。开关关着也能用 —— 勾选本身就是同意。 |
 | **清理云端未使用对象…** | 列出「本库没有笔记引用」的对象（含个数与体积），确认后删除。 |
+| **检查未被引用的云端附件…** | 随时重新问一次「这些附件已经没人引用了」：候选 = 本库上传过的、减去仍被笔记或画布引用的。选之前不动任何东西。 |
 
 ## 需要注意的
 
@@ -338,8 +344,9 @@ Obsidian version and which storage provider you use; the errors name the step th
   Content-Type；画布两类节点的改写；音频、视频、PDF 在两种视图模式下离线预览，且**远端地址从未落进任何元素**；
   云端清理两条入口；以及一次完整回环 —— key 由脚本从字节独立重算，链接**匿名**能打开。可用
   `npm run verify:real-storage` 复现。
-- **没验证的：** iOS 与 Android 都没在真机上跑过（代码避开了已知缺失的 API，但那是推理不是证据）；含非 ASCII 字符的
-  对象 key 有测试覆盖，但没在真实服务商上跑过。
+- **真手机，不只是桌面端：** Android 已在真机上手动跑过 —— 重复添加同一张图的三个修复就是它逼出来的。
+  **iOS 从未在真机上跑过**（代码避开了已知缺失的 API，但那是推理不是证据）；含非 ASCII 字符的对象 key
+  有测试覆盖，但没在真实服务商上跑过。
 
 ## 遇到问题
 

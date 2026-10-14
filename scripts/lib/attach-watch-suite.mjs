@@ -105,9 +105,18 @@ export async function runAttachWatchSuite(mod) {
 	cases.decision += 1;
 
 	// ② ⭐⭐ 时序：create 时链接还没写进笔记 ⇒ 不能当成"不是候选"，要**再等一轮**
+	//
+	// ⚠️ 这就是用户 2026-10-14 在 Android 上报的那条缺陷的**根**：重复插入同一张图时，
+	// 宿主另落一份 `名字 1.ext`，那一刻它还没被引用 —— 少了"再等一轮"，这份文件就永远
+	// 停在本地链接上（create 是唯一入口，此后再没有事件回头看它）。所以这条断言**先说话**：
+	// 它一红，报错就必须能说出"为什么不能没有重试"，而不是某个次要数字不对。
 	const notYetReferenced = decide(file("attachments/new.png"));
 	assert.equal(notYetReferenced.adopt, false, "还没被引用时不许动手（搬走会留死链）");
-	assert.equal(notYetReferenced.retry, true, "「还没被引用」只是还没到时候 ⇒ retry 必须为真");
+	assert.equal(
+		notYetReferenced.retry,
+		true,
+		"「还没被引用」只是还没到时候 ⇒ retry 必须为真（Android 上重复插入同一张图，靠的就是这个「再等一轮」把链接迟到的文件救回来）"
+	);
 	cases.decision += 1;
 
 	// ③ ⭐ 反向断言：**除了「还没被引用」，其余每一种跳过都是终局**。
@@ -145,23 +154,24 @@ export async function runAttachWatchSuite(mod) {
 	}
 	cases.decision += 1;
 
-	// ⑤ ⭐ 同步到达的副本：内容已在上传台账里 ⇒ **终局跳过**（不等引用）
+	// ⑤ ⚠️⭐ 用户 2026-10-14 报的那条（Android）：**重复插入同一张图**。
 	//
-	// 它引用的是云端地址，所以"没有本地引用"是它**正常**的状态；
-	// 若当成"还没到时候"去退避重试，每台设备都会为同一份同步文件白跑 10 秒。
+	// 宿主发现同名文件已存在，会另落一份 `名字 1.ext`，并**照样插一条本地链接** ——
+	// 而链接是文件落盘**之后**才写进笔记的。这里曾经有一条"内容已在上传台账里 ⇒ 终局跳过"
+	// （它假设"内容在云端 ⇒ 引用它的是云端地址 ⇒ 不会再有本地引用"），于是重复插入的那份
+	// 在第一轮判定就出局，此后没有任何事件回头看它 ⇒ 永远停在本地链接上。
 	//
-	// ⚠️ 顺序要紧：**只差一个引用**才轮得到这一条 —— 被引用的文件本来就该接管
-	// （那是 F16 的正路：把本地链接改写成云端链接）。
-	assert.deepEqual(
-		decide(file("attachments/synced.png"), { knownCloudCopy: true }),
-		{ adopt: false, reason: "内容是云端已有的（同步到达的副本）", retry: false },
-		"内容是云端已有的副本 ⇒ 终局跳过，不进退避重试"
+	// 现在的规矩：无引用一律"**再等一轮**"，由退避窗口自己分辨"链接迟到了"和"真的没有链接"；
+	// 而**被引用**的文件必须接管 —— 那正是这条链把本地链接改写成云端地址的正路。
+	assert.equal(
+		decide(file("attachments/dup 1.png"), { referencedPaths: new Set(["attachments/dup 1.png"]) }).adopt,
+		true,
+		"★ 被本地引用着的文件必须接管 —— 重复插入的那一份正是这么被认领、并把链接改写成云端地址的"
 	);
 	assert.equal(
-		decide(file("attachments/synced.png"), { knownCloudCopy: true, referencedPaths: new Set(["attachments/synced.png"]) })
-			.adopt,
+		decide(file("attachments/dup 1.png")).retry,
 		true,
-		"★ 但如果它**被本地引用着**，仍然要接管（把引用改写成云端地址）—— 与上面那条互为守护"
+		"★⚠️ 还没被引用的那一份必须**留在重试窗口里**（曾经的终局跳过就是这条缺陷的成因）"
 	);
 	cases.decision += 1;
 
@@ -266,8 +276,6 @@ export async function runAttachWatchSuite(mod) {
 		const watcher = createAttachWatcher({
 			autoUpload: () => overrides.autoUpload ?? true,
 			isSelfWrite: (path) => overrides.selfWrites?.has(path) ?? false,
-			// ③ 内容是否已在上传台账里（同步到达的副本）。默认"不知道"。
-			isKnownCloudCopy: overrides.isKnownCloudCopy,
 			index: () => index,
 			settings: () => SETTINGS,
 			lookup: (path) => files.get(path) ?? null,
@@ -423,39 +431,63 @@ export async function runAttachWatchSuite(mod) {
 	assert.equal(f8.watcher.pending(), 0, "退避用尽后丢弃");
 	cases.scheduling += 1;
 
-	// S9 ⭐ 同步到达的副本：探针说"内容已在云端" ⇒ **第一轮就跳过**，不进重试
+	// S9 ⚠️⭐ 重复插入同一张图（用户 2026-10-14 报的那条）：宿主的**链接晚于文件**。
 	//
-	// 这是 1.2.0 三重簿记里的第 ③ 条。它省钱的地方在于：内容哈希只要算一次
-	//（按"路径 + 大小"记忆），而判定不必等满四档退避（约 10 秒）。
-	const f9 = makeWatcher({ isKnownCloudCopy: async () => true });
-	f9.files.set("attachments/synced.png", file("attachments/synced.png"));
-	f9.watcher.onCreated({ path: "attachments/synced.png" });
+	// 第一轮判定时链接还没写进笔记；这里曾经因为"内容已在上传台账里"而**当场丢掉**
+	// （终局）⇒ 此后没有任何事件回头看它 ⇒ 那份文件永远停在本地链接上、也不上传。
+	// 现在必须：第一轮先等（留在攒批里），链接出现后**照常接管**。
+	const f9 = makeWatcher({ retryDelaysMs: [10, 20] });
+	f9.files.set("attachments/dup 1.png", file("attachments/dup 1.png"));
+	f9.watcher.onCreated({ path: "attachments/dup 1.png" });
 	await f9.advance();
-	assert.equal(f9.adoptCalls.length, 0, "同步到达的副本不该被当成新附件上传（否则每台设备互相传一遍）");
-	assert.equal(f9.watcher.pending(), 0, "★ 一轮就该丢掉它，不该挂在攒批里等满退避窗口");
-	assert.ok(
-		f9.logs.some((message) => message.includes("同步到达")),
-		"跳过要留下日志（诊断时能看出为什么没动它）"
+	assert.equal(f9.adoptCalls.length, 0, "第一轮链接还没进笔记 ⇒ 先等，不该急着接管");
+	assert.equal(f9.watcher.pending(), 1, "★⚠️ 它必须留在攒批里等下一轮 —— 这正是那条缺陷的判据");
+	f9.referenced.add("attachments/dup 1.png"); // 宿主把链接写进笔记了
+	await f9.advance();
+	assert.deepEqual(
+		f9.adoptCalls,
+		[["attachments/dup 1.png"]],
+		"★ 拿到引用后必须接管（重复插入的那一份也要把本地链接改写成云端地址）"
 	);
 	cases.scheduling += 1;
 
-	// S10 探针抛错 ⇒ 当作"不知道"（回到"再等引用"的老路），绝不因此接管
+	// S10 ⭐⭐ "上传了"与"云端已有、只是换了链接"必须**分开报**（用户 2026-10-14 报）
+	//
+	// 现场：重复插同一张图，实际**一个字节都没传**（对象早就在云端了），可提示写的是
+	// "已自动上传"。成因就是这个通知把 `uploaded` 与 `reused` 合并成了一个数。
+	// 判据：复用 ⇒ 说"已存在"，**不许**说"已上传"。
 	const f10 = makeWatcher({
-		retryDelaysMs: [10, 20],
-		isKnownCloudCopy: async () => {
-			throw new Error("台账读不出来");
-		},
+		retryDelaysMs: [10],
+		adopt: async () => ({ uploaded: 0, reused: 1, failed: 0, linksRewritten: 1 }),
 	});
-	f10.files.set("attachments/x.png", file("attachments/x.png"));
-	f10.watcher.onCreated({ path: "attachments/x.png" });
+	f10.files.set("attachments/same.png", file("attachments/same.png"));
+	f10.referenced.add("attachments/same.png");
+	f10.watcher.onCreated({ path: "attachments/same.png" });
 	await f10.advance();
-	assert.equal(f10.adoptCalls.length, 0, "★ 探针出错时不许接管（失败的代价不对称：误接管会反复惊动用户）");
-	assert.ok(
-		f10.logs.some((message) => message.includes("云端")),
-		"探针出错要留下日志"
+	assert.deepEqual(
+		f10.notices,
+		["attachAutoReused(1)"],
+		"★ 没上传就别说'已上传' —— 用户看到的那句错话就是这里来的"
 	);
-	await f10.advance();
-	assert.equal(f10.watcher.pending(), 0, "退避用尽后照旧丢弃");
+	cases.scheduling += 1;
+
+	// S11 一批里三种结局：各说各的，数量各归各的（顺序也要稳：上传 → 已存在 → 失败）
+	//
+	// ⚠️ 混合是最容易再退化成"一个合并的计数"的地方：只要有人图省事把三条并回一条，
+	// 这一条就会红。
+	const f11 = makeWatcher({
+		retryDelaysMs: [10],
+		adopt: async () => ({ uploaded: 1, reused: 2, failed: 1, linksRewritten: 3 }),
+	});
+	f11.files.set("attachments/mix.png", file("attachments/mix.png"));
+	f11.referenced.add("attachments/mix.png");
+	f11.watcher.onCreated({ path: "attachments/mix.png" });
+	await f11.advance();
+	assert.deepEqual(
+		f11.notices,
+		["attachAutoUploaded(1)", "attachAutoReused(2)", "attachAutoFailed(1)"],
+		"★ 三种结局分开报：数量各归各的（合并报数会让'没传的'显示成'传了'）"
+	);
 	cases.scheduling += 1;
 
 	return cases;

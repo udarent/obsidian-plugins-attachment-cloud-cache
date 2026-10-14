@@ -119,9 +119,17 @@ export function findLinkSpans(text: string): LinkSpan[] {
 			continue;
 		}
 
-		// 标题在引号里：`path "title"` —— 只替换引号之前那一段
-		const quote = firstIndexOf(body, [" ", '"', "'"]);
-		const raw = quote === -1 ? body : body.slice(0, quote);
+		// 标题在引号里：`path "title"` —— 只替换引号之前那一段。
+		//
+		// ⚠️ 分界是"**引号前面**那个空白"，不是"第一个空白"（2026-10-14 修）：
+		// Obsidian 容忍**没加尖括号**的含空格路径 —— `![](attachments/照片 1.png)`
+		// 是很常见的写法（用户手写、或从别处复制过来）。"第一个空白就切"会把目标
+		// 截成 `attachments/照片`，后果不只是"这条不改写"：`stillMentionsPath` 用的是
+		// 同一套解析，于是这一处引用被判成**不存在** ⇒ 那个文件哪怕还有人指着也可能被删。
+		// Markdown 规范里 title 必须用引号包着，所以真正的分界只能是引号前的空白。
+		const quoteAt = firstIndexOf(body, ['"', "'"]);
+		const sep = quoteAt === -1 ? -1 : quoteAt - 1;
+		const raw = (sep > 0 && /\s/.test(body[sep]) ? body.slice(0, sep) : body).trim();
 		if (!raw) continue;
 		spans.push({ ...base, start: bodyStart, end: bodyStart + raw.length, raw });
 	}
@@ -144,6 +152,19 @@ function firstIndexOf(text: string, needles: string[]): number {
 export interface RewriteRule {
 	from: string;
 	to: string;
+	/**
+	 * 改写后链接里该显示的名字（`![这里](url)`）；缺省时用"原路径的最后一段"。
+	 *
+	 * ⭐ 为什么需要它：整条换形态（wikilink → Markdown）时，显示位原本取**原文件名**，
+	 * 而宿主撞名另落的重复副本叫 `照片 1.png`、链接目标却用的是主干名字
+	 * （`…/照片-<哈希>.png`）⇒ 同一个链接里两个名字不一样。用户 2026-10-14 报了它。
+	 * 调用方（知道 key 的那一层）把 `IngestResult.displayName` 填进来即可。
+	 *
+	 * ⚠️ **只影响"整条换形态"那一路**：原文本来就是 Markdown 形态
+	 * （`![我的名字](attachments/x.png)`）时，`[]` 里那串是**用户自己写的**显示文字，
+	 * 我们只换路径段、一个字都不动它。
+	 */
+	display?: string;
 }
 
 export interface RewritePlan {
@@ -191,12 +212,14 @@ export function planLinkRewrites(text: string, rules: readonly RewriteRule[]): R
 		// 上一条换形态时可能已经吃掉了这一条（防御：宁可跳过，也不要产出错位文本）
 		if (span.start < cursor) continue;
 
-		const replacement = resolve(span.raw);
-		if (replacement === undefined) continue;
+		const resolved = resolve(span.raw);
+		if (resolved === undefined) continue;
+		const replacement = resolved.to;
 
 		if (span.kind === "wikilink" && hasScheme(replacement)) {
-			// ⭐ URL 装不进 wikilink ⇒ 整条换形态（见文件头那张表）
-			out += text.slice(cursor, span.linkStart) + wikilinkToMarkdown(span, replacement);
+			// ⭐ URL 装不进 wikilink ⇒ 整条换形态（见文件头那张表）。
+			// 显示位用规则给的名字（= 链接目标里的名字），见 `RewriteRule.display`。
+			out += text.slice(cursor, span.linkStart) + wikilinkToMarkdown(span, replacement, resolved.display);
 			cursor = span.linkEnd;
 		} else {
 			out += text.slice(cursor, span.start) + replacement;
@@ -216,25 +239,36 @@ export function planLinkRewrites(text: string, rules: readonly RewriteRule[]): R
  * 这三条规则若各写一遍，画布与笔记迟早会分叉（例如画布里认得出、笔记里认不出）。
  * 规则为空时返回 `null`（调用方据此短路，不做任何扫描）。
  */
-function buildResolver(rules: readonly RewriteRule[]): ((raw: string) => string | undefined) | null {
+/** 解析结果：改写后的目标，以及（可选）改写后链接里该显示的名字。 */
+interface ResolvedRewrite {
+	to: string;
+	display?: string;
+}
+
+function buildResolver(rules: readonly RewriteRule[]): ((raw: string) => ResolvedRewrite | undefined) | null {
 	if (rules.length === 0) return null;
 
-	const byPath = new Map<string, string>();
-	const byName = new Map<string, string>();
+	const byPath = new Map<string, ResolvedRewrite>();
+	const byName = new Map<string, ResolvedRewrite>();
 	const ambiguous = new Set<string>();
 
 	for (const rule of rules) {
 		const full = normalizeLinkTarget(rule.from);
 		if (!full) continue;
-		byPath.set(full, rule.to);
+		// `display` 只在真给了非空串时才带上 —— 免得解析器那边还要判一次 undefined 与 ""。
+		const trimmed = (rule.display ?? "").trim();
+		const resolved: ResolvedRewrite = trimmed === "" ? { to: rule.to } : { to: rule.to, display: trimmed };
+		byPath.set(full, resolved);
 
 		const name = baseNameOf(full);
 		const seen = byName.get(name);
-		if (seen !== undefined && seen !== rule.to) ambiguous.add(name);
-		else byName.set(name, rule.to);
+		// ⚠️ 歧义判据只看**目标**（`to`）：同一个 `from` 上挂两条目标相同、显示名不同的规则
+		//（例如"主干那份"与"重复副本"都指向同一个地址）不该被当成歧义。
+		if (seen !== undefined && seen.to !== resolved.to) ambiguous.add(name);
+		else byName.set(name, resolved);
 	}
 
-	return (raw: string): string | undefined => {
+	return (raw: string): ResolvedRewrite | undefined => {
 		const full = normalizeLinkTarget(raw);
 		if (!full) return undefined;
 
@@ -264,10 +298,14 @@ function hasScheme(target: string): boolean {
  * 数字尺寸因此**不再影响渲染**，但文字不丢 —— 如实写进了发版说明。
  * 没有别名时用路径的最后一段（与宿主自己生成链接的写法一致）。
  */
-function wikilinkToMarkdown(span: LinkSpan, url: string): string {
+function wikilinkToMarkdown(span: LinkSpan, url: string, display?: string): string {
 	const alias = (span.alias ?? "").trim();
 	// alt 里出现 `]` 会把链接提前闭合，去掉（alt 是给人看的，不是数据）
-	const alt = (alias === "" ? baseNameOf(span.raw) : alias).replace(/[[\]]/g, "");
+	// 显示位：用户显式写的别名优先；否则用改写**规则给的**名字（= 链接目标里的名字），
+	// 规则没给才退回原路径最后一段（老行为，供不关心名字的调用方使用）。
+	const named = (display ?? "").trim();
+	const fallback = named === "" ? baseNameOf(span.raw) : named;
+	const alt = (alias === "" ? fallback : alias).replace(/[[\]]/g, "");
 	const target = span.subpath === null || span.subpath === "" ? url : `${url}#${span.subpath}`;
 	return `${span.embed ? "!" : ""}[${alt}](${target})`;
 }
@@ -276,6 +314,78 @@ function wikilinkToMarkdown(span: LinkSpan, url: string): string {
 function baseNameOf(path: string): string {
 	const parts = path.split("/");
 	return parts[parts.length - 1] ?? path;
+}
+
+/** 安全解码：不是合法编码就原样返回（正文里的 `%` 是合法字符）。 */
+function decodeSafe(value: string): string {
+	try {
+		return decodeURIComponent(value);
+	} catch {
+		return value;
+	}
+}
+
+/**
+ * 这一处链接的**目标**是不是 `path`。
+ *
+ * ⚠️ 只看**路径段**（`LinkSpan.raw`），不看显示文字：改写 wikilink 时显示文字保留的正是
+ * 原文件名（`![照片 1.png](https://…)`），拿整段正文做字面匹配会把**改写后的链接本身**
+ * 当成"还指着它"—— 那样这一份就永远删不掉了（实测踩到过）。
+ *
+ * 归一用的是与改写**同一个** `normalizeLinkTarget`（去 `./`、反斜杠、扩展名），
+ * 并按"完整路径 / 文件名"两个键匹配（与解析器同一套）。
+ * ⚠️ 与解析器唯一的差别是**没有同名歧义那一档**：歧义时解析器宁可不改，
+ * 而这里必须当成"还指着它"（保守的一侧）。
+ */
+function targetIsPath(raw: string, path: string): boolean {
+	if (typeof raw !== "string" || raw === "") return false;
+	const wanted = [path, baseNameOf(path)].map((form) => normalizeLinkTarget(form));
+	if (wanted.every((form) => form === "")) return false;
+	for (const candidate of [raw, decodeSafe(raw)]) {
+		const normalized = normalizeLinkTarget(candidate);
+		if (normalized !== "" && wanted.includes(normalized)) return true;
+	}
+	return false;
+}
+
+/**
+ * 这段正文里**还**提得到 `path` 吗（用来判断"删掉这个文件安不安全"）。
+ *
+ * ## 为什么必须重新读正文，而不是问宿主的链接索引
+ *
+ * ⚠️⚠️ `metadataCache.resolvedLinks` **滞后于刚写下的笔记**。批量上传的收尾要在
+ * "链接已改写"之后删掉宿主撞名另落的重复副本，而那一刻索引里**多半还写着它被引用**：
+ * 后果是**永远删不掉**，而且看不出为什么（断言写不出来、日志里也没有异常）。
+ * 判据改成"当场读到的正文"之后才成立。
+ *
+ * ## 判据 = 逐个链接看**目标**（含 URL 编码那种改写器认不出的写法）
+ *
+ * 用 `findLinkSpans` + {@link targetIsPath}：覆盖"正文里确实指着它"的所有链接形态，
+ * 包括改写器**改不掉**的那些（典型是 URL 编码 —— 从浏览器复制链接时很常见）。
+ * 那种引用原样留在正文里，若判据只看"改写器认不认得"，这份文件就会被删掉，
+ * 而正文里那条链接**还指着一个不存在的文件**。
+ */
+export function stillMentionsPath(text: string, path: string): boolean {
+	if (typeof text !== "string" || text === "") return false;
+	if (typeof path !== "string" || path === "") return false;
+	return findLinkSpans(text).some((span) => targetIsPath(span.raw, path));
+}
+
+/**
+ * 画布正文里**还**提得到 `path` 吗（`text` 节点里的链接，或 `file` 节点的库内路径）。
+ *
+ * 与 {@link stillMentionsPath} 同理，只是画布多了 `file` 那一类值（画布只能指向库内文件）——
+ * 两类都要看，漏了 `file` 就会出现"笔记里没人引用、画布里却还挂着一个节点"的删除误判。
+ * `file` 与 `text` 两类都由 {@link planCanvasRewrites} 的探针覆盖；
+ * 再加 `canvasTextTargets` 兜"编码写法"那一侧（画布的 `file` 值是宿主写下的原样路径，
+ * 不需要这一层）。
+ */
+export function canvasStillMentionsPath(text: string, path: string): boolean {
+	if (typeof text !== "string" || text === "") return false;
+	if (typeof path !== "string" || path === "") return false;
+	const probe: RewriteRule[] = [{ from: path, to: "（仍在引用）" }];
+	if (planCanvasRewrites(text, { linkRules: probe, fileRules: probe }).count > 0) return true;
+	return canvasTextTargets(text).some((raw) => targetIsPath(raw, path));
 }
 
 /**
@@ -418,7 +528,8 @@ export function planCanvasRewrites(text: string, input: CanvasRewriteInput): Can
 	if (resolveFile) {
 		collect("file", (value) => {
 			const target = resolveFile(value);
-			return target === undefined ? null : target;
+			// 画布 `file` 节点只有路径、没有显示文字 ⇒ 只取目标（`display` 在这儿没用途）
+			return target === undefined ? null : target.to;
 		});
 	}
 	if (resolveLink) {

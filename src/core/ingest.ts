@@ -37,7 +37,7 @@
 
 import type { App } from "obsidian";
 import { CacheIndex, normalizeUrl, type CacheEntry } from "../cache/index";
-import { objectKeyFor } from "../object-key";
+import { displayNameForKey, hashFromKey, objectKeyFor } from "../object-key";
 import type { S3Client } from "../s3/client";
 import { sha256Hex } from "../s3/hash";
 import type { LocalCopyAction, PluginSettings } from "../types";
@@ -45,6 +45,7 @@ import { describeError } from "../error-text";
 import { notifyUser } from "../notify-user";
 import type { NotifySink } from "../notify-user";
 import {
+	baseNameForDuplicate,
 	extensionOfName,
 	fallbackFileName,
 	hostAttachmentFolder,
@@ -113,6 +114,20 @@ export interface IngestResult {
 	 * 用户在一篇笔记里要靠它认出"这是哪个文件"，而 `<哈希>.png` 认不出来。
 	 */
 	name: string;
+	/**
+	 * 链接里该显示的**名字**（`![这里](url)`）—— 从 key 反推，于是与链接**目标**里的
+	 * 文件名逐字一致；取不到时退回 {@link name}。
+	 *
+	 * ⚠️ 为什么不能直接用 {@link name}（用户 2026-10-14 在 Android 上报的第五件事）：
+	 * 宿主撞名另落的重复副本叫 `照片 1.png`，而 key 用的是**主干名字**（`照片-<哈希>.png`）
+	 * ⇒ 显示位写 `照片 1.png` 时，笔记里就成了 `![照片 1.png](…/照片-<哈希>.png)`：
+	 * 同一个链接里两个名字不一样，而且那个 ` 1` 是宿主的去重序号、不是用户的东西。
+	 *
+	 * 反推（而不是把 keyName 一路传下来）的理由与 `download-target` 取本地副本名一致：
+	 * key 是名字的**唯一**真相，清洗（`sanitizeFilename`）也在那一层做 ——
+	 * 两处各留一份名字，迟早会出现"显示的名字与地址里的名字不是一个"。
+	 */
+	displayName: string;
 	/** 写进笔记的远端 URL；`fallback` 时为空串。 */
 	remoteUrl: string;
 	/**
@@ -121,6 +136,15 @@ export interface IngestResult {
 	 */
 	localPath: string;
 	etag: string;
+	/**
+	 * ⭐ 这一份是**宿主撞名另落的重复副本**时，指向那份"主干文件"的路径
+	 * （`照片 1.png` ⇒ `照片.png`）。见 {@link nameForHostDuplicate}。
+	 *
+	 * 调用方据此可以**在链接改写成功、且这一份已零引用之后**把它删掉
+	 * （`runBatchUpload` 的收尾步，用户 2026-10-14 要求"链接 ok 以后就可以删掉"）。
+	 * 只有**迁移模式**下才可能出现：粘贴那条路的落盘名是我们自己取的，不会有这种副本。
+	 */
+	redundantDuplicateOf?: string;
 	/** `fallback` 时的原因。 */
 	error?: Error;
 }
@@ -172,6 +196,23 @@ export interface IngestDeps extends NotifySink {
 	/** 内容哈希。注入是为了让测试可确定，也为将来换算法留口子。 */
 	hashBytes?: (bytes: Uint8Array) => Promise<string>;
 	now?: () => Date;
+	/**
+	 * ⭐ 问云端"这个对象在不在"（HEAD）。在 ⇒ 返回它的 etag（拿不到细节时空串）；
+	 * **不在、或问不动（离线 / 鉴权 / 服务端错）⇒ 返回 `null`**。
+	 *
+	 * 用途只有一个：**别把已经传过的字节再传一遍**。见第 2c 步 ——
+	 * 宿主为撞名另落一份（`名字 1.ext`）时我们已经知道"这份内容很可能早就在云端"
+	 * （同内容的兄弟文件就摆在旁边），可本机台账不一定答得上（换设备、索引被覆盖、首装
+	 * 都答不上）⇒ 与其把整份字节重传，先问云端一句。
+	 *
+	 * ⚠️ **只在"要传的这份是重复副本"时才问**（第 2c 步的前提是 `twinPath` 非空），
+	 * 不是每次上传都问：真正的**新**文件云端按定义不可能有，多一次往返纯属浪费
+	 *（手机上"插图"是最常用的动作，给它每次加一个 RTT 不划算）。这是**量过的取舍**。
+	 *
+	 * ⚠️ 失败方向是安全的：**答不上来一律当作"不在"** ⇒ 退回 PUT。同样的字节、同一个 key，
+	 * 重传是幂等的；而把"不在"当成"在"会留下一张**打不开的图**。
+	 */
+	probeRemote?: (key: string) => Promise<string | null>;
 	/**
 	 * ⭐ 刚刚在附件目录里落下了一份**中转文件**（`path` 是它的库内路径）。
 	 *
@@ -291,6 +332,65 @@ function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 }
 
 /**
+ * 宿主为"撞名"另落的那一份 ⇒ 用**原来那个名字**算 key（用户 2026-10-14 Android 直报）。
+ *
+ * 现场：同一张图插第二次，宿主发现 `照片.png` 已在，就把新文件叫 `照片 1.png`
+ * （它的唯一化规矩，我们拦不住）⇒ 名字不同、key 不同 ⇒ 云端多存一份**完全相同**的内容，
+ * 笔记里两处引用指着两个对象。用户看到的正是"新建了一个带 1 的地址"。
+ *
+ * ## 判据只有两条，且**都不依赖本机台账**
+ *
+ * ① 名字是 `<主干> <序号><扩展名>` 这个形状（{@link baseNameForDuplicate}，纯字符串）；
+ * ② 同目录下 `<主干><扩展名>` 确实存在，**且内容哈希和我们一致**。
+ *
+ * 两条都成立 ⇒ 它就是"同一份内容被宿主另起了一个名字" ⇒ 用主干那个名字算 key。
+ * 于是两份文件的 key（以及由 key 推出的 URL）**完全相同**：桶里只有一个对象，
+ * 笔记里两处引用指向同一个地址。
+ * 同时把那份**主干文件的路径**回报给调用方（{@link IngestResult.redundantDuplicateOf}）：
+ * 这一份是宿主为撞名另落下的，调用方可以在**链接改写成功且它已零引用**之后删掉它。
+ *
+ * ⚠️⚠️ 这一版**刻意不再靠上传台账**。上一版修法（"内容是云端已有的 ⇒ 复用那个 key"）
+ * 在真机上失效了：台账（`uploaded`）是**本机状态**，换设备 / 丢了 `.cache-index.json`
+ * 时它里面没有第一笔记录，"这份内容传过吗"就永远答"没有" —— 于是照样传了第二份。
+ * 而"同目录下有没有一个同内容的兄弟文件"是 **vault 里的事实**，与台账无关，问得出答案。
+ * （台账那条路仍然保留，它管的是"跨目录、完全换了名字"的更宽的情形。）
+ *
+ * ## 出错方向
+ *
+ * 任何一步问不出来（探针抛错、读不动）一律**返回原文件名** ⇒ 照常上传。
+ * 代价是"可能多一个对象"（可回收），而另一侧是"把两份**内容不同**的文件并到同一个
+ * 对象上"（覆盖，不可逆）—— 与 `download-target.ts` 的"先比内容再加序号"同一个方向。
+ */
+async function nameForHostDuplicate(
+	deps: IngestDeps,
+	fileName: string,
+	contentHash: string,
+	hashBytes: (bytes: Uint8Array) => Promise<string>,
+	existingPath: string
+): Promise<{ keyName: string; twinPath: string | null }> {
+	// 只在**迁移模式**下判：带序号的名字只可能出现在宿主已经写进 vault 的文件上。
+	// 粘贴那条路由我们自己落盘（`uniqueVaultPath`），而 key 用的是**原始文件名** ——
+	// 那里不会有这种后缀。
+	if (!existingPath || !contentHash) return { keyName: fileName, twinPath: null };
+
+	const original = baseNameForDuplicate(fileName);
+	if (!original) return { keyName: fileName, twinPath: null };
+
+	const folder = parentFolderOf(existingPath);
+	const sibling = folder ? `${folder}/${original}` : original;
+	try {
+		const adapter = deps.app.vault.adapter;
+		if (!(await adapter.exists(sibling))) return { keyName: fileName, twinPath: null };
+		const siblingHash = await hashBytes(new Uint8Array(await adapter.readBinary(sibling)));
+		if (siblingHash !== contentHash) return { keyName: fileName, twinPath: null };
+		return { keyName: original, twinPath: sibling };
+	} catch {
+		// 问不动就按原名处理：多一个对象是可回收的，认错文件不是
+		return { keyName: fileName, twinPath: null };
+	}
+}
+
+/**
  * 执行一次"上传 + 缓存 + 登记"。
  *
  * 幂等性说明：同一份内容重复调用是安全的 —— 远端 PUT 幂等，
@@ -302,24 +402,50 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 	const now = deps.now?.() ?? new Date();
 	const hashBytes = deps.hashBytes ?? sha256Hex;
 
+	// 字节的来源：**先落盘（粘贴）还是指向已有文件（迁移）**。这一步判定要在
+	// 算 key 之前就完成 —— 因为"宿主撞名另落的那一份"只出现在迁移模式下，
+	// key 推导要用它（见 `nameForHostDuplicate`）。
+	const existingPath = normalizeVaultPath(request.existingPath);
+	const isMigration = existingPath !== "";
+
 	// ── 1. 算出 key 与本地缓存路径（纯逻辑，先做完，避免"上传了才发现路径不合法"）──
 	const ext = resolveKeyExtension(request.name, request.mime);
 	// 文件名也是**一次算定**：key 渲染、落盘、显示名、索引都共用它。
 	// 分成两处算会让"没文件名时造的名字"出现两个不同时间戳（截图粘贴的常态）。
 	const fileName = request.name ?? fallbackFileName(ext, now);
+	/**
+	 * 链接里该显示的名字（见 {@link IngestResult.displayName}）：从 key 反推，
+	 * 取不到（key 为空，或不是默认形状）时退回调用方给的文件名。
+	 */
+	const displayFor = (candidate: string): string => displayNameForKey(candidate) || fileName;
 	let key: string;
+	/**
+	 * 宿主撞名另落的那一份对应的**主干文件**路径（不是这一份）。
+	 * 非空 = 这一份是重复副本，调用方可在链接改写成功、它已零引用之后删掉它。
+	 */
+	let twinPath: string | null = null;
+	/** 内容哈希：算 key 与"这份内容传过吗"共用一次。 */
+	let contentHash = "";
 	try {
 		// ⭐ 1.2.0：key 的形状不再可配置（模板设置已取消）——
 		// 固定 `<名字>-<完整哈希>.<扩展名>`，两个分量分别给人看与给机器判身份。
+		contentHash = await hashBytes(bytes);
+		// ⭐ 2026-10-14：宿主为撞名另落的那一份（`照片 1.png`）用**主干名字**算 key ——
+		// 否则同一份内容会因为名字不同而多存一个对象，笔记里两处引用各指一处。
+		const normalized = await nameForHostDuplicate(deps, fileName, contentHash, hashBytes, existingPath);
+		twinPath = normalized.twinPath;
 		key = objectKeyFor({
-			hash: await hashBytes(bytes),
+			hash: contentHash,
 			ext,
-			filename: fileName,
+			filename: normalized.keyName,
 		});
 	} catch (error) {
 		// `objectKeyFor` 是纯函数、不该抛；真抛了说明**哈希那一步**出了问题
-		return { status: "fallback", key: "", ext, name: fileName, remoteUrl: "", localPath: "", etag: "", error: asError(error) };
+		return { status: "fallback", key: "", ext, name: fileName, displayName: fileName, remoteUrl: "", localPath: "", etag: "", error: asError(error) };
 	}
+
+	/** 成功返回时统一带上"这一份是重复副本"这条信息（没有时不带这个字段）。 */
+	const redundantFields = twinPath ? { redundantDuplicateOf: twinPath } : {};
 
 	if (!key) {
 		return {
@@ -327,6 +453,7 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 			key: "",
 			ext,
 			name: fileName,
+			displayName: fileName,
 			remoteUrl: "",
 			localPath: "",
 			etag: "",
@@ -360,10 +487,94 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 				key,
 				ext,
 				name: known.sourceName || fileName,
+				// ⚠️ 显示名**从 key 反推**，不用 `known.sourceName`：名字的真相在 key 里，
+				// 台账那一份是"上次那次上传时叫什么"，可能带着当时的宿主序号。
+				displayName: displayFor(key),
 				remoteUrl: known.remoteUrl,
 				localPath: known.cachePath,
 				etag: known.etag,
+				...redundantFields,
 			};
+		}
+	}
+
+	// ── 2b. 同一份内容、**换了个名字** ⇒ 复用已有对象（零网络）──
+	//
+	// 用户 2026-10-14 在 Android 上报的场景：把同一张图**再插一次**，宿主发现同名文件
+	// 已存在，会另落一份 `名字 1.ext`（宿主的唯一化行为，我们拦不住）⇒ 名字不同、key 不同 ——
+	// 而 key 里带名字是 D-18 的既定取舍（"跨名去重失效"）。于是桶里会多存一份**完全相同**的内容。
+	//
+	// ⚠️ 这条路**只管"更宽的情形"**（跨目录、名字完全换了），因为它靠的是本机上传台账
+	// （`uploaded`）—— 台账是**本机状态**，换设备 / 丢了 `.cache-index.json` 时就答不上来。
+	// 「宿主撞名另落一份」这个**具体**场景改由 `nameForHostDuplicate` 在算 key 之前处理，
+	// 判据是 vault 里的事实（同目录下有没有同内容的兄弟文件），不依赖台账。
+	// 两条并存：先归名字（步骤 1），再按内容认亲（这里）。
+	const twinKey = contentHash && index.wasContentUploaded(contentHash)
+		? (index.uploadedKeys().find((candidate) => candidate !== key && hashFromKey(candidate) === contentHash) ?? null)
+		: null;
+	/** 对象已在云端、只是名字不同 ⇒ 后面跳过 PUT（但本地那一步照常走）。 */
+	let reuseCloudObject = false;
+	if (twinKey) {
+		const twinEntry = index.get(twinKey);
+		const twinUrl = safePublicUrl(client, twinKey);
+		if (twinEntry && twinUrl && normalizeUrl(twinEntry.remoteUrl) === normalizeUrl(twinUrl)) {
+			const twinPresent = await makeExists(deps.app)(twinEntry.cachePath);
+			if (twinPresent) {
+				// ⭐ 本地副本就是**那一份** ⇒ 这一份是重复落下的：索引一个字都不改，
+				// 引用会被改写成那个对象的地址（调用方用返回的 remoteUrl 改写）。
+				return {
+					status: "reused",
+					key: twinKey,
+					ext,
+					name: twinEntry.sourceName || fileName,
+					// ⭐ 这一份是宿主撞名另落的重复副本 ⇒ 显示名必须用**主干名字**
+					//（`照片.png` 而不是 `照片 1.png`），与链接目标里的名字一致。
+					displayName: displayFor(twinKey),
+					remoteUrl: twinEntry.remoteUrl,
+					localPath: twinEntry.cachePath,
+					etag: twinEntry.etag,
+					...redundantFields,
+				};
+			}
+		}
+		// 对象在云端、本地却没有可用的副本（例如「不留副本」档：只记台账、不记条目）⇒
+		// 复用那个 key，但不 PUT 第二份；下面照常按档位处置这一份文件并登记。
+		key = twinKey;
+		reuseCloudObject = true;
+	}
+
+	/**
+	 * 云端对象的 etag（`reuseCloudObject` 时从第 2c 步的 HEAD 拿到，否则留空）。
+	 *
+	 * ⚠️ 台账那条路拿不到它（台账不记 etag）：那种情况留空。它只供展示与复核，
+	 * **不参与任何判据** —— 所以缺它不是"信息不完整"，是"这一路本来就没有"。
+	 */
+	let etag = "";
+
+	// ── 2c. ⭐ 台账答不上来，但这一份**确是宿主撞名另落的重复副本** ⇒ 先问云端一句 ──
+	//
+	// 第 2 步（索引条目）与第 2b 步（上传台账）都靠**本机簿记**：换设备、
+	// `.cache-index.json` 被覆盖或丢了、首装，它们都答不上"这份内容在云端吗"。
+	// 而 `twinPath` 非空说明**同目录下就摆着一份逐字节相同的兄弟文件** ——
+	// 那份对象十有八九早就在云端了（真机现场正是如此：这台设备上一次插入已经把它传上去了，
+	// 第二次插入却又把整份字节传了一遍 —— 用户看到的"上传成功"提示与事实相反）。
+	//
+	// 所以这里花**一次 HEAD**问云端这个"事实"，而不是把整份字节重传：
+	// 在 ⇒ 跳过 PUT（etag 记进条目）；不在、问不动 ⇒ 照常上传（第 4 步）。
+	//
+	// ⚠️ 只在这一种情形下问。新文件云端按定义没有它，若每次上传都问，
+	// 就是给"插图"这个最常用的动作每次都加一个往返。
+	//
+	// ⚠️ 探测**自己抛错**也当作"不在"（多一次 PUT 是幂等的，反过来会留下打不开的图）。
+	if (!reuseCloudObject && twinPath && deps.probeRemote) {
+		try {
+			const probedEtag = await deps.probeRemote(key);
+			if (probedEtag !== null) {
+				reuseCloudObject = true;
+				etag = probedEtag;
+			}
+		} catch {
+			// 问不动 ⇒ 当作"不在"，下面照常上传
 		}
 	}
 
@@ -371,9 +582,7 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 	//
 	// 两条路的差别不只是"省一次 I/O"：迁移模式下那个文件是**用户的资产**，
 	// 我们不能像对待自己落的临时副本那样把它搬进缓存或丢进回收站。
-	const existingPath = normalizeVaultPath(request.existingPath);
-	const isMigration = existingPath !== "";
-
+	// （判定本身已在步骤 1 之前做完 —— key 推导要用它。）
 	let stagedPath: string;
 	if (isMigration) {
 		// 字节已经在用户的 vault 里躺着 ⇒ 不做任何落盘动作。
@@ -385,20 +594,24 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 		} catch (error) {
 			// 连本地都没能落成。调用方必须**大声报错** —— 此时用户粘贴的内容确实没留下，
 			// 而这正是"绝不丢图"要避免的极端情况。
-			return { status: "fallback", key, ext, name: fileName, remoteUrl: "", localPath: "", etag: "", error: asError(error) };
+			return { status: "fallback", key, ext, name: fileName, displayName: displayFor(key), remoteUrl: "", localPath: "", etag: "", error: asError(error) };
 		}
 	}
 
 	// ── 4. 上传 ──
-	let etag = "";
 	let remoteUrl = "";
-	try {
-		const put = await client.putObject(key, bytes, contentType);
-		etag = put.etag;
-		remoteUrl = put.url;
-	} catch (error) {
-		// 上传失败：字节已经留在附件目录里 → 返回本地路径，绝不丢图
-		return { status: "fallback", key, ext, name: fileName, remoteUrl: "", localPath: stagedPath, etag: "", error: asError(error) };
+	if (reuseCloudObject) {
+		// 这份内容的对象已经在云端了（台账认亲、或第 2c 步刚问过云端）⇒ **不 PUT**。
+		remoteUrl = safePublicUrl(client, key);
+	} else {
+		try {
+			const put = await client.putObject(key, bytes, contentType);
+			etag = put.etag;
+			remoteUrl = put.url;
+		} catch (error) {
+			// 上传失败：字节已经留在附件目录里 → 返回本地路径，绝不丢图
+			return { status: "fallback", key, ext, name: fileName, displayName: displayFor(key), remoteUrl: "", localPath: stagedPath, etag: "", error: asError(error) };
+		}
 	}
 
 	// ── 5. 按设置处置本地副本 ──
@@ -416,9 +629,13 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 	}
 
 	// ── 6. 登记索引 + 上传台账 ──
+	//
+	// ⚠️ `cachePath` 在"这一份是宿主撞名另落的重复副本"时指向**主干那一份**（`twinPath`）：
+	// 这一份马上会被调用方删掉（链接改写成功且零引用之后），把索引记在它身上等于留一条
+	// **悬空条目** —— 而主干那份与它逐字节相同、且会留下，才是"我们的本地副本"。
 	const entry: CacheEntry = {
 		key,
-		cachePath: localPath,
+		cachePath: twinPath ?? localPath,
 		remoteUrl,
 		size: bytes.length,
 		contentType,
@@ -456,7 +673,23 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 		}
 	}
 
-	return { status: "uploaded", key, ext, name: fileName, remoteUrl, localPath, etag };
+	// ⭐ 状态要**如实**：`reused` = 这一次**没有把字节传上去**（云端本来就有）。
+	//
+	// ⚠️ 这个字段是**用户可见提示**的源头（调用方按它分别计数"上传了几个 / 已有的几个"），
+	// 所以它写的必须是**真实发生的动作**，而不是"这条流程走完了"。
+	// 用户 2026-10-14 在 Android 上报的正是它写错时的样子：重复插图明明只是拿回了
+	// 已有对象的地址，提示却说"上传成功"。
+	return {
+		status: reuseCloudObject ? "reused" : "uploaded",
+		key,
+		ext,
+		name: fileName,
+		displayName: displayFor(key),
+		remoteUrl,
+		localPath,
+		etag,
+		...redundantFields,
+	};
 }
 
 /** 移入回收站（走宿主的 trash，尊重用户的"删除即进回收站"设置）。 */

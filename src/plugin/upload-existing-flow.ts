@@ -22,6 +22,7 @@ import {
 } from "../maintenance/batch";
 import { runBatchUpload } from "../maintenance/run";
 import { connectionReadiness } from "../s3/credentials";
+import { baseNameForDuplicate, parentFolderOf } from "../vault-files";
 import { readAllNoteTexts, referencedVaultPaths } from "./notes-query";
 import type { PluginContext } from "./context";
 
@@ -89,6 +90,24 @@ export async function uploadExistingAttachments(ctx: PluginContext): Promise<voi
 		lines.push(ctx.t("maintainBatchSkipsUnreferenced", { count: selection.unreferenced }));
 	}
 
+	// ⚠️ 也要说清"清单里那些重复副本会被删掉"（用户 2026-10-14 要求：
+	// **链接改写成功**之后即可删掉，且不进回收站）。
+	//
+	// 判据刻意只到"**看起来**像"：名字是宿主撞名的形状（`baseNameForDuplicate`，
+	// 与写入侧 `uniqueVaultPath` 同一份约定）+ 同名主干文件确实在。
+	// 真正的判定在**执行层**（还要"内容逐字节相同"才算），所以这里多说一句不会谎报；
+	// 反过来，删了却不提才是没交代 —— 用户会以为文件丢了。
+	// ⚠️ 只在**看起来有**的时候加这一行：每次运行都写一遍会变成没人看的噪音。
+	const lookLikeDuplicates = selection.paths.filter((path) => {
+		const original = baseNameForDuplicate(path.slice(path.lastIndexOf("/") + 1));
+		if (!original) return false;
+		const folder = parentFolderOf(path);
+		return ctx.app.vault.getAbstractFileByPath(folder ? `${folder}/${original}` : original) !== null;
+	}).length;
+	if (lookLikeDuplicates > 0) {
+		lines.push(ctx.t("maintainBatchDuplicates", { count: lookLikeDuplicates }));
+	}
+
 	if (external.candidates.length > 0) {
 		// ⚠️ 必须把**站点**列出来：这个确认框就是那份授权（点它就是显式同意）。
 		// 只说"还有 3 张站外图"等于让用户盲签一份许可。
@@ -125,5 +144,9 @@ export async function uploadExistingAttachments(ctx: PluginContext): Promise<voi
 	// 某一处引用可能还指着旧位置（否则他会以为全改好了）。
 	if (result.canvasSkipped > 0) {
 		new Notice(ctx.t("maintainBatchCanvasSkipped", { count: result.canvasSkipped }));
+	}
+	// ⭐ 删掉重复副本也要**单独说一句**：那是清单里的文件之一，不交代就等于"少了一个"。
+	if (result.redundantRemoved > 0) {
+		new Notice(ctx.t("maintainBatchDuplicatesRemoved", { count: result.redundantRemoved }));
 	}
 }

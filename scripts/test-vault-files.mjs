@@ -14,13 +14,15 @@ import { runVaultFilesSuite } from "./lib/vault-files-suite.mjs";
 await withLoadedTs("src/vault-files", async (mod) => {
 	const stats = await runVaultFilesSuite(mod);
 	console.log(
-		`Vault-file tests passed (${stats.extensionCases} extension/type cases + ${stats.placementCases} attachment-placement cases: the landing folder follows the host's own attachment setting, then the vault root — and the host's "./" means "next to the note", not a folder literally named "."; extension from name ` +
+		`Vault-file tests passed (${stats.extensionCases} extension/type cases + ${stats.placementCases} attachment-placement cases + ${stats.duplicateNameCases} duplicate-name cases: the landing folder follows the host's own attachment setting, then the vault root — and the host's "./" means "next to the note", not a folder literally named "."; extension from name ` +
 			"first and MIME second so both screenshot pastes and downloader drags work, a leading dot " +
 			"is not an extension, and an extension has to *look* like one — the token a CDN leaves " +
 			"after the last dot in a URL is not a type, so it falls back to the MIME (otherwise the " +
 			"cached copy is named after the token and Obsidian does not even show unknown extensions); " +
 			"Content-Type derived and defaulted for every common attachment kind (pdf/audio/video/archives/docs) so public links preview instead of force-downloading, with the embeddable table pinned row by row (tiff/heic/ico are deliberately not embeddable in the host, so they degrade to plain links); parentFolderOf normalises " +
 			"separators; uniqueVaultPath never overwrites — it consults both the host index and the " +
-			"real disk, is capped, and fails loudly rather than looping or clobbering)."
+			"real disk, is capped, and fails loudly rather than looping or clobbering; and the host's " +
+			"own duplicate-name convention (\"name 1.ext\") parses back to \"name.ext\" — and only that " +
+			"one shape, so a file the user really named \"-1\" is never rewritten)."
 	);
 });

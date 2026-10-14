@@ -32,9 +32,10 @@
  */
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { readdirSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -175,8 +176,10 @@ const PICKER_IMAGE_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0
  * 用来制造"这张图其实已经在缓存里了"。
  *
  * ⚠️ 文件名必须相同：1.2.0 起 key = `名字-内容哈希.扩展名`，**文件名是对象身份的一部分**，
- * 换个文件名就是另一个对象（跨名去重不再成立）。所以"同一份内容换个地址再取"这件事，
+ * 换个文件名就是另一个对象。所以"同一份内容换个地址再取"这件事，
  * 只有在**文件名也相同**时才落回同一个 key —— 这条路径要按这个口径钉住。
+ * ⚠️ 2026-10-14（D-24）：上传那一侧现在有两条跨名复用的路（名字归一 / 按内容哈希认亲，
+ * 见 §19.4），但**下载侧仍按 key 找对象**，这条口径没变。
  */
 const PICKER_FRESH_URL = `https://images.example.test/pick-a.png`;
 const PICKER_REUSE_URL = `https://images.example.test/deep/pick-a.png`;
@@ -498,12 +501,25 @@ export async function runLoadAcceptance(options = {}) {
 	};
 
 	try {
-		/** 现场快照：失败时能看到"提示了什么、发了什么请求"。**单行**，见 `waitFor`。 */
+		/**
+		 * 现场快照：失败时能看到"提示了什么、发了什么请求"。**单行**，见 `waitFor`。
+		 *
+		 * ⚠️ 索引那一栏必须**容错**（`?.` + 兜底文案）：有一条变异正是"忘了读索引"
+		 * （`indexStore` 留在 `null`），而快照自己抛 `TypeError` 会把那条变异的**真实原因**
+		 * 盖掉 —— 变异验证于是判"原因不符"（红的是一条与它无关的诊断代码）。
+		 * 实测踩到过：`Cannot read properties of null (reading 'index')`。
+		 */
 		const diagnose = () =>
 			[
 				`提示=${mockObsidian.Notice.instances.map((n) => n.message).join(" / ") || "(无)"}`,
 				`请求=${server.requests.map((r) => r.method).join(",") || "(无)"}`,
 				`注册=${plugin.registrations.map((r) => r.detail).join(",") || "(无)"}`,
+				`索引=${
+					plugin.indexStore?.index
+						.toArray()
+						.map((e) => `${e.key}@${e.cachePath}`)
+						.join(" / ") || "(索引未加载)"
+				}`,
 			].join(" ｜ ");
 
 		// ============================================================
@@ -766,6 +782,7 @@ export async function runLoadAcceptance(options = {}) {
 		commandIds,
 		[
 			"audit-cache",
+			"check-orphans",
 			"cleanup-cloud",
 			"pick-external-images",
 			"repair-index",
@@ -773,7 +790,8 @@ export async function runLoadAcceptance(options = {}) {
 		],
 		// ⚠️ 1.2.0（D-17）：从六条变五条 —— `clean-cache` 退役（设计 §20.16 #5）。
 		// 它原来的两个职责都有新家：自愈已自动化；删未引用副本由 R17 的询问与 cleanup-cloud 承担。
-		"★ 五条维护命令都要注册（少一条就是「功能写了但用户找不到」）"
+		// ⚠️ 2026-10-14 又回六条：新增 `check-orphans`（用户报"那次询问被误关后没法重来"）。
+		"★ 六条维护命令都要注册（少一条就是「功能写了但用户找不到」）"
 	);
 
 		const runCommand = (id) => {
@@ -883,6 +901,24 @@ ${text}`);
 			`★ 索引指向的文件已不在 ⇒ 失效数 +1（自愈会摘掉这条）实际：${withStale}`
 		);
 		assert.equal(filesIn(withStale), files0 + 1, `★ 失效那条**不算副本** 实际：${withStale}`);
+
+		// ④ ⭐ 跑一次「自检并修复」⇒ 那条失效记录**真的被摘掉**（不只是被报出来）。
+		// ⚠️ 这一层此前只有注释在承诺（上面那句"自愈会摘掉这条"），**没有任何断言** ——
+		// 而用户 2026-10-14 在 Android 上正是看到"索引指向的文件已不在 1 条"来报的：
+		// 他要的是"这数字会不会自己消失 / 怎么让它消失"，所以这里钉住**命令那条线**。
+		// （后台那条线走**两轮确认**，见 `self-heal` 套件与 `createAbsenceConfirmer`。）
+		runCommand("repair-index");
+		await waitFor(
+			async () => missingIn(await readReport()) === missing0,
+			"★ 修复命令要把失效记录摘掉（占用报告里的失效数回到基线）",
+			5000,
+			diagnose
+		);
+		assert.equal(
+			indexHandle.get("stale-1f.png"),
+			undefined,
+			"★ 那条记录本身也要从索引里消失（否则下一轮又会查到它）"
+		);
 
 		// ⭐ 只读性：报告一个文件都不该动（它没有任何确认框，也没有删除路径）
 		assert.equal(harness.calls.trash.length, trashesBeforeReport, "★ 报告不许碰回收站（它只读）");
@@ -1742,6 +1778,435 @@ ${text}`);
 			// ⚠️ 这一轮**会**再弹确认框（候选非空）—— 如实写在这里，免得下一个人
 			// 以为"再跑一次是空操作"成立（它不是：永远确认不上的那份会一直出现）。
 			assert.equal(releaseAsks.length, 2, "★ 候选非空就会问一次（云端确认不上的那份仍在候选里）");
+		}
+
+		// ============================================================
+		// 8d. ⭐⭐ 宿主撞名另落的重复副本：链接改写成功之后**删掉**（D-24 ④）
+		//
+		// 现场（用户 2026-10-14 Android 直报）：同一张图插第二次时，**宿主自己**把新文件
+		// 叫 `照片 1.png`（它的唯一化规矩，我们拦不住）。此前那次改动已经让两份
+		// **共用同一个对象、同一个地址**；这一段钉的是**收尾**：那一份重复文件在链接
+		// 改写成功之后被删掉，而且**不进回收站**（用户明确要求："不用放回收站"）。
+		// ============================================================
+		{
+			const twinPath = "attachments/dup.png";
+			const duplicatePath = "attachments/dup 1.png";
+			const DUP_BYTES = new Uint8Array([...BATCH_BYTES, 0x7d]);
+			const noteA = "notes/重复甲.md";
+			const noteB = "notes/重复乙.md";
+			await writeFile(join(root, twinPath), Buffer.from(DUP_BYTES));
+			await writeFile(join(root, duplicatePath), Buffer.from(DUP_BYTES));
+			await writeFile(join(root, noteA), "![[dup.png]]\n", "utf8");
+			await writeFile(join(root, noteB), "![[dup 1.png]]\n", "utf8");
+			harness.setResolvedLinks({
+				[noteA]: { [twinPath]: 1 },
+				[noteB]: { [duplicatePath]: 1 },
+			});
+			await harness.refreshPathCache();
+
+			const deletesBefore = harness.calls.delete.length;
+			const trashesBefore = harness.calls.trash.length;
+			mockObsidian.Notice.instances.length = 0;
+			plugin.confirmMaintenance = async () => true;
+			runCommand("upload-attachments");
+			await waitFor(
+				async () => !(await existsOnDisk(root, duplicatePath)),
+				"宿主撞名另落的那一份被删掉",
+				5000,
+				diagnose
+			);
+
+			// ⭐ 内容相同 ⇒ **只传一次**（名字归一让两份落到同一个 key 上）
+			//
+			// ⚠️ 断言必须**只盯这一份内容**：这条命令处理的是全库候选（前面几节留下的
+			// 文件也在里面），拿全局 PUT 计数会比出别人的账 —— 那就是"断言被别的东西满足"。
+			const dupHash = createHash("sha256").update(Buffer.from(DUP_BYTES)).digest("hex");
+			const putPaths = server.requests.filter((r) => r.method === "PUT").map((r) => r.path);
+			assert.equal(
+				putPaths.filter((path) => path.includes(dupHash)).length,
+				1,
+				`★ 同一份内容只应 PUT 一次（实际这些对象：${JSON.stringify(putPaths)}）`
+			);
+			assert.equal(
+				server.stored(`dup 1-${dupHash}.png`),
+				null,
+				"★ 桶里不许出现带「 1」名字的对象（两份必须落在同一个 key 上）"
+			);
+			assert.ok(server.stored(`dup-${dupHash}.png`) !== null, "★ 那个对象确实在桶里");
+			assert.equal(await existsOnDisk(root, twinPath), true, "★ 留下来的那一份必须还在（它才是本地副本）");
+			// ⭐ 索引里**不许留下指着那份被删文件的条目**。
+			// 用户 2026-10-14 在 Android 上报"索引指向的文件已不在 1 条"，第一件要排除的
+			// 就是"我们自己删重复副本时漏摘了条目"（那会让人以为插件把索引弄坏了）。
+			assert.equal(
+				plugin.indexStore.index.findByCachePath(duplicatePath),
+				undefined,
+				"★ 删掉那一份之后，索引里不许有指向它的条目"
+			);
+			const survivingEntry = plugin.indexStore.index.findByCachePath(twinPath);
+			assert.ok(
+				survivingEntry && survivingEntry.key.includes(dupHash),
+				"★ 留下来的那一份仍要被索引记着（它才是本地副本）"
+			);
+			const urlOf = (text) => text.match(/https?:\/\/\S+/)?.[0] ?? "";
+			const urlA = urlOf(await readFile(join(root, noteA), "utf8"));
+			const urlB = urlOf(await readFile(join(root, noteB), "utf8"));
+			assert.ok(urlA.includes(PUBLIC_BASE), `甲笔记应指向配置的存储：${urlA}`);
+			assert.equal(urlA, urlB, "★ 两处引用必须指向**同一个**地址");
+			// ⭐⭐ 显示名也必须与**链接目标**一致（用户 2026-10-14 报的第五件事）。
+			//
+			// 乙笔记改写前那一行是 `![[dup 1.png]]` —— 显示位若沿用宿主给的名字，产出就是
+			// `![dup 1.png](…/dup-<哈希>.png)`：同一个链接里两个名字不一样，而那个 ` 1`
+			// 是宿主的去重序号、不是用户的东西。所以两篇笔记里那一行应当**逐字相同**。
+			const lineA = (await readFile(join(root, noteA), "utf8")).trim();
+			const lineB = (await readFile(join(root, noteB), "utf8")).trim();
+			// ⚠️ 顺序是挑过的：**静态**那句（显示名对不对）先说。
+			// 反过来的话，下面那条带实际值的断言会先报"两行不一样"，而真实原因是
+			// "乙笔记的显示位用了宿主的序号名"—— 报出来的话指不到根因。
+			assert.ok(
+				lineB.startsWith("![dup.png]("),
+				"★ 显示名必须用主干名字（宿主的「 1」不许出现在链接文字里）"
+			);
+			assert.equal(
+				lineB,
+				lineA,
+				`★ 两篇笔记里那一行必须逐字相同（同址 + 同显示名），实际 ${JSON.stringify([lineA, lineB])}`
+			);
+			// ⭐ 删法：直接删（`remove.ts` 的 `vault.delete`）—— **不进回收站**。
+			// 用户 2026-10-14 明确要求这样：同内容的副本进回收站 = 把垃圾从附件目录
+			// 挪到回收站，用户还得自己去清一次。
+			assert.ok(harness.calls.delete.includes(duplicatePath), "★ 重复副本要被真的删掉");
+			// ⭐ 这一趟**只**删掉那一份（`deletesBefore` 从 1.2.0 起一直没被用上 —— 那条
+			// "只删该删的"断言在某次改动里丢了。补回来：多删的文件没有任何**别的**断言能发现
+			//（`dropRedundantCopies` 的四条前置一旦被绕过，症状是"某个附件悄悄没了"）。
+			assert.equal(
+				harness.calls.delete.length,
+				deletesBefore + 1,
+				"★ 这一趟只该删掉那份重复副本（多删的文件没有任何别的断言能发现）"
+			);
+			assert.equal(harness.calls.trash.length, trashesBefore, "★ 不许把它送进回收站");
+			// ⚠️ 这条必须**等**它出现，不能"删完了立刻查提示"：删除发生在 `runBatchUpload`
+			// 里面，而这条提示是流程在它**返回之后**才弹的 ⇒ 两者之间有一个真实的缝隙
+			//（实测：产物路径上碰巧来得及，源码 bundle 路径上就来不及，断言于是偶发变红）。
+			await waitFor(
+				async () =>
+					mockObsidian.Notice.instances.some((notice) =>
+						notice.message.includes(plugin.t("maintainBatchDuplicatesRemoved", { count: 1 }))
+					),
+				"提示里报出删掉 1 份重复副本（删了必须说一句：清单里少了一个文件）",
+				5000,
+				() => `实际提示：${JSON.stringify(mockObsidian.Notice.instances.map((n) => n.message))}`
+			);
+		}
+
+		// ============================================================
+		// 8e. ⚠️ 这一趟**有引用没能改写** ⇒ 一个都不删（宁可留着重复副本）
+		//
+		// 判据用的是"当场重算的引用集合 + 这一趟有没有写失败/跳过"。画布 `file` 节点
+		// 走的是另一条路（`fileRules`），它没改写成功时**引用集合里看不见它** ——
+		// 所以这里必须**粗**：一处没改成就全都不删。
+		// 代价不对称：少删一份只是多占一点磁盘，错删一份是用户的东西不见了。
+		// ============================================================
+		{
+			const twinPath = "attachments/dup2.png";
+			const duplicatePath = "attachments/dup2 1.png";
+			const DUP2_BYTES = new Uint8Array([...BATCH_BYTES, 0x7e]);
+			const notePath = "notes/重复丙.md";
+			await writeFile(join(root, twinPath), Buffer.from(DUP2_BYTES));
+			await writeFile(join(root, duplicatePath), Buffer.from(DUP2_BYTES));
+			await writeFile(join(root, notePath), "![[dup2 1.png]]\n", "utf8");
+			// 坏转义的画布：`\q` 不是合法 JSON 转义 ⇒ 改写器按原则④跳过并计数。
+			// ⚠️ 用 `String.raw`：普通字符串里的 `\q` 会被 JS 吃掉那个反斜杠，
+			// 于是文件里变成合法内容，"卡住删除"的那条前置就不会成立（测了个不存在的情况）。
+			await writeFile(
+				join(root, "board.canvas"),
+				String.raw`{"nodes":[{"type":"file","file":"attachments/dup2 1.png\q"}],"edges":[]}`,
+				"utf8"
+			);
+			harness.setResolvedLinks({ [notePath]: { [duplicatePath]: 1 } });
+			await harness.refreshPathCache();
+
+			const deletesBefore = harness.calls.delete.length;
+			mockObsidian.Notice.instances.length = 0;
+			plugin.confirmMaintenance = async () => true;
+			runCommand("upload-attachments");
+			// 等的是"链接改写好"（这才是"这一趟跑完了"的信号），而不是"文件被删"
+			await waitFor(
+				async () => (await readFile(join(root, notePath), "utf8")).includes(PUBLIC_BASE),
+				"笔记里的链接被改写成远端地址",
+				5000,
+				diagnose
+			);
+
+			// 等"这一趟跑完"再把否定断言说出口：删除与提示都排在那之后（见 8d 的说明）
+			await new Promise((resolve) => setTimeout(resolve, 200));
+
+			assert.equal(
+				await existsOnDisk(root, duplicatePath),
+				true,
+				"★ 有引用没能改写（画布里那个值解不开）⇒ 一份都不删 —— 它可能正被看不见的地方指着"
+			);
+			assert.equal(harness.calls.delete.length, deletesBefore, "★ 这一趟一个文件都不该删");
+			assert.ok(
+				!mockObsidian.Notice.instances.some((notice) =>
+					notice.message.includes(plugin.t("maintainBatchDuplicatesRemoved", { count: 1 }))
+				),
+				"★ 没删成就不能报'已删掉'"
+			);
+			// 收尾：把坏画布清掉，免得它影响后面的场景（它只服务这一条断言）
+			await rm(join(root, "board.canvas"), { force: true });
+			await harness.refreshPathCache();
+		}
+
+		// ============================================================
+		// 8f. ⚠️ 改写**认不出来**的那种链接仍然算"有人指着它" ⇒ 不删
+		//
+		// 判"还在不在"用的是与改写**同一套**匹配器（`stillMentionsPath`）。这个夹具是一条
+		// **URL 编码**的链接（`dup3%201.png`）：改写器解不开它（规则按路径/短名匹配），
+		// 于是它**原样留在正文里** —— 那种情况下必须认定"这一份还被指着"。
+		// 反过来（把它当成没人引用）就会删掉一个正文里还看得见的链接目标。
+		// ============================================================
+		{
+			const twinPath = "attachments/dup3.png";
+			const duplicatePath = "attachments/dup3 1.png";
+			const DUP3_BYTES = new Uint8Array([...BATCH_BYTES, 0x7f]);
+			const notePath = "notes/重复丁.md";
+			await writeFile(join(root, twinPath), Buffer.from(DUP3_BYTES));
+			await writeFile(join(root, duplicatePath), Buffer.from(DUP3_BYTES));
+			// 编码形式（空格写成 %20）——改写器不认，它就该被当成"还在"
+			await writeFile(join(root, notePath), "![x](attachments/dup3%201.png)\n", "utf8");
+			harness.setResolvedLinks({ [notePath]: { [duplicatePath]: 1 } });
+			await harness.refreshPathCache();
+
+			const deletesBefore = harness.calls.delete.length;
+			plugin.confirmMaintenance = async () => true;
+			runCommand("upload-attachments");
+			await waitFor(
+				async () => server.requests.filter((r) => r.method === "PUT").length > 0,
+				"这一趟跑完（至少发出一次 PUT）",
+				5000,
+				diagnose
+			);
+			// 再给它一点时间：删除发生在改写之后（同一趟里），若判据错了它会立刻消失
+			await new Promise((resolve) => setTimeout(resolve, 200));
+
+			assert.equal(
+				await existsOnDisk(root, duplicatePath),
+				true,
+				"★ 正文里还留着一处认不出来的引用 ⇒ 不许删（宁可留着，也不能删掉还被指着的东西）"
+			);
+			assert.equal(harness.calls.delete.length, deletesBefore, "★ 这一趟一个文件都不该删");
+			assert.equal(await existsOnDisk(root, twinPath), true, "★ 留下来的那一份当然也在");
+		}
+
+		// ============================================================
+		// 8g. ⭐⭐ 云端**已经有**那个对象 ⇒ 一个字节都不重传
+		//     （用户 2026-10-14 在 Android 上报的第二件事："提示说上传成功，可并不需要上传")
+		//
+		// 现场：同一张图插第二次，宿主另落 `dup4 1.png`。8d 那一段已经钉住"两份共用同一个
+		// 地址"，但**字节仍会被重传一遍** —— 判断"云端有没有"原本只能问本机台账
+		// （`CacheIndex.wasContentUploaded`），而台账答不上来（换设备 / 索引被覆盖 / 首装）时
+		// 它就退回了 PUT。用户看到的那句"上传成功"正是这一次多余上传。
+		//
+		// 这一段是**入口接线**的判据：少了 `main.ts` 里那行 `probeRemote`，下面那条
+		// "零 PUT"就红 —— 而模块层的套件（`ingest-suite`）单独看还是全绿。
+		// ============================================================
+		{
+			const twinPath = "attachments/dup4.png";
+			const duplicatePath = "attachments/dup4 1.png";
+			const DUP4_BYTES = new Uint8Array([...BATCH_BYTES, 0x81]);
+			const dup4Hash = createHash("sha256").update(Buffer.from(DUP4_BYTES)).digest("hex");
+			const remoteKey = `dup4-${dup4Hash}.png`;
+			const notePath = "notes/重复戊.md";
+			// ⭐ 云端**已经有**它 —— 模拟"这台设备上一次插入已经把它传上去了"。
+			// 而插件**本机索引里没有这一笔**（这份内容从没在本机上传过 ⇒ 台账也答不上来）——
+			// 这正是真机上那个让"按内容认亲"失效的状态。
+			server.objects.set(remoteKey, { body: Buffer.from(DUP4_BYTES), contentType: "image/png" });
+			await writeFile(join(root, twinPath), Buffer.from(DUP4_BYTES));
+			await writeFile(join(root, duplicatePath), Buffer.from(DUP4_BYTES));
+			await writeFile(join(root, notePath), "![[dup4 1.png]]\n", "utf8");
+			harness.setResolvedLinks({ [notePath]: { [duplicatePath]: 1 } });
+			await harness.refreshPathCache();
+
+			const putsBefore = server.countByMethod("PUT");
+			const headsBefore = server.countByMethod("HEAD");
+			plugin.confirmMaintenance = async () => true;
+			runCommand("upload-attachments");
+			await waitFor(
+				async () => !(await existsOnDisk(root, duplicatePath)),
+				"这一趟跑完（重复副本在链接改写后被删掉）",
+				5000,
+				diagnose
+			);
+
+			// ⚠️ 断言只盯**这一份内容**：这条命令处理的是全库候选（前面几节留下的文件也在里面），
+			// 拿全局 PUT 计数会比出别人的账 —— 那就是"断言被别的东西满足"。
+			const putPaths = server.requests.filter((r) => r.method === "PUT").map((r) => r.path);
+			assert.equal(
+				putPaths.filter((path) => path.includes(dup4Hash)).length,
+				0,
+				`★ 云端已有的内容**一个字节都不许重传**（实际 PUT：${JSON.stringify(putPaths)}）`
+			);
+			assert.ok(
+				server.countByMethod("HEAD") > headsBefore,
+				"★ 判据得是**问云端**（HEAD）拿到的答案，不是猜'名字像重复所以不用传'"
+			);
+			const text = await readFile(join(root, notePath), "utf8");
+			assert.ok(
+				text.includes(remoteKey),
+				`★ 笔记里的链接要指向那个**已经在云端**的对象：${text}`
+			);
+			assert.ok(
+				server.stored(remoteKey) !== null,
+				"★ 那个对象本来就该在桶里（我们没传，但它也没被删）"
+			);
+			// ⭐ `putsBefore`（同样一直没被用上）补一条**总量**断言：这一趟的 PUT 次数与之前
+			// **完全相同** —— 上面那条按"这一份内容"过滤，万一 key 算错了就筛不到东西（假绿）；
+			// 总量不变才是"一个字节都没重传"的正面表述。
+			assert.equal(
+				server.countByMethod("PUT"),
+				putsBefore,
+				"★ 这一趟的 PUT 总数没有增加（连一次重传都没有）"
+			);
+		}
+
+		// ============================================================
+		// 8h. ⭐⭐ R17 的**接线**：笔记里去掉引用 ⇒ 询问真的会发生
+		//
+		// ## 为什么以前一条都测不到
+		//
+		// 孤儿询问 100% 挂在 **vault 事件**上（`modify` / `create` / `delete` / `rename`
+		// → 引用快照差分 → 按台账筛候选 → 按档位出声）。而替身的 `vault.on` 一直是
+		// `on() { return {}; }`（**静默吞掉注册**）—— 于是这四条接线在套件里一次都没跑过。
+		// 后果不只是"测不了"：插件入口若**忘了注册**它们，全套测试照样全绿。
+		// 2026-10-14 用户报"删掉最后一个副本后没问要不要删云端"时，本地**无法证伪**，
+		// 根因就在这里（覆盖缺口：vault 事件一条都跑不到）。
+		//
+		// ## 这一段打的是哪一层
+		//
+		// **决定层之上的那一层**：事件 → 快照差分 → 台账筛选 → 出声。
+		// 决定层本身（`selectOrphanAsks` 的候选/冷却规则）在 `orphan-watch` 套件里穷举。
+		//
+		// ⚠️ 用 `notice` 档而不是 `always` 是**刻意**的：`notice` 的出口是 `Notice`，
+		// 替身记得到、断言得了；`always` 那一路要驱动弹窗上的三个按钮
+		//（`askOrphanCloudDelete` 直接 `new Modal`，替身里没有真按钮可点）⇒
+		// ⚠️ 那条**留作已知缺口**，别在这里假装测了（要测就得先给弹窗做一层可驱动的替身）。
+		// ============================================================
+		{
+			// ⚠️ 先钉"四条接线真的挂上了"。替身以前把 `vault.on` 吞掉 ⇒ 忘注册也看不出来。
+			for (const name of ["create", "modify", "delete", "rename"]) {
+				assert.ok(
+					(app.vault.registered.get(name) ?? []).length > 0,
+					`★ vault 的 \`${name}\` 事件必须真的接上线（孤儿询问与"新增附件接管"都挂在它上面）`
+				);
+			}
+
+			const notePath = "notes/待勾选.md";
+			const attachmentPath = "attachments/待勾选.png";
+			const ORPHAN_BYTES = new Uint8Array([...BATCH_BYTES, 0x91]);
+			await writeFile(join(root, attachmentPath), Buffer.from(ORPHAN_BYTES));
+			await writeFile(join(root, notePath), "![[待勾选.png]]\n", "utf8");
+			harness.setResolvedLinks({ [notePath]: { [attachmentPath]: 1 } });
+			await harness.refreshPathCache();
+
+			plugin.confirmMaintenance = async () => true;
+			runCommand("upload-attachments");
+			await waitFor(
+				async () => (await readFile(join(root, notePath), "utf8")).includes(PUBLIC_BASE),
+				"这一篇的引用被改写成远端地址（于是它才是一个「已上传的对象」）",
+				5000,
+				diagnose
+			);
+			const uploadedKey = createHash("sha256").update(Buffer.from(ORPHAN_BYTES)).digest("hex");
+			const key = `待勾选-${uploadedKey}.png`;
+			assert.equal(
+				plugin.indexStore.index.wasUploaded(key),
+				true,
+				"前提：这个对象必须在上传台账里（孤儿候选的认领判据是**台账**，不是索引条目 —— N11）"
+			);
+
+			// ── ① 先让快照记住"这一篇引用着它" ──
+			// 没有这一步，第一次 `modify` 只会**登记**这篇笔记（快照里还没有它）而不产出差分，
+			// 于是一条永远不会问。真实的宿主也是这样：加载时 warmUp 先建快照。
+			app.vault.trigger("create", app.vault.getAbstractFileByPath(notePath));
+			await new Promise((resolve) => setTimeout(resolve, 2000)); // > CHECK_DEBOUNCE(1.5s)
+
+			// ── ② 用户**把那条引用删掉**（这正是 R17 的主场景）──
+			mockObsidian.Notice.instances.length = 0;
+			plugin.settings.orphanAsk = "notice";
+			await writeFile(join(root, notePath), "没有任何引用了。\n", "utf8");
+			app.vault.trigger("modify", app.vault.getAbstractFileByPath(notePath));
+
+			// 1.5 s（引用重算）+ 4 s（询问防抖）—— 等它自己走完
+			await waitFor(
+				() =>
+					mockObsidian.Notice.instances.some(
+						(notice) =>
+							notice.message ===
+							// ⚠️ 指路指向的是**新那条命令**（"检查未被引用的云端附件…"）：它按同一批
+							// 判据再列一次，正是"想再处理一次"该去的地方（`cleanup-cloud` 走列桶，是另一件事）。
+							plugin.t("orphanNotice", { count: 1, command: plugin.t("cmdCheckOrphans") })
+					),
+				"★ 引用消失了 ⇒ 必须出声（`notice` 档：一条通知，且数量如实）",
+				9000,
+				() => `实际提示：${JSON.stringify(mockObsidian.Notice.instances.map((n) => n.message))}`
+			);
+		}
+
+		// ============================================================
+		// 8i. ⭐⭐ 命令入口：**自己重来一次**那次询问（用户 2026-10-14 Android 报告）
+		//
+		// 现场：那个三档弹窗**只自动出现一次**（冷却 `asked` 记住之后不再问），而弹窗还可能被
+		// **误关**（点背景 / ESC —— 用户的原话是"点一下边上就不见了"）⇒ 他从此失去那次决定，
+		// 云端对象永远留着。⇒ 新增命令 `check-orphans`（"检查未被引用的云端附件…"）。
+		//
+		// 这一段钉三件事：
+		//   ① **接线**在（走真实命令路径 `runCommand`，它顺带断言这条命令真的注册过）；
+		//   ② **不吃冷却**（上面那个 key 刚被自动那条问过、已在 `asked` 里）；
+		//   ③ 空结果**如实说**（静默会被当成"命令坏了"）。
+		// ⚠️ 档位用 `notice`：`always` 那一路要驱动弹窗上的三个按钮（替身里没有真按钮可点），
+		// 那是已知缺口，别在这里假装测了（见 §8h 的说明）。
+		// ⚠️ 通知按"**含这条命令名**"匹配，不写死候选数量 —— 库里此刻可能还留着前面几节
+		// 造出来的其它"已上传但没引用"的对象，写死 1 就是"断言被别的东西满足"的反面。
+		// ============================================================
+		{
+			plugin.settings.orphanAsk = "notice";
+			const mentionsCommand = (notice) => notice.message.includes(plugin.t("cmdCheckOrphans"));
+			// 上面那个刚被自动那条问过、因而**已经在冷却里**的对象（与 §8h 用同一批字节）。
+			const ORPHAN_BYTES = new Uint8Array([...BATCH_BYTES, 0x91]);
+			const orphanKey = `待勾选-${createHash("sha256").update(Buffer.from(ORPHAN_BYTES)).digest("hex")}.png`;
+			const index = plugin.indexStore.index;
+
+			// ── ① 台账里**只留**它，再跑命令 ⇒ 必须仍然出声 ──
+			//
+			// ⚠️ "只留它"是**判据的一部分**，不是布景：库里还有前面几节造出来的其它"已上传
+			// 但没引用"的对象，只要**任何**候选被问出来通知就会出现 —— 那样的断言
+			// 会被别的对象满足，变异（命令也吃冷却）照样通过（第一版就是这么写的，
+			// 实测报"漏过：测试无牙"）。唯一候选 + 已在冷却里，才是这条纪律的可判据形态。
+			for (const key of index.uploadedKeys()) index.forgetUploaded(key);
+			index.markUploaded(orphanKey);
+			mockObsidian.Notice.instances.length = 0;
+			runCommand("check-orphans");
+			await waitFor(
+				() => mockObsidian.Notice.instances.some(mentionsCommand),
+				"★ 命令必须能**重来一次**那次询问（冷却只管自动那一侧，命令是显式动作）",
+				6000,
+				() => `实际提示：${JSON.stringify(mockObsidian.Notice.instances.map((n) => n.message))}`
+			);
+
+			// ── ② 台账清空 ⇒ 候选为空 ⇒ 如实说"没有发现"，不能静默 ──
+			// 办法：把**上传台账**清空（`forgetUploaded`）—— 那正是"这台设备什么都没上传过"。
+			index.forgetUploaded(orphanKey);
+			mockObsidian.Notice.instances.length = 0;
+			runCommand("check-orphans");
+			await waitFor(
+				() =>
+					mockObsidian.Notice.instances.some(
+						(notice) => notice.message === plugin.t("orphanNoneToCheck")
+					),
+				"★ 没有候选时必须如实说'没有发现'（静默会被当成命令坏了）",
+				6000,
+				() => `实际提示：${JSON.stringify(mockObsidian.Notice.instances.map((n) => n.message))}`
+			);
 		}
 
 		// ============================================================

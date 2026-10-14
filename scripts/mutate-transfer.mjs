@@ -32,8 +32,8 @@ await runMutations({
 	mutations: [
 		{
 			name: "降级时不插入任何内容（⭐ 图保住了，但笔记里什么都没有）",
-			from: "\t\t\tif (result.localPath) {\n\t\t\t\t// 降级链接：形态交回宿主（按用户的「新链接格式」设置），`!` 由我们按类型表加。\n\t\t\t\tconst generated = deps.generatedLocalLink ? deps.generatedLocalLink(result.localPath) : null;\n\t\t\t\tpushPart(buildLocalLink(generated, result.localPath, result.ext));",
-			to: "\t\t\tif (false) {\n\t\t\t\tconst generated = deps.generatedLocalLink ? deps.generatedLocalLink(result.localPath) : null;\n\t\t\t\tpushPart(buildLocalLink(generated, result.localPath, result.ext));",
+			from: "\t\t\tif (result.localPath) {\n\t\t\t\t// 降级链接：形态交回宿主（按用户的「新链接格式」设置），`!` 由我们按类型表加。\n\t\t\t\tconst generated = deps.generatedLocalLink ? deps.generatedLocalLink(result.localPath) : null;\n\t\t\t\tpushPart(buildLocalLink(generated, result.localPath, result.ext), file);",
+			to: "\t\t\tif (false) {\n\t\t\t\tconst generated = deps.generatedLocalLink ? deps.generatedLocalLink(result.localPath) : null;\n\t\t\t\tpushPart(buildLocalLink(generated, result.localPath, result.ext), file);",
 			expect: "降级也必须插回内容",
 		},
 		{
@@ -67,12 +67,14 @@ await runMutations({
 			expect: "应插入一次文本",
 		},
 		{
-			// ⚠️ 这条原本是"alt 用主干而不是整个文件名"。1.1.0 起显示名**就是**原文件名
-			// （`[report.pdf]` 比 `[report]` 有用），所以改成守"名字从哪来"：
-			// 取文件名的那一步若被换成别的（例如 `file.type`），链接文字会变成乱码。
-			name: "链接的显示名不取文件名（用户认不出这是哪个文件）",
-			from: "\t\tconst displayName = displayNameOf(file);",
-			to: "\t\tconst displayName = String(file.type ?? \"\");",
+			// ⚠️ 这条原本打的是 `const displayName = displayNameOf(file);`。2026-10-14 起
+			// 显示名的**首选**是 `result.displayName`（= key 里的名字），那一步坏掉会被它兜住
+			// ⇒ 变异**不再产生任何后果**（实测报"漏过：测试无牙"）。
+			// ⇒ 锚点挪到三层回退的**最终表达式**上，守的东西没变：名字取不到时链接文字会变成
+			// 别的东西（乱码 / 类型串），用户认不出这是哪个文件。
+			name: "链接的显示名取不到（用户认不出这是哪个文件）",
+			from: "result.displayName || displayName || result.name",
+			to: 'String(file.type ?? "")',
 			expect: "插入的应是远端嵌入链接",
 		},
 		{
@@ -85,10 +87,25 @@ await runMutations({
 			// 后果：同一次粘贴里同一张图被插两条（或更多）链接 —— 用户看到的是
 			// "粘了一张图，出现两张一样的图"（实测报过）。剪贴板把同一张图给成多份
 			// 是常态（files 一份 + items 一份，包装对象不同、元数据也可能不同）。
+			// ⚠️ 2026-10-14：判据从"产出的文本"换成了"**输入**的文件身份"（见 `pushPart`
+			// 注释：D-24 之后同内容异名的两份文件会产出**逐字相同**的链接，拿文本判会把
+			// 第二份吞掉）—— 锚点跟着换到新判据那一行，**否则它会静默失效**
+			//（`from` 找不到就不再变异，输出还是一片绿）。
 			name: "★ 插入不再去重（同一张图被插成两条链接）",
-			from: "\t\tif (inserted.has(text)) return;",
+			from: "\t\tif (inserted.has(id)) return;",
 			to: "\t\tif (false) return;",
-			expect: "同一张图重复出现时只该插一条链接",
+			// ⚠️ 实际先说话的是**既有**那条用例（"★ 同一张图重复出现时只该插一条链接"，它在
+			// 7f-3 之前）—— 那一条的 message 带插值（报出实际文本），所以 expect 只取它前面的静态片段。
+			expect: "★ 同一张图重复出现时只该插一条链接",
+		},
+		{
+			// 后果：回到"产出文本相同就合并" ⇒ 同内容异名的两份文件（`a.png` 与
+			// `a-copy.png`，复用同一个对象 ⇒ 同一个地址、同一个显示名）被当成"同一张图
+			// 又给了一份"，第二份的链接被吞掉 —— 用户少一张图。
+			name: "★★ 插入按产出文本去重（同内容异名的第二份被吞掉）",
+			from: "\t\tconst id = fileIdentity(file) ?? text;",
+			to: "\t\tconst id = text;",
+			expect: "⭐ 两张图都要插入链接（不能因为复用就少插一条）",
 		},
 	],
 });

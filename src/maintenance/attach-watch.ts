@@ -51,12 +51,29 @@
  *    （粘贴的中转文件、回退下载的副本、将来的迁移落点）；
  * ② **索引里已有一条指向这个路径的副本**（`findByCachePath`）：我们自己的副本，
  *    索引在就认得出来；
- * ③ **文件内容在上传台账里**（`isKnownCloudCopy`）：同步到达的副本 —— 它的内容
- *    我们早就传过（key 里带哈希，见 `CacheIndex.wasContentUploaded`），
- *    而笔记里引用它的是**云端地址**，所以"没有本地引用"是正常状态、不是"还没到时候"。
+ * ③ ~~**文件内容在上传台账里** ⇒ 终局跳过~~ —— ⚠️ **2026-10-14 拆掉了这道闸门**，
+ *    理由见下。
+ *
+ * ⚠️⚠️ **为什么 ③ 必须拆（用户 2026-10-14 在 Android 上报的那条缺陷）**
+ *
+ * ③ 的前提是"它的内容我们早就传过 ⇒ 引用它的是**云端地址** ⇒ 不会再有本地引用出现"。
+ * 这个前提在**重复插入同一张图**时是假的：宿主发现同名文件已存在，会另落一份
+ * `名字 1.ext`（宿主的唯一化行为，我们拦不住），并**照样往笔记里插一条本地链接**。
+ * 于是那一刻的判定是：还没被引用（链接是文件落盘**之后**才写的）+ 内容已在云端
+ * ⇒ **终局跳过、不进重试** —— 而 `vault.on("create")` 是唯一入口，此后再没有任何
+ * 事件会回头看它 ⇒ 那份文件永远停在本地链接上，既不接管也不提示。
+ *
+ * 桌面端通常看不出来：1.2 s 后第一轮判定时链接多半已经写好，于是走到"接管"那条路。
+ * **Android 上笔记保存 + 元数据解析更慢**，第一轮判定正好落在窗口里 ⇒ 稳定复现。
+ *
+ * ⇒ 现在的规矩：**"内容已在云端"不再是终局判定，它和普通的新文件一样走退避窗口**
+ * （见 {@link DEFAULT_RETRY_DELAYS_MS}）。真正同步到达的副本没有任何本地引用，
+ * 窗口走满后照样**静默丢弃**（与从前同样的结局，只是晚 ~10 秒）；而重复插入的那份
+ * 会在下一轮拿到本地链接、正常接管。代价是同步文件多白跑几轮，收益是"重复插入"
+ * 这条真实路径不再静默失效。
  *
  * ⚠️ 这三条与 N11 那个教训（借**会缺档的**簿记判归属 ⇒ 判据在某一档恒假）
- * 的区别在于：① 由我们自己在写之前登记、② 靠索引、③ 靠内容哈希，**都不依赖档位**；
+ * 的区别在于：① 由我们自己在写之前登记、② 靠索引，**都不依赖档位**；
  * 而且万一判错也**不是静默失效**：误把自家副本当新附件，走到上传那一步会因为
  * 内容寻址命中已有 key 而**零网络幂等**（见 `core/ingest.ts` 第 2 步）。
  *
@@ -94,13 +111,6 @@ export interface AttachWatchDecisionInput {
 	autoUpload: boolean;
 	/** 这个路径是不是我们自己刚写下的文件（见 `IngestDeps.onStaged` / `LocalCopyDeps.onStaged`）。 */
 	isSelfWrite: boolean;
-	/**
-	 * 这个文件的内容**已经在云端台账里**吗（同步到达的副本）。
-	 *
-	 * ⚠️ 由调用方**按需**算好（要读文件、算哈希），只在"它还没被引用"时才有意义 ——
-	 * 见模块头 ③。缺省 `false` = 当作不知道（那就走"再等引用"的老路）。
-	 */
-	knownCloudCopy?: boolean;
 	/** 索引（判断"是不是已经登记过的副本"）。 */
 	index: CacheIndex;
 	settings: PluginSettings;
@@ -175,12 +185,10 @@ export function decideAdoptCreatedFile(input: AttachWatchDecisionInput): AttachW
 		}).paths.length === 1;
 	if (!onlyMissingReference) return { adopt: false, reason, retry: false };
 
-	// ③ 内容已经在云端（同步到达的副本）⇒ 终局跳过：引用它的是**云端地址**，
-	// 所以"没有本地引用"是它的正常状态，等下去也不会有引用出现。
-	if (input.knownCloudCopy) {
-		return { adopt: false, reason: "内容是云端已有的（同步到达的副本）", retry: false };
-	}
-
+	// ⚠️ 这里曾经还有一条"内容已在云端 ⇒ 终局跳过"，2026-10-14 拆掉了：
+	// 它把"现在还没被引用"读成了"永远不会被本地引用"，而**重复插入同一张图**时
+	// 那句判断正好反过来（链接是落盘之后才写的）⇒ 判定一出，此后没有任何事件回头看它。
+	// 现在一律走"再等一轮"，让退避窗口自己分辨这两种情况（见模块头 ⚠️⚠️ 那段）。
 	return { adopt: false, reason, retry: true };
 }
 
@@ -190,6 +198,14 @@ export interface AttachAdoptResult {
 	reused: number;
 	failed: number;
 	linksRewritten: number;
+	/**
+	 * ⭐ 这一趟顺手删掉的**宿主撞名另落的重复副本**份数（见 `dropRedundantCopies`）。
+	 *
+	 * 加进这个接口只为一件事：**让这个数字可见**（手机上唯一的排查通道是日志）。
+	 * 不弹通知：用户刚刚亲手插了那张图，而"同一张图不该在本地存两份"本来就是承诺，
+	 * 每插一次就弹一条只会变噪音（命令那条路跑了 N 个文件，所以那里会报）。
+	 */
+	redundantRemoved: number;
 }
 
 /** 「这个路径是我们自己刚写下去的」台账。 */
@@ -257,13 +273,6 @@ export function createSelfWriteLedger(options: { ttlMs?: number; now?: () => num
 export interface AttachWatchDeps {
 	autoUpload: () => boolean;
 	isSelfWrite: (path: string) => boolean;
-	/**
-	 * 这个文件的内容是不是**我们早就传过的**（见 `CacheIndex.wasContentUploaded`）。
-	 *
-	 * 不接这条探针时退化为"当作不知道" —— 那种情况下同步到达的副本会走完
-	 * 退避重试（约 10 秒）后才被放弃，行为仍然正确，只是多做几轮无用功。
-	 */
-	isKnownCloudCopy?: (path: string) => Promise<boolean>;
 	index: () => CacheIndex;
 	settings: () => PluginSettings;
 	/** 现查文件（已经不在库里时返回 `null`）。 */
@@ -326,33 +335,6 @@ export function createAttachWatcher(deps: AttachWatchDeps): AttachWatcher {
 		}, delay);
 	};
 
-	/**
-	 * "这份内容我们早就传过吗"的**带记忆**探针。
-	 *
-	 * 记忆的键是 `路径 + 大小`：同一个文件在退避的几轮里会被问好几次，
-	 * 而每次都要读文件 + 算 sha256（手机上可能是几十 MB 的视频）。
-	 * 文件名相同但大小变了 ⇒ 当作另一个文件重算（同步正在写入时可能发生）。
-	 *
-	 * 探针失败/未接线一律返回 `false`（= 不知道）⇒ 回到"再等引用"的老路。
-	 */
-	const cloudCopyMemo = new Map<string, boolean>();
-	const readKnownCloudCopy = async (path: string, file: VaultFileLike): Promise<boolean> => {
-		const probe = deps.isKnownCloudCopy;
-		if (!probe) return false;
-		const cacheKey = `${path}\u0000${String(file.stat?.size ?? "")}`;
-		const remembered = cloudCopyMemo.get(cacheKey);
-		if (remembered !== undefined) return remembered;
-		let known = false;
-		try {
-			known = (await probe(path)) === true;
-		} catch (error) {
-			log(`判断"内容是否已在云端"失败，按"不知道"处理：${describeError(error)}`);
-			known = false;
-		}
-		cloudCopyMemo.set(cacheKey, known);
-		return known;
-	};
-
 	/** 求引用集合；失败时当作"空集"（= 都还没被引用 ⇒ 继续等，是保守的那一侧）。 */
 	const readReferenced = async (): Promise<ReadonlySet<string>> => {
 		try {
@@ -398,14 +380,12 @@ export function createAttachWatcher(deps: AttachWatchDeps): AttachWatcher {
 				continue;
 			}
 			if (verdict.retry) {
-				// ⭐ 走到这里说明"只差一个引用"。再花一次哈希问：内容是不是**早就传过**的？
-				// （同步到达的副本就是这种：引用它的是云端地址，不会再有本地引用出现。）
-				const known = await readKnownCloudCopy(path, file);
-				if (known) {
-					log(`跳过（内容是云端已有的副本，同步到达）：${path}`);
-					pendingPaths.delete(path);
-					continue;
-				}
+				// ⭐ 走到这里说明"只差一个引用" —— 再等一轮。
+				//
+				// ⚠️ 这里曾经还会再花一次哈希问"内容是不是早就传过的"，是的话当场丢掉
+				// （同步到达的副本）。2026-10-14 拆了：那句话对**重复插入同一张图**是错的
+				// （它的本地链接只是还没写进笔记），而丢掉是**终局**的 —— 见模块头 ⚠️⚠️。
+				// 现在两种情形都走这条"再等一轮"，由窗口自己分辨：真的没引用 ⇒ 等满就放弃。
 				waiting.push(path);
 				continue;
 			}
@@ -416,9 +396,18 @@ export function createAttachWatcher(deps: AttachWatchDeps): AttachWatcher {
 		if (adoptable.length > 0) {
 			try {
 				const result = await deps.adopt(adoptable);
-				const done = result.uploaded + result.reused;
-				if (done > 0) deps.notify(deps.t("attachAutoUploaded", { count: done }));
+				// ⭐ **上传**与"云端已有、只是换了链接"要分开报：两者是**不同的动作**，
+				// 合并成一句"已自动上传 N 个"会让没传的那几个也显示成传了
+				//（用户 2026-10-14 在 Android 上报的正是这个：重复插同一张图，
+				// 提示说"上传成功"，而实际上一个字节都没出去）。
+				// 数量仍然只报**真实发生**的那部分。
+				if (result.uploaded > 0) deps.notify(deps.t("attachAutoUploaded", { count: result.uploaded }));
+				if (result.reused > 0) deps.notify(deps.t("attachAutoReused", { count: result.reused }));
 				if (result.failed > 0) deps.notify(deps.t("attachAutoFailed", { count: result.failed }));
+				// 顺手删掉的重复副本只记日志（见 `AttachAdoptResult.redundantRemoved`）
+				if (result.redundantRemoved > 0) {
+					log(`删掉宿主撞名另落的重复副本 ${result.redundantRemoved} 份（同内容、链接已改写）`);
+				}
 			} catch (error) {
 				// 摘出来的文件已经不在攒批里了（重试也救不了这一次），如实说一句
 				log(`接管失败（${adoptable.length} 个）：${describeError(error)}`);

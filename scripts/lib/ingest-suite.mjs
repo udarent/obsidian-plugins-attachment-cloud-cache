@@ -141,11 +141,30 @@ async function makeHarness(mod, options = {}) {
 	let persistCount = 0;
 	let persistError = null;
 
+	/**
+	 * 上传前的云端探测（生产里是 `S3Client.headObject`，见 `IngestDeps.probeRemote`）。
+	 *
+	 * 默认接在**真客户端**上（于是打的是 mock 服务器）—— 套件测的是真实那条链，
+	 * 不是替身自己编的答案。三种覆盖方式各有用途：
+	 * - 传一个函数：精确控制"云端有没有"；
+	 * - `probeRemote: null`：**假装没接线**（老宿主 / 只有 PUT 的宿主）；
+	 * - 传一个会抛错的函数：模拟"问不动"（离线 / 服务端错）。
+	 */
+	const probeRemote =
+		options.probeRemote === null
+			? undefined
+			: (options.probeRemote ??
+				(async (key) => {
+					const head = await client.headObject(key);
+					return head ? head.etag : null;
+				}));
+
 	const deps = {
 		app,
 		settings,
 		client,
 		index,
+		probeRemote,
 		persistIndex: async () => {
 			persistCount += 1;
 			if (persistError) throw persistError;
@@ -266,6 +285,8 @@ export async function runIngestSuite(mod) {
 		// ⭐ 1.2.0（D-17）：副本 = 附件目录里那份原文件（**不再**按 key 镜像到缓存目录）。
 		// 落点由宿主的附件设置决定（这里宿主没配 ⇒ vault 根），名字用**原始文件名**。
 		assert.equal(result.localPath, "photo.png", "副本应原地保留在附件目录，且用原始文件名");
+		// 没有宿主序号时，显示名就是文件名本身（新版字段不许把普通情形也改掉）。
+		assert.equal(result.displayName, "photo.png", "链接里该显示的名字 = 文件名（无序号时与旧行为一致）");
 
 		// ── 网络：恰好 1 次 PUT、0 次 GET ──
 		assert.equal(h.server.countByMethod("PUT"), 1, "上传应当**恰好** 1 次 PUT");
@@ -343,15 +364,9 @@ export async function runIngestSuite(mod) {
 	// ============================================================
 	// 3. 同内容**同名**重复粘贴 → 跳过上传（零网络请求）
 	//
-	// ⚠️ 1.2.0 起"去重"的口径收窄了一格，这条用例把这个收窄**如实钉住**：
-	// key = `<名字>-<哈希>.<扩展名>`，所以"同一份内容"只有在**名字也相同**时才会
-	// 落到同一个 key 上。名字不同的同一份内容 = 另一个对象（这是 C2 的已知代价：
-	// 桶里按名字组织 ⇒ 名字就成了身份的一部分）。
-	//
-	// 代价最常出现在**剪贴板**上：那是**时间戳命名**（`Pasted image 2026...`），
-	// 所以同一张图贴两次得到两个名字 ⇒ 两份对象。⚠️ 目前**未做**任何缓解
-	// （按内容哈希复用已有对象是一条可行路：`CacheIndex.wasContentUploaded` 现成），
-	// 要不要做是独立决定，别顺手加。
+	// ⚠️ 1.2.0 起"去重"的口径收窄了一格（key = `<名字>-<哈希>.<扩展名>` ⇒ 只有**名字也相同**
+	// 才落回同一个 key）。这条用例钉的是那一格；**跨名**那两格（宿主撞名另落 `名字 1.ext`、
+	// 同内容换了别的名字）由 §3b-§3f 钉住 —— 2026-10-14（D-24）起，跨名不再必然 = 跨对象。
 	// ============================================================
 	await withHarness(mod, {}, async (h) => {
 		const first = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "photo.png", mime: "image/png" });
@@ -372,21 +387,287 @@ export async function runIngestSuite(mod) {
 		assert.equal(h.server.countByMethod("GET"), 0, "复用路径上不该有任何下载");
 	});
 
-	// 3b. 同内容**不同名字** ⇒ 另一个对象（名字进了 key，跨名去重就不再成立）
+	// 3b. 同内容**不同名字** ⇒ **复用已有对象**（零网络）
+	//
+	// ⚠️ 这条用例 2026-10-14 改写过。从前它断言"两个对象、两次 PUT"，并把那种行为
+	// 称作 D-18 的既定代价（"名字进了 key ⇒ 跨名去重失效"）。用户在 Android 上报的
+	// 缺陷正是这个代价的现场：重复插入同一张图 ⇒ 宿主另落一份 `名字 1.ext` ⇒ 名字不同、
+	// key 不同 ⇒ 桶里多存一份完全相同的内容，而笔记里两处引用还指着两个不同对象。
+	//
+	// 现在的规矩：**内容哈希才是对象身份**。名字不同但内容相同 ⇒ 台账里一定已有那个对象
+	// （它在那儿，就证明传成功过）⇒ 直接复用它的 key：不 PUT、不占第二份空间，
+	// 笔记里的第二处引用也因此指向同一个对象。名字仍然进 key（D-18 的形状没动），
+	// 只是"跨名"不再必然导致"跨对象"。
 	await withHarness(mod, {}, async (h) => {
 		const first = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "photo.png", mime: "image/png" });
 		assert.equal(first.status, "uploaded");
+		// 前提：上传成功必须落进上传台账 —— 下面"跨名认亲"靠的就是它。
+		// ⚠️ 这条断言同时是 `markUploaded` 那条老锚点的**第一消费者**：台账一坏，
+		// 红在这里（消息里带着"记台账"），而不是红在下面某条复用断言上
+		// —— 否则报错说的是"复用失效"，真实原因（台账没记）就被盖住了。
+		assert.equal(
+			h.index.wasUploaded(first.key),
+			true,
+			"上传成功就要记台账（不留副本这一档也要记台账）—— 跨名复用靠它认亲"
+		);
 
 		const renamed = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "另一个名字.png", mime: "image/png" });
-		assert.equal(renamed.status, "uploaded", "换名字的同一份内容会得到另一个 key ⇒ 会真的再传一次（C2 的已知代价）");
-		assert.notEqual(renamed.key, first.key, "★ 名字不同 ⇒ key 必须不同（否则链接会指向名字对不上的对象）");
-		assert.equal(h.server.countByMethod("PUT"), 2, "两份对象、两次 PUT");
-		// ⚠️ 但**字节**仍然各存一份、内容一致：桶里多了一份，不是丢了什么
-		assert.equal(
-			Buffer.compare(h.server.stored(first.key), h.server.stored(renamed.key)),
-			0,
-			"两份对象的字节完全一样（多占一份空间，不是数据不一致）"
+		assert.equal(renamed.status, "reused", "★ 换名字的同一份内容 ⇒ 复用已有对象，不再另存一份");
+		assert.equal(renamed.key, first.key, "★ 复用的是**同一个** key（否则笔记里两处引用会指着两个对象）");
+		assert.equal(renamed.remoteUrl, first.remoteUrl, "两处引用必须指向同一个地址");
+		assert.equal(h.server.countByMethod("PUT"), 1, "★ 只上传一次 —— 第二次是零网络");
+		// 桶里只有一份对象：那个"本会新建"的 key 下面什么都没有
+		const wouldBeKey = `另一个名字-${sha256Hex(HOSTILE_BYTES)}.png`;
+		assert.notEqual(wouldBeKey, first.key, "前提：新名字确实会推出另一个 key");
+		assert.equal(h.server.stored(wouldBeKey), null, "★ 桶里没有第二个对象（不再多占一份空间）");
+		assert.ok(h.server.stored(first.key) !== null, "第一个对象还在原地");
+	});
+
+	// 3c. ⭐⭐ 宿主撞名另落的那一份（`photo 1.png`）⇒ 用**主干名字**算 key
+	//
+	// 现场（用户 2026-10-14 Android 直报）：同一张图插第二次，宿主发现 `photo.png` 已在，
+	// 就把新文件叫 `photo 1.png` 并写回笔记。名字不同 ⇒ key 不同 ⇒
+	// 云端多存一份**完全相同**的内容，笔记里两处引用指着两个对象。
+	//
+	// ⚠️ 这一条用**空索引**（正是真机现场：`.cache-index.json` 丢了/被覆盖/首装）——
+	// 上一版修法靠 `uploaded` 台账（"这份内容传过吗"）在真机上失效，就因为它是**本机状态**。
+	// 这里靠的是 **vault 里的事实**：同目录下有个同内容的 `photo.png`。
+	//
+	// 期望：key 落在主干名字上 ⇒ 地址与首次**完全相同** ⇒ 桶里只有一个对象。
+	// ⚠️ 而这一份**必须真的传**：云端确实没有这个对象（上面那两个文件都还没上传过）。
+	// "不把正确性押在本机状态上"不等于"闭着眼不传" —— 而是**传之前先问一句云端**
+	//（第 2c 步）。云端有的那种情形见 §3g；这一条守住的是"问完发现没有 ⇒ 照传"。
+	await withHarness(mod, {}, async (h) => {
+		await h.write("attachments/photo.png", Buffer.from(HOSTILE_BYTES));
+		await h.write("attachments/photo 1.png", Buffer.from(HOSTILE_BYTES));
+		// ⚠️ 断言要盯着**这次真正用的那个索引**（下面传进去的是新实例，不是 `h.index`）
+		const freshIndex = new mod.CacheIndex([], []);
+		const result = await ingestAttachment(
+			{ ...h.deps, index: freshIndex },
+			{
+				bytes: HOSTILE_BYTES,
+				name: "photo 1.png",
+				sourcePath: "attachments/photo 1.png",
+				existingPath: "attachments/photo 1.png",
+			}
 		);
+		assert.equal(
+			result.key,
+			`photo-${sha256Hex(HOSTILE_BYTES)}.png`,
+			"★ 宿主撞名另落的那一份要用主干名字算 key —— 台账为空也必须得出同一个 key（判据不能押在本机状态上）"
+		);
+		// ⭐ 显示名必须跟着**主干名字**走（用户 2026-10-14 Android 报的第五件事）：
+		// 显示位若用宿主给的名字，笔记里就成了 `![photo 1.png](…/photo-<哈希>.png)`
+		// —— 同一个链接里两个名字不一样，而那个「 1」是宿主的去重序号、不是用户的东西。
+		assert.equal(
+			result.displayName,
+			"photo.png",
+			"★ 链接里该显示的名字要与**链接目标**逐字一致（不能用宿主的序号名）"
+		);
+		assert.equal(
+			h.server.stored(`photo 1-${sha256Hex(HOSTILE_BYTES)}.png`),
+			null,
+			"★ 桶里只有一份对象（那份「 1」的名字根本不该被用来命名对象）"
+		);
+		assert.equal(
+			h.server.countByMethod("PUT"),
+			1,
+			"★ 云端确实没有 ⇒ 必须传一次（第 2c 步问过云端之后才敢跳过，这里问出来是没有）"
+		);
+		// ⭐ 还要**报告**"这一份是重复副本"（值是留下来的主干那份的路径）——
+		// 调用方据此在链接改写成功、且这一份已零引用之后删掉它（见 `dropRedundantCopies`）。
+		assert.equal(
+			result.redundantDuplicateOf,
+			"attachments/photo.png",
+			"★ 必须回报主干那一份的路径（调用方靠它复核'留下来的那份还在吗'）"
+		);
+		assert.equal(
+			freshIndex.get(result.key)?.cachePath,
+			"attachments/photo.png",
+			"★ 索引的本地副本要记在**留下来的**那份上（记在马上被删的那份 = 悬空条目）"
+		);
+	});
+
+	// 3d. 同上，但**台账里有第一笔**（同一台设备、索引没丢）⇒ 直接命中索引复用，连 PUT 都省
+	await withHarness(mod, {}, async (h) => {
+		await h.write("attachments/photo.png", Buffer.from(HOSTILE_BYTES));
+		const first = await ingestAttachment(h.deps, {
+			bytes: HOSTILE_BYTES,
+			name: "photo.png",
+			sourcePath: "attachments/photo.png",
+			existingPath: "attachments/photo.png",
+		});
+		assert.equal(first.status, "uploaded");
+
+		await h.write("attachments/photo 1.png", Buffer.from(HOSTILE_BYTES));
+		const twin = await ingestAttachment(h.deps, {
+			bytes: HOSTILE_BYTES,
+			name: "photo 1.png",
+			sourcePath: "attachments/photo 1.png",
+			existingPath: "attachments/photo 1.png",
+		});
+		assert.equal(twin.key, first.key, "撞名那一份的 key 与首次相同");
+		assert.equal(twin.remoteUrl, first.remoteUrl, "★ 笔记里两处引用必须指向**同一个地址**");
+		assert.equal(h.server.countByMethod("PUT"), 1, "★ 本机有记录时第二次是零网络（连 PUT 都不发）");
+		assert.equal(
+			twin.redundantDuplicateOf,
+			"attachments/photo.png",
+			"复用那条路也要带上'这是重复副本'（否则收尾不会删它）"
+		);
+	});
+
+	// 3e. ⚠️ 名字带序号、兄弟文件也在、但**内容不同** ⇒ 绝不归一
+	//
+	// 那意味着用户真的有两个不同的文件（`photo.png` 与 `photo 1.png`）。
+	// 把它们并到同一个对象上 = 覆盖，不可逆 —— 与 `download-target` 的
+	// "先比内容，再加序号"是同一条纪律的两个方向。
+	await withHarness(mod, {}, async (h) => {
+		const other = new Uint8Array(HOSTILE_BYTES);
+		other[0] = 0x11;
+		await h.write("attachments/photo.png", Buffer.from(HOSTILE_BYTES));
+		await h.write("attachments/photo 1.png", Buffer.from(other));
+
+		const result = await ingestAttachment(h.deps, {
+			bytes: other,
+			name: "photo 1.png",
+			sourcePath: "attachments/photo 1.png",
+			existingPath: "attachments/photo 1.png",
+		});
+		assert.equal(
+			result.key,
+			`photo 1-${sha256Hex(other)}.png`,
+			"★ 内容不同 ⇒ 名字里的「 1」必须留着（两份不同的东西不能并到一个对象上）"
+		);
+		assert.equal(result.redundantDuplicateOf, undefined, "★ 内容不同 ⇒ 更不许被当成'重复副本'（那会被删掉）");
+	});
+
+	// 3f. 名字带序号但**没有**兄弟文件 ⇒ 那是用户自己的命名，不许改写
+	await withHarness(mod, {}, async (h) => {
+		await h.write("attachments/report 1.pdf", Buffer.from(HOSTILE_BYTES));
+		const result = await ingestAttachment(h.deps, {
+			bytes: HOSTILE_BYTES,
+			name: "report 1.pdf",
+			mime: "application/pdf",
+			sourcePath: "attachments/report 1.pdf",
+			existingPath: "attachments/report 1.pdf",
+		});
+		assert.equal(
+			result.key,
+			`report 1-${sha256Hex(HOSTILE_BYTES)}.pdf`,
+			"★ 没有兄弟文件 ⇒ 名字原样进 key（用户的命名不是我们的事）"
+		);
+		assert.equal(result.redundantDuplicateOf, undefined, "★ 没有兄弟文件 ⇒ 不是重复副本（不许删）");
+	});
+
+	// 3g. ⭐⭐ 台账答不上来（换设备 / 索引被覆盖 / 首装），但云端**确实已经有**那个对象
+	//     ⇒ 问一次云端，**一个字节都不重传**
+	//
+	// 这一条对着的正是用户 2026-10-14 在 Android 上的第二份报告："重复插同一张图，
+	// 提示却说上传成功 —— 可实际上并不需要上传，只要更新链接"。
+	//
+	// 前两轮修法解决了"**key 要落回主干**"（⇒ 地址相同、桶里一份），但**字节仍会重传一遍**：
+	// 判断"云端有没有"只能问本机台账（第 2b 步），而台账答不上来时它就退回了 PUT。
+	// 现在多一条**问云端**的路（第 2c 步）：`twinPath` 非空 ⇒ HEAD ⇒ 在 ⇒ 跳过 PUT。
+	//
+	// ⚠️ 判据是**云端的事实**（HEAD 的回应），不是"名字看起来像重复" ——
+	// 后者在 §3e（内容不同）与 §3h（云端真没有）里各有一条反向守护。
+	await withHarness(mod, {}, async (h) => {
+		const key = `photo-${sha256Hex(HOSTILE_BYTES)}.png`;
+		// 先让对象在云端 —— 模拟"这台设备上一次插入已经把它传上去了"
+		await h.client.putObject(key, HOSTILE_BYTES, "image/png");
+		const putsBefore = h.server.countByMethod("PUT");
+
+		await h.write("attachments/photo.png", Buffer.from(HOSTILE_BYTES));
+		await h.write("attachments/photo 1.png", Buffer.from(HOSTILE_BYTES));
+		const result = await ingestAttachment(
+			// ⚠️ 空索引 = 真机现场（`.cache-index.json` 丢了/被覆盖/首装 ⇒ 台账与条目都没有）
+			{ ...h.deps, index: new mod.CacheIndex([], []) },
+			{
+				bytes: HOSTILE_BYTES,
+				name: "photo 1.png",
+				sourcePath: "attachments/photo 1.png",
+				existingPath: "attachments/photo 1.png",
+			}
+		);
+
+		assert.equal(result.key, key, "★ 复用的是**同一个** key（地址与首次相同）");
+		// ⚠️ 顺序是挑过的：**承重的那条先说**。用户报的就是"多余的这一次上传"，
+		// 所以先钉"一个字节都没发"，再钉"状态/提示如实"。
+		// （反过来会报出"状态不对"，而真实原因是"它压根又传了一遍"。）
+		assert.equal(
+			h.server.countByMethod("PUT"),
+			putsBefore,
+			"★ 一个字节都不许重传 —— 这正是用户报的那件事"
+		);
+		assert.ok(
+			h.server.countByMethod("HEAD") >= 1,
+			"★ 判据是**问云端**（HEAD）拿到的答案，不是猜'名字像重复所以不用传'"
+		);
+		// ⭐ 状态必须如实：调用方按它分别计数，用户看到的那句提示就是从这儿来的
+		assert.equal(
+			result.status,
+			"reused",
+			"★ 云端已有 ⇒ 必须是 reused：一次字节都没传（写 uploaded 会让提示变成'上传成功'）"
+		);
+		assert.equal(
+			result.redundantDuplicateOf,
+			"attachments/photo.png",
+			"重复副本的标记照旧带着（收尾要靠它删掉那一份）"
+		);
+	});
+
+	// 3h. ⚠️ 反向：云端**真的没有**、或**问不动** ⇒ 必须照常上传
+	//
+	// 三种情形都要落在**安全那一侧**（多传一份是幂等的；把"不在"当成"在"会留下打不开的图）：
+	// ① 云端确实没有（下面第一条：空桶 + 两个本地文件）；
+	// ② 探测**抛错**（离线 / 服务端错）；
+	// ③ 这条链**没接线**（老宿主没有第 2c 步的能力）。
+	await withHarness(mod, {}, async (h) => {
+		await h.write("attachments/photo.png", Buffer.from(HOSTILE_BYTES));
+		await h.write("attachments/photo 1.png", Buffer.from(HOSTILE_BYTES));
+		const result = await ingestAttachment(
+			{ ...h.deps, index: new mod.CacheIndex([], []) },
+			{
+				bytes: HOSTILE_BYTES,
+				name: "photo 1.png",
+				sourcePath: "attachments/photo 1.png",
+				existingPath: "attachments/photo 1.png",
+			}
+		);
+		assert.equal(result.status, "uploaded", "云端没有 ⇒ 照常上传（不能因为名字像重复就跳过）");
+		assert.equal(h.server.countByMethod("PUT"), 1, "必须真的传一次（否则链接指向一个不存在的对象）");
+	});
+
+	await withHarness(mod, { probeRemote: async () => { throw new Error("offline"); } }, async (h) => {
+		await h.write("attachments/photo.png", Buffer.from(HOSTILE_BYTES));
+		await h.write("attachments/photo 1.png", Buffer.from(HOSTILE_BYTES));
+		const result = await ingestAttachment(
+			{ ...h.deps, index: new mod.CacheIndex([], []) },
+			{
+				bytes: HOSTILE_BYTES,
+				name: "photo 1.png",
+				sourcePath: "attachments/photo 1.png",
+				existingPath: "attachments/photo 1.png",
+			}
+		);
+		assert.equal(result.status, "uploaded", "★ 问不动（抛错）⇒ 当作'不在'，照常上传");
+		assert.equal(h.server.countByMethod("PUT"), 1, "★ 探测失败不许变成'跳过上传'");
+	});
+
+	await withHarness(mod, { probeRemote: null }, async (h) => {
+		await h.write("attachments/photo.png", Buffer.from(HOSTILE_BYTES));
+		await h.write("attachments/photo 1.png", Buffer.from(HOSTILE_BYTES));
+		const result = await ingestAttachment(
+			{ ...h.deps, index: new mod.CacheIndex([], []) },
+			{
+				bytes: HOSTILE_BYTES,
+				name: "photo 1.png",
+				sourcePath: "attachments/photo 1.png",
+				existingPath: "attachments/photo 1.png",
+			}
+		);
+		assert.equal(result.status, "uploaded", "★ 没接线（老宿主）⇒ 退回老行为：照常上传");
+		assert.equal(h.server.countByMethod("PUT"), 1, "★ 少这个能力只是少一次省流，不许影响正确性");
 	});
 
 	// ⚠️ 复用的前提是**索引里有记录**，而不是"附件目录里恰好有个同名文件"。
@@ -991,7 +1272,10 @@ export async function runIngestSuite(mod) {
 		assert.equal(h.server.countByMethod("PUT"), 1, "复用时不得再上传");
 	});
 
-	return { scenarios: 18 };
+	// ⚠️ 这是**手工维护**的规模数（按 `// N.` 用例块数），不是运行时统计 ——
+	// 加用例时要顺手改它（2026-10-14 复核时它停在 18 而实际已 30+，是本项目
+	// "检查还在跑、但已经不检查任何东西"那一类问题的近亲）。本轮新增 §3g/§3h 四个块。
+	return { scenarios: 22 };
 }
 
 /** 造一个"总是失败"的客户端，用来构造降级路径。 */

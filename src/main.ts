@@ -41,7 +41,6 @@ import type { CacheRotator } from "./maintenance/rotation";
 import {
 	selectExternalUploadCandidates,
 } from "./maintenance/batch";
-import { sha256Hex } from "./s3/hash";
 import { createAttachWatcher, createSelfWriteLedger } from "./maintenance/attach-watch";
 import type { AttachWatcher } from "./maintenance/attach-watch";
 import { CONFIRM_IMMEDIATELY, createAbsenceConfirmer, runSelfHeal } from "./maintenance/self-heal";
@@ -280,8 +279,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		this.attachWatch = createAttachWatcher({
 			autoUpload: () => this.settings.autoUpload,
 			isSelfWrite: (path) => this.stagedPaths.has(path),
-			// ③ 内容哈希 ∈ 上传台账 —— 同步到达的副本靠它一眼认出（不必等满退避窗口）
-			isKnownCloudCopy: (path) => this.isKnownCloudCopy(path),
 			index: () => this.currentIndex(),
 			settings: () => this.settings,
 			// 每次现查（文件可能已经被别的流程搬走/删掉）—— 与 `TFile` 的形状解耦
@@ -302,10 +299,13 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 							where: this.t(readiness.fixIn === "credentials" ? "hookFixCredentials" : "hookFixConnection"),
 						})
 					);
-					return { uploaded: 0, reused: 0, failed: 0, linksRewritten: 0 };
+					return { uploaded: 0, reused: 0, failed: 0, linksRewritten: 0, redundantRemoved: 0 };
 				}
 				// 复用批量那一趟（`referencedPaths` 只放这一个文件 ⇒ 候选也只有它）：
 				// 于是"上传 → 搬入缓存 → 改写引用（含画布）"只有一份实现。
+				// ⭐ 这一趟的收尾还可能**删掉宿主撞名另落的重复副本**（链接改写成功后，
+				// 见 `dropRedundantCopies`）—— 提示不在这里发：这条路一次只处理一个文件、
+				// 且用户刚刚亲手插了那张图，多弹一条只会变噪音（命令那条路会报）。
 				return runBatchUpload(this.maintenanceDeps(), { referencedPaths: new Set(paths) });
 			},
 			notify: (message) => new Notice(message),
@@ -536,6 +536,16 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			callback: () => void cleanupCloudObjects(this.flowContext()),
 		});
 
+		// ⭐ 用户 2026-10-14 在 Android 上要的那条：那次三档询问**只自动出现一次**，
+		// 而弹窗可能被误关（点背景 / ESC，"点一下边上就不见了"）⇒ 他需要一条能自己重来的路。
+		// ⚠️ 与「清理云端未使用对象…」不是一件事：那条列全桶（要 ListBucket 权限、慢），
+		// 这条只看**我们上传过的**（台账），因此快、也不需要列举权限。
+		this.addCommand({
+			id: "check-orphans",
+			name: this.t("cmdCheckOrphans"),
+			callback: () => void this.orphanFlow?.checkNow(),
+		});
+
 		this.addCommand({
 			id: "repair-index",
 			name: this.t("cmdRepairIndex"),
@@ -576,6 +586,12 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 						client,
 						index: this.currentIndex(),
 						persistIndex: () => this.hostContext().persistIndex(),
+						// ⭐ 上传前先问云端"这个对象在不在"：宿主撞名另落的那一份
+						// （`照片 1.png`）本机台账可能答不上来，而它的字节**几乎肯定**
+						// 早就在云端了 ⇒ 与其重传整份，不如问一句。见 `ingest.ts` 第 2c 步。
+						// ⚠️ 只有这条路（批量 / 新增附件接管）会传：粘贴与站外缓存两条路
+						// 不产生 `twinPath`，那个前提不成立，问了也不会被用上。
+						probeRemote: (key) => this.probeRemoteObject(key),
 						notify: (message) => new Notice(message),
 						// ⚠️ 文案由这一层给：核心层只决定"说哪一句"（见 `IngestDeps.t`）
 						t: (key, params) => this.t(key, params),
@@ -664,6 +680,19 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				limit,
 			})
 		);
+
+		// ⚠️ 失效记录**要单独说清它会自己消失**：那行数字本身不带处置办法，
+		// 用户 2026-10-14 在 Android 上把它读成了"插件把索引弄坏了"（其实是"删掉本地副本"
+		// 的正常中间态：后台自检两轮确认后摘掉，或跑一次修复命令立刻摘）。
+		// 只在真有失效时加这一句 —— 每次运行都写一遍会变成没人看的噪音。
+		if (audit.missingCopies.length > 0) {
+			new Notice(
+				this.t("maintainUsageMissingHint", {
+					count: audit.missingCopies.length,
+					command: this.t("cmdRepairIndex"),
+				})
+			);
+		}
 	}
 
 
@@ -808,23 +837,27 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 *   （取证点 E-1c），少了它"只被画布文本引用的附件"会永远不被处理。
 	 *   多出来的候选由后续判据兜底，**少掉的那些才是真缺陷**。
 	 */
+
 	/**
-	 * 这个文件的**内容**是不是我们早就传过的（同步到达的副本判定，见 `attach-watch` ③）。
+	 * 问云端"这个对象在不在"（HEAD）：在 ⇒ 返回它的 etag；不在、或问不动 ⇒ `null`。
 	 *
-	 * 实现只有两步：读字节 → 算 sha256 → 问上传台账（`wasContentUploaded` 会按
-	 * `hashFromKey` 把 key 里的哈希段取出来比较 —— 1.2.0 起 key 里还有名字，
-	 * 直接拿文件哈希去比 key 会**永远不相等**）。
+	 * 两个消费者，**失败方向一致**（答不上来就当作"没有"）：
+	 * ① 淘汰本地副本前的复核 —— 见 {@link isObjectInCloud}（不确定 ⇒ 不删）；
+	 * ② 上传前判断"这份字节要不要真的传" —— 见 `IngestDeps.probeRemote`（不确定 ⇒ 传）。
 	 *
-	 * ⚠️ 任何一步出错都返回 `false`（= 不知道）。方向是刻意的：这一条只用来"提前
-	 * 认出自家副本"，答不上来时退回原来的行为（等引用），既不误判也不会卡住流程。
+	 * ⚠️ 任何异常（离线、鉴权、404 之外的服务端错）一律 `null`。
+	 * 两处都不能把"问不到"当成"在"或"不在"以外的第三种答案 —— 那正是本项目反复吃过的亏：
+	 * 判据要么给出真实答案，要么明确落回安全的那一侧。
 	 */
-	private async isKnownCloudCopy(path: string): Promise<boolean> {
+	private async probeRemoteObject(key: string): Promise<string | null> {
+		const client = this.buildClient();
+		if (!client) return null;
 		try {
-			const buffer = await this.app.vault.adapter.readBinary(path);
-			const hash = await sha256Hex(new Uint8Array(buffer));
-			return this.currentIndex().wasContentUploaded(hash);
-		} catch {
-			return false;
+			const head = await client.headObject(key);
+			return head ? head.etag : null;
+		} catch (error) {
+			console.debug(`[attachment-cloud-cache] 云端探测失败（按"不存在"处理：${key}）`, error);
+			return null;
 		}
 	}
 
@@ -839,15 +872,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 方向是刻意的：这一条的存在意义就是"没有确认就不动手"。
 	 */
 	private async isObjectInCloud(key: string): Promise<boolean> {
-		const client = this.buildClient();
-		if (!client) return false;
-		try {
-			const head = await client.headObject(key);
-			return head !== null;
-		} catch (error) {
-			console.debug(`[attachment-cloud-cache] 云端复核失败（本轮不淘汰 ${key}）`, error);
-			return false;
-		}
+		return (await this.probeRemoteObject(key)) !== null;
 	}
 
 
