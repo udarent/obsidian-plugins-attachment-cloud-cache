@@ -12,7 +12,7 @@
 
 **Your attachments live in your own storage — and still render offline.** Paste a file: it uploads to **your**
 S3-compatible bucket (Cloudflare R2, AWS S3, MinIO, Backblaze B2, self-hosted), the note keeps a portable link, and a
-copy stays in your vault to do the rendering. **Zero remote requests, always.**
+local copy — the file itself — stays in your vault to do the rendering. **Zero remote requests, always.**
 
 [Install](#installation) · [Releases](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases) · [Report a problem](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues) · Requires Obsidian **1.13.0+** ([why](#requirements))
 
@@ -161,7 +161,7 @@ Working on the plugin? `npm install`, then `npm run dev` (watch build) or `npm t
 [English](#attachment-cloud-cache) · **简体中文**
 
 **附件存在你自己的存储里，断网也能看。** 往笔记里粘贴一个文件：它上传到**你自己的** S3 兼容存储桶（Cloudflare R2、
-AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移的链接，渲染走留在 vault 里的那份副本。
+AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移的链接，渲染走**本地副本**（就是那份文件本身）。
 **始终零远端请求。**
 
 [安装](#安装) · [版本发布](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases) · [反馈问题](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues) · 需要 Obsidian **1.13.0+**（[为什么](#环境要求)）

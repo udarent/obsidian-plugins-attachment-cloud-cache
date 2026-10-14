@@ -20,7 +20,7 @@ export const I18N: Record<string, Locale> = {
 		// 按用户的使用顺序排列：先能连上，再谈上传，然后是离线，最后是少数人才动的高级项。
 		sectionStorage: "Storage connection",
 		sectionUpload: "Upload",
-		sectionOffline: "Offline copies",
+		sectionOffline: "Offline and local copies",
 		sectionCleanup: "Cloud cleanup",
 		sectionAdvanced: "Advanced",
 
@@ -110,7 +110,7 @@ export const I18N: Record<string, Locale> = {
 		hookUnexpectedFailure: "Upload failed unexpectedly: {error}",
 
 		// ── 缓存索引 ──
-		indexLoadFailed: "Local-copy index could not be read, so offline copies will be rebuilt: {error}",
+		indexLoadFailed: "Local-copy index could not be read (copies are fetched again when needed): {error}",
 		indexSkipped: "{count} entries in the local-copy index were unusable and have been dropped.",
 
 		// ── 回退下载（补齐本地副本）──
@@ -301,7 +301,7 @@ export const I18N: Record<string, Locale> = {
 	zh: {
 		sectionStorage: "存储连接",
 		sectionUpload: "上传",
-		sectionOffline: "离线副本",
+		sectionOffline: "离线与本地副本",
 		sectionCleanup: "云端清理",
 		sectionAdvanced: "高级",
 
@@ -380,7 +380,7 @@ export const I18N: Record<string, Locale> = {
 		hookFixCredentials: "请到「存储连接」里选择访问密钥。",
 		hookLostFiles: "⚠️ 有 {count} 个文件既没能上传、也没能保存到本地。",
 		hookUnexpectedFailure: "上传出现未预期的错误：{error}",
-		indexLoadFailed: "本地副本索引读取失败，离线副本将被重建：{error}",
+		indexLoadFailed: "本地副本索引读取失败（副本会在下次需要时自动取回）：{error}",
 		indexSkipped: "本地副本索引里有 {count} 条记录无法使用，已丢弃。",
 		fallbackDownloadFailed: "补齐本地副本失败：{error}",
 		fallbackWriteFailed: "副本已取回，但写入 vault 失败：{error}",
