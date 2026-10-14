@@ -144,7 +144,7 @@ export const I18N: Record<string, Locale> = {
 		cloudCleanupDone:
 			"Deleted {deleted} object(s); {alreadyGone} were already gone; {failed} failed. {unindexed} index record(s) removed.",
 		cloudCleanupListFailed: "Could not list the objects in your storage: {error}",
-		cloudCleanupPersistFailed: "Could not save the cache index: {error}",
+		cloudCleanupPersistFailed: "Could not save the local-copy index: {error}",
 		cloudCleanupUnreadableNote: "Could not read {path}, so the cleanup was cancelled.",
 		// F18：清理本地占用（并入「不留副本」档，见设计 §20.10）
 		releaseSpaceName: "Free up local space",
@@ -184,7 +184,7 @@ export const I18N: Record<string, Locale> = {
 		orphanNoneToCheck:
 			"No unreferenced attachments found — everything we have uploaded is still linked from a note or canvas.",
 		cloudDeleteFailed: "Could not delete the object: {error}",
-		cmdAuditCache: "Show cache usage",
+		cmdAuditCache: "Show local copy usage",
 		cmdRepairIndex: "Repair the local-copy index",
 		cmdUploadAttachments: "Upload existing attachments",
 
@@ -195,7 +195,7 @@ export const I18N: Record<string, Locale> = {
 		maintainUsageMissingHint:
 			"Those {count} stale record(s) are harmless — the background check drops them on its own. To clear them right now, run “{command}”.",
 		selfHealRepaired:
-			"Cache index repaired automatically: {count} record(s) pointed at files that are no longer there.",
+			"Local-copy index repaired automatically: {count} record(s) pointed at files that are no longer there.",
 		legacyKeyTemplateUpgraded:
 			"The object-key template setting is gone: new uploads are always named “original-name-content-hash.ext”, so files stay findable by name in your storage (the name therefore also reaches your storage provider). Existing links keep working; content you uploaded under the old naming is stored once more if you paste it again.",
 		legacyExternalDefaultMerged:
@@ -404,7 +404,7 @@ export const I18N: Record<string, Locale> = {
 		cloudCleanupDone:
 			"已删除 {deleted} 个对象；另有 {alreadyGone} 个本来就不存在；失败 {failed} 个；摘掉 {unindexed} 条索引记录。",
 		cloudCleanupListFailed: "无法列出你存储里的对象：{error}",
-		cloudCleanupPersistFailed: "缓存索引保存失败：{error}",
+		cloudCleanupPersistFailed: "本地副本索引保存失败：{error}",
 		cloudCleanupUnreadableNote: "读不到 {path}，因此取消了这次清理。",
 		// F18：清理本地占用（并入「不留副本」档，见设计 §20.10）
 		releaseSpaceName: "释放本地空间",
@@ -443,7 +443,7 @@ export const I18N: Record<string, Locale> = {
 		orphanNoneToCheck:
 			"没有发现未被引用的云端附件 —— 我们记录里每一个已上传的附件，都还有笔记或画布在引用它。",
 		cloudDeleteFailed: "删除对象失败：{error}",
-		cmdAuditCache: "查看缓存占用",
+		cmdAuditCache: "查看本地副本占用",
 		cmdRepairIndex: "自检并修复本地副本索引",
 		cmdUploadAttachments: "上传已存在的附件",
 
@@ -452,7 +452,7 @@ export const I18N: Record<string, Locale> = {
 		// ⚠️ 同上：只在真有失效记录时弹（那行数字不带处置办法，会被读成"索引坏了"）。
 		maintainUsageMissingHint:
 			"那 {count} 条失效记录无害 —— 后台自检会自己摘掉；想立刻清掉就跑一次「{command}」。",
-		selfHealRepaired: "缓存索引已自动修复：{count} 条记录指向的本地副本已经不在了。",
+		selfHealRepaired: "本地副本索引已自动修复：{count} 条记录指向的本地副本已经不在了。",
 		legacyKeyTemplateUpgraded:
 			"「对象 key 模板」设置已取消：之后上传的对象固定命名为「原文件名-内容哈希.扩展名」，存储里可以按名字找到文件（文件名因此也会出现在你的存储服务商那边）。已有链接不受影响；按旧命名传过的内容若再贴一次，会在云端多存一份。",
 		legacyExternalDefaultMerged:

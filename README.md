@@ -87,7 +87,7 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 
 | Command | What it does |
 | --- | --- |
-| **Show cache usage** | What your local copies hold, and how much of it no note refers to any more — an estimate: nothing is removed before your storage is confirmed to still have the object. |
+| **Show local copy usage** | What your local copies hold, and how much of it no note refers to any more — an estimate: nothing is removed before your storage is confirmed to still have the object. |
 | **Repair the local-copy index** | Drops index entries whose files are already gone. |
 | **Upload existing attachments** | Uploads what your notes link to and rewrites those links. Your files stay where they are — that copy *is* the local copy. |
 | **Cache files from other sites…** | Tick individual off-site files to fetch — picking them is the consent. |
@@ -234,7 +234,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 
 | 命令 | 做什么 |
 | --- | --- |
-| **查看缓存占用** | 本地副本占了多少、其中多少已经没有笔记引用了 —— 这是**估算**：真正删除前会先确认你的存储里仍然有这个对象。 |
+| **查看本地副本占用** | 本地副本占了多少、其中多少已经没有笔记引用了 —— 这是**估算**：真正删除前会先确认你的存储里仍然有这个对象。 |
 | **自检并修复本地副本索引** | 丢掉那些文件已经不在的索引记录。 |
 | **上传已存在的附件** | 上传笔记里引用着的附件并改写链接。文件**留在原地** —— 那份就是本地副本。 |
 | **缓存站外文件（可挑选）…** | 勾选具体的站外文件去下载 —— 勾选本身就是同意。 |
@@ -272,7 +272,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 
 ## 已验证到什么程度
 
-- **自动化测试**覆盖签名、key 与路径推导、设置合并、缓存索引、上传链路（字节一致、恰好 1 次 PUT、0 次 GET）、
+- **自动化测试**覆盖签名、key 与路径推导、设置合并、本地副本索引、上传链路（字节一致、恰好 1 次 PUT、0 次 GET）、
   粘贴/拖放判定与画布改写 —— 之后还有一道**变异验证**：把每条规则故意改坏。不会失败的断言等于没有断言。
 - **真实 Obsidian、真实 MinIO：** 八种类型的文件逐项核对到上传字节；画布两类节点；音频、视频、PDF 离线预览，
   且**远端地址从未落进任何元素**；云端清理两条入口；一次完整回环 —— 链接**匿名**能打开。
