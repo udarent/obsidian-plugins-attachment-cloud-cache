@@ -23,8 +23,9 @@
  * 上传本身不碰笔记；但要让老图真正"搬到图床"，笔记里的本地链接必须换成远端
  * 链接 —— 那一步会重写用户的 `.md` 文件。所以选候选时**宁少不多**：
  *
- * - ⭐ **只挑「确实被笔记引用着」的**（`referencedPaths`）：命令跑完会把原文件
- *   **移进**缓存目录（见 `localCopy`），引用的改写正是"搬走之后不会留下死链"的前提。
+ * - ⭐ **只挑「确实被笔记引用着」的**（`referencedPaths`）：命令跑完会把它们的**链接改写成远端地址**
+ *   （⚠️ 2026-10-15 更正：1.2.0 / D-17 起**没有缓存目录、什么都不搬** —— 文件留在原处**就地当本地副本**）。
+ *   这个前提是"改了链接之后，那张图仍然显示得出来"。
  *   用户放在附件目录里、**没有任何笔记引用**的文件一概不碰（既不传也不动）——
  *   那种文件多半是废弃的旧图，动了只会让人以为丢东西。
  * - ⭐ 1.1.0 起**不再按类型白名单挑**，而是**排除制**：排除"笔记/画布/数据库"这三种
@@ -43,7 +44,7 @@ import { decideExternalCache } from "../render/external-decide";
 // ⭐ 本机文件（`file:///D:/…`）的判定 —— 与站外那份**并列**，不是套在它里面（两者的判据不同，
 // 一个看主机/站点名单，一个看平台/扩展名；混成一个函数会让两边的 reason 说不清是谁给的）。
 import { decideLocalFile } from "../local-file";
-import { normalizeLinkTarget } from "./references";
+import { htmlAttributeTargets, linkTargetForms, normalizeLinkTarget } from "./references";
 
 /** 库内文件的最小形状。 */
 export interface VaultFileLike {
@@ -60,8 +61,9 @@ export interface CandidateOptions {
 	/**
 	 * **被笔记引用着**的文件路径集合（宿主解析出来的链接目标）。
 	 *
-	 * 只有在这个集合里的文件才会被选上 —— 因为这条命令跑完会把原文件**移进**缓存目录，
-	 * 而"引用的改写"正是它的前提（见文件头）。集合外的文件一概不碰。
+	 * 只有在这个集合里的文件才会被选上 —— 因为这条命令跑完会把这些文件**当成本地副本**
+	 * （⚠️ 留在原处、不搬）并把笔记里的链接改写成远端地址；"改了链接之后那张图还显示得出来"正是它的前提
+	 * （见文件头）。集合外的文件一概不碰。
 	 *
 	 * 取值的来源是宿主的链接索引（`metadataCache.resolvedLinks`），而不是我们自己扫正文：
 	 * 宿主认识所有链接形态（`![[图.png]]`、`![](attachments/图.png)`、别名、子路径……），
@@ -83,8 +85,8 @@ export interface CandidateOptions {
  *
  * ## ⚠️ 为什么要按来源筛成「笔记」
  *
- * 这条命令会把**被引用**的文件移进缓存目录，而"移走"要成立，前提是那些引用会被
- * 同一条命令改写成远端地址。我们的改写器只认 Markdown 笔记里的链接
+ * 这条命令会把**被引用**的文件的链接改写成远端地址，前提是那些引用**改得掉**。
+ * 我们的改写器只认 Markdown 笔记里的链接
  * （`planLinkRewrites`）——**画布（`.canvas`）里的引用它不改**。
  * 所以画布引用**必须排除**：否则一个只被画布引用的附件会被搬走，
  * 而画布里的那条引用原地不动 ⇒ **死链**（画布上的图直接没了）。
@@ -117,8 +119,8 @@ export function referencedPathsFrom(resolvedLinks: unknown): Set<string> {
  * 这些扩展名是**宿主自己的文本文件**，不是用户的附件。
  *
  * ⚠️ 排除它们的理由不是"传上去没用"，而是**传上去会坏**：
- * 一个 `.md` 被上传 + 移入缓存目录之后，宿主的笔记索引看到的是一份
- * 位置变了、名字变了（内容寻址）的文件 —— 笔记之间的 wikilink 会集体断掉。
+ * 一个 `.md` 被当附件上传，它**正文里的链接会被改写成远端地址**（这条命令的本职），
+ * 而宿主仍按后缀把它当笔记索引 —— 结果是一篇笔记被当成图片对象，笔记之间的 wikilink 也跟着断掉。
  * `.canvas` 同理（它引用别的文件），`.base` 是数据库。
  *
  * 用**扩展名**而不是 MIME/内容判断：这一步是纯判定（不读文件字节），
@@ -149,7 +151,7 @@ export function isNoteLikeExtension(extension: unknown): boolean {
  * 歧义时同样拒绝改写 —— 若这里把两个都算成"被引用"，命令就会**搬走**它们，
  * 而笔记里的链接一处都改不掉 ⇒ 死链。宁可少处理（不搬）。
  */
-export function resolveCanvasTargets(
+export function resolveVaultTargets(
 	targets: readonly string[],
 	vaultPaths: readonly string[]
 ): Set<string> {
@@ -169,16 +171,29 @@ export function resolveCanvasTargets(
 
 	const out = new Set<string>();
 	for (const target of targets ?? []) {
-		const full = normalizeLinkTarget(String(target ?? ""));
-		if (!full) continue;
-		const exact = byPath.get(full);
+		const forms = linkTargetForms(target);
+		if (forms.length === 0) continue;
+		// ⭐ 与改写器**同一份归一**（含百分号解码那一形）。画布文本节点里写
+		// `![[Pasted%20image%201234.png]]` 完全可能（从别处复制来的），少认一形 =
+		// "只被画布文本引用的附件永远不被处理"（与需求 R16 冲突，且不报错）。
+		let exact: string | undefined;
+		for (const form of forms) {
+			exact = byPath.get(form);
+			if (exact) break;
+		}
 		if (exact) {
 			out.add(exact);
 			continue;
 		}
-		const candidates = byName.get(full.split("/").pop() ?? full);
-		// ⚠️ 歧义 ⇒ 不收（与改写器一致，见上面的说明）
-		if (candidates && candidates.length === 1) out.add(candidates[0]);
+		for (const form of forms) {
+			const name = form.split("/").pop() ?? form;
+			const candidates = byName.get(name);
+			// ⚠️ 歧义 ⇒ 不收（与改写器一致，见上面的说明）
+			if (candidates && candidates.length === 1) {
+				out.add(candidates[0]);
+				break;
+			}
+		}
 	}
 	return out;
 }
@@ -217,8 +232,8 @@ export function selectUploadCandidates(files: readonly VaultFileLike[], options:
 			continue;
 		}
 
-		// ⭐ 只处理**被笔记引用着**的文件：命令成功后会把它移进缓存目录，
-		// 而没有引用的文件搬走只会让人以为丢东西（见 `referencedPaths`）。
+		// ⭐ 只处理**被笔记引用着**的文件：命令成功后会改写指向它的那些链接，
+		// 而没有引用的文件传上去只是白占空间、还会让人以为丢东西（见 `referencedPaths`）。
 		if (!options.referencedPaths.has(file.path)) {
 			bump("没有被任何笔记引用");
 			unreferenced += 1;
@@ -351,10 +366,11 @@ export function externalFileUrlsIn(text: string): string[] {
 		const raw = stripAngles(match[1]);
 		if (isHttpUrl(raw)) urls.add(raw);
 	}
-	// 行内 HTML：图片与锚点都收
-	for (const match of text.matchAll(/<(?:img|a)\b[^>]*?\b(?:src|href)\s*=\s*(?:"([^"\n]*)"|'([^'\n]*)')/gi)) {
-		const raw = String(match[1] ?? match[2] ?? "").trim();
-		if (isHttpUrl(raw)) urls.add(raw);
+	// 行内 HTML：标签属性里的地址 —— ⚠️ 正则与解析层**共用一份**（`references.ts` 的
+	// `HTML_ATTRIBUTE`）：各写一遍迟早分叉成"改写认得、候选不认得"（而且不报错）。
+	// 标签集因此也一致（img / a / video / audio / source 这类带 src|href 的都算）。
+	for (const { value } of htmlAttributeTargets(text)) {
+		if (isHttpUrl(value)) urls.add(value);
 	}
 
 	// ⭐ 本机文件（`file:///D:/…`）—— 与上面两段**刻意分开**，因为分界规则不同：
@@ -366,10 +382,9 @@ export function externalFileUrlsIn(text: string): string[] {
 		// 只认 `file:`（http 那一路由上面的规则管，两边的分界规则不同，不能混着用）
 		if (/^file:/i.test(raw)) urls.add(raw);
 	}
-	// 行内 HTML：`<img src="file:///D:/…">`（引号形状本就允许空格，与上面共用一条规则）
-	for (const match of text.matchAll(/<(?:img|a)\b[^>]*?\b(?:src|href)\s*=\s*(?:"([^"\n]*)"|'([^'\n]*)')/gi)) {
-		const raw = String(match[1] ?? match[2] ?? "").trim();
-		if (/^file:/i.test(raw)) urls.add(raw);
+	// 行内 HTML 里的本机路径：`<img src="file:///D:/…">`（引号形状本就允许空格，与上面共用一条规则）
+	for (const { value } of htmlAttributeTargets(text)) {
+		if (/^file:/i.test(value)) urls.add(value);
 	}
 
 	return [...urls];

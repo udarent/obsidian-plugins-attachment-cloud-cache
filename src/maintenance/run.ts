@@ -21,6 +21,7 @@ import { TFile } from "obsidian";
 import type { App } from "obsidian";
 
 import type { CacheIndex } from "../cache/index";
+import type { ExternalCandidate, NoteTextLike } from "./batch";
 import type { PluginSettings } from "../types";
 import { auditCache } from "./audit";
 import type { CacheAudit, DiskFile } from "./audit";
@@ -45,7 +46,7 @@ export interface MaintenanceDeps {
 	/** 上传编排（复用粘贴那条链，避免两套行为）。 */
 	ingest: (request: IngestRequest) => Promise<IngestResult>;
 	/**
-	 * 站外图的"下载 → 上传 → 改写链接"（复用「缓存站外图片」那条链）。
+	 * 站外图的"下载 → 上传 → 改写链接"（复用「缓存外部文件（可挑选）…」那条链）。
 	 *
 	 * 与 `ingest` 同理：只有一处实现，于是同意复核、失败分类、
 	 * "URL 在笔记里总是字面出现"那几条纪律不会因为入口不同而分叉。
@@ -63,6 +64,17 @@ export interface MaintenanceDeps {
 	 * 未提供 ⇒ 一律当作"确认不了" ⇒ **不淘汰**（安全的一侧）。
 	 */
 	confirmRemote?: (key: string) => Promise<boolean>;
+	/**
+	 * ⭐⭐ 笔记 / 画布的链接**直接指着的** vault 路径集合（= `referencedVaultPaths` 那一份）。
+	 *
+	 * ⚠️ 它与 `scanReferencedKeys` 合起来才回答得了"这份副本还有人在用吗"，而两个问题的
+	 * 后果相反（见 `audit.ts` 的 `referencedPaths`）：那一半问"笔记还写着**云端地址**吗"，
+	 * 这一半问"笔记**直接指着这份文件**吗"。
+	 *
+	 * ⚠️ **必填**（编译期保证）：缺了它，一份笔记正在显示的图会被报成"没有任何笔记引用"，
+	 * 于是用户照着这个数字去清、或者后台淘汰把它排到最前面 —— 两个后果都是"图没了"。
+	 */
+	referencedPaths: (notes?: readonly NoteTextLike[]) => Promise<ReadonlySet<string>>;
 	notify: (message: string) => void;
 	t: (key: string, params?: Record<string, unknown>) => string;
 }
@@ -144,10 +156,16 @@ export async function inspectLocalCopies(
 		deps.app,
 		entries.map((entry) => entry.cachePath)
 	);
-	const { keys } = await scanReferences(deps.app, keyFromUrl);
+	const { keys, byPath } = await scanReferences(deps.app, keyFromUrl);
+	// ⭐ "还有人用吗"的另一半：笔记**直接指着**哪些库内文件（见 `MaintenanceDeps.referencedPaths`）。
+	// 少了它，一份正被显示的图会被报成"没有任何笔记引用"。
+	// ⚠️ 把**刚读到的正文**递过去：同一个命令里别把全库笔记读两遍。
+	const referencedPaths = await deps.referencedPaths(
+		[...byPath].map(([path, text]) => ({ path, text }))
+	);
 
 	return {
-		audit: auditCache({ entries, copies, referencedKeys: keys }),
+		audit: auditCache({ entries, copies, referencedKeys: keys, referencedPaths }),
 	};
 }
 
@@ -355,6 +373,30 @@ export interface BatchOptions {
 	 * 所以它由调用方算一次、传两次（确认框 + 这里）。
 	 */
 	referencedPaths: ReadonlySet<string>;
+	/**
+	 * 逐个候选**处理完**时上报（界面据此画进度）。
+	 *
+	 * ⚠️ 报的是**领域对象本身**（候选 / 路径），不是界面那一行的键 ——
+	 * "哪一行"是界面的事（映射在 `plugin/*` 那一层做，见 `ui/external-picker-logic.ts::pickKey`）。
+	 * 让这一层去算界面键，就得让 `maintenance/` 反过来认识 `ui/`，方向是错的。
+	 *
+	 * ⚠️ **只在"这一个候选真的被处理了"时上报**（成功 / 失败 / 跳过）。
+	 * 改写与收尾两趟**不在这里报**（它们是全局的）：所以最后一件处理完时进度就满了，
+	 * 而命令还在改写链接 —— 界面上那句"已结束"由**调用方**在返回之后才说
+	 * （见 `ui/task-list-modal.ts` 的 `runFinished`）。
+	 */
+	onItem?: (
+		event:
+			| { kind: "external"; candidate: ExternalCandidate; status: "done" | "failed" }
+			| { kind: "vault"; path: string; status: "done" | "skipped" | "failed" }
+	) => void;
+	/**
+	 * 只处理这些库内路径（勾选的结果）。缺省 = 全部候选。
+	 *
+	 * ⚠️ 与"候选怎么挑"是两件事：候选仍由 `selectUploadCandidates` 决定
+	 * （安全判据在那儿），这里只做**用户的取舍**。两者相乘 = 真正要上传的那些。
+	 */
+	onlyPaths?: ReadonlySet<string>;
 }
 
 /**
@@ -362,7 +404,7 @@ export interface BatchOptions {
  *
  * ## 两趟，各管一类候选
  *
- * 1. **站外图**（候选已获授权）→ 走 `deps.cacheExternal`，也就是「缓存站外图片」
+ * 1. **站外图**（候选已获授权）→ 走 `deps.cacheExternal`，也就是「缓存外部文件（可挑选）…」
  *    那条链（下载 → 上传 → 落本地副本 → 改写链接）。它自带同意复核，
  *    所以这里只负责按候选逐个跑、并把结果并进同一份统计。
  * 2. **库内文件** → 读字节 → `ingest`（带 `existingPath`，见下）→ 收集改写规则 →
@@ -445,9 +487,9 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 			try {
 				outcome = await deps.cacheExternal(candidate.url, candidate.notePath);
 			} catch {
-				// 这条链是 fire-and-forget 友好的，但还是兜一层：
 				// 一张图出事不该让整条命令停在这里
 				result.failed += 1;
+				options.onItem?.({ kind: "external", candidate, status: "failed" });
 				continue;
 			}
 
@@ -455,13 +497,16 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 				result.uploaded += 1;
 				result.linksRewritten += 1;
 				changedNotes.add(candidate.notePath);
+				options.onItem?.({ kind: "external", candidate, status: "done" });
 			} else if (outcome.status === "cached-no-rewrite") {
 				// 图进了存储，但笔记里的链接没改成 —— **算未完成**：
 				// 命令的承诺是"上传并改写"，只做了一半就报成功，用户会以为搬完了，
 				// 而笔记里那串地址还指着别人的服务器。（重跑一次会补上。）
 				result.failed += 1;
+				options.onItem?.({ kind: "external", candidate, status: "failed" });
 			} else {
 				result.failed += 1;
+				options.onItem?.({ kind: "external", candidate, status: "failed" });
 			}
 		}
 	}
@@ -478,6 +523,12 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 		index: deps.index(),
 		referencedPaths: options.referencedPaths,
 	});
+	// ⭐ 用户**勾掉**的那些不进这一趟：候选（安全判据）与取舍（勾选）是两件事。
+	// 判据用的是 `selection.paths` 的顺序 —— 界面上的清单也是这个顺序，于是
+	// "第几行"在两处一致。
+	const chosenPaths = options.onlyPaths
+		? selection.paths.filter((path) => options.onlyPaths?.has(path))
+		: selection.paths;
 	// 两条路径的"为什么跳过"汇总到一起（形状相同，都是给人看的诊断）
 	result.skipped = [...selection.skipped, ...(options.external?.skipped ?? [])];
 
@@ -497,10 +548,15 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 	 */
 	const fileRules: RewriteRule[] = [];
 
-	for (const path of selection.paths) {
+	for (const path of chosenPaths) {
+		/** 这一份没成 ⇒ 计数 + 让界面那一行变红（两件事必须成对，见 `BatchOptions.onItem`）。 */
+		const failed = (): void => {
+			result.failed += 1;
+			options.onItem?.({ kind: "vault", path, status: "failed" });
+		};
 		const file = deps.app.vault.getAbstractFileByPath(path);
 		if (!(file instanceof TFile)) {
-			result.failed += 1;
+			failed();
 			continue;
 		}
 
@@ -508,7 +564,7 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 		try {
 			bytes = await deps.app.vault.readBinary(file);
 		} catch {
-			result.failed += 1;
+			failed();
 			continue;
 		}
 
@@ -526,16 +582,17 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 				existingPath: path,
 			});
 		} catch {
-			result.failed += 1;
+			failed();
 			continue;
 		}
 
 		if (!ingestResult.remoteUrl) {
-			result.failed += 1;
+			failed();
 			continue;
 		}
 		if (ingestResult.status === "reused") result.reused += 1;
 		else result.uploaded += 1;
+		options.onItem?.({ kind: "vault", path, status: "done" });
 
 		rules.push({ from: path, to: ingestResult.remoteUrl, display: ingestResult.displayName });
 

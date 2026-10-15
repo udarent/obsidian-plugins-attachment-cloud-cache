@@ -26,13 +26,14 @@ await runMutations({
 	suite: (mod) => runLoadAcceptance({ loadPluginClass: () => mod }),
 	mutations: [
 		{
-			// ⚠️ 从 mutate-load-acceptance 搬来。后果：维护命令不再请求确认 ⇒
-			// 用户在命令面板里点错一下就开始改笔记、下载站外图
-			//（"取消 = 什么都没发生"这条路径整个不存在了）。
-			name: "★ 维护命令不再请求确认（点错命令即改笔记、下载站外图）",
-			from: '\tif (!confirmed) {\n\t\tnew Notice(ctx.t("maintainCancelled"));\n\t\treturn;\n\t}\n\n\tconst result = await runBatchUpload(deps, { external, referencedPaths });',
-			to: "\tvoid confirmed;\n\tconst result = await runBatchUpload(deps, { external, referencedPaths });",
-			expect: "取消之后",
+			// 后果：取消之后**装作什么都没发生**（连一句话都没有）⇒ 用户会以为命令坏了。
+			// ⚠️ 2026-10-15：判据移进「清单式弹窗」之后，"取消 ⇒ 不改笔记 / 不下载"是**结构保证**的
+			//（动手只发生在弹窗的 `run` 回调里，取消根本不会调到它）⇒ 这条锚点改守另一半：
+			// 取消必须**如实说一句**（为此在验收里补了一条断言）。
+			name: "★ 取消之后装作什么都没发生（用户以为命令坏了）",
+			from: '\tif (!result) {\n',
+			to: '\tif (false) {\n',
+			expect: "取消之后要如实反馈",
 		},
 		{
 			// ⚠️ 从 mutate-load-acceptance 搬来。后果：确认框不再说清"文件留在原地、
@@ -44,14 +45,13 @@ await runMutations({
 			expect: "留在附件目录",
 		},
 		{
-			// ⚠️ 从 mutate-load-acceptance 搬来。后果：算出了外链候选却不交给执行层 ⇒
-			// 命令只搬库内文件、外链图原样留着，而确认框刚刚向用户承诺过会处理它们。
-			// ⚠️ 只摘掉 `external` —— 把整份 options 都去掉会变成"少传参数"的报错，
-			// 那样测到的就不是"外链那趟被跳过"了（变异的原因要对得上）。
-			name: "★ 算出了外链候选却不交给执行层（确认框承诺了却没做）",
-			from: "runBatchUpload(deps, { external, referencedPaths });",
-			to: "runBatchUpload(deps, { referencedPaths });",
-			expect: "外链图被下载、上传，笔记里的链接被改写",
+			// 后果：算出了外链候选却不交给执行层 ⇒ 清单里承诺了「另有 N 个站外文件」，
+			// 实际一个都不处理（而且不报错）。⚠️ 2026-10-15 起**勾选**成了过滤条件，
+			// 打坏它（`to` 给空数组）就等于「用户勾了却没处理」—— 判据仍是那条端到端等待。
+			name: "★ 勾中的外链候选没交给执行层（清单承诺了却没做）",
+			from: "candidates: external.candidates.filter((candidate) => chosen.has(pickKey(candidate))),",
+			to: "candidates: [],",
+			expect: "外链图被下载、上传",
 		},
 		{
 			// ⚠️ 从 mutate-load-acceptance 搬来。后果：确认框不再列出即将访问的站点 ⇒

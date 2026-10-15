@@ -27,8 +27,8 @@
 import type { App } from "obsidian";
 import { TFile } from "obsidian";
 import type { NoteTextLike } from "../maintenance/batch";
-import { referencedPathsFrom, resolveCanvasTargets } from "../maintenance/batch";
-import { canvasTextTargets } from "../maintenance/references";
+import { referencedPathsFrom, resolveVaultTargets } from "../maintenance/batch";
+import { canvasTextTargets, findLinkSpans, hasScheme } from "../maintenance/references";
 import { keyFromUrl } from "../render/render-target";
 import { publicUrlFor } from "../s3/client";
 import type { PluginSettings } from "../types";
@@ -128,10 +128,37 @@ export async function readAllNoteTexts(app: App): Promise<NoteTextLike[]> {
  * （`main.ts` 里 `readAllNoteTexts` 旁边那个"内容是否已在云端"的探针 —— 它已于 2026-10-14
  * 随 D-24 删除），而方法自己一行注释也没有（2026-10-13 已归位）。
  */
-export async function referencedVaultPaths(app: App): Promise<ReadonlySet<string>> {
+export async function referencedVaultPaths(
+	app: App,
+	options: { notes?: readonly NoteTextLike[] } = {}
+): Promise<ReadonlySet<string>> {
+	const vaultPaths = app.vault.getFiles().map((file) => file.path);
 	const referenced = new Set(referencedPathsFrom(app.metadataCache?.resolvedLinks));
 
-	const vaultPaths = app.vault.getFiles().map((file) => file.path);
+	// ⭐⭐ 2026-10-15（D-32）：**再加一路 —— 我们自己解析笔记正文**。
+	//
+	// 宿主的 `resolvedLinks` 有盲区，而每一处盲区的后果都一样（**那份文件被判成"没人引用"**，
+	// 于是命令不处理它、占用报告也说没人用）：
+	// - **属性区**（`cover: "[[x.png]]"`）：那类链接记在 `frontmatterLinks` 里，不算进 `resolvedLinks`；
+	// - **行内 HTML**（`<img src="x.png">`）：宿主收不收没有保证（画布那条已经吃过同一个亏）；
+	// - **引用式链接**（`![alt][ref]` + `[ref]: x.png`）。
+	//
+	// ⚠️ 这一路与删除前的复核（`references.ts::stillMentionsPath`）走**同一套解析** ——
+	// 分类层与守卫同口径，才不会出现"报告说没人用、真删又被拦下"（D-31 的教训）。
+	const notes = options.notes ?? (await readAllNoteTexts(app));
+	const targets: string[] = [];
+	for (const note of notes) {
+		for (const span of findLinkSpans(note.text)) {
+			// ⚠️⚠️ **带 scheme 的目标不是本地引用**（`https://…` / `file:///D:/…`）：它们归另一条链
+			//（站外缓存 / 本机文件）。按**短名**去比会把"云端地址里的文件名"错认成"某份本地副本
+			// 还被人指着" ⇒ 那份副本从此清不掉（实测：验收里 `release-target` 那份当场被这条误判挡住）。
+			// 判据是"它是不是本地链接"，不是"它看起来像哪个文件"。
+			if (hasScheme(span.raw)) continue;
+			targets.push(span.raw);
+		}
+	}
+	for (const path of resolveVaultTargets(targets, vaultPaths)) referenced.add(path);
+
 	for (const file of app.vault.getFiles()) {
 		if (file.extension !== "canvas") continue;
 		let text: string;
@@ -142,7 +169,8 @@ export async function referencedVaultPaths(app: App): Promise<ReadonlySet<string
 			// 而"读失败"绝不能变成"把它的引用当成不存在"以外的断言。
 			continue;
 		}
-		for (const path of resolveCanvasTargets(canvasTextTargets(text), vaultPaths)) {
+		const canvasTargets = canvasTextTargets(text).filter((raw) => !hasScheme(raw));
+		for (const path of resolveVaultTargets(canvasTargets, vaultPaths)) {
 			referenced.add(path);
 		}
 	}

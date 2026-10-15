@@ -442,6 +442,21 @@ export async function runLoadAcceptance(options = {}) {
 
 	// ── 插件实例 ──
 	const plugin = new PluginClass(app, { id: "attachment-cloud-cache", dir: ".obsidian/plugins/attachment-cloud-cache" });
+
+	/**
+	 * 清单式弹窗的替身（2026-10-15 起「上传已有附件 / 清理云端空间 / 检查未引用的云端附件」
+	 * 都走它）。真弹窗在 Node 里点不了（宿主的 `Setting.addButton` 是空操作 ⇒ 连按钮都不会建），
+	 * 所以这里换成「**全选 + 按主按钮**」—— 与用户「全选 → 确认」是同一条路径。
+	 * ⚠️ 它的 `run` 必须**真的跑**：上传/删除/进度都在那里面。
+	 */
+	const pickAsks = [];
+	const pickTasksAll = async (options) => {
+		pickAsks.push(options);
+		const selected = (options.cards ?? []).map((card) => card.id);
+		await options.run?.(selected, () => {});
+		return { selected, ran: true };
+	};
+	plugin.pickTasks = pickTasksAll;
 	/**
 	 * 记录 `saveData` 的调用。
 	 *
@@ -905,6 +920,28 @@ ${text}`);
 		assert.equal(unusedIn(withUnused), unused0 + 1, `★ 它没有笔记引用 ⇒"没人引用" +1 实际：${withUnused}`);
 		assert.equal(missingIn(withUnused), missing0, `★ 失效数不该动 实际：${withUnused}`);
 
+		// ②b ⭐⭐ 给同一份副本一条**库内链接**（某篇笔记直接指着这份文件）⇒ 它就不再是"没人引用"
+		//
+		// 现场（2026-10-15 真机）：用户的一张 `.png` 被笔记用 `![](../企业微信截图_….png)` 指着，
+		// 而报告说它「没有任何笔记引用」。原因：这一层只问了"有没有笔记提**云端那个地址**"，
+		// 没问"有没有笔记**直接指着这份本地文件**"—— 而后者才是"这张图正在被显示"。
+		//
+		// ⭐ 这一条钉的是**接线**（装配点有没有把 `referencedVaultPaths` 递给维护层）：
+		// 两半判据本身由 `maintenance-suite` 钉着，而"判定对、装配漏"照样会让用户看到假数字。
+		// ⚠️ 在原表上**追加**（不是换掉）：换掉会把别的引用一起抹掉，增量就不再只来自这一条。
+		const linksBefore = app.metadataCache.resolvedLinks ?? {};
+		harness.setResolvedLinks({
+			...linksBefore,
+			[noteWithLink]: { ...(linksBefore[noteWithLink] ?? {}), [unusedPath]: 1 },
+		});
+		const withLocalLink = await readReport();
+		assert.equal(
+			unusedIn(withLocalLink),
+			unused0,
+			`★ 有笔记直接指着它 ⇒ 不许再报"没人引用"（实际：${withLocalLink}）`
+		);
+		assert.equal(filesIn(withLocalLink), files0 + 1, `★ 它当然还在，只是不再算"没人引用" 实际：${withLocalLink}`);
+
 		// ③ 再登记一条**失效记录**（索引里有、磁盘上没有）⇒ 只有失效数 +1
 		indexHandle.set({
 			key: "stale-1f.png",
@@ -1173,11 +1210,9 @@ ${text}`);
 			await writeFile(join(root, externalNote), `# 外链\n\n![x](${externalUrl})\n`, "utf8");
 			await harness.refreshPathCache();
 
-			const externalConfirms = [];
-			plugin.confirmMaintenance = async (options) => {
-				externalConfirms.push(options);
-				return true; // 用户点了确认
-			};
+			// ⚠️ 2026-10-15：确认框换成**清单式弹窗**（同一个壳）⇒ 它给的也是同一份
+			// `lines`（站点、原文件留在原地那几句），断言因此只换来源、不换判据。
+			// 默认替身已经把 options 收进 `pickAsks` 了。
 			externalHostRequests.length = 0;
 			mockObsidian.Notice.instances.length = 0;
 			runCommand("upload-attachments");
@@ -1199,7 +1234,7 @@ ${text}`);
 
 			// ⭐ 确认框必须**列出即将访问的站点** —— 它就是这次下载的授权凭据。
 			// 只说"还有 1 张站外图"等于让用户盲签一份许可。
-			const externalLines = (externalConfirms.at(-1)?.lines ?? []).join(" ｜ ");
+			const externalLines = (pickAsks.at(-1)?.lines ?? []).join(" ｜ ");
 			assert.ok(
 				externalLines.includes(EXTERNAL_HOST),
 				`★ 确认框必须列出即将访问的站点（那是授权凭据）：${externalLines}`
@@ -1220,11 +1255,19 @@ ${text}`);
 			await writeFile(join(root, cancelNote), `![y](${externalUrl})\n`, "utf8");
 			await harness.refreshPathCache();
 			externalHostRequests.length = 0;
-			plugin.confirmMaintenance = async () => false; // 用户点了取消
+			// 用户点了取消 / 直接关掉弹窗 ⇒ 替身返回 null（两条链都按"取消"处理）
+			plugin.pickTasks = async () => null;
 			runCommand("upload-attachments");
 			await new Promise((resolve) => setTimeout(resolve, 300));
 
+			plugin.pickTasks = pickTasksAll; // 恢复默认替身（后面的用例还要用）
 			assert.equal(externalHostRequests.length, 0, "★ 取消之后**不得**下载任何站外图");
+			// ⭐ 取消还要**如实说一句**（2026-10-15：判据挪到弹窗之后，"不删"是结构保证的，
+			//    而"什么都不说"仍然是缺陷 —— 用户会以为命令坏了）
+			assert.ok(
+				mockObsidian.Notice.instances.some((notice) => notice.message.includes(plugin.t("maintainCancelled"))),
+				`★ 取消之后要如实反馈（实际提示：${JSON.stringify(mockObsidian.Notice.instances.map((n) => n.message))}）`
+			);
 			assert.ok(
 				(await readFile(join(root, cancelNote), "utf8")).includes(externalUrl),
 				"取消之后笔记必须一个字都没动"
@@ -1352,9 +1395,18 @@ ${text}`);
 				app.workspace.getActiveFile = () => app.vault.getAbstractFileByPath(vaultPath);
 			};
 			const originalPick = plugin.pickExternalImages;
-			/** 弹窗替身 = "用户在默认范围里看到清单、全选、点确认"。 */
+			/**
+			 * 弹窗替身 = "用户在默认范围里看到清单、全选、点确认"。
+			 *
+			 * ⚠️ 2026-10-15：确认之后那条链的**缓存与进度都在 `run` 里**（弹窗只负责列出来与收勾选）
+			 * ⇒ 替身必须把 `run` 也跑一遍，否则测到的是"挑了但什么都没做"（现象是等待超时）。
+			 */
 			const pickAllFromNote = () => {
-				plugin.pickExternalImages = async (load) => load("note");
+				plugin.pickExternalImages = async (load, run) => {
+					const picked = await load("note");
+					await run?.(picked, () => {});
+					return picked;
+				};
 			};
 
 			// ⭐ 开关**关着**：只让弹窗（显式勾选）那条路动手 —— 1.2.0 起它不受开关约束
@@ -1539,8 +1591,23 @@ ${text}`);
 			await mkdir(join(root, LEGACY_CACHE_FOLDER), { recursive: true });
 			await writeFile(join(root, legacyPath), Buffer.from(bigBytes));
 			await writeFile(join(root, orphanPath), Buffer.from([...bigBytes, 0x7c]));
+
+			// ③ ⛔ 被**笔记用库内路径直接指着**的那一份 ⇒ 淘汰不许碰它（2026-10-15 新加的安全线）。
+			// ⚠️ 笔记里刻意写成**相对路径**（`../attachments/…`）—— 这正是用户实测报过的形态
+			//（`![](../企业微信截图_….png)`），也是"判据漏一半"最容易漏掉的那一形。
+			const pinnedKey = "pinned-big-3f.png";
+			const pinnedPath = `attachments/${pinnedKey}`;
+			const pinnedNote = "notes/pinned-copy.md";
+			await mkdir(join(root, "attachments"), { recursive: true });
+			await writeFile(join(root, pinnedPath), Buffer.from([...bigBytes, 0x11]));
+			await writeFile(join(root, pinnedNote), `![x](../${pinnedPath})\n`, "utf8");
+
 			// ⭐ 只有第一份在"云端"（HEAD 复核要能查到它）
 			server.objects.set(legacyKey, { body: Buffer.from(bigBytes), contentType: "image/png" });
+			// ⚠️⚠️ 第三份**也放进"云端"**：否则它会因为"云端确认不上"被跳过，
+			// 于是"判据漏了 ⇒ 它被删掉"这条根本走不出来（实测：第一版忘了放，
+			// 那条"不许淘汰"的断言在变异下**依然通过** —— 假绿）。
+			server.objects.set(pinnedKey, { body: Buffer.from([...bigBytes, 0x11]), contentType: "image/png" });
 			await harness.refreshPathCache();
 
 			const index = plugin.indexStore.index;
@@ -1568,6 +1635,19 @@ ${text}`);
 				uploadedAt: new Date().toISOString(),
 				lastUsedAt: Date.now() - 1 * 60 * 60 * 1000,
 				sourceName: orphanKey,
+			});
+			// 第三份：**最久没用**（回拨 5 小时）⇒ 判据一旦漏了，它会被**第一个**挑走。
+			// 它被笔记直接指着 ⇒ 该留。
+			index.set({
+				key: pinnedKey,
+				cachePath: pinnedPath,
+				remoteUrl: `${PUBLIC_BASE}/${pinnedKey}`,
+				size: bigBytes.length + 1,
+				contentType: "image/png",
+				etag: "",
+				uploadedAt: new Date().toISOString(),
+				lastUsedAt: Date.now() - 5 * 60 * 60 * 1000,
+				sourceName: pinnedKey,
 			});
 
 			const entriesBefore = index.size;
@@ -1636,6 +1716,34 @@ ${text}`);
 				"★ 云端确认不上时，本地副本必须留着（宁可上限晚点生效，也不能删掉最后一份）"
 			);
 			assert.ok(index.has(orphanKey), "★ 那份副本的索引记录也必须留着（否则渲染层以为它不在了）");
+
+			// ⛔⛔ 第三道边界（2026-10-15 新加）：笔记里**直接指着这份文件**（库内路径）⇒ 淘汰不许碰。
+			//
+			// 那种链接指着的是**文件本身**，不是云端地址 ⇒ 删了**没有任何兜底**
+			//（回退下载只认属于本存储的 URL）⇒ 用户打开那篇笔记看到的是破图。
+			// ⭐ 这一份还是**最久没用**的（回拨 5 小时）⇒ 判据一旦漏了，它是**第一个**被挑走的。
+			//
+			// ⚠️ 这条同时也守着**接线**：判据层的单测证明不了"`referencedPaths` 有没有被
+			// 真的递到淘汰那条链上"（`maintenanceDeps` 与 `rotation` 是**两个**接缝）。
+			assert.equal(
+				await existsOnDisk(root, pinnedPath),
+				true,
+				"★★ 被笔记用库内路径直接指着的副本**不许淘汰**（删了那张图没有任何兜底）"
+			);
+			assert.ok(index.has(pinnedKey), "★ 那份的索引记录也必须留着（文件还在磁盘上）");
+			assert.equal(
+				harness.calls.delete.includes(pinnedPath),
+				false,
+				"★★ 更不许真的发出删除（上面两条的实现层对照）"
+			);
+
+			// 这一节的夹具要**整个收走**：那篇笔记留着会改变后面几节的「还有人引用吗」，
+			// 那份副本留着会变成后面几节的「孤儿」（索引里有、没人引用）—— 两者都会让
+			// 别的用例开始测另一件事。
+			await rm(join(root, pinnedNote), { force: true });
+			await rm(join(root, pinnedPath), { force: true });
+			index.remove(pinnedKey);
+			await harness.refreshPathCache();
 
 			// 关掉上限，免得影响后面的场景
 			plugin.settings.cacheLimitMb = 0;
@@ -1878,6 +1986,21 @@ ${text}`);
 				diagnose
 			);
 
+			// ⭐ 清单里那一行**必须带缩略图地址**（用户 2026-10-15 真机报「.png 缩略图不显示图片」）。
+			//
+			// ⚠️ 这一条只能在这里钉（端到端）：判定层的单测（`file-cards-suite`）证明不了
+			// 「流程有没有把 `localPath` 递下去」—— 少了那一步，界面那一行只会显示一个
+			// 「PNG」标记，而图正是用户核对清单时唯一能用的东西。
+			{
+				const row = (pickAsks.at(-1)?.cards ?? []).find((card) => card.id === twinPath);
+				assert.ok(row, `★ 清单里应当有 ${twinPath} 这一行`);
+				assert.ok(
+					typeof row.thumbUrl === "string" && row.thumbUrl.startsWith("app://"),
+					`★ 库内图片那一行必须有缩略图地址（用磁盘上那份，零网络）：实际 ${JSON.stringify(row.thumbUrl)}`
+				);
+				assert.equal(row.fromLocalCopy, true, "★ 库内那一行必须用本地副本（不联网）");
+			}
+
 			// ⭐ 内容相同 ⇒ **只传一次**（名字归一让两份落到同一个 key 上）
 			//
 			// ⚠️ 断言必须**只盯这一份内容**：这条命令处理的是全库候选（前面几节留下的
@@ -2020,12 +2143,18 @@ ${text}`);
 		}
 
 		// ============================================================
-		// 8f. ⚠️ 改写**认不出来**的那种链接仍然算"有人指着它" ⇒ 不删
+		// 8f. ⭐ **百分号编码**的写法也要能改写 ⇒ 重复副本照常删掉（2026-10-15 修）
 		//
-		// 判"还在不在"用的是与改写**同一套**匹配器（`stillMentionsPath`）。这个夹具是一条
-		// **URL 编码**的链接（`dup3%201.png`）：改写器解不开它（规则按路径/短名匹配），
-		// 于是它**原样留在正文里** —— 那种情况下必须认定"这一份还被指着"。
-		// 反过来（把它当成没人引用）就会删掉一个正文里还看得见的链接目标。
+		// 这一条原先测的是反面：当时改写器认不出编码写法（`dup3%201.png`）⇒ 它**原样留在正文里**
+		// ⇒ 判据必须认定"这一份还被指着" ⇒ 不删。用户 2026-10-15 报的正是这种写法
+		// （`../assets/Pasted%20image%20….png`）：**传上去了、而笔记一处都没改**
+		// —— 在他那里症状是"能识别出来、实际上没有上传"。
+		//
+		// 根因是**两侧各写了一遍归一**：改写侧不认百分号编码，删除判据侧不认相对前缀。
+		// 现在两侧共用同一份（`linkTargetForms`）⇒ 这种写法**改得掉** ⇒ 重复副本也照常
+		// 按 D-24 ④ 删掉。断言因此反过来：**链接必须被改写、副本必须被删掉**。
+		// ⚠️ "有引用没能改写 ⇒ 一份都不删"仍由 8e（画布解不开的值）与 `maintenance-suite`
+		//    里"歧义短名"那条单元断言守着。
 		// ============================================================
 		{
 			const twinPath = "attachments/dup3.png";
@@ -2034,7 +2163,7 @@ ${text}`);
 			const notePath = "notes/重复丁.md";
 			await writeFile(join(root, twinPath), Buffer.from(DUP3_BYTES));
 			await writeFile(join(root, duplicatePath), Buffer.from(DUP3_BYTES));
-			// 编码形式（空格写成 %20）——改写器不认，它就该被当成"还在"
+			// 编码形式（空格写成 %20）—— 宿主的「相对路径」链接格式自己就这么写
 			await writeFile(join(root, notePath), "![x](attachments/dup3%201.png)\n", "utf8");
 			harness.setResolvedLinks({ [notePath]: { [duplicatePath]: 1 } });
 			await harness.refreshPathCache();
@@ -2048,16 +2177,20 @@ ${text}`);
 				5000,
 				diagnose
 			);
-			// 再给它一点时间：删除发生在改写之后（同一趟里），若判据错了它会立刻消失
+			// 再给它一点时间：删除发生在改写之后（同一趟里）
 			await new Promise((resolve) => setTimeout(resolve, 200));
 
+			// ⭐ 用户看到的症状就出在这里：链接没被改写 ⇒ 笔记看起来"没上传"
+			const encodedNote = await readFile(join(root, notePath), "utf8");
 			assert.equal(
-				await existsOnDisk(root, duplicatePath),
-				true,
-				"★ 正文里还留着一处认不出来的引用 ⇒ 不许删（宁可留着，也不能删掉还被指着的东西）"
+				encodedNote.includes("dup3%201.png"),
+				false,
+				`★ 编码写法必须被改写（否则就是"传上去了、笔记没变"）：${encodedNote}`
 			);
-			assert.equal(harness.calls.delete.length, deletesBefore, "★ 这一趟一个文件都不该删");
-			assert.equal(await existsOnDisk(root, twinPath), true, "★ 留下来的那一份当然也在");
+			assert.equal(encodedNote.includes(`${PUBLIC_BASE}/`), true, `★ 换上的是自己存储的公开地址：${encodedNote}`);
+			assert.equal(await existsOnDisk(root, duplicatePath), false, "★ 链接已改写、它已零引用 ⇒ 重复副本照常删掉");
+			assert.equal(harness.calls.delete.length, deletesBefore + 1, "★ 这一趟正好删掉那一份重复副本");
+			assert.equal(await existsOnDisk(root, twinPath), true, "★ 留下来的那一份当然还在");
 		}
 
 		// ============================================================
@@ -2269,6 +2402,64 @@ ${text}`);
 				6000,
 				() => `实际提示：${JSON.stringify(mockObsidian.Notice.instances.map((n) => n.message))}`
 			);
+		}
+
+		// ============================================================
+		// 8i. ⭐⭐ **改不了、但仍被指着** ⇒ 一份都不删（同名歧义）
+		//
+		// 这一条接替 §8f 原先的位置：那里用的是"**URL 编码**那种认不出来的写法"，而
+		// 2026-10-15（D-29）之后编码写法**改得掉**了 ⇒ "删除前必须先问正文"这道守卫在验收里
+		// **失去了窗口**（`mutate-maintenance-run` 的「删除前不看正文里还留着的那条引用」
+		// 当场报「漏过（测试无牙）」）。
+		//
+		// 现在"认得出、但**改不了**"的形态只剩**同名歧义**：两个不同目录下都有 `dup5 1.png`
+		// 且都要上传 ⇒ 规则里短名 `dup5 1` 撞车 ⇒ 改写器**宁可不改**（改成错的那张更糟），
+		// 而判据必须把它当成"还指着它" ⇒ 两份重复副本都不许删。
+		// ⚠️ 链接刻意写成"相对 + 编码"（宿主「相对路径」格式自己那种形态）：它认得出（走短名）
+		// 却改不了（同名歧义），正是这道守卫要求的形态。
+		// ============================================================
+		{
+			const dupA = "attachments/dup5 1.png";
+			const dupATwin = "attachments/dup5.png";
+			const dupB = "notes/dup5 1.png";
+			const dupBTwin = "notes/dup5.png";
+			const BYTES_A = new Uint8Array([...BATCH_BYTES, 0x81]);
+			const BYTES_B = new Uint8Array([...BATCH_BYTES, 0x82]);
+			const notePath = "notes/重复戊.md";
+			await writeFile(join(root, dupATwin), Buffer.from(BYTES_A));
+			await writeFile(join(root, dupA), Buffer.from(BYTES_A));
+			await writeFile(join(root, dupBTwin), Buffer.from(BYTES_B));
+			await writeFile(join(root, dupB), Buffer.from(BYTES_B));
+			await writeFile(join(root, notePath), "![x](../attachments/dup5%201.png)\n", "utf8");
+			harness.setResolvedLinks({ [notePath]: { [dupA]: 1, [dupB]: 1 } });
+			await harness.refreshPathCache();
+
+			const deletesBefore = harness.calls.delete.length;
+			plugin.confirmMaintenance = async () => true;
+			runCommand("upload-attachments");
+			// 两份都是宿主撞名另落的重复副本 ⇒ 各自一次 PUT（拿它当"这一趟跑到了"的信号）
+			await waitFor(
+				async () => server.requests.filter((request) => request.method === "PUT").length >= 2,
+				"这一趟跑完（两份重复副本都进了存储）",
+				6000,
+				diagnose
+			);
+			// 删除排在改写之后（同一趟里）：判据错了它会紧接着消失
+			await new Promise((resolve) => setTimeout(resolve, 600));
+
+			const ambiguousNote = await readFile(join(root, notePath), "utf8");
+			assert.equal(
+				ambiguousNote.includes("dup5%201.png"),
+				true,
+				`★ 同名歧义 ⇒ 改写器宁可不改（这条引用要原样留在正文里）：${ambiguousNote}`
+			);
+			assert.equal(
+				await existsOnDisk(root, dupA),
+				true,
+				"★★ 正文里还有一条认不出的引用指着它 ⇒ 不许删（删了就留一条指向不存在文件的链接）"
+			);
+			assert.equal(await existsOnDisk(root, dupB), true, "★ 同理：歧义那两份都不许删");
+			assert.equal(harness.calls.delete.length, deletesBefore, "★ 这一趟一个文件都不该删");
 		}
 
 		// ============================================================

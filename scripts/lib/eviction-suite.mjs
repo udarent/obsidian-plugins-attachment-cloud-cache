@@ -90,6 +90,7 @@ export function runEvictionSuite(mod) {
 		const selection = buildEvictionCandidates({
 			entries,
 			present,
+			referencedPaths: new Set(),
 			referencedKeys: new Set(["cached.png"]),
 		});
 		const candidates = selection.candidates;
@@ -112,6 +113,11 @@ export function runEvictionSuite(mod) {
 
 		// 字节数：索引记的值（文件是我们写下的；不再需要磁盘清单）
 		assert.equal(byKey.get("kept.png").bytes, 4096, "字节数取索引记录的值");
+		// ⚠️ 先验"它在候选里"再验标记：`referencedKeys` 命中的那份**照常进候选**
+		//（只有被**库内路径**直接指着的才不能删，见下面那一节）——
+		// 少了这句，"把云端地址引用的也排除掉"这类过度保护会以 TypeError 的形式报出来，
+		// 读起来像测试坏了而不是判据错了。
+		assert.equal(byKey.has("cached.png"), true, "★ 被笔记提过**云端地址**的那份照常进候选（只是排在最后）");
 		assert.equal(byKey.get("cached.png").referenced, true, "被笔记引用的要标记出来");
 
 		// ⭐ 孤儿这一类**消失了**：磁盘上有的文件若索引不认得，绝不会成为候选
@@ -134,6 +140,7 @@ export function runEvictionSuite(mod) {
 		const selection = buildEvictionCandidates({
 			entries: [entryFor("a.png")],
 			present: () => true,
+			referencedPaths: new Set(),
 		});
 		assert.equal(selection.candidates.length, 1, "在磁盘上的那份要进候选");
 		assert.equal(selection.candidates[0].key, "a.png", "候选的 key 永远非空");
@@ -148,6 +155,7 @@ export function runEvictionSuite(mod) {
 				entryFor("unknown.png", { uploadedAt: "" }),
 			],
 			present: () => true,
+			referencedPaths: new Set(),
 		});
 		const byKey = new Map(selection.candidates.map((c) => [c.key, c]));
 		assert.equal(byKey.get("used.png").lastUsedAt, NOW - 1 * HOUR, "有使用时间就用它");
@@ -164,11 +172,76 @@ export function runEvictionSuite(mod) {
 		const selection = buildEvictionCandidates({
 			entries: [entryFor("a.png")],
 			present: () => true,
+			referencedPaths: new Set(),
 		});
 		assert.equal(
 			selection.candidates[0].referenced,
 			true,
 			"★ 没扫引用时一律当「已引用」（「不知道」不该被当成「没人用」，否则会优先删掉它们）"
+		);
+	}
+
+	// ============================================================
+	// ⭐⭐「还有人在用吗」= 两个问题，而且**后果不同**（2026-10-15）
+	//
+	// - `referencedKeys`：笔记里还写着**云端那个地址**吗 ⇒ 只影响**排序**
+	//   （提过的排后面）；删掉它只是"那张图暂时失去离线能力"，下次看会**回退下载**。
+	// - `referencedPaths`：笔记用**库内路径**（`![](../企业微信截图_….png)`）**直接指着**
+	//   这份文件吗 ⇒ **硬门槛，进不了候选**。那种链接指着的是文件本身，删了**没有任何兜底**
+	//   （回退下载只认属于本存储的 URL）⇒ 用户打开那篇笔记看到的是**破图**。
+	//
+	// ⚠️⚠️ 判据方向是"多认一句只是少删一份"，而**漏认会删错** ⇒ 两个方向都往保守落。
+	// 用户 2026-10-15 的口径：「笔记里存的始终是远端地址」这句**不是恒真**的
+	// —— 他说"（副本）该删呀，不然腾空间就没什么用了"，那是对**已经被改写成远端地址**
+	// 的那一类说的；写着库内路径的那一类不在此列。
+	// ============================================================
+	{
+		const selection = buildEvictionCandidates({
+			entries: [
+				entryFor("url.png", { cachePath: "attachments/url.png", size: 100 }),
+				entryFor("path.png", { cachePath: "attachments/path.png", size: 200 }),
+			],
+			present: () => true,
+			// 只有 url.png 的**云端地址**出现在笔记里
+			referencedKeys: new Set(["url.png"]),
+			// 而 path.png 被笔记用**库内路径**直接指着
+			referencedPaths: new Set(["attachments/path.png"]),
+		});
+		const byKey = new Map(selection.candidates.map((c) => [c.key, c]));
+
+		assert.equal(byKey.has("path.png"), false, "★★ 库内路径指着的那份**不进候选**（删了那张图没有任何兜底）");
+		assert.equal(selection.pinned, 1, "★ 「被钉住」要计数 —— 腾不到目标时靠它把原因说出来");
+		assert.equal(selection.presentBytes, 300, "★★ 但钉住的那份**照样占磁盘** ⇒ 占用必须算它（否则上限判定失真）");
+		assert.equal(byKey.has("url.png"), true, "★ 提了云端地址的那份**照常进候选**（删了能回退下载 ⇒ 只是排后面，不是不能删）");
+		assert.equal(byKey.get("url.png").referenced, true, "★ 而且它标成「有人提过」⇒ 排在候选最后（软偏好，不是硬门槛）");
+	}
+
+	// 同一份**既被云端地址提过、又被库内路径指着** ⇒ 仍然不能删（库内那一路更硬）
+	{
+		const selection = buildEvictionCandidates({
+			entries: [entryFor("both.png", { cachePath: "attachments/both.png" })],
+			present: () => true,
+			referencedKeys: new Set(["both.png"]),
+			referencedPaths: new Set(["attachments/both.png"]),
+		});
+		assert.equal(selection.candidates.length, 0, "★★ 两条都命中 ⇒ 以「不能删」为准（笔记里那条库内链接指着它）");
+	}
+
+	// 腾不到目标时**原因要说得准**：不是"没找到可删的"，是"那几份不能删"
+	{
+		// 占用 300（其中 200 被笔记直接指着 ⇒ 不能删），上限 50 ⇒ 就算把能删的（100）全删了也还超 150
+		const plan = planEviction({
+			candidates: [candidateFor("only", { bytes: 100, lastUsedAt: NOW - 50 * HOUR })],
+			totalBytes: 300,
+			limitBytes: 50,
+			now: NOW,
+			pinnedCount: 200,
+		});
+		assert.equal(plan.overBy, 150, "★ 连「不能删」的部分一起算 ⇒ 这个超出量是**腾不掉**的，必须如实报");
+		assert.match(
+			plan.reason,
+			/被笔记直接指着|不能删/,
+			"★★ 原因要说清是「被笔记直接指着」—— 只报一个数字会让用户以为插件坏了"
 		);
 	}
 
@@ -208,7 +281,7 @@ export function runEvictionSuite(mod) {
 		const presentPaths = new Set(entries.slice(0, 4).map((e) => e.cachePath));
 		const present = (path) => presentPaths.has(path);
 
-		const selection = buildEvictionCandidates({ entries, present, referencedKeys: null });
+		const selection = buildEvictionCandidates({ entries, present, referencedKeys: null, referencedPaths: new Set() });
 		assert.equal(selection.missing, 6, "6 份是幽灵记录（索引记着、磁盘上没有）");
 		assert.equal(selection.presentBytes, 40 * MB, "★★ 总量 = 磁盘上确实还在的那 4 份");
 		assert.equal(sumOwnedBytes(entries), 100 * MB, "（索引原始和是 100MB —— 它把幽灵记录也算进去了）");

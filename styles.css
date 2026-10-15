@@ -139,3 +139,85 @@
 	min-width: 0;
 	overflow-wrap: anywhere;
 }
+
+/* ── 清单式弹窗（缩略图 + 勾选 + 进度）：上传已有附件 / 清理云端空间 /
+   检查未引用的云端附件 / 挑选要缓存的文件，四条链共用这一套类名 ── */
+.acc-task-list {
+	/* ⚠️ 清单自己带滚动条（用户 2026-10-15 要求「进度要支持滚动条」）：
+	   几千个条目时，进度那句固定在它上方、行在这里滚 —— 两者都不会被挤出去。 */
+	max-height: 45vh;
+	overflow-y: auto;
+	scrollbar-gutter: stable;
+	margin: 0.5em 0;
+}
+
+.acc-task-row {
+	display: flex;
+	align-items: center;
+	gap: 0.6em;
+	padding: 0.2em 0;
+}
+
+.acc-task-check {
+	flex: 0 0 auto;
+	margin: 0;
+}
+
+.acc-task-text {
+	display: flex;
+	flex-direction: column;
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.acc-task-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.acc-task-meta {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	overflow-wrap: anywhere;
+}
+
+.acc-task-status {
+	flex: 0 0 auto;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.acc-task-status-done {
+	color: var(--text-success, var(--text-muted));
+}
+
+.acc-task-status-failed {
+	color: var(--text-error);
+}
+
+.acc-task-status-running {
+	color: var(--text-accent);
+}
+
+.acc-task-progress {
+	min-height: 1.2em;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.acc-task-empty {
+	color: var(--text-muted);
+}
+
+.acc-task-more {
+	padding: 0.4em 0;
+	text-align: center;
+}
+
+/* 确认框里那一列的副标题（`file-cards.ts` 的 `meta`） */
+.acc-file-meta {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	overflow-wrap: anywhere;
+}

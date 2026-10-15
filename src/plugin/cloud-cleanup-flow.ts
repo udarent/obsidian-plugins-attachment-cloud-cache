@@ -23,22 +23,18 @@ import {
 	runCloudCleanup,
 	selectCleanupCandidates,
 } from "../maintenance/cloud-cleanup";
+import type { CloudCleanupResult } from "../maintenance/cloud-cleanup";
 import type { DeletedObjectRecord } from "../maintenance/delete-log";
 import { displayNameForKey } from "../object-key";
+import { buildTaskLabels } from "../ui/task-list";
 import type { PluginContext } from "./context";
 import { cloudReferencedKeys, writeDeleteLog } from "./shared-flows";
-
-/**
- * 清单里最多列几个。**超出的部分只报个数**（"另有 N 个"）——
- * 弹窗里塞两百行等于什么都没说，而用户真正需要的总数与总体积就在清单上方。
- */
-const CLOUD_CLEANUP_LIST_MAX = 10;
 
 /**
  * **入口 B**：「清理云端未使用对象…」。
  *
  * 候选公式（见 `cloud-cleanup.ts`）：桶内对象 − 本库引用着的 key − 站外缓存的 key。
- * 用户看到的是**清单 + 总体积 + 共享风险**，确认之后才真的删。
+ * 用户看到的是**清单 + 总体积 + 共享风险**，勾选之后才真的删。
  *
  * ⚠️ 列举有页数上限；中途停下时**如实说**"清单可能不全"
  * （假装完整会让用户以为"剩下那些都还有人用"）。
@@ -88,71 +84,76 @@ export async function cleanupCloudObjects(ctx: PluginContext): Promise<void> {
 	}
 
 	const index = ctx.currentIndex();
-	const cards = ctx.fileCards(
-		selection.candidates.map((object) => {
-			const entry = index.get(object.key);
-			return {
-				id: object.key,
-				name: entry?.sourceName || displayNameForKey(object.key),
-				localPath: entry?.cachePath,
-				remoteKey: object.key,
-			};
-		}),
-		CLOUD_CLEANUP_LIST_MAX
-	);
+	const inputs = selection.candidates.map((object) => {
+		const entry = index.get(object.key);
+		return {
+			id: object.key,
+			name: entry?.sourceName || displayNameForKey(object.key),
+			localPath: entry?.cachePath,
+			remoteKey: object.key,
+			// 副标题给对象 key：光看名字认不出是**哪一份**（同名对象是常态）
+			meta: object.key,
+		};
+	});
+	// ⚠️ **不截断**：这一份清单现在是可以逐项勾选的，截断会让"全选"漏掉没列出来的那些
+	//（以前截断是因为它只是一段给人看的文字，塞两百行等于什么都没说）。
+	const cards = ctx.fileCards(inputs, inputs.length);
 
 	const lines = [
 		ctx.t("cloudCleanupSummary", {
 			count: selection.candidates.length,
 			mb: Math.max(1, Math.round(selection.bytes / (1024 * 1024))),
 		}),
-		...(selection.candidates.length > CLOUD_CLEANUP_LIST_MAX
-			? [
-					ctx.t("maintainMoreItems", {
-						count: selection.candidates.length - CLOUD_CLEANUP_LIST_MAX,
-					}),
-				]
-			: []),
 		// ⚠️ 显著位置：这两句是"多设备盲区"与"不可恢复"的如实告知
 		ctx.t("cloudCleanupDeviceBlindSpot"),
 		ctx.t("cloudCleanupCannotUndo"),
 		...(listed.truncated ? [ctx.t("cloudCleanupTruncatedWarning")] : []),
 	];
 
-	const confirmed = await ctx.confirmMaintenance({
+	const records: DeletedObjectRecord[] = [];
+	/** 执行结果（在 `run` 回调里填；用盒子装的理由见 `upload-existing-flow.ts` 同处注释）。 */
+	const state: { summary: CloudCleanupResult | null } = { summary: null };
+
+	const answer = await ctx.pickTasks({
 		title: ctx.t("cloudCleanupTitle"),
 		lines,
 		cards,
-		cta: ctx.t("cloudCleanupCta"),
+		labels: buildTaskLabels(ctx.t, "cloudCleanupCta"),
+		// ⚠️ 删云端对象**不可撤销** ⇒ 主按钮必须标成破坏性（真机验证链条盯着这一点）
 		destructive: true,
+		// ⭐ 勾中的那些才删（勾选在这里生效；候选公式仍只有 `selectCleanupCandidates` 一处）
+		run: async (selected, report) => {
+			state.summary = await runCloudCleanup(
+				{
+					client,
+					index: () => ctx.currentIndex(),
+					persistIndex: () => ctx.hostContext().persistIndex(),
+					notify: (message) => new Notice(message),
+					// ⚠️ 这里**直接**用 `ctx.t`：它是 `flowContext()` 里造的普通箭头函数属性，
+					// 不像实例方法那样会被"摘下来"（那边要包一层，lint 的 unbound-method 在拦）。
+					t: ctx.t,
+					onRemoved: (record) => records.push({ ...record, scope: "command" }),
+					// 进度：成功 / 404 / 失败都算"这一件走完了"（与留痕那份回调分开，见 `CloudCleanupDeps`）
+					onItem: (event) => report(event.key, event.status),
+				},
+				selected
+			);
+		},
 	});
-	if (!confirmed) {
+	if (!answer) {
 		new Notice(ctx.t("maintainCancelled"));
 		return;
 	}
-
-	const records: DeletedObjectRecord[] = [];
-	const result = await runCloudCleanup(
-		{
-			client,
-			index: () => ctx.currentIndex(),
-			persistIndex: () => ctx.hostContext().persistIndex(),
-			notify: (message) => new Notice(message),
-			// ⚠️ 这里**直接**用 `ctx.t`：它是 `flowContext()` 里造的普通箭头函数属性，
-			// 不像实例方法那样会被"摘下来"（那边要包一层，lint 的 unbound-method 在拦）。
-			t: ctx.t,
-			onRemoved: (record) => records.push({ ...record, scope: "command" }),
-		},
-		selection.candidates.map((object) => object.key)
-	);
+	if (!state.summary) return;
+	const outcome: CloudCleanupResult = state.summary;
 	await writeDeleteLog(ctx, records);
 
 	new Notice(
 		ctx.t("cloudCleanupDone", {
-			deleted: result.deleted,
-			alreadyGone: result.alreadyGone,
-			failed: result.failed,
-			unindexed: result.unindexed,
+			deleted: outcome.deleted,
+			alreadyGone: outcome.alreadyGone,
+			failed: outcome.failed,
+			unindexed: outcome.unindexed,
 		})
 	);
 }

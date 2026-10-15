@@ -30,7 +30,14 @@ export function runReleaseSpaceSuite(mod) {
 	 * 所以夹具必须**说明自己站在哪一档**，不能再靠默认值蒙混。
 	 * 老用例全都是存量档 ⇒ 一律走这个帮手；上限档的用例直接调 `planReleaseSpace`。
 	 */
-	const planStock = (input) => planReleaseSpace({ keepBytes: 0, now: NOW, ...input });
+	const planStock = (input) =>
+		planReleaseSpace({
+			keepBytes: 0,
+			now: NOW,
+			// 老用例都不涉及「笔记**直接指着**这份本地文件」那一类（2026-10-15 新增的否决）
+			referencedPaths: new Set(),
+			...input,
+		});
 
 	const path1 = "attachments/报告-aaaaaaaa.png";
 	const path2 = "attachments/照片-bbbbbbbb.png";
@@ -243,6 +250,7 @@ export function runReleaseSpaceSuite(mod) {
 			uploaded: allUploaded(...three.map((item) => item.key)),
 			referencedKeys: allReferenced(...three.map((item) => item.key)),
 			present: everythingPresent,
+			referencedPaths: new Set(),
 			keepBytes: 150, // 总量 300，目标 150 ⇒ 只需腾 150 ⇒ 两份
 			now: NOW,
 		});
@@ -262,6 +270,7 @@ export function runReleaseSpaceSuite(mod) {
 			uploaded: allUploaded(...three.map((item) => item.key)),
 			referencedKeys: allReferenced(...three.map((item) => item.key)),
 			present: everythingPresent,
+			referencedPaths: new Set(),
 			keepBytes: 1024,
 			now: NOW,
 		});
@@ -281,6 +290,7 @@ export function runReleaseSpaceSuite(mod) {
 			uploaded: allUploaded(orphan.key, linked.key),
 			referencedKeys: allReferenced(linked.key), // ← 只有 linked 被引用
 			present: everythingPresent,
+			referencedPaths: new Set(),
 			keepBytes: 1, // 目标极小 ⇒ 若孤儿在池里，被删的必然是最旧的它（它也更旧）
 			now: NOW,
 		});
@@ -303,6 +313,7 @@ export function runReleaseSpaceSuite(mod) {
 			uploaded: allUploaded(fresh.key, linked.key),
 			referencedKeys: allReferenced(fresh.key, linked.key),
 			present: everythingPresent,
+			referencedPaths: new Set(),
 			keepBytes: 100,
 			now: NOW,
 		});
@@ -324,6 +335,7 @@ export function runReleaseSpaceSuite(mod) {
 				uploaded: allUploaded(key1),
 				referencedKeys: allReferenced(key1),
 				present: everythingPresent,
+				referencedPaths: new Set(),
 				keepBytes: bad,
 				now: NOW,
 			});
@@ -333,5 +345,53 @@ export function runReleaseSpaceSuite(mod) {
 				`★ 目标读不出来（${String(bad)}）⇒ 什么都不删 —— "读不出目标"最安全的解释就是"这次别动"`
 			);
 		}
+	}
+
+	// ============================================================
+	// ⑥ ⭐⭐ 笔记**直接指着**这份本地文件（库内链接）⇒ 两档都不许删
+	//
+	// 现场（2026-10-15 真机）：一张 `.png` 被笔记用 `![](../企业微信截图_….png)` 指着，
+	// 而占用报告说它「没有任何笔记引用」。两条判据问的是**两个问题**：
+	// 「笔记还写着**云端地址**吗」（`referencedKeys`）与「笔记**直接指着这份文件**吗」
+	// （`referencedPaths`）。后者命中的副本是**笔记正在显示的那一份** ——
+	// 删了那张图就没了，而本流程承诺的'下回显示时重新下载'对它不成立。
+	// ============================================================
+	{
+		/** 一条条目 + 明确的"多久以前用过"（上限档要它决定谁先走）。 */
+		const agedHere = (key, path, size, hoursAgo) => ({
+			...entry(key, path, size),
+			lastUsedAt: NOW - hoursAgo * 60 * 60 * 1000,
+			uploadedAt: "2020-01-01T00:00:00.000Z",
+		});
+		// 两档都要钉：一份不留（`planStock`）与清到上限（直接调）
+		const stock = planStock({
+			entries: [entry(key1, path1, 100), entry(key2, path2, 200)],
+			uploaded: allUploaded(key1, key2),
+			referencedKeys: allReferenced(key1, key2),
+			referencedPaths: new Set([path2]),
+			present: everythingPresent,
+		});
+		assert.deepEqual(
+			stock.candidates.map((candidate) => candidate.key),
+			[key1],
+			"★ 一份不留那一档也不许删被库内链接指着的（删了笔记里那张图就没了）"
+		);
+
+		const trimmed = planReleaseSpace({
+			entries: [agedHere(key1, path1, 100, 100), agedHere(key2, path2, 100, 1)],
+			uploaded: allUploaded(key1, key2),
+			referencedKeys: allReferenced(key1, key2),
+			referencedPaths: new Set([path2]),
+			present: everythingPresent,
+			keepBytes: 50,
+			now: NOW,
+		});
+		assert.deepEqual(
+			trimmed.candidates.map((candidate) => candidate.key),
+			[key1],
+			"★ 上限档同理（那一份虽然最久没用过，但笔记正显示着它）"
+		);
+		// ⚠️ 但它**仍算在这批的占用里**：目标那笔账要把不能删的也算进去，才算得出诚实的结果
+		assert.equal(trimmed.totalBytes, 200, "★ 不能删的那份也要算进'这批'的总量（否则会报一个达不到的目标）");
 	}
 }

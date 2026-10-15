@@ -89,7 +89,11 @@ import { createExternalLiveQueue } from "./render/external-live";
 import type { ExternalLiveQueue, OpenViewLike } from "./render/external-live";
 import { createExternalCacher } from "./core/external-cache";
 import { pickExternalImagesWithModal } from "./ui/external-picker-modal";
-import type { ExternalCandidateLoader } from "./ui/external-picker-modal";
+import { pickKey } from "./ui/external-picker-logic";
+import { buildTaskLabels } from "./ui/task-list";
+import { askTaskList } from "./ui/task-list-modal";
+import type { TaskListOptions, TaskListResult } from "./ui/task-list-modal";
+import type { ExternalCandidateLoader, ExternalPickRunner } from "./ui/external-picker-modal";
 import type { ExternalPickItem, ExternalPickScope } from "./ui/external-picker-logic";
 
 
@@ -175,7 +179,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 *
 	 * ⚠️ 必须是**稳定的一份**：待处理的那批挂在上面的闭包里。
 	 * 而且不能省 —— 后处理器**在实时预览下不跑**（真机实测 0 次），
-	 * 少了这条，编辑态里「缓存站外图片」就完全没有反应。
+	 * 少了这条，编辑态里「缓存外部文件（可挑选）…」那条命令就完全没有反应。
 	 */
 	private externalLive: ExternalLiveQueue | null = null;
 
@@ -218,20 +222,40 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 这条接缝是这条链路唯一能被端到端驱动的地方 —— 没有它，
 	 * "用户勾了几张之后到底发生了什么"就只能靠单元套件间接推断。
 	 */
+	/**
+	 * 清单式弹窗（缩略图 + 勾选 + 进度，四条链共用）的接缝。
+	 *
+	 * ⚠️ 默认是**真弹窗**；入口验收会覆写它（宿主的 `Modal` 在 Node 里点不了，
+	 * 而"点了按钮会发生什么"恰恰是那几条链最要紧的部分）。
+	 * ⚠️ 必须挂成**实例字段**并让 `flowContext()` 转调它 —— 内联 `askTaskList(...)`
+	 * 的话，覆写这个字段就**没有任何效果**（2026-10-15 实测踩到：验收卡在等待超时，
+	 * 而现象只是"什么都没发生"，看不出是接缝没接上）。
+	 */
+	pickTasks: (options: TaskListOptions) => Promise<TaskListResult | null> = (options) =>
+		askTaskList(this.app, options);
+
 	pickExternalImages: (
-		load: ExternalCandidateLoader
-	) => Promise<ExternalPickItem[] | null> = (load) =>
-		pickExternalImagesWithModal(this.app, load, {
-			title: this.t("externalPickTitle"),
-			scopeName: this.t("externalPickScope"),
-			scopeNote: this.t("externalPickScopeNote"),
-			scopeVault: this.t("externalPickScopeVault"),
-			empty: this.t("externalPickEmpty"),
-			selectAll: this.t("externalPickAll"),
-			selectNone: this.t("externalPickNone"),
-			cta: this.t("externalPickCta"),
-			cancel: this.t("externalPickCancel"),
-		});
+		load: ExternalCandidateLoader,
+		run?: ExternalPickRunner
+	) => Promise<ExternalPickItem[] | null> = (load, run) =>
+		pickExternalImagesWithModal(
+			this.app,
+			load,
+			{
+				title: this.t("externalPickTitle"),
+				scopeName: this.t("externalPickScope"),
+				scopeNote: this.t("externalPickScopeNote"),
+				scopeVault: this.t("externalPickScopeVault"),
+				// "全选 / 全不选 / 取消"由共用那份给（同一句话只维护一处）；
+				// ⚠️ 空清单那句**按这条链覆盖**：它要说清"为什么可能是空的"（已缓存过 / 没配好）
+				// ⚠️ `this.t` 必须包一层箭头函数再传（eslint 的 unbound-method 在拦：摘下来的方法丢了 this）
+				labels: {
+					...buildTaskLabels((key, params) => this.t(key, params), "externalPickCta"),
+					empty: this.t("externalPickEmpty"),
+				},
+			},
+			run
+		);
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -385,6 +409,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			isPresent: (path) => Boolean(this.app.vault.getAbstractFileByPath(path)),
 			// 扫引用这条仍然复用维护功能那一份实现（只此一处）
 			scanReferencedKeys: async () => (await scanReferences(this.app, (url) => keyOfUrl(this.settings, url))).keys,
+			// ⭐ "还有人用吗"的另一半（笔记直接指着的库内路径）—— 与上面那半合起来才算完整
+			referencedPaths: () => referencedVaultPaths(this.app),
 			evict: (plan) => runEviction(this.maintenanceDeps(), plan),
 			notify: (message) => new Notice(message),
 			t: (key, params) => this.t(key, params),
@@ -599,12 +625,16 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 					request
 				);
 			},
-			// ⚠️ 复用「缓存站外图片」那条链，而不是另写一套下载+上传：
+			// ⚠️ 复用「缓存外部文件（可挑选）…」那条链，而不是另写一套下载+上传：
 			// 于是同意复核、失败分类、"URL 在笔记里总是字面出现"那几条纪律只有一份实现。
 			cacheExternal: (url, notePath) => this.cacheExternalImage(url, notePath),
 			// ⭐ 淘汰本地副本前的**云端复核**（HEAD）：确认对象此刻真的还在。
 			// 删文件前的安全线 —— 答不上来（离线、出错）一律当作"没有"，于是不删。
 			confirmRemote: (key) => this.isObjectInCloud(key),
+			// ⭐⭐ "这份副本还有人在用吗"的**另一半**：笔记/画布**直接指着**的库内路径。
+			// ⚠️ 缺了它，笔记正在显示的那份副本会被报成"没有任何笔记引用"
+			//（占用报告会骗人）、后台淘汰还会把它排到最前面（见 `audit.ts` 的 `referencedPaths`）。
+			referencedPaths: (notes) => referencedVaultPaths(this.app, { notes }),
 			notify: (message) => new Notice(message),
 			t: (key, params) => this.t(key, params),
 		};
@@ -787,21 +817,33 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			return;
 		}
 
-		const picked = await this.pickExternalImages((scope) => this.externalCandidates(scope));
+		let cached = 0;
+		let partial = 0;
+		let failed = 0;
+		// ⭐ 逐张处理**就在弹窗里跑**（用户能看着每一张的状态）
+		const picked = await this.pickExternalImages(
+			(scope) => this.externalCandidates(scope),
+			async (items, report) => {
+				for (const item of items) {
+					// ⚠️ 键必须与界面上那一行的 `id` 同一份（那里用的是 `pickKey`）
+					const key = pickKey({ url: item.url, notePath: item.notePath });
+					report(key, "running");
+					const outcome = await this.cacheExternalImage(item.url, item.notePath, true);
+					if (outcome.status === "cached") {
+						cached += 1;
+						report(key, "done");
+					} else {
+						if (outcome.status === "cached-no-rewrite") partial += 1;
+						else failed += 1;
+						report(key, "failed");
+					}
+				}
+			}
+		);
 		// `null` = 取消（含直接关掉弹窗）；空数组 = 看了但一张都没勾。两者都不做事。
 		if (!picked || picked.length === 0) {
 			new Notice(this.t("externalPickNothing"));
 			return;
-		}
-
-		let cached = 0;
-		let partial = 0;
-		let failed = 0;
-		for (const item of picked) {
-			const outcome = await this.cacheExternalImage(item.url, item.notePath, true);
-			if (outcome.status === "cached") cached += 1;
-			else if (outcome.status === "cached-no-rewrite") partial += 1;
-			else failed += 1;
 		}
 
 		new Notice(this.t("externalPickDone", { cached, partial, failed }));
@@ -1147,6 +1189,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			buildClient: () => this.buildClient(),
 			fileCards: (items, limit) => this.fileCards(items, limit),
 			confirmMaintenance: (options) => this.confirmMaintenance(options),
+			pickTasks: (options) => this.pickTasks(options),
 			maintenanceDeps: () => this.maintenanceDeps(),
 			isDesktop: () => this.isDesktopHost(),
 		};

@@ -128,6 +128,7 @@ export function runLocalCopyTruthSuite(mod) {
 		const { presentBytes, missing } = buildEvictionCandidates({
 			entries,
 			present: (path) => onDisk.has(path),
+			referencedPaths: new Set(),
 		});
 
 		assert.equal(presentBytes, 3 * MB, "★★ 上限用的占用只算**磁盘上还在的**那些（幽灵不抬高超出量 ⇒ 不会多删）");
@@ -143,6 +144,7 @@ export function runLocalCopyTruthSuite(mod) {
 		const { presentBytes } = buildEvictionCandidates({
 			entries: [entry("a.png", "attachments/a.png", 5 * MB), entry("bad.png", "attachments/bad.png", -3 * MB)],
 			present: () => true,
+			referencedPaths: new Set(),
 		});
 		assert.equal(presentBytes, 5 * MB, "坏字节数收敛到 0，而不是把别的副本的字节减掉");
 	}
@@ -150,7 +152,7 @@ export function runLocalCopyTruthSuite(mod) {
 		// 没有引用的候选是**可回收**，而有引用的不是 —— 两个函数对"不知道有没有引用"的默认值相反，
 		// 这是刻意的：淘汰侧"不确知 ⇒ 当作已引用"（宁可少删）。
 		const entries = [entry("used.png", "attachments/used.png", MB), entry("orphan.png", "attachments/orphan.png", MB)];
-		const blind = buildEvictionCandidates({ entries, present: () => true });
+		const blind = buildEvictionCandidates({ entries, present: () => true, referencedPaths: new Set() });
 		assert.equal(blind.candidates.length, 2, "没扫引用时一律当作已引用 ⇒ 都进候选（这是候选，不是「该删」）");
 	}
 

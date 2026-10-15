@@ -106,5 +106,56 @@ await runMutations({
 			// 目标被截短，第一个表现出来的就是路径段取错了。
 			expect: "五种链接写法的路径段都要取对",
 		},
+		{
+			// 后果：归一只剩"原样"那一形 ⇒ **百分号编码**的链接（宿主的「相对路径」链接格式
+			// 自己就这么写：`../assets/Pasted%20image%20….png`）在改写那一侧永远认不出来
+			// ⇒ 文件上传成功、而笔记里那条链接还是本地路径，用户看到的就是"没上传"
+			//（2026-10-15 用户实测报的正是这一条）。
+			name: "★ 归一丢掉解码那一形（编码写法传上去了、笔记一处都不改）",
+			from: "\t\tconst forms = linkTargetForms(raw);",
+			to: "\t\tconst forms = linkTargetForms(raw).slice(0, 1);",
+			expect: "编码 + `../` 相对前缀的目标必须能改写",
+		},
+		{
+			// 后果：判"这份文件还有人引用吗"时**只比完整路径** ⇒ 带相对前缀的引用
+			//（`../assets/图.png`）被判成"没人指着它" ⇒ 宿主撞名另落的重复副本会被删掉，
+			// 而正文里那条链接还指着它（用户看到的就是「图没了」）。
+			// ⚠️ 这一侧的代价不对称：漏认会丢文件，多认只是少删一份 ⇒ 必须偏保守。
+			name: "★★ 判据不按短名比（带相对前缀的引用被判成没人引用 ⇒ 删掉仍被指的文件）",
+			from: "\t\tif (names.has(baseNameOf(form))) return true;",
+			to: "\t\t// 变异：只比完整路径",
+			expect: "编码 + 相对前缀也要算「还指着它」",
+		},
+		{
+			// 后果：`![[图.png\|600]]`（表格里的常见写法）取到的路径是 `图.png\` ⇒
+			// 归一之后对不上任何文件 ⇒ **判据说没人指着它、改写也不改**（两侧一起静默失效）。
+			name: "★★ wikilink 的转义竖线没剥掉（那种写法判据与改写一起失效）",
+			from: "\t\tconst raw = body.slice(0, cut > 0 && body[cut - 1] === \"\\\\\" ? cut - 1 : cut);",
+			to: "\t\tconst raw = body.slice(0, cut);",
+			expect: "取对路径段",
+		},
+		{
+			// 后果：行内 HTML（`<img src=…>` / `<a href=…>`）整类不被认作引用 ⇒
+			// 只被它引用的附件会被判成没人用、命令也不会改写它（Obsidian 1.8 起这些标签会渲染）。
+			name: "★★ 行内 HTML 标签里的地址不被认作引用",
+			from: "\tfor (const target of htmlAttributeTargets(text)) {",
+			to: "\tfor (const target of []) {",
+			expect: "取对路径段",
+		},
+		{
+			// 后果：引用式链接（`![alt][ref]` + `[ref]: path`）不被认作引用 —— 同上，两侧一起失效。
+			name: "★★ 引用式链接的定义行不被认作引用",
+			from: "\tfor (const match of text.matchAll(REFERENCE_DEFINITION)) {",
+			to: "\tfor (const match of text.matchAll(/$^/gm)) {",
+			expect: "取对路径段",
+		},
+		{
+			// 后果：属性区里的 wikilink 被换成 Markdown 图片（`cover: ![x.png](url)`）⇒
+			// **属性值被写坏**（属性不接受 Markdown 图片）；只换路径那段又会得到死链。
+			name: "★★ 属性区（frontmatter）里也去改写（把属性值写坏）",
+			from: "\t\tif (span.inFrontmatter) continue;",
+			to: "\t\tif (false) continue;",
+			expect: "属性区里的一律不碰",
+		},
 	],
 });

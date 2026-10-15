@@ -119,5 +119,12 @@ await runMutations({
 			to: "\tif (false) {",
 			expect: "目标读不出来",
 		},
+		{
+			// 后果同上，只是走「一份不留」那一档（目标 = 0）。
+			name: "★★ 一份不留那一档把「被库内链接指着」的也删掉",
+			from: "\t\tif (input.referencedPaths.has(path)) continue;\n",
+			to: "",
+			expect: "一份不留那一档也不许删",
+		},
 	],
 });

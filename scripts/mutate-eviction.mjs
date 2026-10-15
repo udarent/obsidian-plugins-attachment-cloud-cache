@@ -52,8 +52,11 @@ await runMutations({
 		{
 			// 后果：没扫引用时把"不知道"当成"没人用" ⇒ 优先删掉一批可能还有人要的副本。
 			name: "★ 没扫引用时把「不知道」当成「没人用」",
-			from: "\t\t\treferenced: input.referencedKeys ? input.referencedKeys.has(entry.key) : true,",
-			to: "\t\t\treferenced: input.referencedKeys ? input.referencedKeys.has(entry.key) : false,",
+			// ⚠️ 2026-10-15：库内路径那一半改成了**硬门槛**（在上面那道 `continue` 里），
+			// 于是这里回到"只由 referencedKeys 决定排序"的一行；意图不变：把「没扫引用」的兜底
+			// 从「已引用」翻成「没人用」。
+			from: "referenced: input.referencedKeys ? input.referencedKeys.has(entry.key) : true,",
+			to: "referenced: input.referencedKeys ? input.referencedKeys.has(entry.key) : false,",
 			expect: "不知道",
 		},
 		{
@@ -70,6 +73,40 @@ await runMutations({
 			from: '\tif (typeof mb !== "number" || !Number.isFinite(mb) || mb <= 0) return 0;\n\treturn Math.floor(mb * 1024 * 1024);',
 			to: "\treturn mb * 1024 * 1024;",
 			expect: "不限制",
+		},
+		{
+			// 后果：一份**笔记直接指着**的副本（笔记里写的是 `![](../图.png)` 这种库内路径）
+			// 进了候选 ⇒ 超上限时被删掉 —— 那条链接指着的是这份文件本身，**没有兜底**
+			//（回退下载只认属于本存储的 URL）⇒ 用户打开那篇笔记看到的是**破图**。
+			name: "★★ 库内路径指着的副本也进候选（删掉笔记正在显示的那份文件）",
+			from: "\t\tif (input.referencedPaths.has(path)) {",
+			to: "\t\tif (false) {",
+			expect: "库内路径指着的那份",
+		},
+		{
+			// 后果：把「提过云端地址」的也当成不能删 ⇒ 淘汰几乎挑不出人来（副本空间释放白做）。
+			// ⚠️ 这条守的是**用户 2026-10-15 的口径**：「笔记里存的是远端地址、只是没在看」，
+			// 删了下次看会**回退下载** ⇒ 该删。过度保护会让上限形同虚设。
+			name: "★★ 过度保护：把「笔记里提过云端地址」的也当成不能删（淘汰挑不出人）",
+			from: "\t\tif (input.referencedPaths.has(path)) {",
+			to: "\t\tif (input.referencedPaths.has(path) || (input.referencedKeys ? input.referencedKeys.has(entry.key) : true)) {",
+			expect: "照常进候选",
+		},
+		{
+			// 后果：被钉住的那几份**不计入占用** ⇒ 上限判定看起来没超，其实超了
+			//（用户看到"上限已生效"，而磁盘上还压着一堆删不掉的副本）。
+			name: "★ 被钉住的副本不计入占用（上限判定失真：看着没超，其实超了）",
+			from: "\t\tpresentBytes += Math.max(0, entry.size);",
+			to: "\t\tpresentBytes += input.referencedPaths.has(path) ? 0 : Math.max(0, entry.size);",
+			expect: "占用必须算它",
+		},
+		{
+			// 后果：「腾不到目标」只报一个数字、不说原因 ⇒ 用户以为插件坏了
+			//（真相是那几份被笔记直接指着，永远删不掉）。
+			name: "★ 腾不到目标时不说「那几份不能删」（只报一个没有解释的数字）",
+			from: "\tconst pinned = Math.max(0, input.pinnedCount ?? 0);",
+			to: "\tconst pinned = 0;",
+			expect: "被笔记直接指着",
 		},
 	],
 });

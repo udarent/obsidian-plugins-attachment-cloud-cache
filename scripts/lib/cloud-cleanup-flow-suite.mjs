@@ -68,6 +68,8 @@ export async function runCloudCleanupFlowSuite(mod) {
 		const calls = {
 			/** `deleteObject` 收到过的 key（顺序即执行顺序）。 */
 			deleted: [],
+			pick: null,
+			reported: [],
 			/** 最后一次给确认框的选项。 */
 			confirm: null,
 			/** 最后一次给 `fileCards` 的候选与上限。 */
@@ -106,6 +108,7 @@ export async function runCloudCleanupFlowSuite(mod) {
 				};
 			},
 			deleteObject: async (key) => {
+				if ((options.deleteFails ?? []).includes(key)) throw new Error(`delete failed: ${key}`);
 				calls.deleted.push(key);
 				return true;
 			},
@@ -150,9 +153,17 @@ export async function runCloudCleanupFlowSuite(mod) {
 				calls.cardLimit = limit;
 				return items.slice(0, limit).map((item) => ({ ...item, thumb: null }));
 			},
-			confirmMaintenance: async (config) => {
-				calls.confirm = config;
-				return options.confirm ?? true;
+			// ⭐ 2026-10-15：确认框换成**清单式弹窗**（缩略图 + 勾选 + 进度，三条链共用）。
+			// 替身做「全选并确认」，并**真的把 `run` 跑一遍** —— 进度与执行是同一条路径，
+			// 只断「弹窗被调用了」等于没测这条链。
+			pickTasks: async (config) => {
+				calls.pick = config;
+				if (options.confirm === false) return null;
+				const selected = (config.cards ?? []).map((card) => card.id);
+				const reported = [];
+				await config.run?.(selected, (key, status) => reported.push({ key, status }));
+				calls.reported = reported;
+				return { selected, ran: true };
 			},
 		};
 
@@ -182,7 +193,7 @@ export async function runCloudCleanupFlowSuite(mod) {
 		assertSingleNotice(["notes/broken.md", "cancelled"], "笔记读不到 ⇒ 必须明确告知并取消");
 		assert.equal(calls.deleted.length, 0, "⚠️ 读不到引用时**一个对象都不许删**（漏掉的那篇可能正引用着它们）");
 		assert.equal(calls.logText, "", "什么都没删 ⇒ 不写删除日志（不产生空文件）");
-		assert.equal(calls.confirm, null, "还没到确认那一步就该停下");
+		assert.equal(calls.pick, null, "还没到弹窗那一步就该停下");
 	}
 	{
 		reset();
@@ -275,8 +286,8 @@ export async function runCloudCleanupFlowSuite(mod) {
 			truncated: true,
 		});
 		await cleanupCloudObjects(ctx);
-		const lines = calls.confirm.lines.join("\n");
-		assert.equal(calls.confirm.destructive, true, "删云端必须标成破坏性");
+		const lines = calls.pick.lines.join("\n");
+		assert.equal(calls.pick.destructive, true, "删云端必须标成破坏性（弹窗的主按钮要染红）");
 		assert.ok(lines.includes("5 MB"), `摘要要说清总体积，实际：${JSON.stringify(lines)}`);
 		assert.ok(/device/i.test(lines), "必须写明「多设备看不到别人的引用」这条盲区");
 		assert.ok(/cannot be undone|permanently/i.test(lines), "必须写明不可恢复");
@@ -325,17 +336,50 @@ export async function runCloudCleanupFlowSuite(mod) {
 	}
 
 	// ============================================================
-	// 7. 候选过多 ⇒ 只列上限那么多张卡，另用一行报"还有几个"
+	// 7. ⭐ 候选多少就列多少（**不截断**）：这份清单现在可以逐项勾选，
+	//    截断会让「全选」漏掉没列出来的那些（以前截断是因为它只是一段给人看的文字）。
 	// ============================================================
 	{
 		reset();
 		const objects = Array.from({ length: 14 }, (_, index) => ({ key: `o${index}.png`, size: 1 }));
 		const { ctx, calls } = makeCtx({ objects, confirm: false });
 		await cleanupCloudObjects(ctx);
-		assert.equal(calls.cardLimit, 10, "清单上限是 10");
-		assert.equal(calls.cardInputs.length, 14, "上限只影响**展示**，不影响候选本身（全部 14 个都要被删）");
-		assert.ok(calls.confirm.lines.some((line) => line.includes("4")), "要有\"另有 4 个\"那一行");
+		assert.equal(
+			calls.cardLimit,
+			14,
+			"★ 每一行都要在清单里（截断会让「全选」漏掉没列出来的那些）"
+		);
+		assert.equal(calls.cardInputs.length, 14, "14 个候选就要算出 14 行");
+		assert.equal(
+			calls.pick.lines.some((line) => /more|还有/.test(line)),
+			false,
+			"不该再有「另有 N 个」那一行（清单是全的）"
+		);
 	}
 
-	return { cases: 13 };
+	// ============================================================
+	// 8. ⭐ 进度：每个对象**处理完**都要上报（界面靠它把那一行标成完成/失败）
+	// ============================================================
+	{
+		reset();
+		const { ctx, calls } = makeCtx({
+			objects: [
+				{ key: "a.png", size: 1 },
+				{ key: "b.png", size: 2 },
+			],
+			deleteFails: ["b.png"],
+		});
+		await cleanupCloudObjects(ctx);
+		assert.deepEqual(calls.deleted, ["a.png"], "删失败的那一件不算删掉（它还在桶里）");
+		assert.deepEqual(
+			calls.reported,
+			[
+				{ key: "a.png", status: "done" },
+				{ key: "b.png", status: "failed" },
+			],
+			"★ 每个对象处理完都要上报一次（界面靠它把那一行标成完成/失败）"
+		);
+	}
+
+	return { cases: 14 };
 }

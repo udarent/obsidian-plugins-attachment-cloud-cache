@@ -44,6 +44,19 @@ export interface FileCardInput {
 	localPath?: string;
 	/** 由它推导远端地址（孤儿询问与云端清理两条路都有 key）。 */
 	remoteKey?: string;
+	/**
+	 * **调用方直接给一个地址**当缩略图 —— 优先于上面两条推导。
+	 *
+	 * 给谁用：站外图（地址就是那个 URL）与本机文件（`file:///D:/…`）——
+	 * 它们的图不在库里、也不是本存储的对象，前两条推导对它们都无从下手。
+	 * ⚠️ 仍然**只对图片类型**生效（见 §判定）：非图片给一个 URL 只会得到破图。
+	 */
+	thumb?: string;
+	/**
+	 * 行里的**副标题**（第二行的小字）：路径、站点、出现在哪篇笔记里这类
+	 * "能让用户核对是哪一个"的信息。空串 = 不画第二行。
+	 */
+	meta?: string;
 }
 
 export interface FileCardDeps {
@@ -55,7 +68,7 @@ export interface FileCardDeps {
 
 /** 一行清单。 */
 export interface FileCard {
-	/** 与输入的 `id` 同一份（调用方按它回查要删什么）。 */
+	/** 与输入的 `id` 同一份（调用方按它回查要删什么 / 要处理什么）。 */
 	id: string;
 	/** 显示给用户的名字：原始文件名，没有就是 `id`。 */
 	label: string;
@@ -65,13 +78,17 @@ export interface FileCard {
 	thumbUrl: string | null;
 	/** 缩略图来自**本地副本**（= 不联网）。 */
 	fromLocalCopy: boolean;
+	/** 副标题（第二行小字）；空串 = 不画。 */
+	meta: string;
 }
 
 /**
  * 把清单里的每一项算成"怎么展示"（纯函数）。
  *
- * 地址的优先级是**本地副本优先**：它是磁盘上已经存在的那一份，
- * 显示它既不联网、也正好是"你库里那份"。拿不到（文件被删/不在宿主索引里）才退到远端地址。
+ * 缩略图地址的优先级：**调用方直接给的** > **本地副本** > **远端地址**。
+ * 中间的"本地副本优先"是刻意的：它是磁盘上已经存在的那一份，显示它既不联网、
+ * 也正好是"你库里那份"。拿不到（文件被删/不在宿主索引里）才退到远端地址。
+ * 最前面那一档给"图根本不在库里"的两类（站外图、本机文件）用。
  */
 export function planFileCards(
 	items: readonly FileCardInput[],
@@ -93,9 +110,13 @@ export function planFileCards(
 		let thumbUrl: string | null = null;
 		let fromLocalCopy = false;
 		if (embedKindFor(ext) === "image") {
+			const explicit = typeof item.thumb === "string" ? item.thumb.trim() : "";
 			const local = typeof item.localPath === "string" ? item.localPath.trim() : "";
 			const localUrl = local ? deps.resourceUrl(local) : null;
-			if (localUrl) {
+			if (explicit) {
+				// 站外地址 / 本机 `file://…`：调用方给的这串就是图本身
+				thumbUrl = explicit;
+			} else if (localUrl) {
 				thumbUrl = localUrl;
 				fromLocalCopy = true;
 			} else {
@@ -104,14 +125,21 @@ export function planFileCards(
 			}
 		}
 
-		cards.push({ id, label, badge, thumbUrl, fromLocalCopy });
+		cards.push({
+			id,
+			label,
+			badge,
+			thumbUrl,
+			fromLocalCopy,
+			meta: typeof item.meta === "string" ? item.meta.trim() : "",
+		});
 	}
 
 	return cards;
 }
 
 /**
- * 把清单画进容器（`Modal.contentEl` / 确认框正文）。
+ * 画**一个缩略图**（图或类型标记）—— 所有列表界面共用这一份。
  *
  * ⚠️ 用 `attr` 写 `src`（= `setAttribute`）而**不是** `img.src = …`：
  * 渲染钩子改写了 `HTMLImageElement.prototype.src` 的 setter，而那一层是**为笔记内容**服务的
@@ -120,30 +148,48 @@ export function planFileCards(
  * ② "缺副本"那一种情况下它会去**下载**对象 —— 而这个对话框问的正是"要不要删掉它"。
  *
  * ⚠️ 图加载不出来时**静默降级成类型标记**：破图图标比"没有图"更像一个故障，
- * 而它最常见的成因（桶私有 / 匿名读没开 / 文件已不在）都不是故障。
+ * 而它最常见的成因（桶私有 / 匿名读没开 / 文件已不在 / 站外地址过期）都不是故障。
  */
+export function renderThumb(container: HTMLElement, card: FileCard): void {
+	const thumb = container.createSpan({ cls: "acc-file-thumb" });
+	if (card.thumbUrl) {
+		const image = thumb.createEl("img", {
+			cls: "acc-file-thumb-img",
+			// `alt` 留空：名字就在旁边，读屏软件重复念一遍没有信息量
+			//
+			// ⚠️⚠️ **不许加 `loading: "lazy"`**（2026-10-15 用户真机报「.png 缩略图不显示图片」）。
+			//
+			// 那一行当时是相对**既有可用**的清单渲染（云端清理那个弹窗）**唯一**的变化，
+			// 而原生懒加载在宿主的弹窗容器里不可靠：`.modal-container`/`.modal` 带
+			// `transform` + `opacity` 的开合动画，滚动根与合成层判定都会被搅乱，
+			// 最坏的结果不是"晚一点加载"而是**永远不加载**（图不出现、也不触发 `onerror`，
+			// 于是连"降级成类型标记"都走不到 —— 那正是用户看到的样子）。
+			//
+			// ⚠️ 性能要求（用户同日提的"文件太多会卡"）**不靠它**兜：清单是**分块画**的
+			//（一次最多 200 行，见 `task-list-modal.ts`），打开时最多只建这么多 `<img>`。
+			// 取舍写在这里：宁可首屏多几个请求，也不要"图根本不出来"这种看不见的坏掉。
+			attr: { src: card.thumbUrl, alt: "" },
+		});
+		image.onerror = () => {
+			image.remove();
+			thumb.addClass("acc-file-badge");
+			thumb.setText(card.badge);
+		};
+	} else {
+		thumb.addClass("acc-file-badge");
+		thumb.setText(card.badge);
+	}
+}
+
+/** 把清单画进容器（`Modal.contentEl` / 确认框正文）：只读的一列（缩略图 + 名字 + 副标题）。 */
 export function renderFileCards(container: HTMLElement, cards: readonly FileCard[]): void {
 	for (const card of cards ?? []) {
 		if (!card) continue;
 		const row = container.createDiv({ cls: "acc-file-card" });
-		const thumb = row.createSpan({ cls: "acc-file-thumb" });
-
-		if (card.thumbUrl) {
-			const image = thumb.createEl("img", {
-				cls: "acc-file-thumb-img",
-				// `alt` 留空：名字就在旁边，读屏软件重复念一遍没有信息量
-				attr: { src: card.thumbUrl, alt: "" },
-			});
-			image.onerror = () => {
-				image.remove();
-				thumb.addClass("acc-file-badge");
-				thumb.setText(card.badge);
-			};
-		} else {
-			thumb.addClass("acc-file-badge");
-			thumb.setText(card.badge);
-		}
-
+		renderThumb(row, card);
 		row.createSpan({ cls: "acc-file-name", text: card.label });
+		// ⚠️ 副标题是**兄弟节点、不是包一层**：这一列的 DOM 形状已经有一处断言钉着
+		// （`file-cards-suite` 按 `children[1]` 取名字），包一层会让它静默换个位置。
+		if (card.meta) row.createSpan({ cls: "acc-file-meta", text: card.meta });
 	}
 }

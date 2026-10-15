@@ -177,6 +177,26 @@ await runMutations({
 			to: '\t\t\tid: "check-orphans-disabled",',
 			expect: "★ 六条维护命令都要注册",
 		},
+		{
+			// 后果：淘汰那条链拿不到"笔记直接指着哪些库内文件" ⇒ 一份**笔记正在显示**的副本
+			//（笔记里写的是 `![](../图.png)`）会被当成"没人引用"，超上限时**第一个**被删掉
+			// —— 那条链接指着的是文件本身，删了**没有任何兜底**（回退下载只认本存储的 URL）
+			// ⇒ 用户打开那篇笔记看到的是破图。
+			//
+			// ⚠️ 这条锚点是为**接线**设的：判据层（`eviction.ts`）的单测证明不了
+			// "`referencedPaths` 有没有真的递到淘汰那条链上" —— `maintenanceDeps` 与
+			// `rotation` 是**两个**接缝，这个项目踩过"一半路径上做了兜底 = 没有兜底"。
+			name: "★★ 淘汰那条链不扫「笔记直接指着的库内路径」（删掉笔记正在显示的文件）",
+			// ⚠️ 锚点必须带上下文：`referencedPaths: () => referencedVaultPaths(this.app),`
+			// 这个文件里有**两处**（维护依赖 / 轮换），只写它自己会打到第一处（静默改错地方）。
+			from:
+				'\t\t\t// ⭐ "还有人用吗"的另一半（笔记直接指着的库内路径）—— 与上面那半合起来才算完整\n' +
+				"\t\t\treferencedPaths: () => referencedVaultPaths(this.app),",
+			to:
+				"\t\t\t// 变异：这一半不扫了\n" +
+				"\t\t\treferencedPaths: () => Promise.resolve(new Set()),",
+			expect: "不许淘汰",
+		},
 
 	],
 });

@@ -53,6 +53,8 @@ import type { NoteKind, OrphanLocalTarget } from "../maintenance/orphan-watch";
 import { removeOrphanCopies as removeCopies } from "../maintenance/orphan-removal";
 import { displayNameForKey } from "../object-key";
 import { askOrphanCloudDelete } from "../ui/cloud-delete-modal";
+import { buildTaskLabels } from "../ui/task-list";
+import type { TaskReporter } from "../ui/task-list";
 import type { PluginContext } from "./context";
 import { cloudReferencedKeys, extractStoredKeys, writeDeleteLog } from "./shared-flows";
 
@@ -276,20 +278,120 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 		// 用户看它认不出是哪张图，而这是不可恢复动作前**唯一能核对**的东西。
 		// ⚠️ 名字的三个来源按序兜底：条目 sourceName → 从 key 反推（key 自带名字：`<名字>-<哈希>.<扩展名>`）
 		// → 退化成 key 本身；图仍然是可核对的（有副本用副本，没有就用存储里的地址）。
-		const cards = ctx.fileCards(
-			selection.asks.map((key) => {
-				const entry = index.get(key);
-				// 「不留副本」档没有条目 ⇒ 从 key 反推（key 自带名字）
-				return {
-					id: key,
-					name: entry?.sourceName || displayNameForKey(key),
-					localPath: entry?.cachePath,
-					remoteKey: key,
-				};
-			}),
-			LIST_MAX
-		);
+		const inputs = selection.asks.map((key) => {
+			const entry = index.get(key);
+			// 「不留副本」档没有条目 ⇒ 从 key 反推（key 自带名字）
+			return {
+				id: key,
+				name: entry?.sourceName || displayNameForKey(key),
+				localPath: entry?.cachePath,
+				remoteKey: key,
+			};
+		});
 
+		/** 三档都要说清的两句（**可恢复性**与**多设备盲区**），自动与命令共用同一份措辞。 */
+		const lines = [ctx.t("orphanLocalNote"), ctx.t("cloudCleanupDeviceBlindSpot")];
+
+		/**
+		 * 把用户选的那一档落到**他勾中的那些**上 —— 自动与命令两条路**共用这一份**。
+		 *
+		 * ⚠️ `report` 只有命令那条路给（它有进度界面）：自动那条只有一两个孤儿，
+		 * 弹窗自己已经把话说完了。
+		 */
+		const applyChoice = async (
+			choice: "local" | "both",
+			chosen: readonly string[],
+			report?: TaskReporter
+		): Promise<void> => {
+			const localTargets = planOrphanLocalRemoval(chosen, {
+				cachePathOf: (key) => ctx.currentIndex().get(key)?.cachePath,
+			});
+			const failed = new Set<string>();
+			const markAll = (status: "running" | "done"): void => {
+				for (const key of chosen) {
+					if (status === "done" && failed.has(key)) continue;
+					report?.(key, status);
+				}
+			};
+			markAll("running");
+
+			// 先删云端（不可恢复的那一半先做：失败时下面那句提示会如实说明"云端对象未动"）
+			let cloud: CloudCleanupResult | null = null;
+			const logRecords: DeletedObjectRecord[] = [];
+			if (choice === "both") {
+				try {
+					cloud = await runCloudCleanup(
+						{
+							client,
+							index: () => ctx.currentIndex(),
+							persistIndex: () => ctx.hostContext().persistIndex(),
+							notify: (message) => new Notice(message),
+							t: ctx.t,
+							onRemoved: (record) => logRecords.push({ ...record, scope: "orphan" }),
+							// 进度：把执行层的事件接到界面上（键与清单行的 `id` 同一份）
+							onItem: (event) => {
+								if (event.status === "failed") failed.add(event.key);
+								report?.(event.key, event.status);
+							},
+						},
+						chosen
+					);
+				} catch (error) {
+					new Notice(ctx.t("cloudDeleteFailed", { error: describeError(error) }));
+				}
+			}
+			// 留痕：这条询问可能是**自动出现**的，而删除不可恢复 ⇒ 至少要让"删过什么"事后可查
+			await writeDeleteLog(ctx, logRecords);
+
+			const removed = await removeLocalCopies(localTargets);
+			// 本地那一步做完 = 这一件真的走完了。⚠️ 云端删失败的那几件**保持失败**
+			// （下一行只给没失败的那些收尾）—— 否则界面会替用户说"都成功了"。
+			markAll("done");
+
+			new Notice(
+				cloud
+					? ctx.t("orphanDeletedBoth", {
+							removed,
+							deleted: cloud.deleted,
+							alreadyGone: cloud.alreadyGone,
+							failed: cloud.failed,
+						})
+					: ctx.t("orphanLocalDeleted", { removed })
+			);
+		};
+
+		// ⭐ 命令那条路：**清单式弹窗**（缩略图 + 勾选 + 进度，与另外三条链同一个壳）。
+		// 它列的是**全部**候选（不截断：要逐项勾选），并在勾选之后就地把三档之一跑完。
+		// ⚠️ `bypassCooldown === true` 就是**命令**那条路（冷却只管自动那一侧，见函数头）。
+		if (bypassCooldown) {
+			const answer = await ctx.pickTasks({
+				title: ctx.t("orphanTitle"),
+				lines: [ctx.t("orphanBody", { count: selection.asks.length }), ...lines],
+				cards: ctx.fileCards(inputs, inputs.length),
+				// ⚠️ 三档动作由 `actions` 给，这里这套 `labels` 只用到"全选/全不选"那几句；
+				// `cta` 那一句用不到（没有单一主按钮），传一个**已被别处用着**的键，别造死键。
+				labels: buildTaskLabels(ctx.t, "orphanKeep"),
+				actions: [
+					// ⭐ 保守那一档是**主按钮**：顺手按回车的代价在两个方向上不对等
+					// （误删云端不可恢复，"保留"最多是下次再清一次）。理由见 `cloud-delete-modal.ts`。
+					{ key: "keep", label: () => ctx.t("orphanKeep"), primary: true, idle: true },
+					{ key: "local", label: () => ctx.t("orphanLocalOnly") },
+					{ key: "both", label: () => ctx.t("orphanBoth"), destructive: true },
+				],
+				run: async (chosen, report, action) => {
+					// `keep` 那一档是 `idle` ⇒ 根本不会走到这里（由弹窗直接收口）
+					if (action === "both" || action === "local") await applyChoice(action, chosen, report);
+				},
+			});
+			// `null` = 取消 / 直接关掉 ⇒ 如实说一句（这一条以前是"点边上就不见了"的场景）
+			if (!answer) new Notice(ctx.t("maintainCancelled"));
+			return;
+		}
+
+		// ⭐ 自动那条路：保持**三选一弹窗**（主按钮是保守项）。它通常只摆一两个孤儿，
+		// 不是"清单"场景；而它出现时用户多半没在期待它 ⇒ 措辞与按钮顺序都按那个前提设计的
+		// （见 `cloud-delete-modal.ts` 头注释）。两条路**共用同一个执行体** `applyChoice`。
+		const cards = ctx.fileCards(inputs, LIST_MAX);
 		const choice = await askOrphanCloudDelete(ctx.app, {
 			title: ctx.t("orphanTitle"),
 			lines: [
@@ -297,11 +399,7 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 				...(selection.asks.length > LIST_MAX
 					? [ctx.t("orphanMore", { count: selection.asks.length - LIST_MAX })]
 					: []),
-				// ⚠️ 显著位置，两句缺一不可：
-				// ① 各档的**可恢复性**（本地能回来、云端不能）—— 这是三个按钮的差别所在；
-				// ② 多设备盲区（只能看到本设备的引用）。
-				ctx.t("orphanLocalNote"),
-				ctx.t("cloudCleanupDeviceBlindSpot"),
+				...lines,
 			],
 			cards,
 			keepCta: ctx.t("orphanKeep"),
@@ -318,48 +416,7 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 		}
 		if (choice === "keep") return;
 
-		// ⚠️ 清单按**索引当时的记录**算（`planOrphanLocalRemoval` 是纯函数）。
-		// 1.2.0（D-17）起删法只有一种（走回收站）：从前那条"在缓存目录里 ⇒ 直接删"的分支
-		// 随缓存目录一起没了，而那份文件现在**同时可能就是用户的附件原件**。
-		const localTargets = planOrphanLocalRemoval(selection.asks, {
-			cachePathOf: (key) => ctx.currentIndex().get(key)?.cachePath,
-		});
-
-		// 先删云端（不可恢复的那一半先做：失败时下面那句提示会如实说明"云端对象未动"）
-		let cloud: CloudCleanupResult | null = null;
-		const logRecords: DeletedObjectRecord[] = [];
-		if (choice === "both") {
-			try {
-				cloud = await runCloudCleanup(
-					{
-						client,
-						index: () => ctx.currentIndex(),
-						persistIndex: () => ctx.hostContext().persistIndex(),
-						notify: (message) => new Notice(message),
-						t: ctx.t,
-						onRemoved: (record) => logRecords.push({ ...record, scope: "orphan" }),
-					},
-					selection.asks
-				);
-			} catch (error) {
-				new Notice(ctx.t("cloudDeleteFailed", { error: describeError(error) }));
-			}
-		}
-		// 留痕：这条询问是**自动出现**的，而删除不可恢复 ⇒ 至少要让"删过什么"事后可查
-		await writeDeleteLog(ctx, logRecords);
-
-		const removed = await removeLocalCopies(localTargets);
-
-		new Notice(
-			cloud
-				? ctx.t("orphanDeletedBoth", {
-						removed,
-						deleted: cloud.deleted,
-						alreadyGone: cloud.alreadyGone,
-						failed: cloud.failed,
-					})
-				: ctx.t("orphanLocalDeleted", { removed })
-		);
+		await applyChoice(choice, selection.asks);
 	}
 
 	/**

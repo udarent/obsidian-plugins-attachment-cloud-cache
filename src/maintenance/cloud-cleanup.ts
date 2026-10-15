@@ -186,6 +186,15 @@ export interface CloudCleanupDeps {
 	 * 会让事后排查以为"那个已经删了"）。见 `maintenance/delete-log.ts`。
 	 */
 	onRemoved?: (record: { key: string; name: string; outcome: "deleted" | "alreadyGone" }) => void;
+	/**
+	 * 每个对象**处理完**时回调一次（界面据此画进度）。
+	 *
+	 * ⚠️ 与 `onRemoved` **不是一回事**，两个都要留着：
+	 * - `onRemoved` 是**留痕**（只在"对象真的不在了"时），写进删除日志；
+	 * - 这个是**进度**（成功 / 跳过 / 失败都算一件事结束了）。
+	 * 合并会让删除日志里出现"删失败"的记录，或者让进度停在失败的那一件上。
+	 */
+	onItem?: (event: { key: string; status: "done" | "skipped" | "failed" }) => void;
 }
 
 export interface CloudCleanupResult {
@@ -259,9 +268,12 @@ export async function runCloudCleanup(
 			if (store.remove(key)) removed.push(key);
 			if (store.forgetUploaded(key)) forgotLedger = true;
 			deps.onRemoved?.({ key, name, outcome: ok ? "deleted" : "alreadyGone" });
+			// 404 也算这一件走完了：目标是"它不在云端"，而它已经不在
+			deps.onItem?.({ key, status: "done" });
 		} catch (error) {
 			// 单个对象失败不能中断整批（用户要的是"把能清的清掉"），但必须计数
 			result.failed += 1;
+			deps.onItem?.({ key, status: "failed" });
 			void error;
 		}
 	}

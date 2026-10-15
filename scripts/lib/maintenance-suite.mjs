@@ -18,7 +18,7 @@ export function runMaintenanceSuite(mod) {
 		planLinkRewrites,
 		planCanvasRewrites,
 		canvasTextTargets,
-		resolveCanvasTargets,
+		resolveVaultTargets,
 		keysInText,
 		stillMentionsPath,
 	} = mod;
@@ -79,6 +79,7 @@ export function runMaintenanceSuite(mod) {
 	assert.equal(audit.bytes.total, 44, "总字节按**磁盘**算（11 + 33），且失效的那条不计（它没有占用）");
 	assert.equal(audit.bytes.reclaimable, 33, "可回收 = 未引用副本在磁盘上的字节");
 
+	// ============================================================
 	// ⭐⭐ 结构性保证：`copies` 里就算塞了**索引外**的文件，也不会被任何一类认领 ——
 	// 因为这一层只遍历索引里的条目。索引外的文件可能是用户的附件，
 	// "扫出来删掉"是**永远不该做**的事（旧实现的"孤儿"类别正是这么干的）。
@@ -113,6 +114,46 @@ export function runMaintenanceSuite(mod) {
 		["a.png", "b.png"],
 		"没扫描引用时应按\"一致即正常\"处理"
 	);
+
+	// 1b. ⭐⭐「还有人用吗」是**两个问题**，两个都要问（2026-10-15 真机报的）
+	//
+	// 用户真机报：一张 `.png` 被笔记用**库内相对路径**（`![](../企业微信截图_….png)`）引用着，
+	// 而占用报告说它「没有任何笔记引用」。原因：这一层只问了「有没有笔记提**云端那个地址**」
+	// （`referencedKeys`），没问「有没有笔记**直接指着这份本地文件**」。
+	//
+	// ⚠️ 两个问题的后果完全不同：
+	// - 指着云端地址 ⇒ 笔记从云端显示，本地这份只是缓存 ⇒ 删了笔记照样看得见；
+	// - 指着本地路径 ⇒ **那份文件就是笔记要显示的东西** ⇒ 删了笔记里那张图就没了。
+	// ⇒ 命中后者的一律不算"未引用"（它是**否决**，不是另一种"可回收"）。
+	// ============================================================
+	{
+		const referencedByPath = auditCache({
+			entries: [
+				entry("p1.png", "attachments/p1.png", 40),
+				entry("p2.png", "attachments/p2.png", 50),
+			],
+			copies: new Map([
+				["attachments/p1.png", { path: "attachments/p1.png", bytes: 40 }],
+				["attachments/p2.png", { path: "attachments/p2.png", bytes: 50 }],
+			]),
+			// 两篇笔记都**没有**提它们的云端地址
+			referencedKeys: new Set(),
+			// 但有一篇笔记直接指着 p1 这份文件（宿主解析出来的库内路径）
+			referencedPaths: new Set(["attachments/p1.png"]),
+		});
+
+		assert.deepEqual(
+			referencedByPath.unused.map((e) => e.key),
+			["p2.png"],
+			"★ 还有笔记直接指着这份本地文件 ⇒ 不许报「没有任何笔记引用」（真机报过）"
+		);
+		assert.deepEqual(
+			referencedByPath.healthy.map((e) => e.key),
+			["p1.png"],
+			"被本地链接指着的那一份算正常副本（留着）"
+		);
+		assert.equal(referencedByPath.bytes.reclaimable, 50, "可回收字节里不许含那一份（它是还在用的）");
+	}
 
 	// 路径写法差异不该造成误判（前导斜杠 / 反斜杠 / 重复斜杠）
 	const sloppy = auditCache({
@@ -164,6 +205,8 @@ export function runMaintenanceSuite(mod) {
 		],
 		"五种链接写法的路径段都要取对（`|别名`、`#子路径`、标题、尖括号形式都不能被吞进去）"
 	);
+
+	// ============================================================
 
 	// ============================================================
 	// 4. 链接改写：只换路径，别名/尺寸/子路径/标题原样保留
@@ -361,6 +404,57 @@ export function runMaintenanceSuite(mod) {
 			"![b](https://img.example.com/sloppy.png)",
 		].join("\n"),
 		"两种写法的链接都该被换掉"
+	);
+
+	// ⭐⭐ 百分号编码与相对前缀 —— 用户 2026-10-15 实测报的那一条
+	// （`../assets/Pasted%20image%2020260930162541.png` **传上去了、而笔记一处都没改**，
+	// 在他那里的症状是"能识别出来、实际上没有上传"）。
+	// 两侧（改写 / "还有人引用吗"）现在共用同一份归一 `linkTargetForms`：
+	// 原样那一形 + 百分号解码那一形；相对前缀那一形由**短名**兜（前缀要笔记的位置才解得开）。
+	{
+		const encodedRule = [
+			{ from: "assets/Pasted image 20260930162541.png", to: "https://img.example.com/hash.png" },
+		];
+		// ① 相对前缀 + 编码（用户报的那一条）
+		const userCase = planLinkRewrites("![x](../assets/Pasted%20image%2020260930162541.png)", encodedRule);
+		assert.equal(userCase.count, 1, "★ `%20` 编码 + `../` 相对前缀的目标必须能改写（否则就是「传上去了、笔记没变」）");
+		assert.equal(userCase.text, "![x](https://img.example.com/hash.png)", "改写后是远端链接（形态与别的写法一致）");
+		// ② 库内绝对路径 + 编码：走的是「完整路径」那一档（比短名可信）
+		const encodedAbsolute = planLinkRewrites("![x](assets/Pasted%20image%2020260930162541.png)", encodedRule);
+		assert.equal(encodedAbsolute.count, 1, "★ 编码写法在「完整路径」那一档也要对得上");
+		// ③ 反向：解码之后仍不是它 ⇒ 一个字都不许动
+		const encodedOther = planLinkRewrites("![x](assets/Pasted%20image%2099999999999999.png)", encodedRule);
+		assert.equal(encodedOther.count, 0, "★ 解码之后仍不是它 ⇒ 不许改（判据不能放宽成「看着像就改」）");
+		// ④ 文件名里**真的**带 `%20`（合法、少见）：原样那一形优先 ——
+		// 否则这条链接会被指到「名字里是空格」的另一份文件上（笔记静默指向别的图）。
+		const literalPercent = planLinkRewrites("![x](attachments/a%20b.png)", [
+			{ from: "attachments/a%20b.png", to: "https://img.example.com/a%20b.png" },
+			{ from: "attachments/a b.png", to: "https://img.example.com/a-b.png" },
+		]);
+		assert.equal(
+			literalPercent.text,
+			"![x](https://img.example.com/a%20b.png)",
+			"★ 原样那一形优先（真的叫 `a%20b.png` 时不许被解码那一形抢走）"
+		);
+	}
+	// ⚠️ 判据（"这份文件还有人引用吗"）与改写器共用归一，但**刻意更宽**：
+	// 相对前缀在这里必须算「还指着它」—— 判错的代价不对称（漏认 ⇒ 删掉仍被引用的文件）。
+	assert.equal(
+		stillMentionsPath("![x](../assets/Pasted%20image%2020260930162541.png)", "assets/Pasted image 20260930162541.png"),
+		true,
+		"★ 编码 + 相对前缀也要算「还指着它」（判错会在链接还指着它的时候把文件删掉）"
+	);
+	assert.equal(stillMentionsPath("![x](../assets/照片 1.png)", "assets/照片 1.png"), true, "★ 带相对前缀的引用也要算");
+	assert.equal(
+		stillMentionsPath("![x](../assets/照片 1.png)", "assets/别的.png"),
+		false,
+		"★ 反向：短名比对不能宽到「凡带这个目录名都算」"
+	);
+	// ⭐ 歧义短名：改写器**宁可不改**，而判据必须**当成还指着它** —— 这是两侧刻意保留的差异
+	assert.equal(
+		stillMentionsPath("![[dup.png]]", "a/dup.png"),
+		true,
+		"★ 歧义短名也要算「还指着它」（保守侧：宁可不删一份）"
 	);
 
 	// 空文本/空规则
@@ -591,30 +685,38 @@ export function runMaintenanceSuite(mod) {
 	{
 		const vault = ["attachments/photo.png", "notes/a.md", "img/logo.svg"];
 		assert.deepEqual(
-			[...resolveCanvasTargets(["photo.png"], vault)],
+			[...resolveVaultTargets(["photo.png"], vault)],
 			["attachments/photo.png"],
 			"短名在唯一时要能对上"
 		);
 		assert.deepEqual(
-			[...resolveCanvasTargets(["attachments/photo"], vault)],
+			[...resolveVaultTargets(["attachments/photo"], vault)],
 			["attachments/photo.png"],
 			"没写扩展名也要能对上（与改写器同一套归一）"
 		);
-		assert.deepEqual([...resolveCanvasTargets(["img/logo.svg"], vault)], ["img/logo.svg"], "完整路径");
-		assert.deepEqual([...resolveCanvasTargets(["missing.png"], vault)], [], "库里没有的不能凭空造出来");
+		assert.deepEqual([...resolveVaultTargets(["img/logo.svg"], vault)], ["img/logo.svg"], "完整路径");
+		assert.deepEqual([...resolveVaultTargets(["missing.png"], vault)], [], "库里没有的不能凭空造出来");
 
 		// ⚠️ 同名歧义 ⇒ **一个都不收**：收了就会把文件搬走，而改写器在歧义时拒绝改写
 		// ⇒ 笔记/画布里那条链接一处都改不掉 ⇒ 死链。宁可少处理。
 		const ambiguous = ["a/dup.png", "b/dup.png"];
 		assert.deepEqual(
-			[...resolveCanvasTargets(["dup.png"], ambiguous)],
+			[...resolveVaultTargets(["dup.png"], ambiguous)],
 			[],
 			"★ 同名歧义一个都不收（搬得走却改不掉 = 死链）"
 		);
 		assert.deepEqual(
-			[...resolveCanvasTargets(["a/dup.png"], ambiguous)],
+			[...resolveVaultTargets(["a/dup.png"], ambiguous)],
 			["a/dup.png"],
 			"写全路径时就不存在歧义"
+		);
+
+		// ⭐ 编码写法（与正文里同一种来源）也要解析到真实文件 —— 少认一形 =
+		// "只被画布文本引用的附件永远不被处理"（与需求 R16 冲突，且不报错）。
+		assert.deepEqual(
+			[...resolveVaultTargets(["attachments/dup%201.png"], ["attachments/dup 1.png"])],
+			["attachments/dup 1.png"],
+			"★ 画布文本里的编码写法也要解析到真实文件（与改写器同一份归一）"
 		);
 	}
 
@@ -935,4 +1037,58 @@ export function runMaintenanceSuite(mod) {
 			"没有路径的笔记、没有正文的笔记都应安全跳过"
 		);
 	}
+	// 3b. ⭐⭐ 2026-10-15（D-32）：**所有引用写法**都要认（判据 + 改写一起）
+	//
+	// 现场：用户要求「外部链接 / 内部文件链接 / 相对地址 / 绝对地址等所有方式都应该能用」。
+	// 这里用一个矩阵逐条钉住 —— `stillMentionsPath`（"还有人指着它吗"，删文件前的判据）
+	// 与 `planLinkRewrites`（改写）在每一种写法上都必须**同时**成立。
+	// ⚠️ 少认一形**不报错**：命令报告成功而笔记里那条还是本地路径，或者那份文件被判成没人引用。
+	// ============================================================
+	{
+		const PATH = "attachments/图 1.png";
+		const RULE = [{ from: PATH, to: "https://cdn.example.com/x.png", name: "图 1.png" }];
+
+		/** 每一种写法：正文 → 期望的路径段 → 改写之后应当长什么样。 */
+		const MATRIX = [
+			["![[attachments/图 1.png]]", "attachments/图 1.png", "![图 1.png](https://cdn.example.com/x.png)"],
+			["![[图 1.png\\|600]]", "图 1.png", "![600](https://cdn.example.com/x.png)"],
+			["![[图 1.png#page=2]]", "图 1.png", "![图 1.png](https://cdn.example.com/x.png#page=2)"],
+			['<img src="attachments/图 1.png">', "attachments/图 1.png", '<img src="https://cdn.example.com/x.png">'],
+			["<img src='attachments/图 1.png'>", "attachments/图 1.png", "<img src='https://cdn.example.com/x.png'>"],
+			[
+				'<a href="attachments/图 1.png">下载</a>',
+				"attachments/图 1.png",
+				'<a href="https://cdn.example.com/x.png">下载</a>',
+			],
+			[
+				'<video src="attachments/图 1.png"></video>',
+				"attachments/图 1.png",
+				'<video src="https://cdn.example.com/x.png"></video>',
+			],
+			["[ref]: attachments/图 1.png", "attachments/图 1.png", "[ref]: https://cdn.example.com/x.png"],
+			['[ref]: attachments/图 1.png "标题"', "attachments/图 1.png", '[ref]: https://cdn.example.com/x.png "标题"'],
+		];
+		for (const [text, expectedRaw, expectedRewritten] of MATRIX) {
+			assert.deepEqual(findLinkSpans(text).map((span) => span.raw), [expectedRaw], `★ 这种写法要取对路径段：${text}`);
+			assert.equal(stillMentionsPath(text, PATH), true, `★★ 这种写法必须算「还有人指着它」：${text}`);
+			assert.equal(planLinkRewrites(text, RULE).text, expectedRewritten, `★★ 这种写法必须改得掉：${text}`);
+		}
+
+		// ⚠️ 属性区（frontmatter）里的一律**不碰**（理由见 `LinkSpan.inFrontmatter`）：
+		// 属性是结构化数据 —— 换成 Markdown 图片会把值写坏，只换路径又得到宿主不解析的 `[[https://…]]`。
+		// 而"不改"没有损失：文件仍在库里，那一处引用照常工作。
+		const front = '---\ncover: "[[图 1.png]]"\n---\n\n正文\n';
+		assert.equal(
+			stillMentionsPath(front, PATH),
+			true,
+			"属性里的引用也要算「还有人指着它」（否则那份文件可能被判成没人引用）"
+		);
+		assert.equal(planLinkRewrites(front, RULE).count, 0, "★ 属性区里的一律不碰（改坏属性值比不改糟得多）");
+		assert.equal(
+			planLinkRewrites("正文\n\n![[图 1.png]]\n", RULE).count,
+			1,
+			"★ 只跳过属性区 —— 同一篇笔记的正文照旧要改（别写成「跳过整篇」）"
+		);
+	}
+
 }

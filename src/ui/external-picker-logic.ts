@@ -95,8 +95,12 @@ export function toggleSelection(selected: ReadonlySet<string>, key: unknown): Se
  * 全选。⚠️ 只勾**清单里现在这些**行的键 ——
  * 换成"把传进来的任何东西都塞进集合"会让切换范围后残留上一批的键，
  * 于是提交时多出几条**当前清单里根本没有**的条目。
+ *
+ * ⚠️ 参数按 `{ key }` 收口（不是 `ExternalPickItem`）：**清单类弹窗也用它**
+ * （那里的行是 `FileCard`，键是 `id`，由 `ui/task-list-modal.ts` 做一层映射）。
+ * 判据只有这一份 —— 别在另一处再写一遍"什么算全选"。
  */
-export function selectEverything(items: readonly ExternalPickItem[]): Set<string> {
+export function selectEverything(items: readonly { key: string }[]): Set<string> {
 	const next = new Set<string>();
 	for (const item of items) next.add(item.key);
 	return next;

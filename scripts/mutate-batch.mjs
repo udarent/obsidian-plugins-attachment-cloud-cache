@@ -29,24 +29,17 @@ await runMutations({
 	suite: runMaintenanceSuite,
 	mutations: [
 		{
-			// ⚠️ 这条原本守"嵌入写法 `![]()` 不许被漏掉"。实测发现那个 `!?` 是**多余的**：
-			// `![a](url)` 里的 `[a](url)` 本来就会被 `\[` 命中（锚点在 `[`，`!` 不属于匹配的一部分），
-			// 于是变异改不改都一个样 —— 变异验证如实报"漏过"（实现里那个 `!?` 也已删掉）。
-			// 改成守**行内 HTML 那一支**：漏掉 `<a href>` 会让"用一个普通链接指向站外的
-			// PDF/音频"永远进不了候选，而这正是 1.1.0 要认真处理的一类（需求 R15）。
-			name: "★ 外链候选漏掉行内 <a href>（普通链接指向的文件永远进不了候选）",
-			// ⚠️ 锚点必须带上**后面那两行**：2026-10-15 加了"本机文件"那一段之后，
-			// 这条正则在同一文件里出现了**两次**（另一处收 `file:`），
-			// 而 `replace` 只改第一处 ⇒ 会静默改到另一条路上（运行器的"锚点不唯一"检查当场报了出来）。
+			// ⚠️ 2026-10-15（D-32）：行内 HTML 的正则搬成了**共用一份**（`references.ts` 的
+			// `HTML_ATTRIBUTE`）—— 原来这里自己写了一串，于是「改写认得、候选不认得」迟早分叉。
+			// 锚点因此改成打在**调用**上（那个正则本身在另一个文件里）。
+			name: "★ 外链候选漏掉行内 HTML（普通链接指向的文件永远进不了候选）",
 			from:
-				"/<(?:img|a)\\b[^>]*?\\b(?:src|href)\\s*=\\s*(?:\"([^\"\\n]*)\"|'([^'\\n]*)')/gi)) {\n" +
-				'\t\tconst raw = String(match[1] ?? match[2] ?? "").trim();\n' +
-				"\t\tif (isHttpUrl(raw)) urls.add(raw);",
+				"\tfor (const { value } of htmlAttributeTargets(text)) {\n" +
+				"\t\tif (isHttpUrl(value)) urls.add(value);",
 			to:
-				"/<img\\b[^>]*?\\bsrc\\s*=\\s*(?:\"([^\"\\n]*)\"|'([^'\\n]*)')/gi)) {\n" +
-				'\t\tconst raw = String(match[1] ?? match[2] ?? "").trim();\n' +
-				"\t\tif (isHttpUrl(raw)) urls.add(raw);",
-			expect: "行内 HTML 的 <a href> 同样要认",
+				"\tfor (const { value } of []) {\n" +
+				"\t\tif (isHttpUrl(value)) urls.add(value);",
+			expect: "行内 HTML",
 		},
 		{
 			// 后果：判定层被绕过 ⇒ **用户自己的存储地址、回环/链路本地地址、
@@ -72,8 +65,12 @@ await runMutations({
 			// 而改写器在歧义时**拒绝改写**（它分不清 `![[dup.png]]` 指哪个）⇒ 两处链接
 			// 全成死链。宁可少处理。
 			name: "★ 画布引用的同名歧义被当成「都算引用」（搬走却改不掉 ⇒ 死链）",
-			from: "\t\tif (candidates && candidates.length === 1) out.add(candidates[0]);",
-			to: "\t\tfor (const hit of candidates ?? []) out.add(hit);",
+			from:
+				"\t\t\tif (candidates && candidates.length === 1) {\n" +
+				"\t\t\t\tout.add(candidates[0]);\n" +
+				"\t\t\t\tbreak;\n" +
+				"\t\t\t}",
+			to: "\t\t\tfor (const hit of candidates ?? []) out.add(hit);",
 			expect: "同名歧义一个都不收",
 		},
 		{
@@ -129,6 +126,16 @@ await runMutations({
 			from: '\t\t\t\tcandidates.push({ url, notePath: path, host: "", local: true });',
 			to: '\t\t\t\tcandidates.push({ url, notePath: path, host: "", local: false });',
 			expect: "本机文件要标出来",
+		},
+		{
+			// 后果：画布文本节点里的**编码写法**解析不到真实文件 ⇒ "只被画布文本引用的附件"
+			// 永远不被处理（与需求 R16 冲突），而且不报错。
+			// ⚠️ 与改写器共用同一份归一（`linkTargetForms`）：两边各写一遍的话，
+			// 就是"正文里认得出、画布里认不出"（或反过来）那类静默分叉。
+			name: "★ 画布文本里的编码写法解析不到文件（只被画布引用的附件永远不被处理）",
+			from: "\t\tconst forms = linkTargetForms(target);",
+			to: "\t\tconst forms = linkTargetForms(target).slice(0, 1);",
+			expect: "画布文本里的编码写法也要解析到真实文件",
 		},
 	],
 });

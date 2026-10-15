@@ -62,6 +62,20 @@ export interface CacheAuditInput {
 	 * 而报告里那个数字会被读成"可回收"。
 	 */
 	referencedKeys?: ReadonlySet<string>;
+	/**
+	 * 笔记 / 画布的链接**直接指着的** vault 路径集合（= `referencedKeys` 的**另一半**）。
+	 *
+	 * ⚠️⚠️ 两个问题都要问，而后果**完全相反**（2026-10-15 真机报过）：
+	 * - `referencedKeys`："还有笔记写着**云端那个地址**吗" ⇒ 有 ⇒ 本地这份只是缓存
+	 *   （删了笔记照样从云端显示）；
+	 * - `referencedPaths`（本项）："还有笔记**直接指着这份本地文件**吗"（`![](../图.png)`、
+	 *   `![[图.png]]` 这类）⇒ 有 ⇒ **那份文件就是笔记要显示的东西，删了图就没了**。
+	 *
+	 * ⭐ 本项是**否决**：命中它的条目一律**不算**"未引用"（它不是另一种"可回收"）。
+	 * `undefined` = 调用方没扫这一半（那就只按 `referencedKeys` 判，与这条判据出现之前一样）。
+	 * ⚠️ 别把它当作"没人指着"的证据：接线层（`main.ts`）**总是**给的。
+	 */
+	referencedPaths?: ReadonlySet<string>;
 }
 
 export interface CacheAudit {
@@ -119,7 +133,15 @@ export function auditCache(input: CacheAuditInput): CacheAudit {
 
 		// 只在调用方提供了引用集合时才判"未引用"——
 		// 否则（只想看占用时）会把每一份都误报成可回收。
-		if (input.referencedKeys && !input.referencedKeys.has(entry.key)) {
+		//
+		// ⚠️ 两个条件缺一不可（见 `CacheAuditInput.referencedPaths`）：笔记还**直接指着
+		// 这份本地文件**时，它就是笔记要显示的东西 —— 报成"可回收"是**说反了**，
+		// 而用户会照这个数字去清（真机上就是这么报出来的）。
+		if (
+			input.referencedKeys &&
+			!input.referencedKeys.has(entry.key) &&
+			!(input.referencedPaths?.has(path) ?? false)
+		) {
 			unused.push(entry);
 			reclaimable += size;
 			continue;

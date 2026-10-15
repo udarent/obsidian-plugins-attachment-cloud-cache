@@ -16,12 +16,17 @@
  */
 
 import { Notice } from "obsidian";
+import { fileNameFromUrl } from "../core/external-cache";
+import { describeError } from "../error-text";
 import {
 	selectExternalUploadCandidates,
 	selectUploadCandidates,
 } from "../maintenance/batch";
 import { runBatchUpload } from "../maintenance/run";
+import type { BatchResult } from "../maintenance/run";
 import { connectionReadiness } from "../s3/credentials";
+import { pickKey } from "../ui/external-picker-logic";
+import { buildTaskLabels } from "../ui/task-list";
 import { baseNameForDuplicate, parentFolderOf } from "../vault-files";
 import { readAllNoteTexts, referencedVaultPaths } from "./notes-query";
 import type { PluginContext } from "./context";
@@ -52,7 +57,10 @@ export async function uploadExistingAttachments(ctx: PluginContext): Promise<voi
 	const files = ctx.app.vault.getFiles().filter((file) => typeof file?.path === "string");
 	// ⭐ 引用集合**算一次、用两次**（确认框的清单 + 真正执行的那趟）——
 	// 两份不一致的话，用户会按清单授权、却按另一份执行。
-	const referencedPaths = await referencedVaultPaths(ctx.app);
+	// ⭐ 笔记正文**读一次、两处用**（引用集合 + 站外候选）：读两遍除了浪费，
+	// 还给了两条链看到不同正文的余地（而它们必须看同一份 —— 清单即授权）。
+	const notes = await readAllNoteTexts(ctx.app);
+	const referencedPaths = await referencedVaultPaths(ctx.app, { notes });
 	const selection = selectUploadCandidates(files, {
 		settings: ctx.settings,
 		index: ctx.currentIndex(),
@@ -65,7 +73,7 @@ export async function uploadExistingAttachments(ctx: PluginContext): Promise<voi
 	// 回环地址 / 存储未就绪"全都自动一致，不另立一套标准。
 	// ⚠️ 它走 `purpose: "manual"`：**点这个确认框本身就是显式动作**，
 	// 于是功能开关与站点名单都不约束它（关掉开关也照样能跑这条命令）。
-	const external = selectExternalUploadCandidates(await readAllNoteTexts(ctx.app), {
+	const external = selectExternalUploadCandidates(notes, {
 		settings: ctx.settings,
 		configured: connectionReadiness(ctx.app.secretStorage, ctx.settings).ready,
 		// ⭐ 平台判据由装配点给（这一层不碰宿主）：本机文件（`file:///D:/…`）只有桌面读得到。
@@ -146,33 +154,96 @@ export async function uploadExistingAttachments(ctx: PluginContext): Promise<voi
 		}
 	}
 
-	const confirmed = await ctx.confirmMaintenance({
+	/**
+	 * 执行结果（在 `run` 回调里填）。
+	 *
+	 * ⚠️ 用**一个可变盒子**装它，而不是 `let summary = null` 那种写法：
+	 * TS 的控制流分析只看得到回调外的初始值，于是 `if (!summary) return;` 之后
+	 * 会把它收窄成 `never`（读它的字段就编译不过）。属性的类型不会因为
+	 * 回调里的赋值而"看不见"，所以这么写既清楚又过得了类型检查。
+	 */
+	const state: { summary: BatchResult | null } = { summary: null };
+	/** 执行层**意料之外**抛出的错（如实说出来，不静默）。 */
+	let failure = "";
+
+	// ⭐ **清单里的两处键必须与执行层上报的键是同一份**（否则进度会挂到别的行上）：
+	// 库内文件 ⇒ 它的 vault 路径；站外 / 本机候选 ⇒ `pickKey`（笔记 + 地址）。
+	// ⚠️ 本机文件那一类必须把**绝对路径**原样放进副标题：用户 2026-10-15 定的边界是
+	// "只走显式入口 + 不加目录白名单"，于是"看得见要读哪条路径"就是那次同意的前提。
+	const rows = ctx.fileCards(
+		[
+			...selection.paths.map((path) => ({
+				id: path,
+				name: path.split("/").pop() ?? path,
+				// 库内文件 ⇒ 缩略图用它自己那份（零网络）
+				localPath: path,
+				meta: path,
+			})),
+			...external.candidates.map((candidate) => ({
+				id: pickKey(candidate),
+				name: fileNameFromUrl(candidate.url) || candidate.url,
+				// 站外地址 / 本机 `file://…`：图就在那个地址上
+				thumb: candidate.url,
+				meta: candidate.local ? candidate.url : `${candidate.host} — ${candidate.notePath}`,
+			})),
+		],
+		selection.paths.length + external.candidates.length
+	);
+
+	const result = await ctx.pickTasks({
 		title: ctx.t("maintainBatchTitle"),
 		lines,
-		cta: ctx.t("maintainBatchCta"),
+		cards: rows,
+		labels: buildTaskLabels(ctx.t, "maintainBatchCta"),
+		// ⭐ 勾选**在这里生效**：候选（安全判据）与取舍（勾选）是两件事。
+		// 站外那一批按 `pickKey` 过滤，库内那批交给执行层的 `onlyPaths`。
+		run: async (selected, report) => {
+			const chosen = new Set(selected);
+			try {
+				state.summary = await runBatchUpload(deps, {
+					external: {
+						...external,
+						candidates: external.candidates.filter((candidate) => chosen.has(pickKey(candidate))),
+					},
+					referencedPaths,
+					onlyPaths: new Set(selection.paths.filter((path) => chosen.has(path))),
+					onItem: (event) => {
+						report(event.kind === "external" ? pickKey(event.candidate) : event.path, event.status);
+					},
+				});
+			} catch (error) {
+				// 执行层内部逐件兜了错，走到这里说明是意料之外的（如实说出，不静默）
+				failure = describeError(error);
+			}
+		},
 	});
-	if (!confirmed) {
+	// `null` = 取消或直接关掉（两种情况都不做事，与"确认了但一件没勾"区分开）
+	if (!result) {
 		new Notice(ctx.t("maintainCancelled"));
 		return;
 	}
-
-	const result = await runBatchUpload(deps, { external, referencedPaths });
+	if (failure) {
+		new Notice(failure);
+		return;
+	}
+	if (!state.summary) return;
+	const outcome: BatchResult = state.summary;
 	new Notice(
 		ctx.t("maintainBatchDone", {
-			uploaded: result.uploaded,
-			reused: result.reused,
-			failed: result.failed,
-			notes: result.notesChanged,
-			links: result.linksRewritten,
+			uploaded: outcome.uploaded,
+			reused: outcome.reused,
+			failed: outcome.failed,
+			notes: outcome.notesChanged,
+			links: outcome.linksRewritten,
 		})
 	);
 	// ⚠️ 画布里"没敢动"的值要**单独说出来**：它不属于失败，但用户必须知道
 	// 某一处引用可能还指着旧位置（否则他会以为全改好了）。
-	if (result.canvasSkipped > 0) {
-		new Notice(ctx.t("maintainBatchCanvasSkipped", { count: result.canvasSkipped }));
+	if (outcome.canvasSkipped > 0) {
+		new Notice(ctx.t("maintainBatchCanvasSkipped", { count: outcome.canvasSkipped }));
 	}
 	// ⭐ 删掉重复副本也要**单独说一句**：那是清单里的文件之一，不交代就等于"少了一个"。
-	if (result.redundantRemoved > 0) {
-		new Notice(ctx.t("maintainBatchDuplicatesRemoved", { count: result.redundantRemoved }));
+	if (outcome.redundantRemoved > 0) {
+		new Notice(ctx.t("maintainBatchDuplicatesRemoved", { count: outcome.redundantRemoved }));
 	}
 }

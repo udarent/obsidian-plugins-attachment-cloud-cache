@@ -76,11 +76,14 @@ await runMutations({
 			expect: "确认框里也要再写一次",
 		},
 		{
-			// 后果：用户点了\"取消\"，对象照样被删 —— 确认框成了装饰。
-			name: "★ 取消之后仍然继续删（确认框形同虚设）",
-			from: '\tif (!confirmed) {\n\t\tnew Notice(ctx.t("maintainCancelled"));\n\t\treturn;\n\t}',
-			to: '\tif (!confirmed) {\n\t\tnew Notice(ctx.t("maintainCancelled"));\n\t}',
-			expect: "取消 ⇒ 一个对象都不许删",
+			// 后果：用户点了「取消」，界面**装作什么都没发生**（连一句话都没有）——
+			// 而用户按取消的动机常常是「我不确定刚才那个框是干什么的」：不吭声他会以为命令坏了。
+			// ⚠️ 「取消 ⇒ 一个对象都不许删」这一条现在是**结构保证**的：删除只发生在弹窗的
+			// `run` 回调里，而取消根本不会调到它。⇒ 这里改守另一半：取消必须**如实说一句**。
+			name: "★ 取消之后装作什么都没发生（用户以为命令坏了）",
+			from: '\tif (!answer) {\n',
+			to: '\tif (false) {\n',
+			expect: "取消要如实反馈",
 		},
 		{
 			// 后果：删了云端却什么都不留 —— 而"不可恢复 + 自动/一步删除 + 不留痕"
@@ -99,12 +102,20 @@ await runMutations({
 			expect: "入口必须记成 command",
 		},
 		{
-			// 后果：桶里几千个对象时把每一张卡都塞进弹窗 —— 用户看不到摘要，
-			// 也就看不到\"总体积\"与\"多设备盲区\"这两句最要紧的告知。
-			name: "★ 清单不截断（几千张卡挤掉摘要与警示）",
-			from: "\t\tCLOUD_CLEANUP_LIST_MAX\n\t);",
-			to: "\t\tselection.candidates.length\n\t);",
-			expect: "清单上限是 10",
+			// 后果（方向随 2026-10-15 的清单式弹窗反过来）：这一份清单现在**可以逐项勾选**，
+			// 截断会让「全选」漏掉没列出来的那些 —— 用户以为全勾上了，实际少了几个。
+			name: "★ 清单被截断（「全选」漏掉没列出来的那些）",
+			from: '\tconst cards = ctx.fileCards(inputs, inputs.length);',
+			to: '\tconst cards = ctx.fileCards(inputs, 10);',
+			expect: "每一行都要在清单里",
+		},
+		{
+			// 后果：执行层的进度**没有接到弹窗上** ⇒ 用户看到的每一行永远停在「待处理」，
+			// 而这一趟可能早就跑完了（他会以为卡住、去关弹窗，然后以为这次操作没生效）。
+			name: "★ 进度没接到弹窗上（每一行永远停在待处理）",
+			from: "\t\t\t\t\tonItem: (event) => report(event.key, event.status),",
+			to: "\t\t\t\t\t// 变异：不接进度",
+			expect: "每个对象处理完都要上报一次",
 		},
 	],
 });

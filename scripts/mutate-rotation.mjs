@@ -36,8 +36,8 @@ await runMutations({
 			// 后果：总量改回"**索引里所有条目的和**"（含幽灵记录）⇒ 与候选不再同源 ⇒
 			// 超出量被抬高 ⇒ **多删真实副本**（真实占用没超上限也会删，极端情况一份不剩）。
 			name: "★★ 总量用「索引里所有条目的和」而不是「存在着的字节和」（幽灵记录导致多删）",
-			from: "\t\tconst plan = planEviction({ candidates, totalBytes: presentBytes, limitBytes, now: at, graceMs: deps.graceMs });",
-			to: "\t\tconst plan = planEviction({ candidates, totalBytes: sumOwnedBytes(entries), limitBytes, now: at, graceMs: deps.graceMs });",
+			from: "\t\tconst plan = planEviction({\n\t\t\tcandidates,\n\t\t\ttotalBytes: presentBytes,\n\t\t\tlimitBytes,\n\t\t\tnow: at,\n\t\t\tgraceMs: deps.graceMs,\n\t\t\tpinnedCount: pinned,\n\t\t});",
+			to: "\t\tconst plan = planEviction({\n\t\t\tcandidates,\n\t\t\ttotalBytes: sumOwnedBytes(entries),\n\t\t\tlimitBytes,\n\t\t\tnow: at,\n\t\t\tgraceMs: deps.graceMs,\n\t\t\tpinnedCount: pinned,\n\t\t});",
 			expect: "只需淘汰 2 份",
 		},
 		{

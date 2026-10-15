@@ -86,6 +86,15 @@ export interface CacheRotationDeps {
 	isPresent: (path: string) => boolean;
 	/** 扫全库笔记，收集仍被引用的 key（接线层复用 `scanReferences`）。 */
 	scanReferencedKeys: () => Promise<Set<string>>;
+	/**
+	 * 笔记 / 画布**直接指着**的库内路径（接线层复用 `referencedVaultPaths`）。
+	 *
+	 * ⚠️ "还有人用吗"的另一半，而且是**硬门槛**而不是排序偏好（见 `eviction.ts` 模块头）：
+	 * 少了它，一份"笔记里还写着本地路径"的副本会被淘汰掉 ⇒ 用户打开那篇笔记看到**破图**，
+	 * 且没有任何自动恢复的路径（回退下载只认属于本存储的 URL）。
+	 * 两个问题为什么都要问，见 `audit.ts` 的 `referencedPaths`。
+	 */
+	referencedPaths: () => Promise<ReadonlySet<string>>;
 	/** 执行淘汰（接线层复用 `runEviction`）。 */
 	evict: (plan: EvictionPlan) => Promise<EvictionOutcome>;
 	notify: (message: string) => void;
@@ -162,15 +171,28 @@ export function createCacheRotator(deps: CacheRotationDeps): CacheRotator {
 		const entries = deps.index().toArray();
 
 		const referencedKeys = await deps.scanReferencedKeys();
-		const { candidates, presentBytes } = buildEvictionCandidates({
+		// ⭐ 另一半：笔记**直接指着**的库内路径。判据是"**不能删**"（不是排序偏好）——
+		// 那些副本删了笔记里那张图就没了（回退下载只认属于本存储的 URL），见 `eviction.ts` 模块头。
+		const referencedPaths = await deps.referencedPaths();
+		const { candidates, presentBytes, pinned } = buildEvictionCandidates({
 			entries,
 			present: deps.isPresent,
 			referencedKeys,
+			referencedPaths,
 		});
 		// ⭐ 总量用 `presentBytes`（**磁盘上确实还在**的那些）—— 与候选同源。
 		// 用索引的原始和会让**幽灵记录**（索引记着、文件已经不在了）抬高超出量 ⇒ 多删真实副本。
 		// 详见 `eviction.ts` 的模块头注释（含那条反例）。
-		const plan = planEviction({ candidates, totalBytes: presentBytes, limitBytes, now: at, graceMs: deps.graceMs });
+		// ⚠️ `presentBytes` 里**包含**被钉住的那几份（它们确实占着磁盘）—— 所以"仍超出"必须
+		// 把它们的存在说出来，否则用户看到的是一个没有解释的数字（`pinnedCount`）。
+		const plan = planEviction({
+			candidates,
+			totalBytes: presentBytes,
+			limitBytes,
+			now: at,
+			graceMs: deps.graceMs,
+			pinnedCount: pinned,
+		});
 
 		// 一份都挑不出来（例如全在宽限期内）→ 不动手，也不打扰
 		const outcome: EvictionOutcome =

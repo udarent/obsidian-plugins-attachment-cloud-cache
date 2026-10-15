@@ -220,6 +220,14 @@ export const I18N: Record<string, Locale> = {
 		repairIndexNothing: "Index is fine — no stale records.",
 		maintainMoreItems: "…and {count} more",
 		maintainCancelled: "Cancelled — nothing was changed.",
+		// ── 清单类弹窗（缩略图 + 勾选 + 进度）：上传已有附件 / 清理云端空间 / 挑选要缓存的文件共用 ──
+		taskListEmpty: "Nothing to show here.",
+		taskProgressRunning: "Working… {finished}/{total}",
+		taskProgressFinished: "Finished: {done} done, {skipped} skipped, {failed} failed.",
+		taskStatusDone: "done",
+		taskStatusFailed: "failed",
+		taskStatusSkipped: "skipped",
+		taskShowMore: "Show {count} more row(s) — the rest are still included",
 		maintainPersistFailed: "Could not save the index after repairing it: {error}",
 		maintainSkipUnknownCopy: "The index no longer points at this file — skipped",
 		maintainSkipUnconfirmed: "Could not confirm the cloud still has it — skipped",
@@ -284,7 +292,7 @@ export const I18N: Record<string, Locale> = {
 		externalPickNothing: "No files were cached.",
 		externalPickDone:
 			"Cached {cached} file(s); {partial} were uploaded but their link could not be rewritten; {failed} failed.",
-		cmdPickExternal: "Cache files from other sites…",
+		cmdPickExternal: "Cache external files…",
 		externalCached: "Cached the file from {host} and rewrote the link.",
 		// ── 本机文件（file:///D:/…）：与站外同一套链，只有"字节从哪来"不同 ──
 		localCached: "Uploaded the local file {name} and rewrote the link.",
@@ -498,6 +506,14 @@ export const I18N: Record<string, Locale> = {
 		repairIndexNothing: "索引没有失效记录，无需修复。",
 		maintainMoreItems: "……还有 {count} 个",
 		maintainCancelled: "已取消，没有改动任何内容。",
+		// ── 清单类弹窗（缩略图 + 勾选 + 进度）：上传已有附件 / 清理云端空间 / 挑选要缓存的文件共用 ──
+		taskListEmpty: "这里没有可处理的条目。",
+		taskProgressRunning: "正在处理…… {finished}/{total}",
+		taskProgressFinished: "已结束：完成 {done} 个、跳过 {skipped} 个、失败 {failed} 个。",
+		taskStatusDone: "完成",
+		taskStatusFailed: "失败",
+		taskStatusSkipped: "跳过",
+		taskShowMore: "再显示 {count} 行（其余的行照样会被处理）",
 		maintainPersistFailed: "修复后保存索引失败：{error}",
 		maintainSkipUnknownCopy: "索引里已经不再指向这个文件 —— 跳过",
 		maintainSkipUnconfirmed: "确认不了云端是否还有它 —— 跳过",
@@ -559,7 +575,7 @@ export const I18N: Record<string, Locale> = {
 		externalPickCancel: "取消",
 		externalPickNothing: "没有缓存任何文件。",
 		externalPickDone: "已缓存 {cached} 张；{partial} 张已上传但没能改写链接；{failed} 张失败。",
-		cmdPickExternal: "缓存站外文件（可挑选）…",
+		cmdPickExternal: "缓存外部文件（可挑选）…",
 		externalCached: "已缓存来自 {host} 的文件并改写链接。",
 		// ── 本机文件（file:///D:/…）：与站外同一套链，只有"字节从哪来"不同 ──
 		localCached: "已把本机文件 {name} 上传上去并改写链接。",

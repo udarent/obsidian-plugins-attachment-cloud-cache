@@ -35,8 +35,10 @@ await runMutations({
 			// ⇒ 连**孤儿**一起清 —— 而孤儿正是"用户可能还想留着"的那一类
 			//（笔记删了、图还在），且它越过了与 R17 三档询问的分工线（那条线是**逐次询问**）。
 			name: "★ 存量清理不再要求「带远端链接」（孤儿也被一起清掉）",
-			from: "\t\treferencedKeys,\n\t\tkeepBytes,",
-			to: "\t\treferencedKeys: new Set(entries.map((entry) => entry.key)),\n\t\tkeepBytes,",
+			// ⚠️ 2026-10-15（D-31）：源码里这两行之间多了 `referencedPaths`（另一半引用判据），
+			// 锚点跟着改成三行；`to` 把每一行都还回去（它俩是两项不同的判据，都要留在对象里）。
+			from: "\t\treferencedKeys,\n\t\treferencedPaths,\n\t\tkeepBytes,",
+			to: "\t\treferencedKeys: new Set(entries.map((entry) => entry.key)),\n\t\treferencedPaths: new Set(),\n\t\tkeepBytes,",
 			expect: "孤儿（没有任何笔记引用）不归它管",
 		},
 		{

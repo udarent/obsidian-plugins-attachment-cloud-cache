@@ -27,8 +27,9 @@
  * ## 三条硬边界
  *
  * 1. **只下载属于本存储的 URL。** 判定侧已经用前缀/索引筛过一遍，这里**再验一次**
- *    （`keyFromUrl(url) === key`）。理由是防线不能只有一道：这一层是**唯一**会
- *    把远端字节写进用户 vault 的地方，越界的代价是把别人的图拉进来
+ *    （`keyFromUrl(url) === key`）。理由是防线不能只有一道 —— 这一层是**回退下载那条路上**
+ *    唯一会把远端字节写进用户 vault 的地方（⚠️ 站外缓存与本机文件那两条路**也会写**，
+ *    各有自己的红线，见 §21 / §20.10b），越界的代价是把别人的图拉进来
  *    （这一层绝不把别人的图拉进来 —— 越界就等于把用户的 vault 变成了别人的图床）。
  * 2. **并发去重：同一个 key 同时只下载一次。** 一屏里同一张图可能出现多次
  *    （同一张图被多篇笔记引用），而渲染钩子会对**每一个** `<img>` 各调用一次。
@@ -220,7 +221,7 @@ export function createLocalCopyEnsurer(deps: LocalCopyDeps) {
 		// → ④ 还没配置好 → ⑤ 本地已有。
 		//
 		// ⭐ ① 是「不留副本」档：那一档下渲染判定已经不产生 `fetch`（见 `render/render-target.ts`），
-		// 但这里**再拦一次**。理由是这一层是**唯一**会把远端字节写进用户 vault 的地方，
+		// 但这里**再拦一次**。理由同模块头那条红线（这条链会往 vault 写远端字节），
 		// 而"不留副本"的语义就是"不要往里写" —— 防线只有一道的话，
 		// 将来任一条新入口（命令、别的调用点）都能悄悄绕过用户的选择，且不报错。
 		if (isCacheDisabled(settings.localCopy)) {
@@ -231,7 +232,7 @@ export function createLocalCopyEnsurer(deps: LocalCopyDeps) {
 			return { status: "disabled", key, localPath: "" };
 		}
 
-		// ⭐ 再验一次"这是我们自己的 URL"。这一层是唯一会把远端字节写进 vault 的地方。
+		// ⭐ 再验一次"这是我们自己的 URL"（同模块头那条红线：这条链会往 vault 写远端字节）。
 		const derived = keyFromUrl(remoteUrl, settings.s3);
 		if (derived !== key) {
 			return { status: "refused", key, localPath: "" };

@@ -102,6 +102,9 @@ export async function runRotationSuite(mod) {
 				}
 				return options.referencedKeys ?? new Set();
 			},
+			// ⭐ 2026-10-15（D-31）："还有人用吗"的**另一半** —— 笔记**直接指着**的库内路径。
+			// 接线层由 `main.ts` 给（`referencedVaultPaths`）；这里是替身。
+			referencedPaths: async () => options.referencedPaths ?? new Set(),
 			evict: async (plan) => {
 				calls.evict += 1;
 				plans.push(plan);
@@ -210,6 +213,29 @@ export async function runRotationSuite(mod) {
 			"★★ 真实占用 9MB、上限 5MB ⇒ 只需淘汰 2 份；若把幽灵算进去会变成「3 份全删光」"
 		);
 		assert.equal(summary.overBy, 0, "★ 幽灵记录不该造成「仍超出」的假象（真实占用已经腾到上限以内）");
+	}
+
+	// ⭐⭐ 2026-10-15（D-31）：**笔记直接指着**的副本不算「没人用」⇒ 排在已引用那一档之后
+	//
+	// 现场：一张 `.png` 被笔记用**库内路径**指着（`![](../图.png)`），而它的云端地址没有任何
+	// 笔记提到 —— 于是它会被当成「没人用」而**优先**淘汰。用户看到的是「笔记里那张图没了」。
+	{
+		const h = makeHarness({
+			...overLimit,
+			entries: [
+				// 两 1MB、上限 1MB ⇒ 只该淘汰 1 份；淘汰谁由「还有人用吗」决定
+				entryFor("shown.png", { cachePath: "attachments/shown.png", size: 1 * MB, lastUsedAt: NOW - 30 * HOUR }),
+				entryFor("idle.png", { cachePath: "attachments/idle.png", size: 1 * MB, lastUsedAt: NOW - 1 * HOUR }),
+			],
+			referencedKeys: new Set(), // 谁都没提云端地址
+			referencedPaths: new Set(["attachments/shown.png"]), // 但它正被笔记显示着
+		});
+		await h.rotator.maybeRotate("growth");
+		assert.deepEqual(
+			h.plans[0].evict.map((victim) => victim.key),
+			["idle.png"],
+			"★ 笔记直接指着的那份不许优先淘汰（它更久没用过，但正被显示着）"
+		);
 	}
 
 	// ⭐ 索引与磁盘不一致（索引记的比磁盘小）时**不再被发现** —— 把取舍写下来

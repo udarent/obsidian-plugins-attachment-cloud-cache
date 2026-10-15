@@ -37,6 +37,10 @@
  * 第 4 条在执行时还会再确认一次"云端现在确实还有它"（`confirmRemote`，见 `run.ts` 的
  * `deleteVerifiedCopies`）—— 那一步不在纯判定层，判定层不碰网络。
  *
+ * 另有一条**硬排除**（不算"准入条件"，是"不能碰"）：**被库内链接直接指着的**一律不进候选
+ * —— 删了那张图没有任何兜底。判定在 `eviction.ts::buildEvictionCandidates` 里，
+ * 与后台淘汰**共用同一份**（2026-10-15 之前这里自己又写了一遍，而后台那边漏了 ⇒ 会删错）。
+ *
  * ## ⚠️ `referencedKeys` 是**必填**的，而且方向与 `eviction.ts` 相反
  *
  * `buildEvictionCandidates` 把 `referencedKeys` 省略当成"**一律当作已引用**"（宁可少删）；
@@ -73,6 +77,21 @@ export interface ReleaseSpaceInput {
 	 * ⚠️ **必填**：给不出来（例如没扫引用）就不该让用户"清理" —— 见文件头的说明。
 	 */
 	referencedKeys: ReadonlySet<string>;
+	/**
+	 * 笔记 / 画布**直接指着**的库内路径（= `referencedKeys` 的**另一半**）。
+	 *
+	 * ⚠️ **必填**，理由与 `referencedKeys` 同一条，而且这条更硬：命中它的副本是**笔记正在
+	 * 显示的那一份**（笔记里写的是 `![](../图.png)` 这种库内路径）—— 删了那张图就没了，
+	 * 而本流程的承诺「下回笔记显示时还会重新下载」对它**不成立**（笔记指的就是这份文件本身，
+	 * 没有"云端地址"可回退）。⇒ 它**进不了可删清单**，也**不算**"没有任何笔记引用"。
+	 *
+	 * ⚠️⚠️ 那道过滤**不在这个文件里**，在 `eviction.ts::buildEvictionCandidates`
+	 * —— 与后台淘汰**共用同一份判据**（两处各写一遍就会各自演化，而两侧都不报错）。
+	 * 本文件只负责把它**递下去**（以及让 `pinnedCount` 进到"腾不到目标"的原因里）。
+	 *
+	 * ⚠️ 它与 `referencedKeys` 是两个问题，别互相替代（见 `audit.ts` 的同一段）。
+	 */
+	referencedPaths: ReadonlySet<string>;
 	/** ⭐ 清理目标：清完**最多**保留多少字节。`0` = 一份不留（「不留副本」档）。 */
 	keepBytes: number;
 	/**
@@ -165,16 +184,27 @@ function planToLimit(input: ReleaseSpaceInput, keepBytes: number): Omit<ReleaseS
 	const pool = input.entries.filter(
 		(entry) => input.uploaded.has(entry.key) && input.referencedKeys.has(entry.key)
 	);
-	const { candidates, presentBytes, missing } = buildEvictionCandidates({
+	const { candidates, presentBytes, missing, pinned } = buildEvictionCandidates({
 		entries: pool,
 		present: input.present,
 		referencedKeys: input.referencedKeys,
+		referencedPaths: input.referencedPaths,
 	});
+	// ⭐ **被库内链接直接指着的那些不进可删清单** —— 那道过滤在 `buildEvictionCandidates`
+	// 里（与后台淘汰**共用同一份**判据）。
+	//
+	// ⚠️ 这里过去自己再 `filter` 了一遍：同一个判据写两处 ⇒ 一边改了另一边没跟上，
+	// 而两侧都不报错（2026-10-15 实测到后台淘汰那边就漏了这一道 ⇒ 会删掉"笔记里还写着
+	// 本地路径"的副本，用户看到的是破图）。判据现在只有一处。
+	//
+	// ⚠️ 那些被钉住的副本**仍算在这批的占用里**（`presentBytes` 不动）：否则"清到上限"
+	// 会报一个达不到的数字（把不能删的也算进目标那笔账才算得诚实 —— 够不到就说够不到）。
 	const plan = planEviction({
 		candidates,
 		totalBytes: presentBytes,
 		limitBytes: keepBytes,
 		now: input.now,
+		pinnedCount: pinned,
 		...(input.graceMs === undefined ? {} : { graceMs: input.graceMs }),
 	});
 
@@ -239,6 +269,10 @@ function planWholeStock(input: ReleaseSpaceInput): Omit<ReleaseSpaceSelection, "
 			missing += 1;
 			continue;
 		}
+		// ④ ⭐ 还被**库内链接直接指着** ⇒ 不动（笔记正在显示它；见 `referencedPaths`）。
+		// ⚠️ 放在存在性判断**之后**：这一条只决定"删不删"，不改"失效记录"那个数
+		//（那份文件确实不在了，自愈该摘掉它）。
+		if (input.referencedPaths.has(path)) continue;
 
 		seen.add(path);
 		candidates.push({

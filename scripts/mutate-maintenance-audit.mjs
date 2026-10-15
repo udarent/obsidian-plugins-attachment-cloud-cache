@@ -55,9 +55,24 @@ await runMutations({
 			// 一起删掉了 —— 死代码的锚点留着只会让"全都抓住了"这句话不可信。
 			// 后果：没扫描引用时把所有副本都报成"未引用"⇒ 用户看到"全部可回收"。
 			name: "★ 没扫描引用也判\"未引用\"（把每一份都报成可删）",
-			from: "\t\tif (input.referencedKeys && !input.referencedKeys.has(entry.key)) {",
+			// ⚠️ 2026-10-15 起这条判据有**两个**条件（云端地址 / 库内路径），所以 `from` 是多行的；
+			// `to` 把每一行都还回去（只把两半引用判据一起去掉 ⇒ 一旦没扫引用就全报可回收）。
+			from:
+				"\t\tif (\n" +
+				"\t\t\tinput.referencedKeys &&\n" +
+				"\t\t\t!input.referencedKeys.has(entry.key) &&\n" +
+				"\t\t\t!(input.referencedPaths?.has(path) ?? false)\n" +
+				"\t\t) {",
 			to: "\t\tif (!input.referencedKeys || !input.referencedKeys.has(entry.key)) {",
 			expect: "不该产生",
+		},
+		{
+			// 后果：一份**笔记正在显示**的本地副本被报成「没有任何笔记引用」（真机 2026-10-15
+			// 报的就是这个形态）⇒ 用户照着这个数字去清，而后台淘汰还会把它排到最前面。
+			name: "★★ 丢掉「笔记是否直接指着这份文件」这一半（把正在显示的副本报成没人引用）",
+			from: "!(input.referencedPaths?.has(path) ?? false)",
+			to: "true",
+			expect: "不许报「没有任何笔记引用」",
 		},
 	],
 });

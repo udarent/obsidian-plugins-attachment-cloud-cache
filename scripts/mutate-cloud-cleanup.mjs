@@ -44,8 +44,8 @@ await runMutations({
 			// 后果：摘索引不看删除结果 ⇒ 对象还在，而记录没了；
 			// 渲染时那条 URL 会被当成站外图（不下载、离线看不到），且**永远查不出原因**。
 			name: "★ 删除失败也摘索引（那条 URL 从此被当成站外图）",
-			from: "\t\t} catch (error) {\n\t\t\t// 单个对象失败不能中断整批（用户要的是\"把能清的清掉\"），但必须计数\n\t\t\tresult.failed += 1;\n\t\t\tvoid error;\n\t\t}",
-			to: "\t\t} catch (error) {\n\t\t\tresult.failed += 1;\n\t\t\tif (deps.index().remove(key)) removed.push(key);\n\t\t\tvoid error;\n\t\t}",
+			from: "\t\t} catch (error) {\n\t\t\t// 单个对象失败不能中断整批（用户要的是\"把能清的清掉\"），但必须计数\n\t\t\tresult.failed += 1;\n\t\t\tdeps.onItem?.({ key, status: \"failed\" });\n\t\t\tvoid error;\n\t\t}",
+			to: "\t\t} catch (error) {\n\t\t\tresult.failed += 1;\n\t\t\tdeps.onItem?.({ key, status: \"failed\" });\n\t\t\tif (deps.index().remove(key)) removed.push(key);\n\t\t\tvoid error;\n\t\t}",
 			expect: "只有**删成功**的对象才摘索引",
 		},
 		{
@@ -64,8 +64,8 @@ await runMutations({
 			// 后果：删除**失败**时也把台账忘掉 ⇒ 对象还在云端，插件却不再认领它，
 			// 下一次孤儿判定会把它当成"不是我们的" —— 从"少问一次"变成"彻底管不了它"。
 			name: "★★ 删除失败也忘台账（对象还在云端却不再被认领）",
-			from: "\t\t\tresult.failed += 1;\n\t\t\tvoid error;",
-			to: "\t\t\tresult.failed += 1;\n\t\t\tdeps.index().forgetUploaded(key);\n\t\t\tvoid error;",
+			from: "\t\t\tresult.failed += 1;\n\t\t\tdeps.onItem?.({ key, status: \"failed\" });\n\t\t\tvoid error;",
+			to: "\t\t\tresult.failed += 1;\n\t\t\tdeps.onItem?.({ key, status: \"failed\" });\n\t\t\tdeps.index().forgetUploaded(key);\n\t\t\tvoid error;",
 			expect: "上传台账同样只在删成功时忘掉",
 		},
 		{
@@ -81,8 +81,8 @@ await runMutations({
 			// 后果：留痕把**删除失败**的对象也记进去 ⇒ 事后翻日志看到"删了这一个"，
 			// 而它其实还在桶里 —— 留痕的全部价值就是"说的与事实一致"。
 			name: "★ 删除失败的对象也被留痕（日志说删了，其实还在桶里）",
-			from: "\t\t\tresult.failed += 1;\n\t\t\tvoid error;",
-			to: '\t\t\tresult.failed += 1;\n\t\t\tdeps.onRemoved?.({ key, name: "", outcome: "deleted" });\n\t\t\tvoid error;',
+			from: "\t\t\tresult.failed += 1;\n\t\t\tdeps.onItem?.({ key, status: \"failed\" });\n\t\t\tvoid error;",
+			to: '\t\t\tresult.failed += 1;\n\t\t\tdeps.onItem?.({ key, status: "failed" });\n\t\t\tdeps.onRemoved?.({ key, name: "", outcome: "deleted" });\n\t\t\tvoid error;',
 			expect: "留痕只记真的不在桶里的对象",
 		},
 		{

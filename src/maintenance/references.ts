@@ -10,18 +10,37 @@
  *
  * ## ⚠️ 为什么用"扫描 + 精确替换"而不是正则一次性替换
  *
- * 笔记里的引用有四种写法，各自的边界不同：
+ * 笔记里的引用写法**有十来种**，各自的边界不同：
  *
  * | 写法 | 注意 |
  * |---|---|
  * | `![[photo.png]]` | wikilink，**没有**扩展名也能指向同一文件 |
- * | `![[photo.png\|600]]` | 带显示尺寸/别名，`\|` 之后要保留 |
+ * | `![[photo.png\|600]]` | 带显示尺寸/别名；⚠️ **`\|` 的那个反斜杠不属于路径** |
  * | `![[photo.png#page=2]]` | 带子路径，`#` 之后要保留 |
  * | `![alt](attachments/photo.png)` | 标准 Markdown，可带标题 |
  * | `![alt](<attachments/a b.png>)` | 含空格时用尖括号包起来 |
+ * | `![alt](attachments/Pasted%20image%201.png)` | **百分号编码**的空格（宿主的「相对路径」格式） |
+ * | `![alt](../assets/photo.png)` | **相对当前笔记**的路径（同上，随链接格式设置而变） |
+ * | `<img src="attachments/photo.png">` | **行内 HTML**（1.8 起阅读态/实时预览都渲染）；`href` / `<video>` 同理 |
+ * | `![alt][ref]` + `[ref]: photo.png` | **引用式链接**：定义行在哪都要认（改写落在定义行上） |
+ * | `---` 里的 `cover: "[[photo.png]]"` | **属性区**：认（判据），但**不改**（理由见 `LinkSpan.inFrontmatter`） |
  *
  * 用一个正则通吃会漏掉后几种、或者把 `|600` 一起换掉（那就改坏了）。
  * 所以这里**先定位链接范围、再按结构拆分**。
+ *
+ * ⚠️ 每一条的后果都一样、而且都**不报错**：判据说"没人指着它"（那份文件可能被删）、
+ * 改写默默跳过（命令报告成功、而笔记里那条还是本地路径）。⇒ 这张表就是**验收矩阵**
+ * （`maintenance-suite` 的 3b 一节逐条钉着）。
+ *
+ * ## ⭐⭐ 每一种写法都必须认：否则"传上去了、笔记没变"
+ *
+ * 归一只落在一个字符串上，而同一个文件在正文里的写法有十来种。少认一形**不报错**：
+ * 改写那一趟默默跳过它（用户看到的是"命令报告成功、而笔记里那条链接还是本地路径"，
+ * 2026-10-15 用户就是这么报的），删除判据那一趟则可能把还被人指着的文件判成没人引用。
+ * ⇒ 「这条链接指着哪个文件」**只有一份判据**（{@link linkTargetForms}），两趟都走它。
+ * 详见 {@link linkTargetForms} 与 {@link targetIsPath} 的说明。
+ * ⚠️ 2026-10-15（D-32）补齐的三类：**行内 HTML 标签**、**引用式链接的定义行**、
+ * **wikilink 的转义竖线** —— 补齐前它们两侧一起静默失效（矩阵探针量出来的）。
  *
  * ## ⭐⭐ wikilink 换成远端 URL 时，必须**整条**换形态
  *
@@ -50,13 +69,27 @@ export interface LinkSpan {
 	/** **整条**链接在原文中的下标 —— 换形态时要连 `!`、方括号、别名一起替掉。 */
 	linkStart: number;
 	linkEnd: number;
-	kind: "wikilink" | "markdown";
+	/**
+	 * 写法类别。`html` = **标签属性里的地址**（`<img src="…">`）：
+	 * 只能换属性值那一段，**绝不能**整体换形态（标签结构是用户写的）。
+	 */
+	kind: "wikilink" | "markdown" | "html";
 	/** wikilink 的 `|` 之后那一段（别名或显示尺寸）；没有则为 `null`。 */
 	alias: string | null;
 	/** wikilink 的 `#` 之后那一段（子路径）；没有则为 `null`。 */
 	subpath: string | null;
 	/** 原文里有没有 `!` 前缀（wikilink 的"嵌入"）。 */
 	embed: boolean;
+	/**
+	 * 这一处在 frontmatter（属性区，`---` 那一段）里吗。
+	 *
+	 * ⚠️ 属性里的 `[[x.png]]` 是**属性链接**（Obsidian 单独记在 `frontmatterLinks` 里）：
+	 * - 整条换成 `![x.png](url)` ⇒ 属性值被写坏（属性不接受 Markdown 图片）；
+	 * - 只换路径那段 ⇒ 得到 `[[https://…]]`，而 wiki 语法只解析库内文件 ⇒ **死链**。
+	 * ⇒ 改写器对"属性里的 wikilink 且目标是 URL"**整处跳过**（文件仍在库里，那张图照样显示；
+	 * 见 `planLinkRewrites`）。判据那边照旧认（`stillMentionsPath`）—— 它确实还指着那个文件。
+	 */
+	inFrontmatter: boolean;
 }
 
 /**
@@ -79,7 +112,11 @@ export function findLinkSpans(text: string): LinkSpan[] {
 		const hashAt = body.indexOf("#");
 		const pipeAt = body.indexOf("|");
 		const cuts = [hashAt, pipeAt].filter((index) => index >= 0);
-		const raw = body.slice(0, cuts.length > 0 ? Math.min(...cuts) : body.length);
+		const cut = cuts.length > 0 ? Math.min(...cuts) : body.length;
+		// ⚠️ **`\|` 的那个反斜杠不属于路径**（在表格里必须这么写，是常见写法）：
+		// 带上它就成了 `图.png\` ⇒ 归一之后**对不上任何文件** ⇒ 判据"没人指着它"、改写也不改
+		//（2026-10-15 用矩阵探针量出来的：`![[图 1.png\|600]]` 两侧一起静默失效）。
+		const raw = body.slice(0, cut > 0 && body[cut - 1] === "\\" ? cut - 1 : cut);
 		if (!raw) continue;
 		spans.push({
 			start: bodyStart,
@@ -91,6 +128,7 @@ export function findLinkSpans(text: string): LinkSpan[] {
 			alias: pipeAt === -1 ? null : body.slice(pipeAt + 1),
 			subpath: hashAt === -1 ? null : body.slice(hashAt + 1, pipeAt > hashAt ? pipeAt : body.length),
 			embed: match[0].startsWith("!"),
+			inFrontmatter: false,
 		});
 	}
 
@@ -109,6 +147,7 @@ export function findLinkSpans(text: string): LinkSpan[] {
 			alias: null,
 			subpath: null,
 			embed: match[0].startsWith("!"),
+			inFrontmatter: false,
 		};
 
 		// 尖括号形式：路径被 `<...>` 包住（含空格时 Markdown 规范允许这么写）
@@ -134,8 +173,110 @@ export function findLinkSpans(text: string): LinkSpan[] {
 		spans.push({ ...base, start: bodyStart, end: bodyStart + raw.length, raw });
 	}
 
+	// ── HTML 标签属性里的地址：`<img src="…">` / `<a href='…'>` / `<video src="…">` ──
+	//
+	// ⭐ 2026-10-15（D-32）补：Obsidian 1.8 起这类标签在阅读态与实时预览里都渲染
+	//（相对路径也行），而**宿主的链接索引不保证收录它** ⇒ 这一层必须自己认。少认一形的后果
+	// 与 wikilink 那条一样、而且都不报错：① 那份文件被判成"没人指着它"（可能被删）
+	// ② 命令跑完笔记里那条还是本地路径。
+	// ⚠️ 替换范围只能是**属性值本身**（`start`/`end` 落在引号之间）——
+	// 标签结构是用户写的，整体换形态就不是他的东西了（所以 `kind: "html"` 永远走"只换值"那条路）。
+	for (const target of htmlAttributeTargets(text)) {
+		spans.push({
+			start: target.start,
+			end: target.start + target.value.length,
+			raw: target.value,
+			linkStart: target.tagStart,
+			linkEnd: target.tagEnd,
+			kind: "html",
+			alias: null,
+			subpath: null,
+			embed: true,
+			inFrontmatter: false,
+		});
+	}
+
+	// ── 引用式链接的定义行：`[ref]: attachments/x.png`（正文里用 `![alt][ref]`） ──
+	//
+	// CommonMark 的另一种写法。宿主认不认没有保证，而**判据必须认**（否则那份文件会被
+	// 判成没人指着它）；改写落在**定义行**上：`[ref]: https://…/x.png` 之后引用处自然指向云端。
+	for (const match of text.matchAll(REFERENCE_DEFINITION)) {
+		const inner = (match[1] ?? match[2] ?? "").trim();
+		// ⚠️ 目标**可以带空格**（`[ref]: attachments/图 1.png`）—— 与 Markdown 那一趟同一条规矩：
+		// 分界是**引号前面**那个空白（`[ref]: path "标题"`），不是"第一个空白"。
+		const quoteAt = firstIndexOf(inner, ['"', "'"]);
+		const sep = quoteAt === -1 ? -1 : quoteAt - 1;
+		const value = (sep > 0 && /\s/.test(inner[sep]) ? inner.slice(0, sep) : inner).trim();
+		if (!value) continue;
+		const at = (match.index ?? 0) + match[0].lastIndexOf(value);
+		spans.push({
+			start: at,
+			end: at + value.length,
+			raw: value,
+			linkStart: match.index ?? 0,
+			linkEnd: (match.index ?? 0) + match[0].length,
+			kind: "markdown",
+			alias: null,
+			subpath: null,
+			embed: false,
+			inFrontmatter: false,
+		});
+	}
+
+	// frontmatter（属性区）里的那些标记出来 —— 改写器要跳过"属性里的 wikilink 改成 URL"
+	//（理由见 `LinkSpan.inFrontmatter`）。
+	const fm = frontmatterRange(text);
+	if (fm) {
+		for (const span of spans) span.inFrontmatter = span.start >= fm.start && span.end <= fm.end;
+	}
+
 	// 按出现位置排序，便于调用方按顺序重建文本
 	return spans.sort((a, b) => a.start - b.start);
+}
+
+/**
+ * 标签属性里的地址（`src=` / `href=`，单双引号都行）。
+ *
+ * ⚠️ **一处定义、两处用**：这里（找链接）与 `batch.ts` 的站外候选采集。
+ * 两处各写一个正则 ⇒ 迟早分叉成"改写认得、候选不认得"这类错位（而且不报错）。
+ */
+export const HTML_ATTRIBUTE = /<[a-z][a-z0-9]*\b[^>]*?\b(?:src|href)\s*=\s*(?:"([^"\n]*)"|'([^'\n]*)')/gi;
+
+/** 引用式链接的定义行（`[ref]: <path>`）。 */
+// ⚠️ 非尖括号那一支**要允许空格**（`[ref]: attachments/图 1.png`）—— 截到第一个空白就会
+// 得到 `attachments/图`，那是个**指向别的东西**的路径（与 D-25 那类坑同一个形态）。
+export const REFERENCE_DEFINITION = /^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*(?:<([^>\n]*)>|([^\n]+?))[ \t]*$/gm;
+
+/** frontmatter（开头 `---` 包起来的那一段）的范围；没有则 `null`。 */
+function frontmatterRange(text: string): { start: number; end: number } | null {
+	if (!text.startsWith("---\n") && !text.startsWith("---\r\n")) return null;
+	const close = text.search(/\r?\n---[ \t]*(\r?\n|$)/);
+	if (close < 0) return null;
+	return { start: 0, end: close };
+}
+
+/**
+ * 取出标签属性里的地址，并**带上它在原文里的位置**（改写要按位置替换）。
+ *
+ * `start` 是值的起点、`tagStart`/`tagEnd` 是整条标签的范围（只用于诊断；替换永远只动值）。
+ */
+export function htmlAttributeTargets(text: string): { value: string; start: number; tagStart: number; tagEnd: number }[] {
+	const out: { value: string; start: number; tagStart: number; tagEnd: number }[] = [];
+	if (typeof text !== "string" || text === "") return out;
+	for (const match of text.matchAll(HTML_ATTRIBUTE)) {
+		const double = match[1];
+		const single = match[2];
+		const value = String(double ?? single ?? "").trim();
+		if (!value) continue;
+		const quote = double === undefined ? "'" : '"';
+		const body = match[0];
+		const tagStart = match.index ?? 0;
+		// 用"两端带引号"去找值的位置：单靠值本身会在标签里出现两次时找错
+		const inner = body.lastIndexOf(quote + value + quote);
+		if (inner < 0) continue;
+		out.push({ value, start: tagStart + inner + 1, tagStart, tagEnd: tagStart + body.length });
+	}
+	return out;
 }
 
 function firstIndexOf(text: string, needles: string[]): number {
@@ -209,6 +350,15 @@ export function planLinkRewrites(text: string, rules: readonly RewriteRule[]): R
 	let count = 0;
 
 	for (const span of spans) {
+		// ⚠️ **属性区（frontmatter）里的一律不碰**（2026-10-15 / D-32）。
+		//
+		// 属性是**结构化数据**（Obsidian 自己写、自己读）：
+		// - 属性里的 wikilink 换成 `![x.png](url)` ⇒ 属性值写坏（属性不接受 Markdown 图片）；
+		//   只换路径那段又会得到 `[[https://…]]` —— wiki 语法只解析库内文件 ⇒ **死链**；
+		// - 属性里的 Markdown 链接本来就只是**一段文本**（属性不渲染 Markdown）⇒ 改它没有收益。
+		// ⇒ 而"不改"没有任何损失：文件仍在库里，那一处引用照常工作，判据那边也照旧认它。
+		if (span.inFrontmatter) continue;
+
 		// 上一条换形态时可能已经吃掉了这一条（防御：宁可跳过，也不要产出错位文本）
 		if (span.start < cursor) continue;
 
@@ -269,15 +419,23 @@ function buildResolver(rules: readonly RewriteRule[]): ((raw: string) => Resolve
 	}
 
 	return (raw: string): ResolvedRewrite | undefined => {
-		const full = normalizeLinkTarget(raw);
-		if (!full) return undefined;
+		const forms = linkTargetForms(raw);
+		if (forms.length === 0) return undefined;
 
-		const exact = byPath.get(full);
-		if (exact !== undefined) return exact;
+		// ① **完整路径优先**：精确匹配永远比短名可信（短名匹配是下面那一档的兜底）。
+		for (const form of forms) {
+			const exact = byPath.get(form);
+			if (exact !== undefined) return exact;
+		}
 
-		const name = baseNameOf(full);
-		if (ambiguous.has(name)) return undefined; // ⚠️ 同名歧义 → 宁可不改
-		return byName.get(name);
+		// ② 再按短名（`../` 那种相对前缀只有短名这一档兜得住 —— 前缀要笔记的位置才解得开）。
+		// ⚠️ 同名歧义 → 宁可不改（改成错的那张图比不改更糟）。
+		for (const name of new Set(forms.map(baseNameOf))) {
+			if (ambiguous.has(name)) continue;
+			const hit = byName.get(name);
+			if (hit !== undefined) return hit;
+		}
+		return undefined;
 	};
 }
 
@@ -287,7 +445,7 @@ function buildResolver(rules: readonly RewriteRule[]): ((raw: string) => Resolve
  * 这条线决定改写**形态**：URL 装不进 wikilink（wiki 语法只解析库内文件），
  * 所以必须整条换成 Markdown；而库内路径两种写法都成立，就保持用户/宿主选的那一种。
  */
-function hasScheme(target: string): boolean {
+export function hasScheme(target: string): boolean {
 	return /^[a-z][a-z0-9+.-]*:\/\//i.test(target);
 }
 
@@ -326,24 +484,72 @@ function decodeSafe(value: string): string {
 }
 
 /**
+ * 一处链接目标的**所有归一形式**（按可信度从高到低）。
+ *
+ * ⭐⭐ **这是「这条链接指着哪个文件」的唯一一份判据** —— 改写（`buildResolver`）与
+ * 「这份文件还有人引用吗」（{@link targetIsPath}）都走它。两处各写一遍的话，同一条链接会在
+ * 一边被认出来、在另一边认不出来，而**两边都不报错**（2026-10-15 用户实测：一条
+ * `../assets/Pasted%20image%2020260930162541.png` 传上去了、笔记却一处都没改）。
+ *
+ * ## 为什么要"多种形式"而不是一种
+ *
+ * 归一只落在一个字符串上，而同一个文件在正文里的写法随**宿主的链接格式设置**与来源而变：
+ *
+ * | 正文里写的 | 归一之后 | 片段 |
+ * |---|---|---|
+ * | `attachments/图 1.png` | `attachments/图 1` | 规则给的就是这一形 |
+ * | `attachments/图%201.png` | `attachments/图%201` | ❌ 对不上 ⇒ 必须再有**解码那一形** |
+ * | `../attachments/图 1.png` | `../attachments/图 1` | ❌ 对不上 —— `../` 要**笔记的位置**才解得开 |
+ *
+ * 前缀那一形这里**刻意不"猜着剥掉"**（剥了就可能匹配到另一个目录里的同名文件 ⇒
+ * 把链接改到错的那张图上）。它由调用方按**短名**兜（`baseNameOf`，对前后缀不敏感），
+ * 而短名的歧义各有守卫：改写时**宁可不改**，判「还有引用」时**宁可信其有**。
+ *
+ * ⚠️ **原样那一形必须排在前面**：文件名里真的写着 `%20` 的（合法、少见）只有原样对得上，
+ * 解码那一形会把这条链接指到"名字里是空格"的另一份文件上去。
+ */
+export function linkTargetForms(raw: unknown): string[] {
+	if (typeof raw !== "string") return [];
+	const value = raw.trim();
+	if (value === "") return [];
+	const forms: string[] = [];
+	for (const candidate of [value, decodeSafe(value)]) {
+		const normalized = normalizeLinkTarget(candidate);
+		if (normalized !== "" && !forms.includes(normalized)) forms.push(normalized);
+	}
+	return forms;
+}
+
+/**
  * 这一处链接的**目标**是不是 `path`。
  *
  * ⚠️ 只看**路径段**（`LinkSpan.raw`），不看显示文字：改写 wikilink 时显示文字保留的正是
  * 原文件名（`![照片 1.png](https://…)`），拿整段正文做字面匹配会把**改写后的链接本身**
  * 当成"还指着它"—— 那样这一份就永远删不掉了（实测踩到过）。
  *
- * 归一用的是与改写**同一个** `normalizeLinkTarget`（去 `./`、反斜杠、扩展名），
+ * 归一用的是与改写**同一个** {@link linkTargetForms}（原样 + 百分号解码），
  * 并按"完整路径 / 文件名"两个键匹配（与解析器同一套）。
- * ⚠️ 与解析器唯一的差别是**没有同名歧义那一档**：歧义时解析器宁可不改，
- * 而这里必须当成"还指着它"（保守的一侧）。
+ *
+ * ⭐ 两侧都取**短名**再比一次：`../assets/图.png` 这种带相对前缀的目标在"完整路径"那一比
+ * 上永远对不上（前缀要笔记的位置才解得开，而这两趟都拿不到）。判据落在**保守的一侧**：
+ * 多认一句"还指着它"只是少删一份重复副本（下次运行还会再来），而漏认会在链接还指着它的时候
+ * 把文件删掉 —— 用户看到的就是「图没了」。
+ * ⚠️ 与解析器唯一的差别是没有同名歧义那一档：歧义时解析器宁可不改，而这里必须当成"还指着它"。
  */
 function targetIsPath(raw: string, path: string): boolean {
-	if (typeof raw !== "string" || raw === "") return false;
-	const wanted = [path, baseNameOf(path)].map((form) => normalizeLinkTarget(form));
-	if (wanted.every((form) => form === "")) return false;
-	for (const candidate of [raw, decodeSafe(raw)]) {
-		const normalized = normalizeLinkTarget(candidate);
-		if (normalized !== "" && wanted.includes(normalized)) return true;
+	if (typeof raw !== "string" || raw === "" || typeof path !== "string" || path === "") return false;
+	const wanted = [
+		...new Set(
+			[path, baseNameOf(path)]
+				.map((form) => normalizeLinkTarget(form))
+				.filter((form) => form !== "")
+		),
+	];
+	if (wanted.length === 0) return false;
+	const names = new Set(wanted.map(baseNameOf));
+	for (const form of linkTargetForms(raw)) {
+		if (wanted.includes(form)) return true;
+		if (names.has(baseNameOf(form))) return true;
 	}
 	return false;
 }
@@ -358,12 +564,16 @@ function targetIsPath(raw: string, path: string): boolean {
  * 后果是**永远删不掉**，而且看不出为什么（断言写不出来、日志里也没有异常）。
  * 判据改成"当场读到的正文"之后才成立。
  *
- * ## 判据 = 逐个链接看**目标**（含 URL 编码那种改写器认不出的写法）
+ * ## 判据 = 逐个链接看**目标**（含改写器认不出的那些写法）
  *
  * 用 `findLinkSpans` + {@link targetIsPath}：覆盖"正文里确实指着它"的所有链接形态，
- * 包括改写器**改不掉**的那些（典型是 URL 编码 —— 从浏览器复制链接时很常见）。
- * 那种引用原样留在正文里，若判据只看"改写器认不认得"，这份文件就会被删掉，
- * 而正文里那条链接**还指着一个不存在的文件**。
+ * 包括改写器**改不掉**的那些 —— 典型是**相对前缀**（`../assets/图.png`：要笔记的位置才解得开，
+ * 而改写器的规则里只有库内路径，它靠短名兜住的是"能改"，判据这边则一律认下来）
+ * 与**同名歧义**（改写器宁可不改）。那种引用原样留在正文里，若判据只看"改写器认不认得"，
+ * 这份文件就会被删掉，而正文里那条链接**还指着一个不存在的文件**。
+ *
+ * ⚠️ 2026-10-15 起**百分号编码**（`图%201.png`）不再属于这一类：那份写法改写器也认了
+ * （见 {@link linkTargetForms}）—— 判据两侧共用同一份归一，不再各写一遍。
  */
 export function stillMentionsPath(text: string, path: string): boolean {
 	if (typeof text !== "string" || text === "") return false;

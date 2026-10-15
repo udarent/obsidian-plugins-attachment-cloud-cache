@@ -23,18 +23,34 @@
  * 那种副本是**最后一份**，删它就是丢数据 —— 所以"我们传过它"不再够用，
  * 必须确认"云端**现在**确实还有它"，而这件事只能问服务端。
  *
- * ## 淘汰谁：三类对象，优先级不同
+ * ## 淘汰谁：三类对象，前两类可删、第三类不碰
  *
- * | 类别 | 判据 | 为什么这么排 |
+ * | 类别 | 判据 | 处置 |
  * |---|---|---|
- * | **未引用副本** | 有索引记录，但没有任何笔记引用 | 先淘汰：引用它的笔记已经删了，纯占地方 |
- * | **被引用的副本** | 有索引记录，且仍有笔记引用 | 后淘汰：删掉它会让那张图**暂时失去离线能力** |
+ * | **未引用副本** | 有索引记录，但没有任何笔记引用 | **先淘汰**：引用它的笔记已经删了，纯占地方 |
+ * | **被引用的副本** | 有索引记录，笔记里提的是它的**云端地址** | **后淘汰**：删掉只是"那张图暂时失去离线能力" |
+ * | **笔记直接指着的副本** | 笔记里写的是 `![](../图.png)` 这种**库内路径** | ⛔ **不进候选**（见下） |
  *
- * ## ⚠️ 淘汰是被允许的，因为"副本"不是唯一的一份
+ * ## ⚠️ 淘汰是被允许的，**前提是"笔记里存的是远端地址"**
  *
- * 笔记里存的是**远端 URL**（从没被改写），所以被淘汰的副本下次看到那张图时会**自动重新下载**。
- * 代价是"重新拉一遍"，**不是丢数据**。也正因如此，淘汰之后调用方**必须摘掉索引记录** ——
+ * 笔记里存的是远端地址，所以被淘汰的副本下次看到那张图时会**自动重新下载**
+ * （回退下载，见 `render/render-target.ts` 的判定表）。代价是"重新拉一遍"，
+ * **不是丢数据**。也正因如此，淘汰之后调用方**必须摘掉索引记录** ——
  * 否则渲染层会以为本地还有那份副本，于是每次渲染都白试一次（见 `run.ts` 的 `runEviction`）。
+ *
+ * ## ⛔ 但那个前提**不一定成立**：笔记里可能写的是**库内路径**
+ *
+ * 那种引用（`![](../图.png)` / `![[图.png]]`）指着的是**这份文件本身**，不是云端地址。
+ * 删掉它，"重新下载"这条兜底**接不上**（回退下载只认属于本存储的 URL）
+ * ⇒ 用户打开那篇笔记看到的是**破图**，而且**没有自动恢复的路径**。
+ *
+ * ⇒ 这类副本**不进候选**（`referencedPaths` 命中，见 `CandidateInput`）；但它的占用
+ * **照算**（`presentBytes` 包含它）—— "腾不到目标"必须如实说，不能假装它已经能删了。
+ *
+ * ⚠️⚠️ 这条判据与「清理本地副本」（`release-space.ts`）**共用同一份实现**（就在本函数里），
+ * 两边只许有一处。2026-10-15 实测到过它被写了两处：那边写了、这里漏了 ⇒ 后台淘汰会删掉
+ * "笔记里还写着本地路径"的副本（用户看到的是"图没了"）。这正是本项目的头号坑
+ * （同一个判据写两遍 ⇒ 各自演化 ⇒ 两侧都不报错）。
  *
  * ## ⚠️ 两条绝不能越过的界
  *
@@ -153,6 +169,19 @@ export interface CandidateInput {
 	 * 优先删掉一批可能还有人要的副本。
 	 */
 	referencedKeys?: ReadonlySet<string>;
+	/**
+	 * 笔记 / 画布**直接指着**的 vault 路径集合（= `referencedKeys` 的**另一半**，
+	 * 两个问题为什么都要问见 `audit.ts` 的同一段）。
+	 *
+	 * ⛔ **命中的副本不进候选**（不是"排后面"，是"不能删"）：笔记里那条链接指着的是
+	 * **这份文件本身**，删了它没有任何兜底（回退下载只认属于本存储的 URL）⇒ 破图。
+	 * 理由与占用照算的账，见模块头那一节。
+	 *
+	 * ⚠️ **必填**（2026-10-15 从可选改成必填）：这是**防破图**的判据，漏传的后果是
+	 * "悄悄删掉笔记正在显示的文件"，而这个错误在类型层能拦住。传空集 = 明确声称
+	 * "没有任何笔记用库内路径引用它们"。
+	 */
+	referencedPaths: ReadonlySet<string>;
 }
 
 export interface CandidateSelection {
@@ -160,10 +189,19 @@ export interface CandidateSelection {
 	/** 索引里有记录、但磁盘上找不到那份文件的数量（没有可删的东西）。 */
 	missing: number;
 	/**
+	 * 磁盘上还在、但**被笔记用库内路径直接指着**的数量（= 不能删的那些）。
+	 *
+	 * 它不在 `candidates` 里，可**在 `presentBytes` 里** —— 占着空间但不能动。
+	 * 唯一的用途是让"腾不到目标"的原因**说得出来**（见 `planEviction` 的 `Reason`）。
+	 */
+	pinned: number;
+	/**
 	 * **磁盘上确实还在**的那些副本的字节和（`entry.size` 之和）。
 	 *
 	 * ⭐ 这才是上限判定该用的"当前占用"：它把幽灵记录排除在外，于是与候选**同源**。
 	 * 用索引的原始和会让幽灵记录抬高超出量 ⇒ 多删（见模块头注释那条反例）。
+	 *
+	 * ⚠️ 它**包含** `pinned` 那些（它们确实占着磁盘）—— 上限判定不能把它们漏掉。
 	 */
 	presentBytes: number;
 }
@@ -176,10 +214,14 @@ export interface CandidateSelection {
  * 依赖的是"缓存目录里的东西都是我们的"这个物理保证；那份保证随缓存目录一起消失了。
  *
  * ⭐ 顺带算出 `presentBytes`（存在着的字节和）—— 见模块头注释：上限判定必须用它。
+ *
+ * ⛔ **被笔记用库内路径直接指着的不进候选**（判定在下面那一行 `input.referencedPaths.has`，
+ * 与「清理本地副本」共用这一份）—— 理由见模块头那一节。
  */
 export function buildEvictionCandidates(input: CandidateInput): CandidateSelection {
 	const candidates: EvictionCandidate[] = [];
 	let missing = 0;
+	let pinned = 0;
 	let presentBytes = 0;
 
 	for (const entry of input.entries) {
@@ -192,6 +234,16 @@ export function buildEvictionCandidates(input: CandidateInput): CandidateSelecti
 		}
 		presentBytes += Math.max(0, entry.size);
 
+		// ⛔ 笔记里**直接指着**这份文件（`![](../图.png)` 那种库内路径）⇒ 不能删。
+		//
+		// ⚠️ 顺序要紧：上面那行 `presentBytes += …` 必须**先**执行 —— 它占着磁盘，
+		// 上限判定要算它；把它排除在占用之外会让"腾不到目标"变成一个说不出的谜
+		// （看起来没超，其实超了）。
+		if (input.referencedPaths.has(path)) {
+			pinned += 1;
+			continue;
+		}
+
 		candidates.push({
 			key: entry.key,
 			cachePath: path,
@@ -200,11 +252,16 @@ export function buildEvictionCandidates(input: CandidateInput): CandidateSelecti
 			bytes: Math.max(0, entry.size),
 			// 有使用时间就用它；否则退回上传时间（"刚上传的"约等于"刚用过"）
 			lastUsedAt: entry.lastUsedAt > 0 ? entry.lastUsedAt : parseTime(entry.uploadedAt),
+			// ⭐ "笔记里提过它的**云端地址**吗" —— 只影响**排序**（提过的排后面）。
+			//
+			// ⚠️ 与库内路径那一路的分工：一路是"能不能删"（上面那道 `continue`，硬门槛），
+			// 一路是"先删谁"（这里，软偏好）。两者**后果不同**，别互相替代。
+			// `referencedKeys` 省略 ⇒ 一律当已引用（不知道 ≠ 没人用，宁可少删）。
 			referenced: input.referencedKeys ? input.referencedKeys.has(entry.key) : true,
 		});
 	}
 
-	return { candidates, missing, presentBytes };
+	return { candidates, missing, pinned, presentBytes };
 }
 
 export interface EvictionInput {
@@ -220,6 +277,13 @@ export interface EvictionInput {
 	/** 当前时间（epoch ms），注入是为了可穷举。 */
 	now: number;
 	graceMs?: number;
+	/**
+	 * 磁盘上还在、但**被笔记用库内路径直接指着**的数量（= `CandidateSelection.pinned`）。
+	 *
+	 * ⚠️ 它只用来把"腾不到目标"的原因说清楚：那些字节算在 `totalBytes` 里、
+	 * 却**永远删不掉** ⇒ 不说明的话，用户看到"仍超出 X"会以为是插件坏了。
+	 */
+	pinnedCount?: number;
 }
 
 export interface EvictionPlan {
@@ -290,12 +354,17 @@ export function planEviction(input: EvictionInput): EvictionPlan {
 	const projectedBytes = total - reclaimable;
 	const overBy = Math.max(0, projectedBytes - limit);
 	const fresh = input.candidates.length - eligible.length;
+	const pinned = Math.max(0, input.pinnedCount ?? 0);
 
 	let reason: string;
 	if (overBy <= 0) {
 		reason = "已腾到上限以内";
 	} else if (fresh > 0) {
 		reason = `仍超出 ${overBy} 字节：有 ${fresh} 份副本在宽限期内（刚用过），本轮不动`;
+	} else if (pinned > 0) {
+		// ⭐ 说得出原因，而且要**说得准**：这些字节不是"没找到可删的"，是**不能删**
+		//（笔记里写的就是这份文件，删了那张图没有任何兜底）。
+		reason = `仍超出 ${overBy} 字节：另有 ${pinned} 份副本被笔记直接指着（删了那张图就没了），不能删`;
 	} else {
 		// 候选不够 —— 常见原因是索引里没有更多副本可淘汰了（例如多数目标都在云端确认不上、
 		// 或索引本身不全）。⚠️ 两个方向都靠"统计与候选同源"才成立：

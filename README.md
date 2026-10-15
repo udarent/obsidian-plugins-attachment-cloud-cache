@@ -36,22 +36,18 @@ This does both — the file goes to your bucket, the copy that renders stays beh
 
 - **Any S3-compatible storage, any file type** — images, audio, video, PDF, archives, documents, extension-less files.
   What Obsidian can preview becomes an embed; everything else, a clickable link.
-- **Upload however the file gets in** — pasted, dropped, from your phone's gallery or camera, shared into Obsidian, or
-  copied into the vault.
-- **The same file twice is one object.** The key is the file name plus its full content hash, so re-uploading stores
-  nothing new — and even `photo 1.png` next to `photo.png` is recognised as one image: one address, the original name
-  in the link text, and the extra local copy cleaned up.
+- **Any way in** — pasted, dropped, from your phone's gallery or camera, shared into Obsidian, or copied into the vault.
+- **The same file twice is one object.** The key is the file name plus its full content hash, so even `photo 1.png`
+  beside `photo.png` is one image: one address, the original name in the link text, the extra copy cleaned up.
 - **Offline and multi-device** — rendering always uses the local copy, and a new device back-fills copies on demand.
-  The copy *is* the file you already had.
 - **Canvas references count too**, and one command bulk-uploads what your notes already link.
-- **Cloud space cleanup** — lists the objects no note refers to, and deletes only what you confirm.
+- **Cloud cleanup** — lists the objects no note refers to, and deletes only what you confirm.
 - **Two optional extras, both off by default** — off-site files treated as ordinary files (with a site list), and a
-  local copy limit that trims least-recently-used copies in the background.
+  local-copy limit that trims least-recently-used copies in the background.
 
 ## Requirements
 
-- **Obsidian 1.13.0 or newer**, desktop and mobile. Older versions see *No appropriate version found.* in the
-  catalogue — the installer refusing, not a broken plugin.
+- **Obsidian 1.13.0 or newer**, desktop and mobile.
 - **An S3-compatible bucket you control**, plus an access key pair.
 - **The bucket must allow anonymous reads**, or you set a public URL prefix (CDN or custom domain) — otherwise the
   links open for you but not for others. **Test connection** checks exactly this.
@@ -75,11 +71,11 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | **Public URL prefix** | Optional. Empty means `endpoint/bucket/key`, which requires anonymous reads. |
 | **Test connection** | One signed request, then one **credential-free** request to the address your links would use. |
 | **Upload new attachments automatically** | On by default; off leaves new files local only. |
-| **Where the local copy goes** | Keep the file where it is (default) or delete it after uploading — the file itself is the copy. ⚠️ Delete turns caching off: uploads and link rewriting still happen, but nothing is fetched back, so **nothing works offline**. |
-| **Free up local space** | Clears the local copies of attachments still linked from a note. Deleted **for good, not trashed**, so the space comes back at once. With a limit set, it only trims down **to that limit** — it does not clear everything, and copies no note links to are left to the unreferenced-attachment cleanup (they may need removing from your storage too). |
+| **Where the local copy goes** | Keep the file where it is (default) or delete it after uploading. ⚠️ Delete turns caching off: uploads and link rewriting still happen, but nothing is fetched back, so **nothing works offline**. |
+| **Free up local space** | Clears local copies of attachments still linked from a note — deleted **for good, not trashed**, so the space comes back at once. With a limit set it trims down **to that limit** only; copies no note links to are left to the unreferenced-attachment cleanup (they may need removing from your storage too). |
 | **Local copy limit (MB) · Download missing copies** | `0` = no limit. Least-recently-used copies are trimmed first, and only after confirming the object is still in your storage. Auto-download stays off while "delete" is selected. |
-| **Handle files from other sites like ordinary files** | Off by default; while off, nothing off-site is touched automatically. On, an off-site file is downloaded, uploaded and its link rewritten exactly like a local paste — the copy setting included. **Which sites to handle** (`All` / `All except the ones listed` / `Only the ones listed`) filters the automatic handling only — picking files by hand is never restricted. `example.com` also matches `img.example.com`. |
-| **Pick specific files** | Tick individual off-site files; only those are fetched. Works whether or not the switch above is on. **Local files outside your vault** (`file:///D:/…`, e.g. a screenshot from a chat app) are listed here too and go through the same chain — desktop only, and only the kinds that can be embedded in a note (image/audio/video/PDF). |
+| **Handle files from other sites like ordinary files** | Off by default. On, an off-site file is downloaded, uploaded and its link rewritten exactly like a local paste — the copy setting included. **Which sites to handle** (`All` / `All except the ones listed` / `Only the ones listed`) filters the **automatic** path only; picking files by hand is never restricted. `example.com` also matches `img.example.com`. |
+| **Pick specific files** | Tick individual off-site files; only those are fetched. Works whether or not the switch above is on. **Files outside your vault** (`file:///D:/…`, e.g. a chat-app screenshot) are listed here too, and go through the same chain — desktop only, and only the kinds that can be embedded in a note (image/audio/video/PDF). |
 | **When an attachment is no longer linked** | Once an uploaded file loses its last link from any note or canvas: ask (default) / just show a notice / do nothing. Cleanup always needs your explicit confirmation — this only decides whether you are told, and how. |
 | **Compatibility mode** | Advanced. Addresses objects as `endpoint/bucket/key`: keep it on for Cloudflare R2, MinIO and most self-hosted services. |
 
@@ -89,10 +85,10 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | --- | --- |
 | **Show local copy usage** | What your local copies hold, and how much of it no note refers to any more — an estimate: nothing is removed before your storage is confirmed to still have the object. |
 | **Repair the local-copy index** | Drops index entries whose files are already gone. |
-| **Upload existing attachments** | Uploads what your notes link to and rewrites those links. Your files stay where they are — that copy *is* the local copy. |
-| **Cache files from other sites…** | Tick individual off-site files to fetch — picking them is the consent. |
-| **Clean up unused objects in the cloud…** | Lists objects no note here refers to, then deletes what you confirm. |
-| **Check for unreferenced attachments in the cloud…** | Re-runs the "these are no longer linked" prompt on demand: everything this vault uploaded, minus everything still linked. |
+| **Upload existing attachments** | Lists what your notes link to (a thumbnail and a tick box per row), then uploads the ticked ones and rewrites those links. Your files stay where they are — that copy *is* the local copy. |
+| **Cache external files…** | Lists files that live outside your vault (thumbnails, tick boxes, per-item progress); tick individual ones — on other sites, or on this computer — and only those are fetched. Picking them is the consent. |
+| **Clean up unused objects in the cloud…** | The same list, for objects no note here refers to; deletes what you tick. |
+| **Check for unreferenced attachments in the cloud…** | The same list again, and applies your choice to the ticked ones; re-runs the "these are no longer linked" prompt on demand: everything this vault uploaded, minus everything still linked. |
 
 ## Good to know
 
@@ -106,7 +102,7 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 - **A dropped file's link lands at the caret, not at the pointer** — no public API maps pointer coordinates to an
   editor position. Deliberate.
 - **The local-copy index repairs itself** shortly after startup and periodically afterwards — it only ever edits the
-  index, never a file. *Repair the local-copy index* does the same on demand.
+  index, never a file.
 - **Moving to another device: copy the plugin folder, but delete `.cache-index.json` first** — it records where *this*
   device keeps its copies. The secret access key is not in the folder at all.
 
@@ -121,7 +117,9 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 
 ## Privacy & security
 
-- **It normally talks only to your storage** — no telemetry, no analytics, no requests outside your vault. ⚠️ The one exception is a **file outside your vault that you tick yourself** in "Pick specific files" (e.g. a screenshot at `file:///D:/…`): reading it is something you asked for.
+- **It normally talks only to your storage** — no telemetry, no analytics, no requests outside your vault. ⚠️ The one
+  exception is a **file outside your vault that you tick yourself** in "Pick specific files": reading it is something
+  you asked for.
 - **One optional feature reaches other sites, and it never turns itself on** — off by default; turning it on is the
   consent, and the site list narrows it further. The request carries nothing beyond the file's own address.
 - **A web page is never stored** — `text/html` and other `text/*` answers are refused rather than uploaded.
@@ -187,8 +185,8 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 - **任何 S3 兼容存储，任何类型的附件** —— 图片、音频、视频、PDF、压缩包、文档、没有扩展名的文件。Obsidian 能
   预览的插入为嵌入，其余插入为可点开的普通链接。
 - **附件怎么进来都行** —— 粘贴、拖入、手机相册或相机、分享到 Obsidian、从别处拷进库。
-- **同一个文件传两次只存一份。** 对象 key 里带文件名 + 完整内容哈希，所以重复上传不多占空间；哪怕 Obsidian 只能把
-  新来的另存成 `照片 1.png`，两份也认得出是同一张：一个地址、链接文字用原名、多出来的本地副本会被清掉。
+- **同一个文件传两次只存一份。** 对象 key 里带文件名 + 完整内容哈希，所以哪怕 Obsidian 只能把新来的另存成
+  `照片 1.png`，两份也认得出是同一张：一个地址、链接文字用原名、多出来的本地副本会被清掉。
 - **离线、多设备** —— 渲染始终走本地副本，换新设备时副本按需补回。**副本就是你已经有的那份文件**。
 - **画布引用同等算数**；存量附件一条命令搬完（只处理笔记引用着的文件）。
 - **云端空间清理** —— 列出「本库没有笔记引用」的对象，只删你确认过的。
@@ -197,8 +195,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 
 ## 环境要求
 
-- **Obsidian 1.13.0 或更新**，桌面端与移动端。更低的版本在社区目录里只回一句 *No appropriate version found.* ——
-  那是 Obsidian 的安装机制在拒绝，不是插件坏了。
+- **Obsidian 1.13.0 或更新**，桌面端与移动端。
 - **一个你自己控制的 S3 兼容存储桶**，以及一对访问密钥。
 - **存储桶要允许匿名读取**，或者填一个公开访问前缀（CDN 或自定义域名）。否则写进笔记的链接你自己打得开、
   别人打不开 —— **测试连接** 检查的正是这件事。
@@ -222,10 +219,10 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | **公开访问前缀** | 可留空。留空就用 `服务地址/存储桶/键`，那要求存储桶允许匿名读取。 |
 | **测试连接** | 先发一次签名请求，再**不带凭据**请求一次「你笔记里会写的那条地址」。 |
 | **新增附件自动上传** | 默认开启；关闭后新文件只存在本地。 |
-| **本地副本的处理** | 留在原处（默认）或上传后删除 —— **那份文件本身就是**副本。⚠️ 选「删除」等于关闭缓存：照常上传、照常改写链接，但不取回副本，所以**离线什么都看不到**。 |
-| **释放本地空间** | 清掉笔记里仍引用着的附件本地副本。**永久删除、不进回收站**，空间立刻释放。设了上限时它只清**到上限为止**（不会全清）；没有任何笔记引用的副本留给「没人引用的附件」那条清理 —— 那些可能要连云端对象一起处理。 |
+| **本地副本的处理** | 留在原处（默认）或上传后删除。⚠️ 选「删除」等于关闭缓存：照常上传、照常改写链接，但不取回副本，所以**离线什么都看不到**。 |
+| **释放本地空间** | 清掉笔记里仍引用着的附件本地副本 —— **永久删除、不进回收站**，空间立刻释放。设了上限时只清**到上限为止**（不会全清）；没有任何笔记引用的副本留给「没人引用的附件」那条清理 —— 那些可能要连云端对象一起处理。 |
 | **本地副本上限（MB） · 缺本地副本时自动下载** | `0` 表示不限制。超限时按最近最少使用清理，且只有确认你的存储里仍有那个对象之后才会删。选「删除」时自动下载不生效。 |
-| **站外文件按普通附件处理** | 默认关闭；关着时站外的东西一步都不会被自动碰。打开后，站外文件会被下载、上传并改写链接 —— 与粘贴一张本地附件完全一样（副本那一档也一样适用）。**处理哪些站点**（`所有站点` / `除名单外` / `仅名单内`）只筛自动处理 —— 手动挑选不受限制。写 `example.com` 也会命中 `img.example.com`。 |
+| **站外文件按普通附件处理** | 默认关闭。打开后，站外文件会被下载、上传并改写链接 —— 与粘贴一张本地附件完全一样（副本那一档也一样适用）。**处理哪些站点**（`所有站点` / `除名单外` / `仅名单内`）只筛**自动**那一路；手动挑选不受限制。写 `example.com` 也会命中 `img.example.com`。 |
 | **挑选要缓存的文件** | 勾选具体的站外文件，只有勾中的会被取。开关关着也能用。**库外的本机文件**（`file:///D:/…`，比如聊天软件的截图）也在这里出现，走同一条链 —— 仅桌面端，且只收能嵌进笔记的那几类（图 / 音 / 视频 / PDF）。 |
 | **附件没人引用时** | 某个已上传的附件失去笔记或画布里的最后一条引用之后：弹窗问我（默认）/ 只给一条通知 / 什么都不做。清理永远需要你明确确认 —— 这一项只决定要不要告诉你、用哪种方式。 |
 | **兼容模式** | 高级。按「地址/桶/键」寻址：Cloudflare R2、MinIO 与多数自建服务都要开着。 |
@@ -236,10 +233,10 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | --- | --- |
 | **查看本地副本占用** | 本地副本占了多少、其中多少已经没有笔记引用了 —— 这是**估算**：真正删除前会先确认你的存储里仍然有这个对象。 |
 | **自检并修复本地副本索引** | 丢掉那些文件已经不在的索引记录。 |
-| **上传已存在的附件** | 上传笔记里引用着的附件并改写链接。文件**留在原地** —— 那份就是本地副本。 |
-| **缓存站外文件（可挑选）…** | 勾选具体的站外文件去下载 —— 勾选本身就是同意。 |
-| **清理云端未使用对象…** | 列出「本库没有笔记引用」的对象，确认后删除。 |
-| **检查未被引用的云端附件…** | 随时重新问一次「这些附件已经没人引用了」：候选 = 本库上传过的、减去仍被笔记或画布引用的。 |
+| **上传已存在的附件** | 列出笔记里引用着的附件（**每条带缩略图与勾选框**），只上传你勾中的那些并改写链接。文件**留在原地** —— 那份就是本地副本。 |
+| **缓存外部文件（可挑选）…** | 列出**库外**的文件（缩略图 + 勾选框 + 逐项进度）：别处服务器上的、或你这台电脑上的，勾中的才会被取回 —— 勾选本身就是同意。 |
+| **清理云端未使用对象…** | 同一套清单，列的是「本库没有笔记引用」的对象；只删你勾中的那些。 |
+| **检查未被引用的云端附件…** | 还是那套清单，按你选的那一档处理勾中的那些；随时重新问一次「这些附件已经没人引用了」：候选 = 本库上传过的、减去仍被笔记或画布引用的。 |
 
 ## 需要注意的
 
@@ -249,7 +246,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
   **本设备**的引用，且永远先问你一次。
 - **`tiff`、`heic`、`ico` 插入的是普通链接，不是嵌入** —— 宿主无法在嵌入里预览它们，写 `![]()` 只会得到一个坏图。
 - **拖放文件的链接插在光标处，不是指针落点** —— 公开 API 里没有「指针坐标 → 编辑器位置」的映射。有意取舍。
-- **本地副本索引会自愈** —— 启动后不久、以及之后定期，它会摘掉指向「文件已经不在了」的记录；**只改索引、绝不碰文件**。「自检并修复本地副本索引」做的是同一件事，供你想立刻核一遍时用。
+- **本地副本索引会自愈** —— 启动后不久、以及之后定期摘掉指向「文件已经不在了」的记录；**只改索引、绝不碰文件**。
 - **换设备：把插件目录复制过去，但先删掉 `.cache-index.json`** —— 它记的是**这台设备**的副本在哪。秘密访问密钥根本不在目录里。
 
 **常见故障**

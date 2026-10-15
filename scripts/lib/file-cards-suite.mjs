@@ -103,6 +103,40 @@ export function runFileCardsSuite(mod) {
 	}
 
 	// ============================================================
+	// ⑤b ⭐ 调用方**直接给的地址**（站外图 / 本机 `file://…`）优先，且同样只对图片生效
+	//
+	// 这两类的图既不在库内、也不是本存储的对象 ⇒ 上面那两条推导（本地副本 / 远端 key）
+	// 对它们无从下手，只能由调用方把地址递进来。
+	// ⚠️ 「只给图片」那条纪律对它们**一样**成立：给 PDF 一个地址只会得到破图。
+	// ============================================================
+	{
+		const [image, pdf, both] = planFileCards(
+			[
+				{ id: "https://example.com/a.png", name: "a.png", thumb: "https://example.com/a.png" },
+				{ id: "https://example.com/b.pdf", name: "b.pdf", thumb: "https://example.com/b.pdf" },
+				// 三个都给：显式地址排最前（顺序写在 `planFileCards` 上，别处不许另有口径）
+				{
+					id: "d5e6.png",
+					name: "d.png",
+					thumb: "app://elsewhere/d.png",
+					localPath: "attachments-cache/d5e6.png",
+					remoteKey: "d5e6.png",
+				},
+			],
+			deps
+		);
+		assert.equal(image.thumbUrl, "https://example.com/a.png", "★ 调用方给的地址优先（否则站外/本机那些行永远没有图）");
+		assert.equal(image.fromLocalCopy, false, "它不来自本地副本 —— 别把站外/本机图说成零网络");
+		assert.equal(pdf.thumbUrl, null, "非图片给地址也只显示类型标记");
+		assert.equal(
+			both.thumbUrl,
+			"app://elsewhere/d.png",
+			"★ 显式地址优先于本地副本与远端 key（三样都给时按这个顺序）"
+		);
+		assert.equal(both.fromLocalCopy, false, "显式地址那一档不算本地副本");
+	}
+
+	// ============================================================
 	// ⑥ 脏输入：空项 / 空白 id 跳过，缺字段不抛错
 	// ============================================================
 	{
@@ -173,6 +207,14 @@ export function runFileCardsSuite(mod) {
 			"★ 缩略图地址必须通过 attr 写（走 img.src 会被渲染钩子接走 → 缺副本时触发下载）"
 		);
 		assert.equal(img.src, undefined, "不许直接给元素赋 src 属性");
+		// ⚠️⚠️ 缩略图**不许**带原生懒加载（理由见 `renderThumb` 的注释，2026-10-15 真机踩过）：
+		// 宿主的弹窗容器带 transform/opacity 动画，`loading="lazy"` 在那种容器里可能
+		// **永远不加载**；而它不加载时**连 `onerror` 都不触发** ⇒ 连"降级成类型标记"
+		// 那条兜底也走不到，用户看到的就是一块空白、也没有任何报错可查。
+		assert.ok(
+			!("loading" in (calls[0]?.attr ?? {})),
+			"★ 缩略图不许带 loading 属性（原生懒加载在宿主弹窗里可能永远不加载，且不报错）"
+		);
 		assert.equal(row.children[1].text, "报告.png", "名字要显示出来（那是核对的主要依据）");
 
 		// 加载失败 ⇒ 降级成类型标记，不留破图
@@ -187,5 +229,5 @@ export function runFileCardsSuite(mod) {
 		assert.equal(root2.children[0].children[0].text, "PDF", "非图片显示类型标记");
 	}
 
-	return { cases: 11 };
+	return { cases: 12 };
 }

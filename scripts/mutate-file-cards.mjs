@@ -49,9 +49,29 @@ await runMutations({
 			// 后果：图片加载失败时什么都不做 ⇒ 界面上留一个破图图标。
 			// 而它最常见的成因（桶私有 / 匿名读没开）**不是故障** —— 显示得像故障就会把人引去查错的东西。
 			name: "★ 图加载失败时不降级（界面留一个破图）",
-			from: "\t\t\timage.onerror = () => {\n\t\t\t\timage.remove();\n\t\t\t\tthumb.addClass(\"acc-file-badge\");\n\t\t\t\tthumb.setText(card.badge);\n\t\t\t};",
-			to: "\t\t\tvoid image;",
+			from: "\t\timage.onerror = () => {\n\t\t\timage.remove();\n\t\t\tthumb.addClass(\"acc-file-badge\");\n\t\t\tthumb.setText(card.badge);\n\t\t};",
+			to: "\t\tvoid image;",
 			expect: "降级成标记",
+		},
+		{
+			// 后果：站外图 / 本机文件那些行**永远没有缩略图** —— 它们的图既不在库内、
+			// 也不是本存储的对象，上面那两条推导（本地副本 / 远端 key）一个都推不出来，
+			// 只能靠调用方把地址递进来（`thumb`）。忽略了它就只剩一个类型标记。
+			name: "★ 忽略调用方直接给的地址（站外 / 本机文件的行永远没有图）",
+			from: "\t\t\tif (explicit) {",
+			to: "\t\t\tif (false) {",
+			expect: "调用方给的地址优先",
+		},
+		{
+			// 后果：图**永远不出现**，而且**没有任何报错**（2026-10-15 真机踩过一次：
+			// 用户报「.png 缩略图不显示图片」，而这一行正是相对既有可用实现唯一的变化）。
+			// 宿主的弹窗容器带 transform/opacity 开合动画 ⇒ 原生懒加载在那种容器里
+			// 可能根本不触发；更糟的是不触发时**连 `onerror` 都没有** ⇒
+			// "降级成类型标记"那条兜底也走不到，界面上就是一块空白。
+			name: "★★ 缩略图加回原生懒加载（图可能永远不出现，且连错误都不报）",
+			from: '\t\t\tattr: { src: card.thumbUrl, alt: "" },',
+			to: '\t\t\tattr: { src: card.thumbUrl, alt: "", loading: "lazy" },',
+			expect: "不许带 loading",
 		},
 	],
 });

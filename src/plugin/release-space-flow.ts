@@ -41,6 +41,7 @@ import { readCopies, runReleaseSpace } from "../maintenance/run";
 import { displayNameForKey } from "../object-key";
 import { localCopyCleanupTarget } from "../ui/settings-logic";
 import type { PluginContext } from "./context";
+import { referencedVaultPaths } from "./notes-query";
 import { cloudReferencedKeys } from "./shared-flows";
 
 /** 确认框里最多列几项（对象可能很多，列少一点）。 */
@@ -68,12 +69,16 @@ async function localSpaceSelection(ctx: PluginContext, keepBytes: number): Promi
 		entries.map((entry) => entry.cachePath)
 	);
 	const referencedKeys = await cloudReferencedKeys(ctx);
+	// ⭐ "还有人用吗"的另一半：笔记**直接指着**哪些库内文件（判据见 `release-space.ts` 的
+	// `referencedPaths`）。少了它，一份正被笔记显示的副本会被当成可删的。
+	const referencedPaths = await referencedVaultPaths(ctx.app);
 
 	return planReleaseSpace({
 		entries,
 		uploaded: new Set(index.uploadedKeys()),
 		present: (path) => copies.has(path),
 		referencedKeys,
+		referencedPaths,
 		keepBytes,
 		// ⚠️ 上限那条路要用它判"刚用过的这轮不动"（宽限期）
 		now: Date.now(),
