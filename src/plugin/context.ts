@@ -71,4 +71,15 @@ export interface PluginContext {
 	 * 与 `currentIndex()`（两者都会被整体替换），缓存下来的话会拿到上一份。
 	 */
 	readonly maintenanceDeps: () => MaintenanceDeps;
+	/**
+	 * 当前是不是桌面端（宿主的 `Platform.isDesktopApp`）。
+	 *
+	 * ⚠️ **本项目第一次做平台判断**，而它只服务一件事：`file:///D:/…` 这类**本机绝对路径**
+	 * 只有桌面读得到（手机端那个路径根本不存在）。判据放在这里，因为"谁去问平台"必须只有**一处**
+	 * （`main.ts`）；纯判定层收的是**结果**（`isDesktop: boolean`），于是那层可以穷举。
+	 *
+	 * ⚠️ 别把它当"能力探测"的通用开关：以后再有平台相关的功能，照这个形状**再加一条**，
+	 * 而不是在这里判断"是不是 Electron"（那样一处判断会慢慢承载好几个不相干的功能）。
+	 */
+	readonly isDesktop: () => boolean;
 }

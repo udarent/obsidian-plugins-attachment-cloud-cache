@@ -40,6 +40,9 @@
 import type { PluginSettings } from "../types";
 import type { CacheIndex } from "../cache/index";
 import { decideExternalCache } from "../render/external-decide";
+// ⭐ 本机文件（`file:///D:/…`）的判定 —— 与站外那份**并列**，不是套在它里面（两者的判据不同，
+// 一个看主机/站点名单，一个看平台/扩展名；混成一个函数会让两边的 reason 说不清是谁给的）。
+import { decideLocalFile } from "../local-file";
 import { normalizeLinkTarget } from "./references";
 
 /** 库内文件的最小形状。 */
@@ -266,6 +269,14 @@ export interface ExternalCandidate {
 	/** 它出现在哪篇笔记里（改写链接要指名道姓）。 */
 	notePath: string;
 	host: string;
+	/**
+	 * ⭐ 是不是**本机文件**（`file:///D:/…`）。
+	 *
+	 * ⚠️ 界面据此说话：它的 `url` 是一条**本机绝对路径**，所以列表里必须**原样显示**它 ——
+	 * 用户 2026-10-15 定的边界是"只走显式入口 + 不加目录白名单"，于是"逐份勾选"就是那次同意，
+	 * 而**看得见路径**是那次同意能成立的前提（只显示文件名＝让人在看不见风险的情况下点确认）。
+	 */
+	local: boolean;
 }
 
 export interface ExternalCandidateOptions {
@@ -274,6 +285,13 @@ export interface ExternalCandidateOptions {
 	configured: boolean;
 	/** 安全拦截的可替换接缝；默认 `isBlockedHost`。 */
 	blockedHost?: (host: string) => boolean;
+	/**
+	 * ⭐ 当前是不是桌面端（`file:///D:/…` 那条路要它：手机拿不到本机绝对路径）。
+	 *
+	 * ⚠️ **由装配点算好传进来**（`main.ts` 的 `isDesktopHost()`）—— 这一层保持**纯**：
+	 * 不 import 宿主、不看 `Platform`，于是"谁去问平台"全库只有一处。详见 `local-file.ts` 模块头。
+	 */
+	isDesktop: boolean;
 }
 
 export interface ExternalSelection {
@@ -281,6 +299,13 @@ export interface ExternalSelection {
 	candidates: ExternalCandidate[];
 	/** 站点汇总，按主机名排序（顺序稳定，便于断言与展示）。 */
 	sites: ExternalSiteSummary[];
+	/**
+	 * ⭐ 候选里**本机文件**的条数。
+	 *
+	 * ⚠️ 单独一个数而不是并进 `sites`：本机路径**没有主机**，硬塞一个伪主机名会让
+	 * "来自 N 个站点"那句话变成假话（它会把本机路径数成一个站点）。
+	 */
+	localFiles: number;
 	/**
 	 * 跳过原因统计（诊断用，与库内那部分同一个形状）。
 	 *
@@ -332,7 +357,34 @@ export function externalFileUrlsIn(text: string): string[] {
 		if (isHttpUrl(raw)) urls.add(raw);
 	}
 
+	// ⭐ 本机文件（`file:///D:/…`）—— 与上面两段**刻意分开**，因为分界规则不同：
+	// 本机路径**常带空格**（`D:/My Documents/…`），而上面那句 `[^)\s\n]+` 会在空格处截断
+	//（截断出来的路径指向**另一样东西** —— 与 D-25「含空格的 Markdown 目标被截断」同一类坑）。
+	// 所以这一路允许空格，只在 `)` 处收尾，并顺手切掉 Markdown 的标题尾巴。
+	for (const match of text.matchAll(/\[[^\]\n]*\]\(\s*(<[^>)\n]*>|[^)\n]*)/g)) {
+		const raw = stripMarkdownTitle(stripAngles(match[1]));
+		// 只认 `file:`（http 那一路由上面的规则管，两边的分界规则不同，不能混着用）
+		if (/^file:/i.test(raw)) urls.add(raw);
+	}
+	// 行内 HTML：`<img src="file:///D:/…">`（引号形状本就允许空格，与上面共用一条规则）
+	for (const match of text.matchAll(/<(?:img|a)\b[^>]*?\b(?:src|href)\s*=\s*(?:"([^"\n]*)"|'([^'\n]*)')/gi)) {
+		const raw = String(match[1] ?? match[2] ?? "").trim();
+		if (/^file:/i.test(raw)) urls.add(raw);
+	}
+
 	return [...urls];
+}
+
+/**
+ * 切掉 Markdown 链接的标题尾巴（`path "标题"` / `path '标题'`）。
+ *
+ * ⚠️ 只给本机路径那一路用：http 那一路的分界规则天然在空格处停下（`[^)\s\n]+`），
+ * 而本机路径允许带空格 ⇒ 标题就得自己切。
+ */
+function stripMarkdownTitle(value: string): string {
+	const trimmed = String(value ?? "").trim();
+	const at = trimmed.search(/\s+["']/);
+	return (at >= 0 ? trimmed.slice(0, at) : trimmed).trim();
 }
 
 function stripAngles(value: string): string {
@@ -375,6 +427,8 @@ export function selectExternalUploadCandidates(
 	const candidates: ExternalCandidate[] = [];
 	const bySite = new Map<string, ExternalSiteSummary>();
 	const reasons = new Map<string, number>();
+	/** ⭐ 本机文件（`file:///D:/…`）的条数 —— 它们没有主机，不进 `sites`（见 `ExternalSelection`）。 */
+	let localFiles = 0;
 
 	const bump = (reason: string) => reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
 
@@ -387,6 +441,22 @@ export function selectExternalUploadCandidates(
 		// `getMarkdownFiles()` 不会给出重复路径，而每篇笔记的地址表本来就已去重。
 		// 与其留一段看起来在防什么、实际防不住的代码，不如删掉并把"去重来自哪里"写清楚。
 		for (const url of externalFileUrlsIn(note?.text ?? "")) {
+			// ⭐ 两类地址**各有各的判定，但都在判定层里** —— 这里只负责分流，不另写一套。
+			// `not-mine` = 不是本机文件写法 ⇒ 交给站外那份判定。
+			const localDecision = decideLocalFile({ src: url, isDesktop: options.isDesktop });
+			if (localDecision.action === "ignore") {
+				// 跳过的**原因**照实记下来（诊断用）。判定层给的就是那句原因，不需要我再猜。
+				bump(localDecision.reason);
+				continue;
+			}
+			if (localDecision.action === "read") {
+				// 本机文件：没有主机 ⇒ `host` 留空、不进 `sites`，界面显示的是**那条绝对路径**
+				//（见 `ExternalCandidate.local`）。注意**只收桌面端**：手机上这一步就是 `ignore`。
+				candidates.push({ url, notePath: path, host: "", local: true });
+				localFiles += 1;
+				continue;
+			}
+
 			const decision = decideExternalCache({
 				src: url,
 				settings: options.settings,
@@ -403,7 +473,7 @@ export function selectExternalUploadCandidates(
 			}
 
 			const host = decision.host;
-			candidates.push({ url, notePath: path, host });
+			candidates.push({ url, notePath: path, host, local: false });
 
 			const summary = bySite.get(host);
 			if (summary) summary.count += 1;
@@ -417,6 +487,7 @@ export function selectExternalUploadCandidates(
 	return {
 		candidates,
 		sites,
+		localFiles,
 		skipped: [...reasons].map(([reason, count]) => ({ reason, count })),
 	};
 }

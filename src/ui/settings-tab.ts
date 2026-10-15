@@ -491,10 +491,13 @@ export class SettingsTab extends PluginSettingTab {
 				name: this.t("releaseSpaceName"),
 				desc: this.t("releaseSpaceDesc"),
 				aliases: ["free", "space", "disk", "clean", "delete", "空间", "磁盘", "清理", "释放"],
-				// ⚠️ 只在「不留副本」档可见：那一档的含义**就是**本地不留副本，
-				// 而这个按钮是把它应用到**已经存在的**那批副本上（F18 / 设计 §20.10）。
-				// 在「保留副本」档显示它是自相矛盾的（用户刚说要留副本）。
-				visible: () => shouldShowReleaseSpace(this.plugin.settings.localCopy),
+				// ⚠️ 判据是 `localCopyCleanupTarget`（与流程算目标**同一处**，见 `settings-logic.ts`）：
+				// 「不留副本」档（清掉这批 = 这一档的含义）**或**已设上限（清到上限以内）。
+				// 1.2.2 及以前只在「不留副本」档显示 —— 那时按钮的含义是"全删"，
+				// 在保留档显示它与"我要留副本"自相矛盾；现在它清的是**用户自己设的上限**，
+				// 那条矛盾消失了，而"设了上限却没有手动入口"才是真缺口（用户 2026-10-15 报的）。
+				visible: () =>
+					shouldShowReleaseSpace(this.plugin.settings.localCopy, this.plugin.settings.cacheLimitMb),
 				render: (setting) => this.renderReleaseSpace(setting),
 			},
 			{

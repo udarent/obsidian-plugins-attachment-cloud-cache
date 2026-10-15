@@ -18,7 +18,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -394,6 +394,9 @@ export async function runExternalCacheSuite(mod) {
 			maxBytes: options.maxBytes,
 			now: () => NOW,
 			hashBytes: async (bytes) => sha256Hex(bytes),
+			// ⭐ 本机文件（`file:///D:/…`）那条路的平台判据。省略时用生产默认（问宿主
+			// `Platform.isDesktopApp`，替身里默认是桌面）—— 要测"手机端"就显式传 `() => false`。
+			isDesktop: options.isDesktop ?? (() => true), // 替身默认桌面（生产上这份默认在 core/external-cache.ts）
 		};
 		// 默认**不**改安全拦截（用生产的那份）；只有明确要求时才放开，
 		// 因为测试要指向 127.0.0.1 上的假图床。
@@ -468,6 +471,102 @@ export async function runExternalCacheSuite(mod) {
 			assert.ok(note.includes("# 标题"), "★ 笔记的其它内容必须原样保留");
 
 			assert.ok(h.notices.includes("externalCached"), `应给出成功提示（实际 ${JSON.stringify(h.notices)}）`);
+		} finally {
+			await h.close();
+		}
+	}
+
+	// ---------- 2.1b ⭐ 本机文件（`file:///D:/…`）：同一套链，只是字节从磁盘读 ----------
+	//
+	// 用户 2026-10-15 要的：企业微信截图那种链接按**与站外同一套**业务逻辑处理。
+	// 差别只有"字节从哪来" ⇒ 这里要钉两件事：① **共用那部分确实共用了**（上传、落本地副本、
+	// 改写链接、索引登记 + `cached` 状态码 —— 两处调用方按它计数）；
+	// ② **本机特有的几种结局分得清**（不在 / 超上限 / 非桌面）。
+	{
+		const h = await makeHarness();
+		const outsideDir = join(h.root, "..", "acc-local-outside");
+		try {
+			// 一份真实的"库外文件"（模拟企微截图那种路径）
+			await mkdir(outsideDir, { recursive: true });
+			const outside = join(outsideDir, "企业微信截图_1.png");
+			await writeFile(outside, IMAGE_BYTES);
+			// ⚠️ 用 Windows 那种三斜杠写法（真机上就是它），别用 `pathToFileURL` 的规范化结果 ——
+			// 要测的正是"用户在笔记里写的那个形状"。
+			const fileUrl = "file:///" + outside.split("\\").join("/");
+
+			await h.writeNote(NOTE, `![x](${fileUrl})\n`);
+			const outcome = await h.cache(fileUrl, NOTE);
+
+			assert.equal(
+				outcome.status,
+				"cached",
+				`★ 本机文件要**走通同一条链**（实际 ${outcome.status} / ${outcome.error ?? ""}）`
+			);
+			assert.equal(h.server.countByMethod("PUT"), 1, "★ 同样恰好一次 PUT");
+			assert.equal(outcome.remoteUrl.startsWith(h.endpoint), true, "新 URL 仍指向自己的存储");
+			assert.equal(h.index.size, 1, "★ 索引同样要登记一条（本地副本与台账是一套账）");
+			const note = await h.readNote(NOTE);
+			assert.ok(
+				!note.includes(fileUrl),
+				"★★ 那条本机路径必须被换掉 —— 不换的话笔记换台电脑就废了（这正是用户要的）"
+			);
+			assert.ok(note.includes(outcome.remoteUrl), "★ 必须换上自己存储的地址");
+			assert.ok(
+				h.notices.includes("localCached"),
+				`★ 文案要分得开（本机文件说得出文件名，而不是拿空主机去套站外那句）：${JSON.stringify(h.notices)}`
+			);
+		} finally {
+			await rm(outsideDir, { recursive: true, force: true });
+			await h.close();
+		}
+	}
+	{
+		// ⚠️ 本机特有的结局之一：**文件不在了**（最常见的一种）
+		const h = await makeHarness();
+		try {
+			const missingUrl = "file:///" + join(h.root, "..", "acc-nope-9f3.png").split("\\").join("/");
+			await h.writeNote(NOTE, `![x](${missingUrl})\n`);
+			const missing = await h.cache(missingUrl, NOTE);
+			assert.equal(missing.status, "local-missing", "★ 文件不在 ⇒ 单独一个结局（不是泛泛的失败）");
+			assert.equal(h.server.countByMethod("PUT"), 0, "没读到字节 ⇒ 一个 PUT 都不该有");
+			assert.ok(
+				h.notices.includes("localFileMissing"),
+				`★ 要如实说"那个文件不在了"：${JSON.stringify(h.notices)}`
+			);
+		} finally {
+			await h.close();
+		}
+	}
+	{
+		// ⚠️ 本机特有的结局之二：**超上限** ⇒ 读进来之前就该拦下（`stat` 先量）
+		const h = await makeHarness({ maxBytes: 4 });
+		const bigDir = join(h.root, "..", "acc-local-big");
+		try {
+			await mkdir(bigDir, { recursive: true });
+			const big = join(bigDir, "shot.png");
+			await writeFile(big, Buffer.from([1, 2, 3, 4, 5]));
+			const bigUrl = "file:///" + big.split("\\").join("/");
+			// ⚠️ 笔记要先写出来：执行器**先读笔记再取字节**（读不到就不下载/不读盘）——
+			// 少了这一步，测到的是 `no-note` 而不是这里要守的超限判据。
+			await h.writeNote(NOTE, `![x](${bigUrl})\n`);
+			const tooLarge = await h.cache(bigUrl, NOTE);
+			assert.equal(tooLarge.status, "too-large", `★ 超上限：先量后读，不把整份文件搬进内存（实际 ${tooLarge.status} / ${tooLarge.error ?? ""}）`);
+			assert.equal(h.server.countByMethod("PUT"), 0, "超上限 ⇒ 不上传");
+		} finally {
+			await rm(bigDir, { recursive: true, force: true });
+			await h.close();
+		}
+	}
+	{
+		// ⭐ 非桌面（手机）：本机绝对路径在移动端**不存在** ⇒ 一个请求都不发、也不出声
+		const h = await makeHarness({ isDesktop: () => false });
+		try {
+			const fileUrl = "file:///" + join(h.root, "..", "whatever.png").split("\\").join("/");
+			await h.writeNote(NOTE, `![x](${fileUrl})\n`);
+			const outcome = await h.cache(fileUrl, NOTE);
+			assert.equal(outcome.status, "refused", "★ 非桌面 ⇒ refused（手机读不到本机绝对路径）");
+			assert.equal(h.server.countByMethod("PUT"), 0, "★ 一个字节都不该上传");
+			assert.deepEqual(h.notices, [], "★ 也不出声：那是平台事实，不是用户做错了什么");
 		} finally {
 			await h.close();
 		}

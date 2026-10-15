@@ -138,21 +138,56 @@ export function shouldShowCacheLimit(action: unknown): boolean {
 }
 
 /**
- * 「释放本地空间」（F18：清掉存量副本）这一项要不要显示。
+ * 「清理本地副本」（F18）在**这一档**下该清到什么程度。
  *
- * ⚠️ 只在**「不留副本」**那一档显示 —— 判据是"这一档的含义**就是**本地不留副本"，
- * 而这个按钮做的正是把那条含义**应用到已经存在的那批副本**上（设计 §20.10）。
+ * ## ⭐ 为什么这是一处定义、两个调用方
  *
- * ⚠️ 在「保留副本」档**必须**藏起来：用户刚说了"我要留副本"，再给他一个
- * "把副本全删掉"的按钮是**自相矛盾**的配置（与"隐藏缓存目录"同一条纪律：
- * 界面上的两个元素不该互相打架）。
+ * 设置页的显隐谓词（`shouldShowReleaseSpace`）与流程本身（`release-space-flow` 拿它算目标）
+ * 必须**同一个来源**：分成两处必然在某次改动里分叉，而分叉的表现是
+ * "按钮在，点了一点动静都没有"或有动静却清错了量 —— 都不报错。
  *
- * ⚠️ 但**不能**并入 `shouldShowCacheLimit` / `shouldShowFallbackDownload`：
- * 那两条问的是"这一档**会不会产生**副本"，这一条问的是"有没有**存量**要清" ——
- * 三个问题各自都可能单独变（例如将来给「保留副本」档也开一个"只清未引用的"入口）。
+ * | 档位 | 上限 | 目标 | 按钮 |
+ * |---|---|---|---|
+ * | 不留副本 | （隐藏） | `all`（一份不留）| 显示 —— 这一档的含义**就是**本地不留副本，按钮把它应用到**已有的**那批上（设计 §20.10） |
+ * | 保留副本 | > 0 | `limit`（清到上限以内）| 显示 —— 上限是"**总量**"的承诺，手动入口只是"**立刻**执行它"（不比后台多删什么，只是不等那 ≤10 分钟） |
+ * | 保留副本 | 0 / 没设 | `none` | **不显示** —— 不限量就谈不上"清到多少" |
+ * | 非法值 | 非法值 | `none` | **不显示** |
+ *
+ * ⚠️ 最后一行是刻意的：坏值**不**落回 `all`。那是三种解释里**最具破坏性**的一种，
+ * 而"读不出来的值"没有任何理由触发它（`mergePluginSettings` 已经在入口校验过一遍，
+ * 这里只是不让"再往下一层出问题时"变成一次误删）。
+ *
+ * ⚠️ 1.2.0～1.2.2 的旧口径在这里被**推翻**了：那时这个按钮**只在「不留副本」档显示**，
+ * 理由是"在保留档显示它 = 用户刚说要留副本、却给他一个把副本全删掉的按钮，自相矛盾"。
+ * 现在按钮在保留档下清的是**用户自己设的上限**（而不是全删）⇒ 那条理由自动消失；
+ * 而反过来，旧口径留下的缺口正是用户 2026-10-15 报的那个：**设了上限、想立刻腾空间，
+ * 却找不到任何手动入口**（只能等后台那一轮）。
  */
-export function shouldShowReleaseSpace(action: unknown): boolean {
-	return action === "trash";
+export type LocalCopyCleanupTarget =
+	| { kind: "all" }
+	| { kind: "limit"; mb: number }
+	| { kind: "none" };
+
+/**
+ * 档位（+ 上限）→ 清理目标。
+ *
+ * ⚠️ 上限的口径与 `eviction.ts` 的 `megabytesToBytes` **必须一致**（非数 / 负数 / NaN / 0
+ * 都算"不限制"）：两处要是分叉，设置里"500"就会在后台与手动之间变成两个数。
+ */
+export function localCopyCleanupTarget(action: unknown, cacheLimitMb: unknown): LocalCopyCleanupTarget {
+	if (isCacheDisabled(action)) return { kind: "all" };
+	const mb =
+		typeof cacheLimitMb === "number" && Number.isFinite(cacheLimitMb) ? Math.floor(cacheLimitMb) : 0;
+	return mb > 0 ? { kind: "limit", mb } : { kind: "none" };
+}
+
+/**
+ * 「释放本地空间」（F18）那一项要不要显示。
+ *
+ * ⚠️ 判据**只**来自 `localCopyCleanupTarget`（见上）—— 别再在这里写第二套条件。
+ */
+export function shouldShowReleaseSpace(action: unknown, cacheLimitMb?: unknown): boolean {
+	return localCopyCleanupTarget(action, cacheLimitMb).kind !== "none";
 }
 
 /**

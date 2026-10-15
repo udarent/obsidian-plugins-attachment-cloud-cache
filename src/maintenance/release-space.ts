@@ -1,5 +1,5 @@
 /**
- * 「清理已上传附件的本地占用」的**纯判定**（F18：候选只来自索引、且必须带远端链接；确认后逐个 HEAD 复核再删）。
+ * 「清理本地副本」的**纯判定**（F18）。
  *
  * ## 它解决什么
  *
@@ -7,41 +7,45 @@
  * "把图片改成远程链接之后清掉本地那份"。笔记里存的**始终是远端地址**（我们从没改写过），
  * 所以本地那份只为"离线可用"服务：删掉它，图照常显示，代价只是下次看时重新下载一遍。
  *
- * ## ⭐ 它不是独立功能：它是「不留副本」那一档的**存量部分**
+ * ## ⭐⭐ 目标来自档位（2026-10-15，用户报告"上限 500 时清理应留下 500 而不是全清"）
  *
- * 同一个档位两段行为（2026-10-12 用户定，D-19）：
+ * 同一个按钮在两种档位下问的是**两个问题**，所以 `keepBytes` 是必填的：
  *
- * | 段 | 触发 | 删法 |
+ * | 档位 | 目标 | 顺序 |
  * |---|---|---|
- * | **新上传** | 自动（上传成功后） | 回收站（`planLocalCopy` ⇒ `trash`） |
- * | **存量**（本模块） | **用户主动确认** | **直接删** + 逐个云端 HEAD 前置 |
+ * | **不留副本** | `0` = 一份不留 | 先大的（清单先给能腾得多的） |
+ * | **保留副本 + 上限 N** | `N` = 清到上限以内 | 最久没用过的先走 + 10 分钟宽限（= 后台淘汰那一套） |
  *
- * ⚠️ 两段删法**故意不同**：判据是"**要不要立刻释放空间**"（设计 §20.16 #7）——
- * 新上传是自动动作、不要求立刻腾空间 ⇒ 回收站；存量清理的目的**就是**腾空间，
- * 而回收站（系统回收站与 `.trash`）**不释放磁盘空间**，所以必须直接删。
+ * ⚠️⚠️ **两条路的池子是同一个**：台账 ∩ **带远端链接** ∩ 磁盘上还在。
+ * 用户 2026-10-15 特意纠正过一次"要不要把没人引用的也一起清"：**不要** ——
+ * 没人引用的副本可能还要**连云端对象一起删**（R17 三档询问会问用户），
+ * 那是**另一个决定**；而这里只是腾空间。⇒ 判据 ③ 是**硬门槛**，换目标也不放宽。
+ * 代价如实说：孤儿占着空间时，这批清完**总占用仍可能高于上限** ——
+ * 结果通知里会单独说明那部分字节去哪处理（`unlinkedBytes`）。
  *
- * ## 四条判据，缺一不进候选
+ * ⭐ **上限那条路直接复用 `eviction.ts` 的挑选规则**（`planEviction`）：池过滤在**输入**上做，
+ * 顺序与宽限都只有一份定义。后台淘汰那边的池更宽（它会连没人引用的副本一起淘汰，
+ * 那是**容量**机制的既定行为）—— 两者的差别是**刻意**的，见 `single-pool` 那段注释。
+ *
+ * ## 「不留副本」那一路的四条判据，缺一不进候选
  *
  * 1. **索引里有记录** —— 索引外的文件一律不碰（那可能是用户自己的附件，见 `audit.ts` 文件头）；
  * 2. **`uploaded` 台账命中** —— 证明"这个对象是我们传上去的"，也保证它**有远端地址**；
- * 3. **⭐ 带远端链接** —— 该 key 出现在**某篇笔记或画布的引用里**（`referencedKeys`）。
- *    这条来自用户口径"只清理有远端链接的"，同时也是**分工线**：没有远端链接的那些
- *    （= 孤儿，没人引用了）**不归这里管** —— 那是 R17 三档询问里"只删本地"的活。
- *    两类**互不重叠**，别把这一条放宽成"反正都能重新下载"；
+ * 3. **⭐ 带远端链接** —— 该 key 出现在**某篇笔记或画布的引用里**（`referencedKeys`）；
  * 4. **磁盘上真的还在** —— 不在的话没有可删的东西（那条记录该由自愈摘，见 `self-heal.ts`）。
  *
- * 第 4 条在执行时还会再确认一次"云端现在确实还有它"（`confirmRemote`），
- * 那一步在 `run.ts` 里，不在纯判定层 —— 判定层不碰网络。
+ * 第 4 条在执行时还会再确认一次"云端现在确实还有它"（`confirmRemote`，见 `run.ts` 的
+ * `deleteVerifiedCopies`）—— 那一步不在纯判定层，判定层不碰网络。
  *
  * ## ⚠️ `referencedKeys` 是**必填**的，而且方向与 `eviction.ts` 相反
  *
  * `buildEvictionCandidates` 把 `referencedKeys` 省略当成"**一律当作已引用**"（宁可少删）；
- * 这里反过来：**没有引用扫描结果就一个候选都不给** —— 因为"带远端链接"是本功能的**准入条件**，
- * 而不是排序偏好。两处默认值方向相反是有意的：谁更保守的方向不同
- * （淘汰里"当作已引用"是保守；这里"当作没有链接"才是保守）。
+ * 这条反过来：**没有引用扫描结果就一个候选都不给** —— 因为"带远端链接"是
+ * 它的**准入条件**，而不是排序偏好。两处默认值方向相反是有意的：谁更保守的方向不同。
  */
 
 import type { CacheEntry } from "../cache/index";
+import { buildEvictionCandidates, planEviction } from "./eviction";
 // 路径归一用**共享**的实现（与淘汰、审计同源）：调用方要拿索引里的路径去磁盘上找，
 // 两侧必须用同一套规则，否则"索引里写着 A、磁盘上叫 B"会被判成"文件不在"。
 import { normalizeVaultPath } from "../vault-files";
@@ -69,21 +73,154 @@ export interface ReleaseSpaceInput {
 	 * ⚠️ **必填**：给不出来（例如没扫引用）就不该让用户"清理" —— 见文件头的说明。
 	 */
 	referencedKeys: ReadonlySet<string>;
+	/** ⭐ 清理目标：清完**最多**保留多少字节。`0` = 一份不留（「不留副本」档）。 */
+	keepBytes: number;
+	/**
+	 * 当前时间（epoch ms）。只有目标 > 0 那条路用得上（宽限期要它），
+	 * 注入是为了**可穷举** —— 拿 `Date.now()` 的判定没法写"刚用过"的用例。
+	 */
+	now: number;
+	/** 目标 > 0 时：刚用过多久之内的副本不参与（默认 `DEFAULT_EVICTION_GRACE_MS`）。 */
+	graceMs?: number;
 }
 
 export interface ReleaseSpaceSelection {
-	/** 可清理的副本，**按字节降序**（清单先给大的，用户一眼看到能腾多少）。 */
+	/** 可清理的副本，**按该走的顺序**排好（第一个最该走）。 */
 	candidates: ReleaseSpaceCandidate[];
 	/** 合计可释放字节（**清单口径**，不代表实际释放量 —— 执行时会再逐个确认云端）。 */
 	bytes: number;
 	/** 其余判据都过、但磁盘上已经没有了：没有可删的东西（自愈会摘掉那些记录）。 */
 	missing: number;
+	/** 磁盘上**确实还在**的副本的字节和（目标 > 0 时用它比目标）。 */
+	totalBytes: number;
+	/** 目标（字节）。 */
+	keepBytes: number;
+	/**
+	 * 清完之后**预计**还占多少（**只算本流程能动的这批**）。
+	 *
+	 * ⚠️ 大于 `keepBytes` 就说明这一轮**清不到目标**（有副本在宽限期内 / 可删的已经挑完），
+	 * 界面必须如实说 —— 报一个达不到的数字等于骗用户。
+	 */
+	projectedBytes: number;
+	/**
+	 * 磁盘上还留着、但**没有任何笔记引用**的、我们上传过的副本有多少字节。
+	 *
+	 * ⚠️ 它**不在**上面任何一个数里 —— 那是刻意的：这一类归 R17 的三档询问
+	 * （可能连云端一起删），本流程不碰。它唯一的用途是**如实解释**
+	 * "为什么清完了总占用仍可能高于上限"。
+	 */
+	unlinkedBytes: number;
 }
 
 /**
  * 挑出可清理的本地副本。**纯函数**：不改索引、不碰文件、不联网。
  */
 export function planReleaseSpace(input: ReleaseSpaceInput): ReleaseSpaceSelection {
+	// ⚠️ 目标必须是**有限的非负数**。读不出来（NaN / undefined / 别的类型）⇒ 一个候选都不给：
+	// "读不出目标"唯一安全的解释是**这次什么都别删**。
+	//
+	// ⚠️ 别把它当成 0 —— 0 在这里是"一份不留"，是三种解释里**最具破坏性**的一种，
+	// 而"读不出来的值"没有任何理由触发它。调用方本来也该在这一层之前拦掉坏值
+	//（`ui/settings-logic.ts` 的 `localCopyCleanupTarget` 就把它映射成"没有目标 ⇒ 按钮不显示"）。
+	if (!Number.isFinite(input.keepBytes) || input.keepBytes < 0) {
+		return {
+			candidates: [],
+			bytes: 0,
+			missing: 0,
+			totalBytes: 0,
+			keepBytes: 0,
+			projectedBytes: 0,
+			unlinkedBytes: 0,
+		};
+	}
+
+	const keepBytes = Math.floor(input.keepBytes);
+	const planned = keepBytes > 0 ? planToLimit(input, keepBytes) : planWholeStock(input);
+	return { ...planned, keepBytes };
+}
+
+/**
+ * 目标 > 0：**把这批在用的副本清到上限以内**。
+ *
+ * ## ⭐ 池 = 台账 ∩ 带远端链接 —— 与「不留副本」档**同一个池**
+ *
+ * 目标换了（从"一份不留"换成"清到 N"），但**能动的范围不变**。用户 2026-10-15 特意纠正过
+ * 这一点，理由是**两种清理行为不同**：
+ *
+ * - **没人引用的副本**可能还要**连云端对象一起删**（R17 三档询问里那一条，会问用户
+ *   "只删本地 / 一起删 / 保留"）—— 那是一个**要用户参与的决定**；
+ * - 而这里的"清到上限"只是**腾空间**，腾完还得保留"以后再看到它还能显示"的语义。
+ *
+ * ⇒ 这条流程**不替 R17 做决定**，也不去碰它那一类。代价如实记在结果通知里：
+ * 有孤儿占着空间时，这批清了**总占用仍可能高于上限**（剩下的那部分会单独说明去哪处理）。
+ *
+ * ## ⭐ 复用 `planEviction`：顺序与宽限期都只有一份定义
+ *
+ * 池过滤在**输入**上做（`entries` 先筛），挑选规则仍然走 `planEviction` ——
+ * 于是"最久没用过的先走"与"10 分钟内用过的不动"这两条**不会在这里第二次实现**
+ * （重复实现的那一份迟早在某次改动里与后台分叉，而且不报错）。
+ * 池里每一份都带远端链接 ⇒ `planEviction` 的第一档"未引用优先"在这里恒不起作用。
+ */
+function planToLimit(input: ReleaseSpaceInput, keepBytes: number): Omit<ReleaseSpaceSelection, "keepBytes"> {
+	const pool = input.entries.filter(
+		(entry) => input.uploaded.has(entry.key) && input.referencedKeys.has(entry.key)
+	);
+	const { candidates, presentBytes, missing } = buildEvictionCandidates({
+		entries: pool,
+		present: input.present,
+		referencedKeys: input.referencedKeys,
+	});
+	const plan = planEviction({
+		candidates,
+		totalBytes: presentBytes,
+		limitBytes: keepBytes,
+		now: input.now,
+		...(input.graceMs === undefined ? {} : { graceMs: input.graceMs }),
+	});
+
+	return {
+		candidates: plan.evict.map((victim) => ({
+			key: victim.key,
+			cachePath: victim.cachePath,
+			bytes: victim.bytes,
+		})),
+		bytes: plan.reclaimable,
+		missing,
+		// ⚠️ 这两个数是"**这批**在用的副本"的：上限档的界面话术必须跟着说"这批"，
+		// 不能声称"总占用已经降到上限以内" —— 孤儿那部分不在这个数里。
+		totalBytes: plan.totalBytes,
+		projectedBytes: plan.projectedBytes,
+		unlinkedBytes: unlinkedPresentBytes(input),
+	};
+}
+
+/**
+ * 磁盘上还留着、但**没有任何笔记引用**的、我们上传过的副本有多少字节。
+ *
+ * 只有一个用途：**如实解释"为什么清完了占用还高于上限"** ——
+ * 那一类归 R17 的三档询问（可能连云端一起删），本流程按纪律不碰它。
+ * 它是纯内存计算，没有额外 I/O。
+ */
+function unlinkedPresentBytes(input: ReleaseSpaceInput): number {
+	let total = 0;
+	for (const entry of input.entries) {
+		const path = normalizeVaultPath(entry.cachePath);
+		if (!path) continue;
+		if (!input.uploaded.has(entry.key)) continue;
+		if (input.referencedKeys.has(entry.key)) continue;
+		if (!input.present(path)) continue;
+		total += Math.max(0, entry.size);
+	}
+	return total;
+}
+
+/**
+ * 目标 = 0：**一份不留**（「不留副本」档的存量部分）。
+ *
+ * 候选顺序是"先大的"（而不是"最久没用过的"）：这一档没有"留谁"的问题（全都要走），
+ * 于是顺序只该服务一件事 —— 让清单第一时间给出**能腾多少**。
+ */
+function planWholeStock(input: ReleaseSpaceInput): Omit<ReleaseSpaceSelection, "keepBytes"> {
 	const candidates: ReleaseSpaceCandidate[] = [];
 	// 同一路径只算一次：索引理论上不会有两条记录指向同一份文件，
 	// 但"理论上"不是判据 —— 而**报给用户的字节数**会被重复计入。
@@ -123,5 +260,6 @@ export function planReleaseSpace(input: ReleaseSpaceInput): ReleaseSpaceSelectio
 	let bytes = 0;
 	for (const candidate of candidates) bytes += candidate.bytes;
 
-	return { candidates, bytes, missing };
+	// 这一档的目标就是"一份不留"：池里所有还在磁盘上的副本都是候选 ⇒ 清完预计剩 0。
+	return { candidates, bytes, missing, totalBytes: bytes, projectedBytes: 0, unlinkedBytes: unlinkedPresentBytes(input) };
 }

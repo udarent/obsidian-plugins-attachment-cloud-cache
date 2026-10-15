@@ -18,7 +18,7 @@ local copy — the file itself — stays in your vault to do the rendering. **Ze
 
 ![Paste an image, a PDF and an audio clip into a note: each one uploads to your own storage, a copy of each stays in your vault, and all three still render after the storage goes offline](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
 
-*Paste an image, a PDF and an audio clip → each uploads → the note keeps a link, each file stays as its own offline copy. Then the storage is stopped, and all three still work.*
+*Paste an image, a PDF and an audio clip → each uploads → the note keeps a link, each file stays as its own local copy. Then the storage is stopped, and all three still work.*
 
 ## Why use it
 
@@ -76,10 +76,10 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | **Test connection** | One signed request, then one **credential-free** request to the address your links would use. |
 | **Upload new attachments automatically** | On by default; off leaves new files local only. |
 | **Where the local copy goes** | Keep the file where it is (default) or delete it after uploading — the file itself is the copy. ⚠️ Delete turns caching off: uploads and link rewriting still happen, but nothing is fetched back, so **nothing works offline**. |
-| **Free up local space** | Shown for "delete" only: clears the local copies of attachments still linked from a note. Deleted **for good, not trashed**, so the space comes back at once. |
+| **Free up local space** | Clears the local copies of attachments still linked from a note. Deleted **for good, not trashed**, so the space comes back at once. With a limit set, it only trims down **to that limit** — it does not clear everything, and copies no note links to are left to the unreferenced-attachment cleanup (they may need removing from your storage too). |
 | **Local copy limit (MB) · Download missing copies** | `0` = no limit. Least-recently-used copies are trimmed first, and only after confirming the object is still in your storage. Auto-download stays off while "delete" is selected. |
-| **Handle files from other sites** | Off by default; while off, nothing off-site is touched automatically. On, an off-site file is downloaded, uploaded and its link rewritten exactly like a local paste — the copy setting included. **Which sites to handle** (`All` / `All except the ones listed` / `Only the ones listed`) filters the automatic handling only — picking files by hand is never restricted. `example.com` also matches `img.example.com`. |
-| **Pick specific files** | Tick individual off-site files; only those are fetched. Works whether or not the switch above is on. |
+| **Handle files from other sites like ordinary files** | Off by default; while off, nothing off-site is touched automatically. On, an off-site file is downloaded, uploaded and its link rewritten exactly like a local paste — the copy setting included. **Which sites to handle** (`All` / `All except the ones listed` / `Only the ones listed`) filters the automatic handling only — picking files by hand is never restricted. `example.com` also matches `img.example.com`. |
+| **Pick specific files** | Tick individual off-site files; only those are fetched. Works whether or not the switch above is on. **Local files outside your vault** (`file:///D:/…`, e.g. a screenshot from a chat app) are listed here too and go through the same chain — desktop only, and only the kinds that can be embedded in a note (image/audio/video/PDF). |
 | **When an attachment is no longer linked** | Once an uploaded file loses its last link from any note or canvas: ask (default) / just show a notice / do nothing. Cleanup always needs your explicit confirmation — this only decides whether you are told, and how. |
 | **Compatibility mode** | Advanced. Addresses objects as `endpoint/bucket/key`: keep it on for Cloudflare R2, MinIO and most self-hosted services. |
 
@@ -121,7 +121,7 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 
 ## Privacy & security
 
-- **It normally talks only to your storage** — no telemetry, no analytics, nothing outside your vault.
+- **It normally talks only to your storage** — no telemetry, no analytics, no requests outside your vault. ⚠️ The one exception is a **file outside your vault that you tick yourself** in "Pick specific files" (e.g. a screenshot at `file:///D:/…`): reading it is something you asked for.
 - **One optional feature reaches other sites, and it never turns itself on** — off by default; turning it on is the
   consent, and the site list narrows it further. The request carries nothing beyond the file's own address.
 - **A web page is never stored** — `text/html` and other `text/*` answers are refused rather than uploaded.
@@ -166,9 +166,9 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 
 [安装](#安装) · [版本发布](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases) · [反馈问题](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues) · 需要 Obsidian **1.13.0+**（[为什么](#环境要求)）
 
-![演示：往笔记里粘贴一张图片、一个 PDF 和一段音频 —— 它们各自上传到你的存储，文件留在库中作为离线副本；随后把存储整个停掉，三者仍然正常显示与播放](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
+![演示：往笔记里粘贴一张图片、一个 PDF 和一段音频 —— 它们各自上传到你的存储，文件留在库中作为本地副本；随后把存储整个停掉，三者仍然正常显示与播放](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
 
-*粘贴图片、PDF 和音频 → 各自上传 → 笔记里各留一条链接，文件留在库中作为离线副本。随后把**存储整个停掉**，三者照常工作。*
+*粘贴图片、PDF 和音频 → 各自上传 → 笔记里各留一条链接，文件留在库中作为本地副本。随后把**存储整个停掉**，三者照常工作。*
 
 ## 为什么用它
 
@@ -223,10 +223,10 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | **测试连接** | 先发一次签名请求，再**不带凭据**请求一次「你笔记里会写的那条地址」。 |
 | **新增附件自动上传** | 默认开启；关闭后新文件只存在本地。 |
 | **本地副本的处理** | 留在原处（默认）或上传后删除 —— **那份文件本身就是**副本。⚠️ 选「删除」等于关闭缓存：照常上传、照常改写链接，但不取回副本，所以**离线什么都看不到**。 |
-| **释放本地空间** | 只在选「删除」时显示：清掉笔记里仍引用着的附件本地副本。**永久删除、不进回收站**，空间立刻释放。 |
+| **释放本地空间** | 清掉笔记里仍引用着的附件本地副本。**永久删除、不进回收站**，空间立刻释放。设了上限时它只清**到上限为止**（不会全清）；没有任何笔记引用的副本留给「没人引用的附件」那条清理 —— 那些可能要连云端对象一起处理。 |
 | **本地副本上限（MB） · 缺本地副本时自动下载** | `0` 表示不限制。超限时按最近最少使用清理，且只有确认你的存储里仍有那个对象之后才会删。选「删除」时自动下载不生效。 |
 | **站外文件按普通附件处理** | 默认关闭；关着时站外的东西一步都不会被自动碰。打开后，站外文件会被下载、上传并改写链接 —— 与粘贴一张本地附件完全一样（副本那一档也一样适用）。**处理哪些站点**（`所有站点` / `除名单外` / `仅名单内`）只筛自动处理 —— 手动挑选不受限制。写 `example.com` 也会命中 `img.example.com`。 |
-| **挑选要缓存的文件** | 勾选具体的站外文件，只有勾中的会被取。开关关着也能用。 |
+| **挑选要缓存的文件** | 勾选具体的站外文件，只有勾中的会被取。开关关着也能用。**库外的本机文件**（`file:///D:/…`，比如聊天软件的截图）也在这里出现，走同一条链 —— 仅桌面端，且只收能嵌进笔记的那几类（图 / 音 / 视频 / PDF）。 |
 | **附件没人引用时** | 某个已上传的附件失去笔记或画布里的最后一条引用之后：弹窗问我（默认）/ 只给一条通知 / 什么都不做。清理永远需要你明确确认 —— 这一项只决定要不要告诉你、用哪种方式。 |
 | **兼容模式** | 高级。按「地址/桶/键」寻址：Cloudflare R2、MinIO 与多数自建服务都要开着。 |
 
@@ -263,7 +263,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 
 ## 隐私与安全
 
-- **默认只连你自己的存储** —— 不含遥测、统计，也不碰 vault 之外的文件。
+- **默认只连你自己的存储** —— 不含遥测、统计，也不会向 vault 之外发请求。⚠️ 唯一例外是**你自己在「挑选要缓存的文件」里勾中**的库外本机文件（例如 `file:///D:/…` 的截图）：读它是你要求的动作。
 - **有一个可选功能会访问其它站点，而且它不会自己启动** —— 默认关闭，打开它就是同意，站点名单再把范围收窄；
   请求里除文件地址本身不带任何其它内容。
 - **网页永远不会被存下来** —— `text/html` 与其它 `text/*` 一律拒收，而不是传上去。

@@ -211,6 +211,7 @@ export async function runMutations({ source, entries, reexportDefault, suite, mu
 	//
 	// ⚠️ 这里只**预检**、不代替运行时的判断：真正执行前仍会再查一次
 	//（源码在运行过程中会被临时改写，条件与此刻不同）。
+	const countOf = (text, needle) => text.split(needle).length - 1;
 	const staleAnchors = mutations.filter((mutation) => !original.includes(mutation.from));
 	if (staleAnchors.length > 0) {
 		console.log(`✗ ${staleAnchors.length} 条变异的锚点在 ${source} 里找不到 —— 先更新变异脚本：`);
@@ -218,6 +219,25 @@ export async function runMutations({ source, entries, reexportDefault, suite, mu
 			// 只打第一行，避免把多行锚点刷屏
 			console.log(`    · ${mutation.name}`);
 			console.log(`      期望源码含：${JSON.stringify(mutation.from.split("\n")[0])}`);
+		}
+		await rm(backupPathFor(sourcePath), { force: true });
+		process.exit(1);
+	}
+
+	// ⚠️⚠️ **锚点必须唯一**，这条要单独查（2026-10-15 踩到，而且它是**假绿**）。
+	//
+	// 执行时用的是 `original.replace(from, to)` —— 只替换**第一处**。所以当一个 `from`
+	// 在源码里出现两遍时，变异会静默改到**另一处**：套件照样通过 ⇒ 报"漏过（测试无牙）"，
+	// 于是人跑去补断言（而那行本来就有牙），真相却是锚点写得不唯一。
+	// 实测那一次：新加的帮手函数里有一行与主路径逐字相同（`if (!input.uploaded...` 那句），
+	// 而帮手在上面 ⇒ 变异改的是帮手，主路径毫发无损。
+	// ⇒ 与"锚点找不到目标"并列，这两种都是"检查没在检查"的形态，必须在跑之前就报出来。
+	const ambiguousAnchors = mutations.filter((mutation) => countOf(original, mutation.from) > 1);
+	if (ambiguousAnchors.length > 0) {
+		console.log(`✗ ${ambiguousAnchors.length} 条变异的锚点在 ${source} 里**不唯一** —— 会静默改到别处，先加够上下文：`);
+		for (const mutation of ambiguousAnchors) {
+			console.log(`    · ${mutation.name}`);
+			console.log(`      出现 ${countOf(original, mutation.from)} 次：${JSON.stringify(mutation.from.split("\n")[0])}`);
 		}
 		await rm(backupPathFor(sourcePath), { force: true });
 		process.exit(1);
@@ -263,9 +283,18 @@ export async function runMutations({ source, entries, reexportDefault, suite, mu
 	let allCaught = true;
 
 	for (const mutation of mutations) {
-		if (!original.includes(mutation.from)) {
-			console.log(`✗ 变异点未找到（脚本需更新）：${mutation.name}`);
-			console.log(`   期望源码含：${JSON.stringify(mutation.from.slice(0, 76))}`);
+		// ⚠️ 运行时**也要**查（预检只是"跑之前先看一眼"）：`original` 在每轮之间会被还原，
+		// 但这条判断的代价几乎为零，而漏掉它的后果是一次假绿。
+		// 只允许**恰好出现一次**：0 次 = 锚点过期；≥2 次 = 会改到别处（见预检那段的说明）。
+		const occurrences = countOf(original, mutation.from);
+		if (occurrences !== 1) {
+			console.log(
+				`✗ ${occurrences === 0 ? "变异点未找到（脚本需更新）" : "锚点不唯一（会改到别处）"}：${mutation.name}`
+			);
+			console.log(
+				`   期望源码含：${JSON.stringify(mutation.from.slice(0, 76))}` +
+					(occurrences > 1 ? `（实际出现 ${occurrences} 次）` : "")
+			);
 			allCaught = false;
 			continue;
 		}

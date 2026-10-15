@@ -5,7 +5,7 @@
  *
  * 这个语义原本在 **8 个文件里各写了一份**（`cache/store`、`core/download`、
  * `core/external-cache`、`core/ingest`、`core/transfer`、`host/editor-bridge`、
- * `host/site-store`、`maintenance/run`）—— 同一个语义、两种写法。
+ * `maintenance/run`）⚠️ 原先还有 `host/site-store`，那个文件已随 1.2.0 删除—— 同一个语义、两种写法。
  *
  * 抽出来的真正理由不是少写几行，而是**同一个语义只能有一处**：
  * 8 份里任何一份被改坏（比如有人为了排查改成返回 `error.stack`），

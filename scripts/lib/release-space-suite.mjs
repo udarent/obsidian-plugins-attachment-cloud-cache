@@ -19,6 +19,19 @@ function entry(key, cachePath, size) {
 export function runReleaseSpaceSuite(mod) {
 	const { planReleaseSpace } = mod;
 
+	/** 判定用的"现在"（注入是为了可穷举 —— 宽限期与 `Date.now()` 没法一起测）。 */
+	const NOW = 1_700_000_000_000;
+
+	/**
+	 * **存量档**（「不留副本」：目标 = 一份不留）的输入。
+	 *
+	 * ⚠️ 2026-10-15 起 `planReleaseSpace` 多了一个**必填**的 `keepBytes`（目标）：
+	 * 同一个按钮在两种档位下问的是两个问题（全清 / 清到上限以内），
+	 * 所以夹具必须**说明自己站在哪一档**，不能再靠默认值蒙混。
+	 * 老用例全都是存量档 ⇒ 一律走这个帮手；上限档的用例直接调 `planReleaseSpace`。
+	 */
+	const planStock = (input) => planReleaseSpace({ keepBytes: 0, now: NOW, ...input });
+
 	const path1 = "attachments/报告-aaaaaaaa.png";
 	const path2 = "attachments/照片-bbbbbbbb.png";
 	const key1 = "报告-aaaaaaaa.png";
@@ -32,7 +45,7 @@ export function runReleaseSpaceSuite(mod) {
 	// 1. 四条判据全过 ⇒ 一个候选，路径/字节都对
 	// ============================================================
 	{
-		const selection = planReleaseSpace({
+		const selection = planStock({
 			entries: [entry(key1, path1, 100)],
 			uploaded: allUploaded(key1),
 			referencedKeys: allReferenced(key1),
@@ -54,7 +67,7 @@ export function runReleaseSpaceSuite(mod) {
 	// 本地附件（索引里可能有记录、或者将来某次改动让它有）就会被当成"删了随时能下载"。
 	// ============================================================
 	{
-		const selection = planReleaseSpace({
+		const selection = planStock({
 			entries: [entry(key1, path1, 100)],
 			uploaded: allUploaded(), // 台账里没有它
 			referencedKeys: allReferenced(key1),
@@ -73,7 +86,7 @@ export function runReleaseSpaceSuite(mod) {
 	// 而孤儿恰恰是**用户可能还想留着**的那一类（笔记删了、图还在）。
 	// ============================================================
 	{
-		const selection = planReleaseSpace({
+		const selection = planStock({
 			entries: [entry(key1, path1, 100)],
 			uploaded: allUploaded(key1),
 			referencedKeys: allReferenced(), // 没有任何笔记引用它
@@ -90,7 +103,7 @@ export function runReleaseSpaceSuite(mod) {
 	// 两处默认值方向相反是有意的 —— 谁更保守的方向不同。
 	// ============================================================
 	{
-		const selection = planReleaseSpace({
+		const selection = planStock({
 			entries: [entry(key1, path1, 100), entry(key2, path2, 200)],
 			uploaded: allUploaded(key1, key2),
 			referencedKeys: new Set(),
@@ -106,7 +119,7 @@ export function runReleaseSpaceSuite(mod) {
 	// 跑完却发现一个都没删）；而那些记录该由自愈去摘（不是这条命令的事）。
 	// ============================================================
 	{
-		const selection = planReleaseSpace({
+		const selection = planStock({
 			entries: [entry(key1, path1, 100), entry(key2, path2, 200)],
 			uploaded: allUploaded(key1, key2),
 			referencedKeys: allReferenced(key1, key2),
@@ -126,7 +139,7 @@ export function runReleaseSpaceSuite(mod) {
 	{
 		const big = "zzz-cccccccc.png";
 		const small = "aaa-dddddddd.png";
-		const selection = planReleaseSpace({
+		const selection = planStock({
 			entries: [
 				entry(small, "attachments/aaa-dddddddd.png", 10),
 				entry(big, "attachments/zzz-cccccccc.png", 900),
@@ -144,7 +157,7 @@ export function runReleaseSpaceSuite(mod) {
 		// 同样大：按 key 字典序 —— 与输入顺序无关
 		const e = "ee-eeeeeeee.png";
 		const c = "cc-cccccccc.png";
-		const stable = planReleaseSpace({
+		const stable = planStock({
 			entries: [entry(e, "attachments/ee-eeeeeeee.png", 50), entry(c, "attachments/cc-cccccccc.png", 50)],
 			uploaded: allUploaded(e, c),
 			referencedKeys: allReferenced(e, c),
@@ -164,7 +177,7 @@ export function runReleaseSpaceSuite(mod) {
 	// 而报给用户的字节数一旦重复，他会按一个达不到的数字去期待。
 	// ============================================================
 	{
-		const selection = planReleaseSpace({
+		const selection = planStock({
 			entries: [entry(key1, path1, 100), entry("副本-bbbbbbbb.png", path1, 900)],
 			uploaded: allUploaded(key1, "副本-bbbbbbbb.png"),
 			referencedKeys: allReferenced(key1, "副本-bbbbbbbb.png"),
@@ -178,7 +191,7 @@ export function runReleaseSpaceSuite(mod) {
 	// 8. 空输入与坏输入：一律不崩、不猜
 	// ============================================================
 	{
-		const empty = planReleaseSpace({
+		const empty = planStock({
 			entries: [],
 			uploaded: allUploaded(),
 			referencedKeys: allReferenced(),
@@ -187,7 +200,7 @@ export function runReleaseSpaceSuite(mod) {
 		assert.deepEqual(empty.candidates, [], "空索引 ⇒ 空候选");
 		assert.equal(empty.bytes, 0);
 
-		const badPath = planReleaseSpace({
+		const badPath = planStock({
 			entries: [entry(key1, "", 100)],
 			uploaded: allUploaded(key1),
 			referencedKeys: allReferenced(key1),
@@ -196,12 +209,129 @@ export function runReleaseSpaceSuite(mod) {
 		assert.equal(badPath.candidates.length, 0, "★ 空路径不得进候选（别拿空串去问宿主）");
 
 		// 索引里的 size 坏掉时不能变成负数（负数字节会被"合计"抹掉别的量）
-		const badSize = planReleaseSpace({
+		const badSize = planStock({
 			entries: [entry(key1, path1, -5)],
 			uploaded: allUploaded(key1),
 			referencedKeys: allReferenced(key1),
 			present: everythingPresent,
 		});
 		assert.equal(badSize.candidates[0].bytes, 0, "★ 坏字节数收敛到 0，而不是把别的数抹掉");
+	}
+
+	// ============================================================
+	// 9. ⭐⭐ 上限档：目标是"清到上限以内"，**不是全清**
+	//
+	// 用户 2026-10-15 报的原话："设置上限 500，清理副本，应该要留下 500，而不是全清"。
+	// 上限档的输入多一个 `keepBytes`，其余判据一个字都不放宽。
+	// ============================================================
+	{
+		/** 一条上限档用的条目（`lastUsedAt` 决定谁先走）。 */
+		const aged = (key, path, size, hoursAgo) => ({
+			...entry(key, path, size),
+			lastUsedAt: NOW - hoursAgo * 60 * 60 * 1000,
+			uploadedAt: "2020-01-01T00:00:00.000Z",
+		});
+
+		// ── ① 只清超出的那部分，不多删 ──
+		const three = [
+			aged("a-aaaaaaaa.png", "attachments/a-aaaaaaaa.png", 100, 100),
+			aged("b-bbbbbbbb.png", "attachments/b-bbbbbbbb.png", 100, 50),
+			aged("c-cccccccc.png", "attachments/c-cccccccc.png", 100, 1),
+		];
+		const trim = planReleaseSpace({
+			entries: three,
+			uploaded: allUploaded(...three.map((item) => item.key)),
+			referencedKeys: allReferenced(...three.map((item) => item.key)),
+			present: everythingPresent,
+			keepBytes: 150, // 总量 300，目标 150 ⇒ 只需腾 150 ⇒ 两份
+			now: NOW,
+		});
+		assert.equal(trim.candidates.length, 2, "★ 只清超出的那部分（目标 150，总量 300 ⇒ 两份就够）");
+		assert.equal(trim.bytes, 200, "★ 可释放量按挑中的那几份算");
+		assert.equal(trim.totalBytes, 300, "总量要如实给出来（界面要拿它说'清完约剩多少'）");
+		assert.equal(trim.projectedBytes, 100, "★ 清完之后预计剩余（≤ 目标）");
+		assert.deepEqual(
+			trim.candidates.map((candidate) => candidate.key),
+			["a-aaaaaaaa.png", "b-bbbbbbbb.png"],
+			"★ 最久没用过的先走（用户的承诺是'保留最近用到的'）"
+		);
+
+		// ── ② 已经在上限以内 ⇒ 一份都不清 ──
+		const under = planReleaseSpace({
+			entries: three,
+			uploaded: allUploaded(...three.map((item) => item.key)),
+			referencedKeys: allReferenced(...three.map((item) => item.key)),
+			present: everythingPresent,
+			keepBytes: 1024,
+			now: NOW,
+		});
+		assert.deepEqual(under.candidates, [], "★ 没超上限 ⇒ 没有该清的东西（按钮那边会说'已经在上限以内'）");
+		assert.equal(under.projectedBytes, 300, "一份不删 ⇒ 预计剩余 = 现有总量");
+
+		// ── ③ ⭐⭐ 上限档**也不动**没人引用的副本（用户 2026-10-15 特意排除） ──
+		//
+		// 理由：没人引用的副本可能还要**连云端对象一起删**（R17 三档询问会问用户 "只删本地 /
+		// 一起删 / 保留"）—— 那是另一个决定；而这里只是腾空间。
+		// ⚠️ 这条**与后台淘汰不同**（后台是容量机制，它先淘汰没人引用的）；
+		// 差别是刻意的，两边各有断言钉着。
+		const orphan = aged("orphan-aaaaaaaa.png", "attachments/orphan-aaaaaaaa.png", 100, 999);
+		const linked = aged("linked-bbbbbbbb.png", "attachments/linked-bbbbbbbb.png", 100, 10);
+		const withOrphan = planReleaseSpace({
+			entries: [orphan, linked],
+			uploaded: allUploaded(orphan.key, linked.key),
+			referencedKeys: allReferenced(linked.key), // ← 只有 linked 被引用
+			present: everythingPresent,
+			keepBytes: 1, // 目标极小 ⇒ 若孤儿在池里，被删的必然是最旧的它（它也更旧）
+			now: NOW,
+		});
+		assert.deepEqual(
+			withOrphan.candidates.map((candidate) => candidate.key),
+			[linked.key],
+			"★★ 上限档只清'带远端链接'的那批 —— 没人引用的那份要留给'连云端一起清'那条流程"
+		);
+		assert.equal(withOrphan.totalBytes, 100, "★ 目标只按**这批**算（孤儿不进总量，否则会误判超限）");
+		assert.equal(
+			withOrphan.unlinkedBytes,
+			100,
+			"★ 孤儿那部分要**单独报出来**（否则用户会问'我设了上限，怎么还占着'）"
+		);
+
+		// ── ④ 刚用过的这一轮不动（与后台同一道宽限期）──
+		const fresh = aged("fresh-aaaaaaaa.png", "attachments/fresh-aaaaaaaa.png", 100, 0);
+		const freshTrim = planReleaseSpace({
+			entries: [fresh, linked],
+			uploaded: allUploaded(fresh.key, linked.key),
+			referencedKeys: allReferenced(fresh.key, linked.key),
+			present: everythingPresent,
+			keepBytes: 100,
+			now: NOW,
+		});
+		assert.deepEqual(
+			freshTrim.candidates.map((candidate) => candidate.key),
+			[linked.key],
+			"★ 10 分钟内用过的副本不动（刚删掉它、下次渲染又会下回来 ⇒ 用户看到'清了又回来'）"
+		);
+		assert.equal(
+			freshTrim.projectedBytes,
+			100,
+			"★ 因为宽限没清到目标时，预计剩余要如实给出来（界面据此说明'为什么还剩这么多'）"
+		);
+
+		// ── ⑤ 坏目标 ⇒ 一个候选都不给（**不崩、也不猜**）──
+		for (const bad of [Number.NaN, undefined, "300"]) {
+			const broken = planReleaseSpace({
+				entries: [entry(key1, path1, 100)],
+				uploaded: allUploaded(key1),
+				referencedKeys: allReferenced(key1),
+				present: everythingPresent,
+				keepBytes: bad,
+				now: NOW,
+			});
+			assert.deepEqual(
+				broken.candidates,
+				[],
+				`★ 目标读不出来（${String(bad)}）⇒ 什么都不删 —— "读不出目标"最安全的解释就是"这次别动"`
+			);
+		}
 	}
 }

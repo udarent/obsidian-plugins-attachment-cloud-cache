@@ -73,5 +73,30 @@ await runMutations({
 			to: "\t\t// 变异：不识别本存储\n",
 			expect: "本存储",
 		},
+
+		// ── ⭐ 本机文件（`file:///D:/…`，2026-10-15 用户要的"与站外同一套"）──
+		{
+			// 后果：**不再分流** ⇒ 本机路径掉进站外那条路：`hostOf(file://…)` 是空串 ⇒ 立刻 `refused`
+			//（用户勾了、也点了确认，却什么都没有发生）。整条功能就是这么静默失效的。
+			name: "★★ 忘了给本机文件分流（勾了却什么都不发生）",
+			from: "\t\tconst local = decideLocalFile({ src: url, isDesktop: (deps.isDesktop ?? isDesktopApp)() });",
+			to: '\t\tconst local = { action: "not-mine" };',
+			expect: "本机文件要",
+		},
+		{
+			// 后果：**手机端也去读本机绝对路径** ⇒ 读不到（那个路径在移动端不存在），
+			// 而它会先花掉一趟、再给用户一句莫名其妙的失败。
+			name: "★ 平台判据丢了（手机端也去读本机绝对路径）",
+			from: "\t\tconst local = decideLocalFile({ src: url, isDesktop: (deps.isDesktop ?? isDesktopApp)() });",
+			to: "\t\tconst local = decideLocalFile({ src: url, isDesktop: true });",
+			expect: "非桌面 ⇒ refused",
+		},
+		{
+			// 后果：读本机文件时**不看大小上限** ⇒ 一份几 GB 的文件被整个读进内存（这个上限要防的正是它）。
+			name: "★ 读本机文件时不看大小上限（几 GB 的文件直接读进内存）",
+			from: "\t\t\t\tmaxBytes: deps.maxBytes ?? MAX_EXTERNAL_BYTES,",
+			to: "\t\t\t\tmaxBytes: Number.MAX_SAFE_INTEGER,",
+			expect: "先量后读",
+		},
 	],
 });

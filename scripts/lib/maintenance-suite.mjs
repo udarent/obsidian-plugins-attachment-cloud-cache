@@ -871,6 +871,62 @@ export function runMaintenanceSuite(mod) {
 			"★ 候选清单与站点名单无关（名单说的是「自动处理哪些站点」，不是「能不能手动挑」）"
 		);
 
+		// ── 5b. ⭐ 本机文件（`file:///D:/…`）：同一套候选层，另一类判定 ──
+		//
+		// 用户 2026-10-15 要的：企业微信截图那种链接按**与站外同一套**业务逻辑处理。
+		// ⚠️ 候选层只负责**分流**（判定本身在 `local-file` 与 `external-decide` 两处），这里钉的是：
+		// 本机文件算进 `localFiles`、**不进 `sites`**（它没有主机）、且**只收桌面端**。
+		const desktopOptions = { ...options, isDesktop: true };
+		const localNotes = [
+			{
+				path: "notes/local.md",
+				// ① 普通写法；② **带空格**的路径（http 那条规则 `[^)\s\n]+` 会在空格处截断 ——
+				// 与 D-25「含空格的 Markdown 目标被截断」同一类坑）；③ Markdown 标题尾巴；
+				// ④ 尖括号写法（路径里含空格时最规范的写法）
+				text:
+					"![](file:///D:/企业微信文件/图.png)\n" +
+					"![](file:///D:/My Documents/截图 2026.png)\n" +
+					'![](file:///D:/a/图.png "标题")\n' +
+					"![](<file:///D:/b/Another Shot.png>)\n",
+			},
+		];
+		const locals = selectExternalUploadCandidates(localNotes, desktopOptions);
+		assert.deepEqual(
+			locals.candidates.map((c) => c.url),
+			[
+				"file:///D:/企业微信文件/图.png",
+				"file:///D:/My Documents/截图 2026.png",
+				"file:///D:/a/图.png",
+				"file:///D:/b/Another Shot.png",
+			],
+			"★★ 四条都要收全 —— 尤其带空格那条（截断出来的路径会指向另一样东西）"
+		);
+		assert.ok(
+			locals.candidates.every((c) => c.local === true),
+			"★ 本机文件要标出来（界面据此说话：列表里显示的必须是**那条绝对路径**）"
+		);
+		assert.equal(locals.localFiles, 4, "★ 本机文件单独计数");
+		assert.deepEqual(
+			locals.sites,
+			[],
+			"★★ 本机路径**没有主机** ⇒ 不进站点汇总（否则「来自 N 个站点」就成了假话）"
+		);
+
+		// ⚠️ 平台：手机端一条都不该有（那个路径在移动端不存在）
+		const localOnMobile = selectExternalUploadCandidates(localNotes, { ...options, isDesktop: false });
+		assert.deepEqual(localOnMobile.candidates, [], "★ 手机端不列本机文件（读不到）");
+		assert.equal(localOnMobile.localFiles, 0, "★ 也不该计入");
+
+		// 扩展名闸门在候选层同样生效（勾不中它，也就到不了执行器）
+		assert.deepEqual(
+			selectExternalUploadCandidates(
+				[{ path: "notes/x.md", text: "![](file:///D:/a/secret.txt)" }],
+				desktopOptions
+			).candidates,
+			[],
+			"★★ 不是可嵌入的那几类 ⇒ 不进候选（不加目录白名单之后唯一站着的边界）"
+		);
+
 		// ── 6. 坏输入不该让整批失败 ──
 		assert.deepEqual(
 			selectExternalUploadCandidates([{ path: "", text: "![](https://x.test/a.png)" }, { path: "n.md" }], options)

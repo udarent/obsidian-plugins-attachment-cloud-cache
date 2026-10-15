@@ -20,6 +20,7 @@ export function runSettingsUiSuite(mod) {
 		shouldShowCacheLimit,
 		shouldShowFallbackDownload,
 		shouldShowReleaseSpace,
+		localCopyCleanupTarget,
 		localCopyOptions,
 		deleteModeOptions,
 		classifyConnectionFailure,
@@ -89,20 +90,58 @@ export function runSettingsUiSuite(mod) {
 	assert.equal(shouldShowFallbackDownload("cache"), true, "遗留值按 keep 处理（显示）");
 	assert.equal(shouldShowCacheLimit("cache"), true, "遗留值按 keep 处理（显示）");
 
-	// ⭐ F18（2026-10-12 / D-19）：「释放本地空间」按钮**只**在「不留副本」档显示。
+	// ⭐⭐ F18（2026-10-15 改口径）：这个按钮现在**按目标**显示，而目标 = 档位 + 上限。
 	//
-	// 判据是"这一档的含义就是本地不留副本"—— 那个按钮把这个含义应用到**已经存在的**
-	// 那批副本上。反过来在「保留副本」档给它一个"全删掉"的按钮是**自相矛盾**的配置。
+	// 1.2.2 及以前它只在「不留副本」档显示 —— 那时按钮的含义是"全删"，在保留档显示它
+	// 与"我要留副本"自相矛盾。现在它在保留档清的是**用户自己设的上限**（不是全删），
+	// 那条矛盾消失了；而"设了上限却没有手动入口、只能等后台那一轮"正是用户 2026-10-15
+	// 报的那个缺口。⇒ 判据整体换成 `localCopyCleanupTarget`（见下）。
 	assert.equal(shouldShowReleaseSpace("trash"), true, "★ 不留副本档要显示（这正是这一档的存量部分）");
 	assert.equal(
-		shouldShowReleaseSpace("keep"),
+		shouldShowReleaseSpace("keep", 500),
+		true,
+		"★ 保留副本档设了上限也要显示（否则用户设了 500 却找不到手动入口）"
+	);
+	assert.equal(
+		shouldShowReleaseSpace("keep", 0),
 		false,
-		"★ 保留副本档必须隐藏 —— 用户刚说要留副本，不能再给他一个「全删掉」的按钮"
+		"★ 不限量时不该显示（没有目标就无可清之物，摆一个点了没动静的按钮更糟）"
+	);
+	assert.equal(shouldShowReleaseSpace("keep"), false, "★ 上限缺省（= 0 = 不限制）时隐藏");
+	assert.equal(shouldShowReleaseSpace("keep", -5), false, "★ 负上限按'不限制'处理 ⇒ 隐藏");
+	assert.equal(shouldShowReleaseSpace("keep", Number.NaN), false, "★ 坏上限不算'有目标'");
+	assert.equal(
+		shouldShowReleaseSpace("keep", Number.POSITIVE_INFINITY),
+		false,
+		"★ 无穷大的上限不算'有目标'（目标变成一个不可能达到的数时，按钮只会白摆着）"
 	);
 	assert.equal(shouldShowReleaseSpace("nonsense"), false, "★ 非法值也隐藏（宁可少显示，绝不误导）");
 	assert.equal(shouldShowReleaseSpace(undefined), false, "缺值时隐藏");
 	// 遗留值已折成 keep ⇒ 与 keep 一致（隐藏）
 	assert.equal(shouldShowReleaseSpace("cache"), false, "遗留值按 keep 处理（隐藏）");
+
+	// ⭐ 目标本身 —— 流程拿它算 `keepBytes`，所以它与上面的显隐**必须是同一处判据**。
+	assert.deepEqual(
+		localCopyCleanupTarget("trash", 500),
+		{ kind: "all" },
+		"⚠️ 不留副本档：上限**不参与**（那一档上限那行是隐藏的，一个陈旧的数字绝不能变成目标）"
+	);
+	assert.deepEqual(
+		localCopyCleanupTarget("keep", 500),
+		{ kind: "limit", mb: 500 },
+		"★ 保留副本档 + 上限 ⇒ 目标是'清到上限以内'（而不是全清）"
+	);
+	assert.deepEqual(localCopyCleanupTarget("keep", 0), { kind: "none" }, "不限量 ⇒ 没有目标");
+	assert.deepEqual(
+		localCopyCleanupTarget("keep", Number.NaN),
+		{ kind: "none" },
+		"★ 坏上限 ⇒ 没有目标（**不**落回'一份不留'：那是三种解释里最具破坏性的一种）"
+	);
+	assert.deepEqual(
+		localCopyCleanupTarget("keep", 500.9),
+		{ kind: "limit", mb: 500 },
+		"上限是 MB 粒度（小数截断，与 `parseCacheLimitMb` 同口径）"
+	);
 
 	// ============================================================
 	// 3. 下拉选项必须与类型清单同源

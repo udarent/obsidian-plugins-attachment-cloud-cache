@@ -196,6 +196,20 @@ export function runObjectKeySuite(mod) {
 
 	// ---------- 18. hashFromKey：路径入参只取末段、大写不认 ----------
 	assert.equal(hashFromKey(`C:////cache////报告-${fullHash}.pdf`), fullHash, "Windows 路径应取末段");
+	// ⚠️ 上一条用的是**正斜杠**路径 —— 它连 `split("/")` 都能过。真正认"Windows 路径"
+	// 必须有**反斜杠**这一条（2026-10-15 加：那是锚点唯一性检查顺带查出来的覆盖缺口 ——
+	// 同一个"按分隔符取末段"的规则在 `displayNameForKey` 与 `hashFromKey` 里各写了一遍，
+	// 而锚点与断言此前都只盖住了前一个）。
+	//
+	// ⚠️⚠️ 用**纯哈希**当末段，别用 `名字-哈希.ext`：后者的正则允许 `.+` 吃掉整条路径
+	//（`^(.+)-(哈希)(\.扩展名)?$` 没锚住前缀），于是"没切分隔符"也能匹配上 ⇒ 那条断言
+	// 看着很对、其实**分不出对错**（2026-10-15 实测：第一版就是这么写的，变异报"漏过"）。
+	// 纯哈希形状必须**整段等于**哈希，一旦没切分隔符就必然取不到 ⇒ 才有牙。
+	assert.equal(
+		hashFromKey(`C:\\cache\\${fullHash}.png`),
+		fullHash,
+		"反斜杠路径（Windows）也要取末段再解析 —— 只按 / 切会把整条路径当基名（纯哈希名就取不到了）"
+	);
 	assert.equal(
 		hashFromKey(`报告-${fullHash.toUpperCase()}.pdf`),
 		null,

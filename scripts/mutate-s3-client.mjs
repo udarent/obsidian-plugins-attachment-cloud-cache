@@ -44,10 +44,29 @@ await runMutations({
 			expect: "必须走 path-style",
 		},
 		{
-			name: "forcePathStyle 判定反了（默认变成 virtual-host，R2 直接用不了）",
-			from: "if (address.forcePathStyle === false) {",
-			to: "if (address.forcePathStyle !== false) {",
+			// ⚠️ 这条判据在同文件里有**三处**（`requestTargetFor` 的键地址 / `bucketTargetFor` 的桶探针 /
+			// `objectBaseFor` 的展示前缀），所以锚点**必须各来一条**：
+			// `replace` 只改第一处，一条锚点会静默只盖住一处，另两处从来没被变过
+			//（2026-10-15 由"锚点唯一"检查查出来）。三处各自都有断言 ⇒ 拆开就都被抓住。
+			name: "forcePathStyle 判定反了（键地址走 virtual-host，R2 直接用不了）",
+			from: "\tconst encodedKey = encodePath(cleanKey).slice(1);\n\n\tif (address.forcePathStyle === false) {",
+			to: "\tconst encodedKey = encodePath(cleanKey).slice(1);\n\n\tif (address.forcePathStyle !== false) {",
 			expect: "必须走 path-style",
+		},
+		{
+			name: "forcePathStyle 判定反了（桶探针走 virtual-host ⇒ 探的是错的地址）",
+			from: "\tif (!bucket) throw configError(\"S3 桶名未配置，请先在设置里填写\");\n\n\tif (address.forcePathStyle === false) {",
+			to: "\tif (!bucket) throw configError(\"S3 桶名未配置，请先在设置里填写\");\n\n\tif (address.forcePathStyle !== false) {",
+			// ⚠️ 实际先说话的是**正着**的那条（path-style 的签名路径）—— 判定反了之后
+			// `forcePathStyle: true` 也会走 virtual-host 分支，而那条断言在文件里更靠前。
+			// 照实写它，而不是写"我期望先红的"那条（否则报"原因不符"，反而像锚点写错了）。
+			expect: "path-style 下桶探针的签名路径就是 /桶名",
+		},
+		{
+			name: "forcePathStyle 判定反了（展示前缀与真实请求地址分叉）",
+			from: "\tif (!endpoint || !bucket) return \"\";\n\n\tif (address.forcePathStyle === false) {",
+			to: "\tif (!endpoint || !bucket) return \"\";\n\n\tif (address.forcePathStyle !== false) {",
+			expect: "objectBaseFor 必须与 requestTargetFor 同源",
 		},
 		{
 			name: "逻辑 key 不再 trim（同一张图会变成桶里两个对象）",
@@ -166,9 +185,12 @@ await runMutations({
 			expect: "实际发出 /a%20b",
 		},
 		{
+			// ⚠️ 锚点要带上上一行（`parsed.host = …`）：这句 `parsed.pathname = "/"` 在同一文件里
+			// 出现两次（另一处在 `bucketRoot()` 的 virtual-host 分支），不加上下文会**静默改到别处**
+			// （2026-10-15 由"锚点唯一"检查查出来）。
 			name: "桶探针的 virtual-host 分支多出一段路径（地址不再是桶根）",
-			from: '\t\tparsed.pathname = "/";',
-			to: '\t\tparsed.pathname = "/bucket";',
+			from: '\t\tparsed.host = `${bucket}.${parsed.host}`;\n\t\tparsed.pathname = "/";',
+			to: '\t\tparsed.host = `${bucket}.${parsed.host}`;\n\t\tparsed.pathname = "/bucket";',
 			expect: "实际发出 /bucket",
 		},
 		{

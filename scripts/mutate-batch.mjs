@@ -35,8 +35,17 @@ await runMutations({
 			// 改成守**行内 HTML 那一支**：漏掉 `<a href>` 会让"用一个普通链接指向站外的
 			// PDF/音频"永远进不了候选，而这正是 1.1.0 要认真处理的一类（需求 R15）。
 			name: "★ 外链候选漏掉行内 <a href>（普通链接指向的文件永远进不了候选）",
-			from: "/<(?:img|a)\\b[^>]*?\\b(?:src|href)\\s*=\\s*(?:\"([^\"\\n]*)\"|'([^'\\n]*)')/gi",
-			to: "/<img\\b[^>]*?\\bsrc\\s*=\\s*(?:\"([^\"\\n]*)\"|'([^'\\n]*)')/gi",
+			// ⚠️ 锚点必须带上**后面那两行**：2026-10-15 加了"本机文件"那一段之后，
+			// 这条正则在同一文件里出现了**两次**（另一处收 `file:`），
+			// 而 `replace` 只改第一处 ⇒ 会静默改到另一条路上（运行器的"锚点不唯一"检查当场报了出来）。
+			from:
+				"/<(?:img|a)\\b[^>]*?\\b(?:src|href)\\s*=\\s*(?:\"([^\"\\n]*)\"|'([^'\\n]*)')/gi)) {\n" +
+				'\t\tconst raw = String(match[1] ?? match[2] ?? "").trim();\n' +
+				"\t\tif (isHttpUrl(raw)) urls.add(raw);",
+			to:
+				"/<img\\b[^>]*?\\bsrc\\s*=\\s*(?:\"([^\"\\n]*)\"|'([^'\\n]*)')/gi)) {\n" +
+				'\t\tconst raw = String(match[1] ?? match[2] ?? "").trim();\n' +
+				"\t\tif (isHttpUrl(raw)) urls.add(raw);",
 			expect: "行内 HTML 的 <a href> 同样要认",
 		},
 		{
@@ -76,6 +85,50 @@ await runMutations({
 			from: "\t\t// \u2b50 来源**不筛**：Markdown 笔记与画布同等算数（需求 R16，2026-10-09 拍板）。\n\t\t// 空的来源路径仍然跳过 —— 那不是宿主会给的形状。\n\t\tif (!sourcePath) continue;",
 			to: "\t\tif (!/\\.md$/i.test(sourcePath)) continue;\n\t\tif (!sourcePath) continue;",
 			expect: "画布里的引用**算数**",
+		},
+
+		// ── ⭐ 本机文件（`file:///D:/…`，2026-10-15 用户要的"与站外同一套"）──
+		{
+			// 后果：**手机端也去列本机文件** —— 那些路径在移动端不存在，用户勾了也读不到，
+			// 只会换来一串"文件不在了"。平台判据的意义就是让它们**根本不出现**。
+			name: "★ 候选项不再问平台（手机端也列出读不到的本机文件）",
+			from: "\t\t\tconst localDecision = decideLocalFile({ src: url, isDesktop: options.isDesktop });",
+			to: "\t\t\tconst localDecision = decideLocalFile({ src: url, isDesktop: true });",
+			expect: "手机端不列本机文件",
+		},
+		{
+			// 后果：Markdown 的标题尾巴没切掉 ⇒ 候选里出现 `file:///D:/a/图.png "标题"`，
+			// 而按它去读磁盘**一定读不到**（那是另一串字符）。
+			name: "★ Markdown 标题尾巴没切（带标题的那条一定读不到）",
+			from: "\t\tconst raw = stripMarkdownTitle(stripAngles(match[1]));",
+			to: "\t\tconst raw = stripAngles(match[1]);",
+			expect: "四条都要收全",
+		},
+		{
+			// 后果：本机文件被塞进**站点汇总** ⇒ 确认框里那句"来自 N 个站点"把一条本机路径数成站点
+			//（用户以为要去访问一台叫 `local` 的服务器）。本机路径没有主机，只能单独计数。
+			// ⚠️ 这条**必须连 `bySite.set` 一起写进 `to`**：本机那条路原本根本**不碰** `bySite`
+			//（所以只改 `host` 字段是**看不出效果**的 —— 第一版就这么写，运行器报"漏过（测试无牙）"）。
+			// ⚠️ 同时**保留 `localFiles += 1`**：去掉它会让"本机文件单独计数"先红，报错就不是这条规则了。
+			name: "★ 本机文件被算进「站点汇总」（把本机路径说成一个站点）",
+			from:
+				'\t\t\t\tcandidates.push({ url, notePath: path, host: "", local: true });\n' +
+				"\t\t\t\tlocalFiles += 1;\n" +
+				"\t\t\t\tcontinue;",
+			to:
+				'\t\t\t\tcandidates.push({ url, notePath: path, host: "local", local: true });\n' +
+				"\t\t\t\tlocalFiles += 1;\n" +
+				'\t\t\t\tbySite.set("local", { host: "local", count: 1 });\n' +
+				"\t\t\t\tcontinue;",
+			expect: "不进站点汇总",
+		},
+		{
+			// 后果：候选丢了"这是本机文件"这个标记 ⇒ 界面无法据此说明"要读的是你电脑上这条路径"，
+			// 于是"逐份勾选"那次同意就失去了前提（看不见风险就点了确认）。
+			name: "★ 本机文件的标记丢了（界面说不出「要读哪条路径」）",
+			from: '\t\t\t\tcandidates.push({ url, notePath: path, host: "", local: true });',
+			to: '\t\t\t\tcandidates.push({ url, notePath: path, host: "", local: false });',
+			expect: "本机文件要标出来",
 		},
 	],
 });

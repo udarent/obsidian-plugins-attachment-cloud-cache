@@ -149,7 +149,7 @@ export const I18N: Record<string, Locale> = {
 		// F18：清理本地占用（并入「不留副本」档，见设计 §20.10）
 		releaseSpaceName: "Free up local space",
 		releaseSpaceDesc:
-			"Delete the local copies of attachments that are already uploaded and still linked from a note through your storage. The files are deleted for good — not moved to the trash — so the space comes back right away. Your storage keeps the objects and your notes keep their links; a copy you delete is downloaded again the next time a note shows it. Copies no note links to are not covered here.",
+			"Delete already-uploaded local copies — for good, not to the trash, so the space comes back at once; your storage and your notes are untouched, and a copy you delete is downloaded again when a note next shows it. With \"delete the local file\" this clears the copies a note still links to; with a local-copy limit it trims that same batch down to the limit (least recent first, and copies used in the last 10 minutes are left alone). Copies no note links to are never touched here — those may need removing from your storage as well, and that is a separate step.",
 		releaseSpaceButton: "Delete local copies…",
 		releaseSpaceTitle: "Delete these local copies for good?",
 		releaseSpaceSummary: "{count} local copy(ies), about {mb} MB:",
@@ -165,6 +165,19 @@ export const I18N: Record<string, Locale> = {
 			"Nothing to clean up: this only covers copies that a note still links to through your storage (attachments you never uploaded are left alone).",
 		releaseSpaceNothingMissing:
 			"Nothing to clean up. {count} index record(s) point at files that are no longer there — \"Check and repair the local-copy index\" clears those.",
+		// ── 上限档（目标 = 清到上限以内）：说什么都要带上目标与**结果** ──
+		// ⚠️ 话术里一律说"这批"（= 笔记里仍引用着的那批）：本流程**不碰**没人引用的副本
+		//（那一类要连云端一起决定，见 `releaseSpaceUnlinkedLeft`），所以不能声称"总占用已降到上限以内"。
+		releaseSpaceSummaryToLimit:
+			"{count} local copy(ies), about {mb} MB — trimming this batch to your {limit} limit leaves about {remainMb} MB:",
+		releaseSpaceDoneToLimit:
+			"Deleted {deleted} local copy(ies), freeing about {mb} MB. This batch is now about {remainMb} MB ({limit} limit). Skipped {skipped}.",
+		releaseSpaceStillOver:
+			"About {overMb} MB of this batch was left alone: those copies were used in the last 10 minutes (or could not be confirmed in your storage). The background will keep trimming.",
+		releaseSpaceNothingUnderLimit:
+			"This batch of local copies is already within your {limit} limit — nothing to clean up.",
+		releaseSpaceUnlinkedLeft:
+			"Also about {mb} MB of local copies are linked from no note — those are not part of this cleanup: they may need removing from your storage as well, so run “{command}” for them.",
 		orphanTitle: "Clean up these unused attachments?",
 		orphanBody:
 			"{count} attachment(s) you uploaded are no longer linked from any note or canvas.",
@@ -233,6 +246,10 @@ export const I18N: Record<string, Locale> = {
 		maintainBatchCta: "Upload and rewrite links",
 		maintainBatchExternal:
 			"Also {count} file(s) hosted elsewhere, on {sites} site(s): {hosts}",
+		// ⚠️ 本机文件那条**必须带路径**：不加目录白名单（用户 2026-10-15 定）之后，
+		// "看得见要读哪条路径"是那次授权唯一能成立的前提。⚠️ `{count}` 是**全部**条数，
+		// 列表最多三条（多的省略）—— 数字准确、清单诚实。
+		maintainBatchLocalFiles: "Also {count} local file(s) on this computer (outside the vault): {paths}",
 		maintainBatchDone:
 			"Uploaded {uploaded}, already there {reused}, failed {failed}. Rewrote {links} link(s) across {notes} note(s).",
 
@@ -269,6 +286,10 @@ export const I18N: Record<string, Locale> = {
 			"Cached {cached} file(s); {partial} were uploaded but their link could not be rewritten; {failed} failed.",
 		cmdPickExternal: "Cache files from other sites…",
 		externalCached: "Cached the file from {host} and rewrote the link.",
+		// ── 本机文件（file:///D:/…）：与站外同一套链，只有"字节从哪来"不同 ──
+		localCached: "Uploaded the local file {name} and rewrote the link.",
+		localFileMissing: "That file is no longer on this computer, so nothing was changed: {path}",
+		localFileUnreadable: "Could not read that file on this computer, so nothing was changed: {path} ({error})",
 		externalCachedNoRewrite: "The file was uploaded, but the link in this note could not be rewritten: {error}",
 		externalNoNote: "Could not read the note that links this file, so nothing was downloaded or changed.",
 		externalFetchForbidden: "Could not download the file from {host}: the site blocks direct downloads (hotlink protection).",
@@ -409,7 +430,7 @@ export const I18N: Record<string, Locale> = {
 		// F18：清理本地占用（并入「不留副本」档，见设计 §20.10）
 		releaseSpaceName: "释放本地空间",
 		releaseSpaceDesc:
-			"把已上传、且笔记里仍引用着你存储地址的附件本地副本清掉。这些文件会被永久删除（不进回收站），所以空间立刻释放；云端对象与笔记里的链接都不动，删掉的那份下次看图时会自动重新下载。没有任何笔记引用的副本不归它管。",
+			"清掉已上传附件的本地副本 —— 永久删除、不进回收站，所以空间立刻释放；云端对象与笔记里的链接都不动，删掉的那份下次看图时会自动重新下载。选「不留本地副本」时：清掉笔记里仍引用着云端地址的那批；设了「本地副本上限」时：把同一批清到上限以内（最久没用过的先走，10 分钟内用过的这轮不动）。没有任何笔记引用的副本一概不碰 —— 那类可能还要连云端对象一起删，是另一步。",
 		releaseSpaceButton: "清理本地副本…",
 		releaseSpaceTitle: "永久删除这些本地副本？",
 		releaseSpaceSummary: "{count} 个本地副本，约 {mb} MB：",
@@ -425,6 +446,19 @@ export const I18N: Record<string, Locale> = {
 			"没有可清理的本地副本 —— 只清理笔记里仍引用着你存储地址的那些（你自己未上传的附件一概不碰）。",
 		releaseSpaceNothingMissing:
 			"没有可清理的副本。有 {count} 条索引记录指向的文件已经不在，那些记录由「自检并修复本地副本索引」处理。",
+		// ── 上限档（目标 = 清到上限以内）：说什么都要带上目标与**结果** ──
+		// ⚠️ 话术里一律说"这批"（= 笔记里仍引用着的那批）：本流程**不碰**没人引用的副本
+		//（那一类要连云端一起决定，见 `releaseSpaceUnlinkedLeft`），所以不能声称"总占用已降到上限以内"。
+		releaseSpaceSummaryToLimit:
+			"将删除 {count} 个本地副本，约 {mb} MB —— 把这批清到你设的 {limit} 上限以内后，约剩 {remainMb} MB：",
+		releaseSpaceDoneToLimit:
+			"已删除 {deleted} 个本地副本，释放约 {mb} MB；这批本地副本现在约 {remainMb} MB（上限 {limit}）。跳过 {skipped} 个。",
+		releaseSpaceStillOver:
+			"这批里还有约 {overMb} MB 没清掉：那些副本 10 分钟内刚用过（或云端没能确认上）。后台还会按上限继续处理。",
+		releaseSpaceNothingUnderLimit:
+			"这批本地副本已经在你设的 {limit} 上限以内，没什么可清理的。",
+		releaseSpaceUnlinkedLeft:
+			"另有约 {mb} MB 是「没有任何笔记引用」的本地副本 —— 那不属于这次清理：它们可能需要连云端对象一起处理，请用「{command}」。",
 		orphanTitle: "要清掉这些没人用的附件吗？",
 		orphanBody: "你上传过的 {count} 个附件已经不再被任何笔记或画布引用了。",
 		orphanMore: "……还有 {count} 个。",
@@ -488,6 +522,10 @@ export const I18N: Record<string, Locale> = {
 			"画布里有 {count} 处引用没能改写（画布文件不是可读的 JSON），它们仍指向旧位置。",
 		maintainBatchCta: "上传并改写链接",
 		maintainBatchExternal: "另有 {count} 个文件托管在站外，来自 {sites} 个站点：{hosts}",
+		// ⚠️ 本机文件那条**必须带路径**：不加目录白名单（用户 2026-10-15 定）之后，
+		// "看得见要读哪条路径"是那次授权唯一能成立的前提。⚠️ `{count}` 是**全部**条数，
+		// 列表最多三条（多的省略）—— 数字准确、清单诚实。
+		maintainBatchLocalFiles: "另有 {count} 个是**本机文件**（在你电脑上、不在库里）：{paths}",
 		maintainBatchDone:
 			"上传 {uploaded} 个、已存在 {reused} 个、失败 {failed} 个。在 {notes} 篇笔记里改写了 {links} 处链接。",
 
@@ -523,6 +561,10 @@ export const I18N: Record<string, Locale> = {
 		externalPickDone: "已缓存 {cached} 张；{partial} 张已上传但没能改写链接；{failed} 张失败。",
 		cmdPickExternal: "缓存站外文件（可挑选）…",
 		externalCached: "已缓存来自 {host} 的文件并改写链接。",
+		// ── 本机文件（file:///D:/…）：与站外同一套链，只有"字节从哪来"不同 ──
+		localCached: "已把本机文件 {name} 上传上去并改写链接。",
+		localFileMissing: "那个文件在这台电脑上已经不在了，没有改动任何内容：{path}",
+		localFileUnreadable: "读不了这台电脑上的那个文件，没有改动任何内容：{path}（{error}）",
 		externalCachedNoRewrite: "文件已上传，但没能改写本篇笔记里的链接：{error}",
 		externalNoNote: "读不到链接该文件的笔记，因此没有下载、也没有改动任何内容。",
 		externalFetchForbidden: "无法从 {host} 下载文件：该站点有防盗链保护。",

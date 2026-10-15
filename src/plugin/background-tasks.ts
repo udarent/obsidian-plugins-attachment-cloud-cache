@@ -27,7 +27,7 @@ import type { RotationReason } from "../maintenance/rotation";
 /**
  * 启动后延迟多久做第一次缓存上限检查。
  *
- * 延迟是刻意的：超限时那一轮要列目录、还要扫全库笔记（判断哪些副本还被人引用），
+ * 延迟是刻意的：超限时那一轮要**遍历索引**、还要扫全库笔记（判断哪些副本还被人引用），
  * 直接放在 `onload` 里会让"打开 Obsidian"变慢。3 秒足够让界面先出来。
  */
 export const ROTATION_STARTUP_DELAY_MS = 3 * 1000;
@@ -119,7 +119,7 @@ export function backgroundTaskList(deps: BackgroundTaskDeps): readonly Backgroun
 			id: "rotation-startup",
 			kind: "timeout",
 			everyMs: ROTATION_STARTUP_DELAY_MS,
-			why: "启动后延迟一次：超限时这一轮要列目录、扫全库笔记，不能挡在插件加载路径上",
+			why: "启动后延迟一次：超限时这一轮要遍历索引、扫全库笔记，不能挡在插件加载路径上",
 			run: () => deps.rotate("startup"),
 		},
 		{

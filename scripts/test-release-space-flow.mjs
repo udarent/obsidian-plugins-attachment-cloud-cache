@@ -24,8 +24,10 @@ await withLoadedTs(
 				"index record is reported with its own wording; the confirmation carries the amount, the " +
 				"permanence, the irreversibility and the promise that storage and notes are untouched; cancelling " +
 				"deletes nothing and never asks the cloud; confirming deletes the copy only after re-checking the " +
-				"cloud holds it; and when nothing could be deleted the plugin explains why instead of leaving the " +
-				"user with a silent 'skipped N'.)"
+				"cloud holds it; when nothing could be deleted the plugin explains why instead of leaving the " +
+				"user with a silent 'skipped N'; and with a local-copy limit set the same button stops at that " +
+				"limit instead of clearing everything - still leaving copies no note links to alone, and saying " +
+				"where those went instead.)"
 		);
 	}
 );

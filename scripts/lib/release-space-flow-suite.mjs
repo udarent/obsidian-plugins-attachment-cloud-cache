@@ -60,7 +60,12 @@ export async function runReleaseSpaceFlowSuite(mod) {
 	 * @param {object} options
 	 *   `entries` 索引条目（`{key, cachePath, size, sourceName?}`）、`uploaded` 台账里的 key、
 	 *   `notes` 笔记（`{path, text}` 或 `{path, readError}`）、`onDisk` 磁盘上真实存在的路径、
-	 *   `cloudHas` 逐个 key 的"云端现在还有吗"（`true`/`false`/`"throw"`）、`confirm` 确认框答案。
+	 *   `cloudHas` 逐个 key 的"云端现在还有吗"（`true`/`false`/`"throw"`）、`confirm` 确认框答案、
+	 *   `localCopy` 档位（默认 `"trash"`）、`cacheLimitMb` 上限（默认 `0` = 不限制）。
+	 *
+	 * ⚠️ 2026-10-15 起这个夹具**必须**声明自己在哪一档：同一个按钮在「不留副本」档是"全清"、
+	 * 在「保留副本 + 上限」档是"清到上限以内"，两者连候选池之外的目标都不一样。
+	 * 老用例全部是「不留副本」档 ⇒ 默认值就是它（`trash`）。
 	 */
 	function makeCtx(options = {}) {
 		const entries = options.entries ?? [];
@@ -120,7 +125,11 @@ export async function runReleaseSpaceFlowSuite(mod) {
 				},
 			},
 			manifest: { dir: ".obsidian/plugins/attachment-cloud-cache" },
-			settings: { s3: { ...S3 } },
+			settings: {
+				s3: { ...S3 },
+				localCopy: options.localCopy ?? "trash",
+				cacheLimitMb: options.cacheLimitMb ?? 0,
+			},
 			t: (key, params) => translate("en", key, params ?? {}),
 			currentIndex: () => index,
 			hostContext: () => ({ persistIndex: async () => {} }),
@@ -321,5 +330,103 @@ export async function runReleaseSpaceFlowSuite(mod) {
 		assertNotice(["notes/broken.md", "was cancelled"], "必须明确告知并取消");
 	}
 
-	return { cases: 11 };
+	// ============================================================
+	// 7. ⭐⭐ 上限档（「保留副本」+ 设了上限）：目标是"清到上限以内"，不是全清
+	//
+	// 用户 2026-10-15 报的原话："设置上限 500，清理副本，应该要留下 500，而不是全清。"
+	// 判据层由 `release-space-suite` §9 穷举；这里守的是**编排层**：
+	// 目标真的从设置里取到了吗、确认框与结果通知真的带上了目标吗。
+	// ============================================================
+	{
+		reset();
+		// 3 份 × 1 MB，上限 2 MB ⇒ 只需腾 1 MB（一份），剩下的要留下
+		const files = [0, 1, 2].map((index) => ({
+			key: `p${index}-aaaaaaaa.png`,
+			cachePath: `attachments/p${index}-aaaaaaaa.png`,
+			size: MB,
+		}));
+		const { ctx, calls } = makeCtx({
+			entries: files,
+			notes: files.map((item, index) => ({ path: `notes/n${index}.md`, text: mod.publicUrlFor(S3, item.key) })),
+			localCopy: "keep",
+			cacheLimitMb: 2,
+		});
+		await releaseLocalSpace(ctx, "notice");
+		assert.deepEqual(
+			calls.deleted,
+			["attachments/p0-aaaaaaaa.png"],
+			"★★ 只删到上限以内就停（3 份 3 MB、上限 2 MB ⇒ 只该删 1 份）—— 全清是用户 2026-10-15 报的那个缺陷"
+		);
+		const lines7 = calls.confirm.lines.join("\n");
+		assert.ok(
+			/2 MB/.test(lines7) && /1\.0 MB/.test(lines7),
+			`★ 按下之前就要说清"清到你的 2 MB 上限、清完约剩 1.0 MB"，实际：${JSON.stringify(lines7)}`
+		);
+		assertNotice(
+			["Deleted 1 local copy(ies)", "2 MB"],
+			"★ 结果通知要带上目标（否则'为什么只剩这些'永远解释不清）"
+		);
+	}
+	{
+		reset();
+		// ⭐⭐ 上限档**也不动**没人引用的副本（用户 2026-10-15 特意纠正）：
+		// 没人引用的那份可能还要连云端对象一起删，那是 R17 三档询问的活。
+		// ⚠️ 让孤儿**更旧**：真把池子放宽了，被删的必然是最旧的它 ⇒ 断言能抓出来。
+		// ⚠️ 两份都要在宽限期之外（否则连"该删的那份"都不会动，这条用例就退化成"什么都没发生"）。
+		const HOUR = 60 * 60 * 1000;
+		const orphan = {
+			key: "orphan-aaaaaaaa.png",
+			cachePath: "attachments/orphan-aaaaaaaa.png",
+			size: MB,
+			lastUsedAt: Date.now() - 100 * HOUR,
+		};
+		const linked = {
+			key: "linked-bbbbbbbb.png",
+			cachePath: "attachments/linked-bbbbbbbb.png",
+			// ⚠️ 它要**大于**上限，否则这批"已经在上限以内" ⇒ 一份都不该删，用例就退化成"什么都没发生"
+			size: 2 * MB,
+			lastUsedAt: Date.now() - 1 * HOUR,
+		};
+		const { ctx, calls } = makeCtx({
+			entries: [orphan, linked],
+			notes: [noteLinking(linked.key)], // 只有 linked 被引用
+			localCopy: "keep",
+			cacheLimitMb: 1,
+		});
+		await releaseLocalSpace(ctx, "notice");
+		assert.deepEqual(
+			calls.deleted,
+			["attachments/linked-bbbbbbbb.png"],
+			"★★ 上限档只动'笔记里仍引用着'的那批 —— 没人引用的那份要留给'连云端一起清'那条流程"
+		);
+		assertNotice(
+			["Check for unreferenced attachments in the cloud"],
+			"★★ 剩下那部分（没人引用的）必须指路：否则'我设了上限、也清了，怎么还占着'会变成一个说不清的谜"
+		);
+	}
+	{
+		reset();
+		const { ctx, calls } = makeCtx({
+			entries: [entry()],
+			notes: [noteLinking()],
+			localCopy: "keep",
+			cacheLimitMb: 128,
+		});
+		await releaseLocalSpace(ctx, "notice");
+		assert.equal(calls.confirm, null, "没超上限 ⇒ 连确认框都不该出现");
+		assertNotice(["already within"], "★ 上限档的'没什么可清理'要说成'已经在上限以内'（那是好消息，不是故障）");
+	}
+	{
+		reset();
+		// ⚠️ 防御线：保留副本档 + **没设上限** ⇒ 没有目标。界面上那个按钮本来就不显示
+		//（见 `shouldShowReleaseSpace`），走进来只可能是陈旧的设置页 —— 那时**什么都不做**，
+		// 而绝不能把"没有目标"理解成"那就全清"。
+		const { ctx, calls } = makeCtx({ entries: [entry()], notes: [noteLinking()], localCopy: "keep" });
+		await releaseLocalSpace(ctx, "notice");
+		assert.equal(calls.deleted.length, 0, "★★ 没有目标 ⇒ 一个文件都不许删（'没有目标'最不该被解释成'全清'）");
+		assert.equal(calls.confirm, null, "没有目标 ⇒ 不该弹确认框");
+		assertNoNotice("没有目标不是用户的动作，别打扰他");
+	}
+
+	return { cases: 15 };
 }

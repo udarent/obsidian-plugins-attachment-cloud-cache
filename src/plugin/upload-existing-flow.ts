@@ -30,6 +30,14 @@ import type { PluginContext } from "./context";
 const BATCH_LIST_MAX = 10;
 
 /**
+ * 确认框里最多列几条**本机路径**（`file:///D:/…`）。
+ *
+ * ⚠️ 比 `BATCH_LIST_MAX` 小得多：本机路径动辄七八十字（`D:/企业微信文件/WXWork/…`），
+ * 列十条会把确认框撑成一面墙 —— 而条数仍然是**如实**给的（`{count}` 是全部）。
+ */
+const LOCAL_FILE_LIST_MAX = 3;
+
+/**
  * 上传附件目录里已有的图片（P1 #8）。
  *
  * 上传前先确认：这条命令会**改用户的笔记**（把本地链接换成远端链接）。
@@ -60,6 +68,8 @@ export async function uploadExistingAttachments(ctx: PluginContext): Promise<voi
 	const external = selectExternalUploadCandidates(await readAllNoteTexts(ctx.app), {
 		settings: ctx.settings,
 		configured: connectionReadiness(ctx.app.secretStorage, ctx.settings).ready,
+		// ⭐ 平台判据由装配点给（这一层不碰宿主）：本机文件（`file:///D:/…`）只有桌面读得到。
+		isDesktop: ctx.isDesktop(),
 	});
 
 	if (selection.paths.length === 0 && external.candidates.length === 0) {
@@ -118,6 +128,22 @@ export async function uploadExistingAttachments(ctx: PluginContext): Promise<voi
 				hosts: external.sites.map((site) => site.host).join(", "),
 			})
 		);
+		// ⭐ **本机文件**另说一句，而且**必须带上路径**（截断也要带）：
+		// 用户 2026-10-15 定的边界是"不加目录白名单"，于是"看得见要读哪条路径"就是那次授权
+		// 唯一能成立的前提 —— 只报个数字等于让人盲签（与上面"必须列出站点"同一条纪律）。
+		// ⚠️ 条数**如实**（{count} 是全部），列表最多三条（多的用省略号）—— 数字准确、清单诚实。
+		if (external.localFiles > 0) {
+			const paths = external.candidates
+				.filter((candidate) => candidate.local)
+				.map((candidate) => candidate.url);
+			const shown = paths.slice(0, LOCAL_FILE_LIST_MAX).join("、");
+			lines.push(
+				ctx.t("maintainBatchLocalFiles", {
+					count: external.localFiles,
+					paths: paths.length > LOCAL_FILE_LIST_MAX ? `${shown} …` : shown,
+				})
+			);
+		}
 	}
 
 	const confirmed = await ctx.confirmMaintenance({

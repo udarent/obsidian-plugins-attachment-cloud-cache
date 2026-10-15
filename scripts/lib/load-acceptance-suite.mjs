@@ -273,6 +273,29 @@ async function waitFor(predicate, what, timeoutMs = 10000, diagnose = () => "") 
 	}
 }
 
+/**
+ * 「**不该发生**的那件事有没有发生」—— 否定式断言必须带一个**窗口**。
+ *
+ * 与 `waitFor` 正好相反：`waitFor` 等的是"必须发生"（超时 = 失败），
+ * 这里等的是"若它会发生、就该在这段时间里发生"（超时 = 通过）。
+ *
+ * ⚠️ 否定式断言**不能**写成一句直接 `assert`：被测动作多半是**异步启动**的
+ * （`void releaseLocalSpace(...)`），那一刻它还没跑到能被观察到的地方 ⇒
+ * 断言**恒为真**（"假绿"，比跑失败更糟）。实测踩到过一次：
+ * `mutate-load-acceptance` 那条"切回保留副本不该问"第一版就是这么写的，
+ * 变异跑出来是"漏过（测试无牙）"。
+ *
+ * @param settleMs 给它的窗口。取 1.5 s 是相对于被测链条说的：它只做
+ *   "读几个文件的 stat + 扫几篇笔记"，本地实测都在几十毫秒内。
+ */
+async function waitForAbsence(predicate, what, settleMs = 1500) {
+	const deadline = Date.now() + settleMs;
+	while (Date.now() < deadline) {
+		if (await predicate()) throw new Error(`不该发生却发生了：${what}`);
+		await new Promise((r) => setTimeout(r, 10));
+	}
+}
+
 /** 一个够用的假 `<img>`：记录每一次赋值（用于断言"远端地址是否被写过"）。 */
 function makeFakeImage(src) {
 	return {
@@ -1563,7 +1586,7 @@ ${text}`);
 			plugin.rotation = {
 				maybeRotate: (reason) => {
 					rotateReasons.push(reason);
-					return realRotator.maybeRotate(reason);
+					return realRotator.maybeRotate(reason).then((summary) => { console.log("[probe] rotate", reason, JSON.stringify(summary)); return summary; });
 				},
 			};
 
@@ -1577,6 +1600,7 @@ ${text}`);
 				}`
 			);
 
+			console.log("[probe] index=", JSON.stringify(index.toArray().map((e) => ({ k: e.key, size: e.size, at: e.lastUsedAt }))));
 			await waitFor(() => !index.has(legacyKey), "超限后自动淘汰了最久没用过的遗留副本", 20000, diagnose);
 
 			assert.equal(await existsOnDisk(root, legacyPath), false, "★ 被淘汰的副本要真的离开磁盘");
@@ -1674,7 +1698,11 @@ ${text}`);
 					contentType: "image/png",
 					etag: "",
 					uploadedAt: new Date().toISOString(),
-					lastUsedAt: Date.now(),
+					// ⚠️ **一小时前用过**，不是"刚刚"：上限那条路有 **10 分钟宽限**（刚用过的这轮不动），
+					// 而本节的最后一条断言（"切回保留副本不该问"）要求**那条错路真的能走到弹窗**——
+					// 写成 `Date.now()` 时它落在宽限里 ⇒ 零候选 ⇒ 静默返回 ⇒ 错路不可见（实测踩到）。
+					// 「不留副本」那条路不看这个字段，所以这里改它不影响上面的断言。
+					lastUsedAt: Date.now() - 60 * 60 * 1000,
 					sourceName: key,
 				});
 			}
@@ -1778,6 +1806,40 @@ ${text}`);
 			// ⚠️ 这一轮**会**再弹确认框（候选非空）—— 如实写在这里，免得下一个人
 			// 以为"再跑一次是空操作"成立（它不是：永远确认不上的那份会一直出现）。
 			assert.equal(releaseAsks.length, 2, "★ 候选非空就会问一次（云端确认不上的那份仍在候选里）");
+
+			// ⭐⭐ 反向（2026-10-15，用户从"站在用户角度"提出来）：把档位切**回保留副本** ⇒ **不该再问**。
+			//
+			// 若判定放宽成"只要档位变了就问"，用户刚说要保留副本，插件却问"要不要把本地副本删掉"
+			// —— 那是自相矛盾的配置（与"不留副本档下不给删除按钮"同一条纪律）。
+			// ⚠️ 此刻候选**非空**（那份云端确认不上的仍在候选里）⇒ 这一条测的是"**不该问**"，
+			// 不是"没东西可问所以静默"。两者必须能区分开，否则这条断言会永远为真。
+			// ⚠️ 否定断言要走 `waitForAbsence`（**给它一个出现的窗口**），不能直接 assert：
+			// 上面那次 `saveSettings` 里的清理流程是 `void` 启动的，直接断言时它还没跑到
+			// 弹确认框那一步 ⇒ 这条断言会**恒真**（实测：第一版直接 assert，变异报"漏过"）。
+			//
+			// ⚠️⚠️ 还要**让那条错路真的能走到能被看到的地方**（D-27 之后补的这一条）：
+			// 目标现在来自档位，而"保留副本 + 没设上限"= **没有目标** ⇒ 流程自己就返回了
+			// ⇒ 判定写错也**什么都不发生** ⇒ 这条否定断言变得**没有牙**（实测：D-27 落地后
+			// `mutate-load-acceptance` 又报了一次"漏过"）。
+			//
+			// ⭐ 所以上限必须**低于当前占用量**、且夹具里那些副本必须**不在宽限期内**：
+			// 这样"切回保留档却去清"在错误实现下**真的有候选可问** ⇒ 弹出确认框 ⇒ 这条断言才看得见。
+			// ⚠️ 第一版写的是 `4096`（"远大于占用量，顺便避免触发后台淘汰"）—— 那正好让错路
+			// **零候选、静默返回** ⇒ 变异报"漏过（测试无牙）"。**上限取值的判据是"能不能让错路现形"，
+			// 不是"能不能避开别的副作用"。**
+			// ⚠️ 后台淘汰（`maybeRotate("settings")`）确有 60 s 节流且本套件更早处已经真跑过一轮
+			// ⇒ 这里这一轮会被节流跳过（`isRotationDue`），不会把候选先清空。
+			plugin.settings.cacheLimitMb = 1;
+			plugin.settings.localCopy = "keep";
+			await plugin.saveSettings();
+			await waitForAbsence(
+				() => releaseAsks.length > 2,
+				"★ 切成「保留副本」时不该问要不要删（用户刚说要保留）"
+			);
+			// ⚠️ 收尾把上限还原成"不限量"：这一节造出来的 1 MB 上限留在设置里，会让**后面**
+			// 任何一次 `saveSettings` 都想去淘汰（虽然也会被 60 s 节流挡下）—— 不留这种尾巴。
+			plugin.settings.cacheLimitMb = 0;
+			await plugin.saveSettings();
 		}
 
 		// ============================================================

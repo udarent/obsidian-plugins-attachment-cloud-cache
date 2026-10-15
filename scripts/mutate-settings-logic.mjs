@@ -61,20 +61,38 @@ await runMutations({
 			expect: "原地保留档**也要显示**",
 		},
 		{
-			// 后果（F18 / D-19）：一个**永久删除**本地副本的按钮出现在「保留副本」档下 ——
-			// 用户刚说了"我要留副本"，界面却给他一个"全删掉"。配置自相矛盾，
-			// 而按下它删掉的东西**不进回收站**。
-			name: "★ 「释放本地空间」按钮在「保留副本」档也显示（自相矛盾的界面）",
-			from: 'export function shouldShowReleaseSpace(action: unknown): boolean {\n\treturn action === "trash";\n}',
-			to: "export function shouldShowReleaseSpace(action: unknown): boolean {\n\treturn true;\n}",
-			expect: "保留副本档必须隐藏",
+			// 后果：又退回 1.2.2 的旧口径（只在「不留副本」档显示）⇒ **设了上限的用户找不到手动入口**，
+			// 只能干等后台那一轮（它每 10 分钟才看一次、还带 60 s 节流与 10 分钟宽限）。
+			// ⭐ 这正是用户 2026-10-15 报的那个缺口："设置上限 500，想清理，却发现没有入口"。
+			name: "★ 又只认「不留副本」档（设了上限却没有手动入口）",
+			from: '\treturn localCopyCleanupTarget(action, cacheLimitMb).kind !== "none";',
+			to: '\treturn isCacheDisabled(action);',
+			expect: "保留副本档设了上限也要显示",
 		},
 		{
-			// 相反的错向：把判据写成"不等于 trash" ⇒ 按钮在**该出现的档**消失，
-			// 而"界面上找不到"与"功能没做"看起来完全一样（功能静默不可达）。
-			name: "★ 判据写反（按钮在该出现的档消失，功能静默不可达）",
-			from: 'export function shouldShowReleaseSpace(action: unknown): boolean {\n\treturn action === "trash";\n}',
-			to: 'export function shouldShowReleaseSpace(action: unknown): boolean {\n\treturn action !== "trash";\n}',
+			// 后果（与上一条相反的错向）：没有目标也把按钮摆出来 —— 用户按下去，
+			// 流程那一侧会**什么都不做**（`kind === "none"` 直接返回），
+			// 界面上表现成"按钮点了没动静"，与"功能坏了"完全一样。
+			name: "★ 没有目标也显示（按钮点了没动静）",
+			from: '\treturn mb > 0 ? { kind: "limit", mb } : { kind: "none" };',
+			to: '\treturn { kind: "limit", mb };',
+			expect: "不限量时不该显示",
+		},
+		{
+			// 后果：坏上限（无穷大 / 非数）被当成"有目标" ⇒ 目标变成一个够不着的数，
+			// 按钮永远显示、而"已经在上限以内"这条永远不成立。
+			name: "★ 坏上限被读成「有目标」",
+			from: "\t\ttypeof cacheLimitMb === \"number\" && Number.isFinite(cacheLimitMb) ? Math.floor(cacheLimitMb) : 0;",
+			to: "\t\ttypeof cacheLimitMb === \"number\" ? Math.floor(cacheLimitMb) : 0;",
+			expect: "无穷大的上限不算",
+		},
+		{
+			// 后果：目标不再"按档位"给 ⇒ 「不留副本」档会用**遗留的上限数字**当目标
+			//（那一档上限那行是隐藏的，用户看不到它，更不知道它在生效）——
+			// 于是"不留副本"清完却还留着一批，而界面上没有任何解释。
+			name: "★ 目标不按档位给（「不留副本」档误用遗留的上限数字）",
+			from: '\tif (isCacheDisabled(action)) return { kind: "all" };\n',
+			to: "",
 			expect: "不留副本档要显示",
 		},
 

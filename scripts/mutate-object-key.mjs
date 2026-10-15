@@ -110,10 +110,24 @@ await runMutations({
 			expect: "老格式纯哈希 key 应解析为空",
 		},
 		{
-			name: "Windows 路径不按分隔符取末段（路径解析失败）",
-			from: "raw.split(/[\\\\/]/)",
-			to: 'raw.split("/")',
+			// ⚠️ 同一条规则在 `displayNameForKey` 与 `hashFromKey` 里**各写了一遍**，
+			// 所以锚点也要**各来一条**（带上下文区分）。从前只有一条、`from` 又是纯字面片段：
+			// `replace` 只改第一处 ⇒ 它一直只盖着 `displayNameForKey`，
+			// 而 `hashFromKey` 那一处**从来没被变过**（2026-10-15 由"锚点唯一"检查查出来）。
+			name: "Windows 路径不按分隔符取末段（displayNameForKey 侧解析失败）",
+			from: 'export function displayNameForKey(key: unknown): string {\n\tconst raw = typeof key === "string" ? key.trim() : "";\n\tif (!raw) return "";\n\tconst segment = raw.split(/[\\\\/]/).pop() ?? "";',
+			// ⚠️ `to` 必须把 `from` 覆盖的**每一行**都还回去（只在那一行上做改动）：
+			// 漏掉函数签名或 `if (!raw)` 那一行 ⇒ 变异出来的文件**语法错**，
+			// 报出来的是"Build failed"，而不是这条规则该有的那句断言（实测踩到）。
+			to: 'export function displayNameForKey(key: unknown): string {\n\tconst raw = typeof key === "string" ? key.trim() : "";\n\tif (!raw) return "";\n\tconst segment = raw.split("/").pop() ?? "";',
 			expect: "Windows 路径应按分隔符取末段再解析",
+		},
+		{
+			// 同上，这是 `hashFromKey` 那一条（此前没人守着）。
+			name: "Windows 路径不按分隔符取末段（hashFromKey 侧：整条路径被当成基名 ⇒ 取不到哈希）",
+			from: '\tconst segment = raw.split(/[\\\\/]/).pop() ?? "";\n\tconst named = HASH_TAIL_PATTERN.exec(segment);',
+			to: '\tconst segment = raw.split("/").pop() ?? "";\n\tconst named = HASH_TAIL_PATTERN.exec(segment);',
+			expect: "反斜杠路径（Windows）也要取末段再解析",
 		},
 	],
 });

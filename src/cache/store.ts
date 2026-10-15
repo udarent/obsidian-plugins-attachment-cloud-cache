@@ -91,7 +91,7 @@ export async function loadCacheIndex(adapter: DataAdapter, path: string): Promis
 /**
  * 原子化写入索引。
  *
- * 怎么原子、怎么兜底、怎么建目录都收在 `atomic-write.ts` 里（与站点记忆**共用同一份**）。
+ * 怎么原子、怎么兜底、怎么建目录都收在 `atomic-write.ts` 里（⚠️ 站点记忆那个调用方已随 1.2.0 删除 —— 这里现在是唯一调用方）。
  * 这里只负责把索引序列化好交给它 —— 所以两个 store 的落盘语义只可能一致。
  */
 export async function saveCacheIndex(adapter: DataAdapter, path: string, index: CacheIndex): Promise<void> {

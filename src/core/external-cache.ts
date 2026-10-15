@@ -37,12 +37,16 @@
  */
 
 import type { App, RequestUrlParam, RequestUrlResponse } from "obsidian";
-import { TFile, requestUrl } from "obsidian";
+import { Platform, TFile, requestUrl } from "obsidian";
 
 import type { PluginSettings } from "../types";
 import type { S3Client } from "../s3/client";
 import type { CacheIndex } from "../cache/index";
 import { ingestAttachment } from "./ingest";
+// ⭐ 本机文件（`file:///D:/…`）：与站外是**同一件事的两半**，差别只在"字节从哪来"。
+// 见 `local-file.ts` 模块头（那里也写着这条路的边界：只走显式入口、不加目录白名单）。
+import { decideLocalFile, readLocalFileBytes } from "../local-file";
+import type { LocalFileReader } from "../local-file";
 import { keyFromUrl } from "../render/render-target";
 import { hostOf, isBlockedHost } from "../render/external-decide";
 import { resolveExtension } from "../vault-files";
@@ -107,6 +111,10 @@ export type ExternalCacheStatus =
 	| "fetch-failed"
 	| "not-attachment"
 	| "too-large"
+	/** 本机文件：**它不在了**（被挪走/删掉）—— 最常见的一种，值得一句具体的话。 */
+	| "local-missing"
+	/** 本机文件：在那儿但读不了（权限 / 是目录 / 平台不支持）。 */
+	| "local-unreadable"
 	/** 下载成功但上传失败（字节已留在本地，绝不丢图）。 */
 	| "upload-failed";
 
@@ -351,6 +359,26 @@ export interface ExternalCacherDeps extends NotifySink {
 	maxBytes?: number;
 	now?: () => Date;
 	hashBytes?: (bytes: Uint8Array) => Promise<string>;
+	/**
+	 * 读一份**本机绝对路径**上的文件（`file:///D:/…` 那条路用）。
+	 *
+	 * ⚠️ 留成接缝只为**测试**：生产路径上必须是默认值（`local-file.ts` 里那份真读磁盘的实现）。
+	 * 换成别的实现 = 换掉"读的是哪个文件"这件事本身。
+	 */
+	readLocalFile?: LocalFileReader;
+	/**
+	 * 当前是不是桌面端。**默认**问宿主的 `Platform.isDesktopApp`（兜底）。
+	 *
+	 * ⚠️ 装配点上**只有一处**问平台（`main.ts::isDesktopHost()`）—— 但这一层**必须**留一份默认：
+	 * `core/` 不该反过来依赖装配点，而"没有注入"时的安全方向是**保守**（手机上没有本机绝对路径）。
+	 * ⚠️ 本项目**第一次**做平台判断；以后再有平台相关的功能，照这个形状**再加一条**。
+	 */
+	isDesktop?: () => boolean;
+}
+
+/** 兜底的平台判据：宿主的 `Platform.isDesktopApp`（装配点没注入时用它）。 */
+function isDesktopApp(): boolean {
+	return Platform.isDesktopApp === true;
 }
 
 /** 下载阶段的状态 → 链路状态。 */
@@ -390,6 +418,10 @@ function messageKeyFor(status: ExternalCacheStatus): string {
 			return "externalNotAttachment";
 		case "too-large":
 			return "externalTooLarge";
+		case "local-missing":
+			return "localFileMissing";
+		case "local-unreadable":
+			return "localFileUnreadable";
 		case "upload-failed":
 			return "externalUploadFailed";
 		default:
@@ -423,10 +455,21 @@ export function createExternalCacher(deps: ExternalCacherDeps): ExternalCacher {
 		// ⚠️ 这里**刻意不查 `externalImageCache`**：那个开关只管**自动**那一路，
 		// 而本执行器同时服务显式工具（挑选 / 批量）—— 在那条路上开关关着也照样要搬
 		//（勾选本身就是同意）。开关只在渲染路径的 `purpose: "auto"` 里判。
-		if (!host) return { ...base, status: "refused" };
-		if ((deps.blockedHost ?? isBlockedHost)(host)) return { ...base, status: "refused" };
-		// 本存储的 URL 不该走这条路（那是回退下载的活；走到这里说明调用方搞错了）
-		if (keyFromUrl(url, settings.s3)) return { ...base, status: "refused" };
+		//
+		// ⭐ **本机文件先分流**：`file:///D:/…` **没有主机** ⇒ 下面那三条主机判据对它都不成立
+		//（`hostOf` 会给空串，而"没有主机"在这一层本来是 `refused` 的理由）。
+		// 所以先问"这是不是一条本机路径"，再按需走主机那几条。
+		// ⚠️ 非桌面在这里直接 `refused`（静默）：手机端拿不到 `D:/…`，那是平台事实，
+		// 不是用户做错了什么；清单那一层本来也会先把这类剔掉（同一个判据）。
+		const local = decideLocalFile({ src: url, isDesktop: (deps.isDesktop ?? isDesktopApp)() });
+		if (local.action === "ignore") return { ...base, status: "refused" };
+		if (local.action === "not-mine") {
+			// 站外那条：主机判据在这里才成立
+			if (!host) return { ...base, status: "refused" };
+			if ((deps.blockedHost ?? isBlockedHost)(host)) return { ...base, status: "refused" };
+			// 本存储的 URL 不该走这条路（那是回退下载的活；走到这里说明调用方搞错了）
+			if (keyFromUrl(url, settings.s3)) return { ...base, status: "refused" };
+		}
 
 		const client = deps.client();
 		if (!client) return { ...base, status: "unavailable" };
@@ -446,25 +489,61 @@ export function createExternalCacher(deps: ExternalCacherDeps): ExternalCacher {
 			return { ...base, status: "no-note", error };
 		}
 
-		// ── 3. 下载 ──
-		const fetched = await fetchExternalImage(url, {
-			request: deps.request,
-			timeoutMs: deps.timeoutMs,
-			maxBytes: deps.maxBytes,
-		});
+		// ── 3. 取字节：站外去网上下，**本机文件从磁盘读**（两条路只差这一处） ──
+		// 分流在**第 1 步**就做过了（`local`）：那里要先知道"这是不是一条本机路径"，
+		// 因为主机判据对它不适用。这里只管按分流结果取字节。
+		let bytes: Uint8Array;
+		let mime: string | undefined;
+		/**
+		 * 上传时用的文件名：本机文件取它自己的名字（一定有），站外从 URL 末段推（推不出就是 undefined，
+		 * 由 `ingestAttachment` 兜底 —— 那是它原有的行为）。
+		 */
+		let name: string | undefined;
 
-		if (fetched.status !== "ok") {
-			const status = cacheStatusFor(fetched.status);
-			const params: Record<string, unknown> =
-				status === "fetch-missing"
-					? { status: fetched.detail }
-					: status === "not-attachment"
-						? { contentType: fetched.detail }
-						: status === "too-large"
-							? { mb: Math.round((deps.maxBytes ?? MAX_EXTERNAL_BYTES) / (1024 * 1024)) }
-							: { host };
-			if (shouldReportExternalFailure(status)) say(status, params);
-			return { ...base, status, error: fetched.detail };
+		if (local.action === "read") {
+			name = local.name;
+			mime = local.contentType;
+			const read = await (deps.readLocalFile ?? readLocalFileBytes)(local.path, {
+				maxBytes: deps.maxBytes ?? MAX_EXTERNAL_BYTES,
+			});
+			if (read.status === "missing") {
+				// 文件被挪走/删掉 —— 这一类**最常见**，所以单独成一句（"那个文件不在了"）
+				say("local-missing", { path: local.path });
+				return { ...base, status: "local-missing" };
+			}
+			if (read.status === "too-large") {
+				// 与站外共用同一条"超过上限"的话：对用户来说这两件事是同一件事
+				say("too-large", { mb: Math.round((deps.maxBytes ?? MAX_EXTERNAL_BYTES) / (1024 * 1024)) });
+				return { ...base, status: "too-large" };
+			}
+			if (read.status !== "ok") {
+				say("local-unreadable", { path: local.path, error: describeError(read.error) });
+				return { ...base, status: "local-unreadable", error: read.error };
+			}
+			bytes = read.bytes;
+		} else {
+			name = fileNameFromUrl(url);
+			const fetched = await fetchExternalImage(url, {
+				request: deps.request,
+				timeoutMs: deps.timeoutMs,
+				maxBytes: deps.maxBytes,
+			});
+
+			if (fetched.status !== "ok") {
+				const status = cacheStatusFor(fetched.status);
+				const params: Record<string, unknown> =
+					status === "fetch-missing"
+						? { status: fetched.detail }
+						: status === "not-attachment"
+							? { contentType: fetched.detail }
+							: status === "too-large"
+								? { mb: Math.round((deps.maxBytes ?? MAX_EXTERNAL_BYTES) / (1024 * 1024)) }
+								: { host };
+				if (shouldReportExternalFailure(status)) say(status, params);
+				return { ...base, status, error: fetched.detail };
+			}
+			bytes = fetched.bytes;
+			mime = fetched.contentType;
 		}
 
 		// ── 4. 上传 + 落本地副本 + 登记索引（复用现成零件，一次调用完成） ──
@@ -487,9 +566,9 @@ export function createExternalCacher(deps: ExternalCacherDeps): ExternalCacher {
 				origin: "external",
 			},
 			{
-				bytes: fetched.bytes,
-				name: fileNameFromUrl(url),
-				mime: fetched.contentType,
+				bytes,
+				name,
+				mime,
 				// 让宿主的"附件目录"设置生效（含"与笔记同目录"这类模式）
 				sourcePath: notePath,
 			}
@@ -525,7 +604,12 @@ export function createExternalCacher(deps: ExternalCacherDeps): ExternalCacher {
 			return { ...uploaded, status: "cached-no-rewrite", error };
 		}
 
-		say("cached", { host });
+		// ⚠️ 成功那条**共用同一个状态码 `cached`**（两处调用方按它计数：`main.ts` 的批量统计与
+		// `maintenance/run.ts`），但**文案分开**：一个说得出文件名，另一个说得出站点名。
+		// ⇒ 本机那条直接给键（不走 `messageKeyFor`），免得为了文案在状态码两边都加分支
+		//（"同一条规则写在 N 处"是这个项目吃过亏的形状）。
+		if (local.action === "read") notifyUser(deps, "localCached", { name });
+		else say("cached", { host });
 		return { ...uploaded, status: "cached" };
 	};
 }

@@ -24,7 +24,7 @@
  * 而"没配置就用"时粘贴会给出明确报错并指向设置页 —— 那条路径比一个图标更有用。
  */
 
-import { Component, MarkdownRenderer, Notice, Plugin, TFile, TFolder, getLanguage } from "obsidian";
+import { Component, MarkdownRenderer, Notice, Platform, Plugin, TFile, TFolder, getLanguage } from "obsidian";
 
 import { SETTINGS_DEFAULTS, hasLegacyExternalImageDefault, hasLegacyObjectKeyTemplate, legacyAutoCacheEnabled, mergePluginSettings } from "./settings";
 import type { LocalCopyAction, PluginSettings } from "./types";
@@ -450,7 +450,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		//
 		// 为什么不是"用户删掉那个文件时问"（上一版的落地方式）：用户在 Obsidian 里表达
 		// "我不要这张图了"几乎总是**删掉笔记里的引用**（或删掉整篇笔记）—— 两者都不删文件；
-		// 而默认档（移入缓存目录）下那个附件文件根本不在附件目录里（上传时就被搬走了）
+		// 而他**几乎不会去删那个文件**（默认档下它就留在附件目录里、是他自己的文件）
 		// ⇒ 挂在"删文件"上的询问，默认配置下**一次都不会出现**（详细设计 §13.1）。
 		this.orphanFlow = createOrphanFlow(this.flowContext());
 
@@ -819,6 +819,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		const selection = selectExternalUploadCandidates(notes, {
 			settings: this.settings,
 			configured: connectionReadiness(this.app.secretStorage, this.settings).ready,
+			// ⭐ 平台判据（与 `flowContext().isDesktop` 同源）—— 本机文件只有桌面读得到
+			isDesktop: this.isDesktopHost(),
 		});
 		return selection.candidates;
 	}
@@ -828,7 +830,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	/**
 	 * **被引用着**的文件路径集合（宿主的链接索引 + 我们自己扫的画布文本）。
 	 *
-	 * 这条命令跑完会把原文件移进缓存目录，所以"搬谁"必须由**引用**决定：
+	 * 这条命令跑完**不搬动原文件**（1.2.0 起副本就是原地那份；早先承诺的"移进缓存目录"已取消），
+	 * 所以"搬谁"仍必须由**引用**决定：
 	 * 引用会被同一条命令改写成远端地址，而没有任何引用的文件我们一概不碰。
 	 *
 	 * ⚠️ 两条来源**都要看**（需求 R16：画布与笔记同等算数）：
@@ -1108,7 +1111,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 索引指向的本地副本其实不存在 → 把这条记录摘掉并落盘。
 	 *
 	 * 这是**自愈**而不是清理：只改索引，不动任何文件。发生的时机是渲染时
-	 * `<img>` 加载失败（用户删了缓存目录 —— 那随时可做，是承诺过的）。
+	 * `<img>` 加载失败（用户删了本地副本 —— 那随时可做，是承诺过的）。
 	 * 不摘掉的话，这个 key 会**永远**被判为"本地已有"，于是永远不去下载。
 	 */
 	private async forgetLocalCopy(key: string): Promise<void> {
@@ -1145,7 +1148,19 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			fileCards: (items, limit) => this.fileCards(items, limit),
 			confirmMaintenance: (options) => this.confirmMaintenance(options),
 			maintenanceDeps: () => this.maintenanceDeps(),
+			isDesktop: () => this.isDesktopHost(),
 		};
+	}
+
+	/**
+	 * 当前是不是桌面端 —— ⚠️ **全库唯一一处问平台**。
+	 *
+	 * 只有一件事靠它：`file:///D:/…` 这类**本机绝对路径**只有桌面读得到
+	 * （手机端那个路径不存在）。所以判据留在这里（装配点），而**纯判定层收的是结果**
+	 * （`decideLocalFile({ isDesktop })`）—— 于是那一层可穷举，测试里也不用去替换宿主标志。
+	 */
+	private isDesktopHost(): boolean {
+		return Platform.isDesktopApp === true;
 	}
 
 	async loadSettings(): Promise<void> {

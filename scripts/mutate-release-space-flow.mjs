@@ -35,16 +35,16 @@ await runMutations({
 			// ⇒ 连**孤儿**一起清 —— 而孤儿正是"用户可能还想留着"的那一类
 			//（笔记删了、图还在），且它越过了与 R17 三档询问的分工线（那条线是**逐次询问**）。
 			name: "★ 存量清理不再要求「带远端链接」（孤儿也被一起清掉）",
-			from: "\t\treferencedKeys,\n\t});",
-			to: "\t\treferencedKeys: new Set(entries.map((entry) => entry.key)),\n\t});",
+			from: "\t\treferencedKeys,\n\t\tkeepBytes,",
+			to: "\t\treferencedKeys: new Set(entries.map((entry) => entry.key)),\n\t\tkeepBytes,",
 			expect: "孤儿（没有任何笔记引用）不归它管",
 		},
 		{
 			// 后果：读不到笔记时异常直接冒泡 —— 两个入口都在没有 catch 的回调里
 			// ⇒ 变成一句 unhandled rejection，用户什么都看不到。
 			name: "★ 去掉\"读不到笔记 ⇒ 整体放弃\"的兜底（异常冒泡，用户什么都看不到）",
-			from: "\tlet selection: ReleaseSpaceSelection;\n\ttry {\n\t\tselection = await localSpaceSelection(ctx);\n\t} catch (error) {",
-			to: "\tconst selection = await localSpaceSelection(ctx);\n\tif (false) {",
+			from: "\tlet selection: ReleaseSpaceSelection;\n\ttry {\n\t\tselection = await localSpaceSelection(ctx, keepBytes);\n\t} catch (error) {",
+			to: "\tconst selection = await localSpaceSelection(ctx, keepBytes);\n\tif (false) {",
 			// ⚠️ 这条的失败形态与别条不同：套件在 await 那一步就被拒绝（断言没机会跑），
 			// 报错就是那句从 i18n 冒出来的错误文本 —— 照实写。
 			expect: "Could not read notes/broken.md",
@@ -102,6 +102,24 @@ await runMutations({
 			from: "\t\tRELEASE_SPACE_LIST_MAX\n\t);",
 			to: "\t\tselection.candidates.length\n\t);",
 			expect: "清单上限是 10",
+		},
+
+		// ── ⭐⭐ 目标（2026-10-15 用户报告：设了上限 500，清理却全清）──
+		{
+			// 后果：目标在**编排层**就丢了（永远当成"一份不留"）⇒ 用户设了 500 MB、按下清理，
+			// 结果本地副本一份不剩。⭐ 这正是用户报的那个行为。
+			name: "★★ 目标在编排层丢掉（上限档退化成全清）",
+			from: "\tconst keepBytes = target.kind === \"limit\" ? megabytesToBytes(target.mb) : 0;",
+			to: "\tconst keepBytes = 0;",
+			expect: "只删到上限以内就停",
+		},
+		{
+			// 后果："没有目标"（保留副本档 + 没设上限）被放进下面的路径 ⇒ `target.mb` 是
+			// `undefined` ⇒ 目标算成 0 = **全清** —— 一个防御分支变成了破坏性行为。
+			name: "★★ 没有目标时继续往下走（被解释成「全清」）",
+			from: "\tif (target.kind === \"none\") return;",
+			to: "\tif (false) return;",
+			expect: "没有目标 ⇒ 一个文件都不许删",
 		},
 	],
 });
