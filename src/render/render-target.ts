@@ -28,7 +28,7 @@
  * | 不是 http(s) 图（已经是 `app://`、data:、blob:、相对路径） | `ignore` | 不是我们的图 |
  * | 索引里有本地副本 | `local` | 零网络，这是离线可用的来源 |
  * | 属于本存储但本地没有 | `fetch` | 交给回退下载（换设备/缓存被清） |
- * | 属于本存储但本地没有，**且是「不留副本」档** | `ignore` | 这一档等于关闭缓存：不为它联网取回副本 |
+ * | 属于本存储但本地没有，**且是「不留副本」档** | `direct`（公开读）／ `signed`（仅内部） | 这一档等于关闭缓存：不为它联网取回副本。私有存储里远端地址必 403，改给一条预签名地址；公开存储不必签名，直接把远端地址交出去（音视频由调用方换节点）—— 两条都是图床式：磁盘不落文件、每次从存储读 |
  * | 不属于本存储的地址 | `ignore` | 本层只服务**本存储里的对象**；别的地址不在它的范围内 |
  * | 没配存储 | `ignore` | 连"自己的存储"是什么都不知道，不该动任何图 |
  *
@@ -73,7 +73,23 @@ export type RenderTarget =
 	/** 用本地副本：`localPath` 是 vault 相对路径，调用方负责换成可用的 URL。 */
 	| { action: "local"; key: string; remoteUrl: string; localPath: string }
 	/** 属于本存储但本地没有副本 —— 交给回退下载。 */
-	| { action: "fetch"; key: string; remoteUrl: string };
+	| { action: "fetch"; key: string; remoteUrl: string }
+	/**
+	 * 公开读取 + 不留副本：**不落盘、也不签名** —— 音视频由调用方用这条远端地址
+	 * 直接造节点（图片不走它：远端 `src` 本来就能显示）。
+	 *
+	 * ⭐ 为什么需要它（2026-10-17 评审时发现的一格空白）：公开桶的字节任何人都取得到，
+	 * 宿主的 `<img>` 却播不了视频 ⇒ 不给这条来路的话，「公开 + 不留副本」的音视频
+	 * **既没有签名地址、也没有副本**，一帧都放不出来。签名是**私有桶**才需要的东西。
+	 */
+	| { action: "direct"; key: string; remoteUrl: string }
+	/**
+	 * 私有存储 + 不留副本（图床式）：把 `src` 换成一条**预签名地址**。
+	 *
+	 * ⚠️ 换上去的那条地址**只存在内存里**，绝不写进笔记（写进去就是一批会过期的死链）。
+	 * 判定为什么在渲染层而不在下载层：这条路不取字节、不落盘，什么都不写。
+	 */
+	| { action: "signed"; key: string; remoteUrl: string };
 
 /** 探测用的固定片段：用来把"前缀"从完整 URL 里切出来。 */
 const PROBE_KEY = "acc-probe";
@@ -153,6 +169,14 @@ export interface RenderDecisionInput {
 	src: unknown;
 	settings: PluginSettings;
 	index: CacheIndex;
+	/**
+	 * 缺副本的图该不该改用**预签名地址**（= 私有存储 + 不留副本）。
+	 *
+	 * ⚠️ 由 `link-access.ts::usesSignedUrls` 算出来传进来，**不要**在这里读设置自己判：
+	 * 那条判据同时在下载闸门与预签名那条路上用，两处算一次必然分叉（一侧说"要"、
+	 * 一侧说"不要"，而两边都不报错）。缺省 `false` = 老行为（私有 + 不留副本时放弃显示）。
+	 */
+	useSignedUrls?: boolean;
 }
 
 /** 判定一张图该怎么渲染。**同步、无 I/O** —— 理由见本模块头注释。 */
@@ -174,8 +198,22 @@ export function decideRenderTarget(input: RenderDecisionInput): RenderTarget {
 	// ⭐ 「不留副本」= 关闭缓存：这一档下**不产生 `fetch`** —— 不为缺副本的图联网，
 	// 也就更不会把远端字节写进 vault。放在这里（索引之后、算 key 之前）是刻意的：
 	// ① 已经存在的副本仍然照常走 `local`（理由见模块头注释）；
-	// ② 这一档连"是不是我们的图"都不必算 —— 反正不动它。
+	// ② 这一档连"是不是我们的图"都不必算 —— 反正不动它（除了下面那条预签名分支）。
 	if (isCacheDisabled(input.settings.localCopy)) {
+		// ⭐ 1.7.0（用户 2026-10-17 追问的"图床效果"）：私有存储 + 不留副本时，
+		// 不是"放弃显示"，而是给一条**预签名地址** —— 浏览器自己就能取，
+		// 磁盘上什么都不落。代价是离线看不到（那正是"不留副本"的定义）。
+		// ⚠️ 只有它能救这一类图：别的分支要么写文件（`fetch`）、要么用远端地址（403）。
+		if (input.useSignedUrls) {
+			const signedKey = keyFromUrl(src, input.settings.s3);
+			if (signedKey) return { action: "signed", key: signedKey, remoteUrl: src };
+		}
+		// 公开读 + 不留副本：同样不落盘，但**不需要签名** —— 把远端地址交出去，
+		// 由调用方按类型决定要不要自己造节点（音视频要，图片不要）。
+		// ⚠️ 这里**不判类型**：类型表只有一处（`embed-rebuild.ts::signedMediaKindFor`），
+		// 在这一层再写一份迟早与它分叉。
+		const directKey = keyFromUrl(src, input.settings.s3);
+		if (directKey) return { action: "direct", key: directKey, remoteUrl: src };
 		return { action: "ignore", reason: "「不留副本」档：缓存已关闭，不为缺副本的图取回副本" };
 	}
 

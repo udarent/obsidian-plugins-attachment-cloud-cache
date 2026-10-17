@@ -13,7 +13,7 @@ import { runReleaseSpaceFlowSuite } from "./lib/release-space-flow-suite.mjs";
  * 笔记里的链接由插件自己的函数生成，而不是测试手拼的字符串）。
  */
 await withLoadedTs(
-	["src/plugin/release-space-flow", "src/i18n", "src/s3/client"],
+	["src/plugin/release-space-flow", "src/i18n", "src/s3/client", "src/maintenance/run"],
 	async (mod) => {
 		const stats = await runReleaseSpaceFlowSuite(mod);
 		console.log(

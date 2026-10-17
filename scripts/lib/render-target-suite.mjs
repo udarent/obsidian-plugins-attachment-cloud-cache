@@ -152,12 +152,21 @@ export function runRenderTargetSuite(mod) {
 	// ============================================================
 	const trashSettings = { ...settingsWith(baseAddress), localCopy: "trash" };
 
-	// ① 属于本存储但没副本 → ignore（**不是** fetch）：这一档不为它联网。
-	assert.equal(
-		decideRenderTarget({ src: `${baseAddress.publicUrlBase}/other.png`, settings: trashSettings, index }).action,
-		"ignore",
-		"★ 「不留副本」档下不为缺副本的图去联网（等于关闭缓存）"
-	);
+	// ① 属于本存储但没副本 → **不 fetch**：这一档不为它联网取回副本。
+	// ⭐ 1.7.0：公开读时的动作是 `direct`（把那条远端地址交出去），不再是 `ignore` ——
+	// 因为「公开」与「私有」在这一格的处理不一样（私有要签名，公开不用）。
+	// 对**图片**消费者 `direct` 等于什么都不做（远端 `src` 本来就能显示），
+	// 对**音视频**它才是唯一能显示的那条路（换节点）。判据在消费侧，不在这一层。
+	{
+		const decision = decideRenderTarget({
+			src: `${baseAddress.publicUrlBase}/other.png`,
+			settings: trashSettings,
+			index,
+		});
+		assert.notEqual(decision.action, "fetch", "★ 「不留副本」档下不为缺副本的图取回副本（等于关闭缓存）");
+		assert.equal(decision.action, "direct", "公开读取 + 不留副本 ⇒ direct（不签名、也不落盘）");
+		assert.equal(decision.key, "other.png", "要带上 key：消费侧按类型决定要不要换节点");
+	}
 
 	// ② **已有的**副本照常走 local：旧档位留下的，或用户**显式**缓存进来的站外图
 	//（「缓存站外图片」那条链会强制用 `cache` 档写副本）。
@@ -167,6 +176,59 @@ export function runRenderTargetSuite(mod) {
 		"local",
 		"★ 这一档下已有的副本仍然照用（否则用户显式缓存进来的图会静默失效）"
 	);
+
+	// ②b. ⭐ 1.7.0：私有存储 + 不留副本 ⇒ `signed`（图床式：不落盘、每次从存储读）
+	//
+	// 用户 2026-10-17 的追问：「仅内部就必须把图下载下来吗？不能像图床那样只存在 S3？」
+	// 判定层因此多出第三种动作 —— 它与 `fetch` 的区别是**什么都不写**，
+	// 与 `ignore` 的区别是**它真的会去取字节**（只是走一条临时地址）。
+	{
+		const signed = decideRenderTarget({
+			src: `${baseAddress.publicUrlBase}/signed-case.png`,
+			settings: trashSettings,
+			index,
+			useSignedUrls: true,
+		});
+		assert.equal(signed.action, "signed", "★ 私有 + 不留副本 ⇒ 预签名地址（不是 ignore、也不下载）");
+		assert.equal(signed.key, "signed-case.png", "签名要按**反推出来的 key** 做（不是拼 URL）");
+		assert.equal(signed.remoteUrl, `${baseAddress.publicUrlBase}/signed-case.png`, "原地址要原样带下去");
+
+		// 不认识的地址（不是本存储的）**不许**为它签名 —— 那等于用我们的密钥替别人的对象签名
+		assert.equal(
+			decideRenderTarget({
+				src: "https://evil.example.net/a.png",
+				settings: trashSettings,
+				index,
+				useSignedUrls: true,
+			}).action,
+			"ignore",
+			"★ 站外图不许走预签名（那会拿我们的凭据替别人的地址签名）"
+		);
+
+		// 已有的副本仍然优先（零网络、离线可用）—— 「不再往里写」不等于「已有的不用」
+		assert.equal(
+			decideRenderTarget({
+				src: `${baseAddress.publicUrlBase}/k1.png`,
+				settings: trashSettings,
+				index,
+				useSignedUrls: true,
+			}).action,
+			"local",
+			"★ 有副本时优先用副本（哪怕这一档会签名）"
+		);
+
+		// 反向：不打开这个开关（公开读取 / 保留副本）时**不许签** ——
+		// 否则公开桶的用户会被无谓地签一遍名（多一个过期窗口，且地址每次不同、缓存全废）。
+		assert.equal(
+			decideRenderTarget({
+				src: `${baseAddress.publicUrlBase}/signed-case.png`,
+				settings: trashSettings,
+				index,
+			}).action,
+			"direct",
+			"★ 没要求签名时不许签（走 direct，把远端地址原样交出去）"
+		);
+	}
 
 	// ③ 站外图在任何档位下都不碰（红线不受设置影响）
 	assert.equal(

@@ -33,9 +33,9 @@ import { ButtonComponent, Notice, PluginSettingTab } from "obsidian";
 import type { App, Setting, SettingDefinitionItem, SettingGroupItem } from "obsidian";
 
 import type AttachmentCloudCachePlugin from "../main";
-import { createS3Client, objectBaseFor, probePublicLink, publicUrlFor } from "../s3/client";
-import type { S3ClientConfig } from "../s3/client";
+import { createS3Client, objectBaseFor } from "../s3/client";
 import { connectionReadiness } from "../s3/credentials";
+import { resolveAccess } from "../link-access";
 import { fromControlValue, isWritableValue, readByKey, toControlValue, writeByKey } from "./settings-bindings";
 import {
 	classifyConnectionFailure,
@@ -43,6 +43,7 @@ import {
 	connectionFailureKey,
 	ensureSecretSlot,
 	externalSiteModeOptions,
+	linkAccessOptions,
 	localCopyOptions,
 	orphanAskOptions,
 	publicLinkKey,
@@ -89,6 +90,7 @@ export class SettingsTab extends PluginSettingTab {
 		if (!isWritableValue(key, value)) return;
 
 		if (!writeByKey(this.plugin.settings, key, fromControlValue(key, value))) return;
+
 		await this.plugin.saveSettings();
 	}
 
@@ -172,6 +174,19 @@ export class SettingsTab extends PluginSettingTab {
 					type: "text",
 					key: "s3.publicUrlBase",
 					placeholder: objectBaseFor(this.plugin.settings.s3) || undefined,
+				},
+			},
+
+			{
+				name: this.t("linkAccessName"),
+				desc: this.t("linkAccessDesc"),
+				// 别名覆盖用户会搜的词：他们要的是"能不能给别人看"，不一定知道"ACL / 匿名读"
+				aliases: ["link", "share", "public", "private", "acl", "permission", "公开", "私有", "权限", "外链", "分享", "别人"],
+				control: {
+					type: "dropdown",
+					key: "linkAccess",
+					// 选项由类型清单生成：界面上能选的 = 类型允许的（只有一处定义）
+					options: linkAccessOptions((value) => this.t(`linkAccess_${value}`)),
 				},
 			},
 
@@ -432,31 +447,55 @@ export class SettingsTab extends PluginSettingTab {
 		}
 
 		// 第一步过了，第二步才有参考价值（凭据/桶都不对时，公开地址的结论说明不了什么）
-		return [{ key: "testOk", tone: "ok" }, await this.runPublicLinkCheck(readiness.config)];
+		return [{ key: "testOk", tone: "ok" }, ...(await this.runAccessCheck())];
 	}
 
 	/**
-	 * 第二步：**匿名**试着打开「当前配置会写进笔记的那个地址」，回答「别人打得开吗」。
+	 * 第二步：**匿名**试着打开「当前配置会写进笔记的那个地址」，回答两个问题：
 	 *
-	 * ⚠️ 必须试**真的要写的那个地址**（用 `publicUrlFor` 算，与写链接同一套推导）。
+	 * 1. **别人打得开吗**（`testPublic_*`）—— 桶允许匿名读吗、前缀写对了吗；
+	 * 2. **我们据此走哪条路**（`testAccess_*`）—— 公开读取，还是内部访问（取回本地副本）。
+	 *
+	 * ⚠️ 必须试**真的要写的那个地址**：`probeUrlFor` 与写链接同一套推导（`publicUrlFor`）。
 	 * 自己另拼一个地址来测，测的就不是用户笔记里那条链接了 —— 而本项目刚因为
 	 * "推导与写入不同源"吃过一次亏（公开前缀根本没传到客户端）。
+	 *
+	 * ⚠️ 走 `plugin.refreshAccessProbe({ force: true })` 而不是这里自己发一次请求：
+	 * 这样"界面上显示的结论"与"渲染判定用的结论"**是同一份**。分成两份的话，
+	 * 用户会看到"测试说公开、图却按私有取"这种自相矛盾的表现。
 	 */
-	private async runPublicLinkCheck(config: S3ClientConfig): Promise<TestLine> {
-		const key = this.plugin.sampleObjectKey();
-		if (!key) {
+	private async runAccessCheck(): Promise<TestLine[]> {
+		const probe = await this.plugin.refreshAccessProbe({ force: true });
+		if (probe.kind === "unknown") {
 			// 没有对象可试：**如实说无从验证**，而不是报一个假的通过
-			return { key: "testPublic_noSample", tone: "warn" };
+			return [{ key: "testPublic_noSample", tone: "warn" }];
 		}
 
-		const url = publicUrlFor(config, key);
-		const probe = await probePublicLink(url);
 		const kind = classifyPublicLink(probe.status);
-		return {
-			key: publicLinkKey(kind),
-			params: { status: probe.status ?? "-", url },
-			tone: publicLinkTone(kind),
-		};
+		const resolution = resolveAccess(this.plugin.settings.linkAccess, probe);
+		const lines: TestLine[] = [
+			{
+				key: publicLinkKey(kind),
+				// 地址取**真正探测过的那一条**（`currentAccessProbeUrl`），不在这里重推一遍：
+				// 重推就可能与探测用的地址不同源，而那种差异只会在用户对照时暴露。
+				params: { status: probe.status ?? "-", url: this.plugin.currentAccessProbeUrl() ?? "-" },
+				tone: publicLinkTone(kind),
+			},
+			{
+				key: `testAccess_${resolution.access}`,
+				// 把"为什么"带上：`auto` 档下用户看不到自己选的东西，只有这个理由能让他判断
+				// "该不该去存储那边改权限"。
+				params: { reason: this.t(`testAccessReason_${resolution.reason}`) },
+				tone: resolution.access === "public" ? "ok" : "warn",
+			},
+		];
+
+		// 探测不出来（超时 / 连不上）时把话说准：这不是"桶私有"，是"我们不知道"。
+		// 判定方向仍然是内部路径（安全方向），但用户得知道该去查哪一边。
+		if (probe.kind === "unreachable") {
+			lines.push({ key: probe.timedOut ? "testAccess_timedOut" : "testAccess_unreachable", tone: "warn" });
+		}
+		return lines;
 	}
 
 	// ─────────────────────── 上传 ───────────────────────

@@ -1,5 +1,6 @@
 import { runMutations } from "./lib/mutate.mjs";
 import { runLoadAcceptance } from "./lib/load-acceptance-suite.mjs";
+import { runReleaseSpaceFlowSuite } from "./lib/release-space-flow-suite.mjs";
 
 /**
  * 变异验证：维护功能的**执行层**（`src/maintenance/run.ts`）。
@@ -20,9 +21,15 @@ import { runLoadAcceptance } from "./lib/load-acceptance-suite.mjs";
  */
 await runMutations({
 	source: "src/maintenance/run.ts",
-	entries: ["src/main"],
+	// ⚠️ 除了 main（验收环境）之外还要「执行层模块」本身：三条准入判据的反例
+	// 在验收环境里造不出来（宿主的文件索引滞后等），只能由链接清理套件
+	// 直连执行层来钉。两套一起跑，锚点才有人接。
+	entries: ["src/main", "src/maintenance/run", "src/plugin/release-space-flow", "src/i18n", "src/s3/client"],
 	reexportDefault: ["src/main"],
-	suite: (mod) => runLoadAcceptance({ loadPluginClass: () => mod }),
+	suite: async (mod) => {
+		await runLoadAcceptance({ loadPluginClass: () => mod });
+		await runReleaseSpaceFlowSuite(mod);
+	},
 	mutations: [
 		{
 			name: "★ 批量上传只传不改链接（笔记仍指向本地，用户以为已经搬走了）",
@@ -52,6 +59,22 @@ await runMutations({
 			from: "\t\tif (!stillInCloud) {",
 			to: "\t\tif (false) {",
 			expect: "云端确认不上时，本地副本必须留着",
+		},
+		{
+			// 后果：那份文件被删掉，而索引里已经没有任何记录指向它 —— 下次渲染判定
+			// "本地没有副本"，可它其实还在磁盘上（用户看到的是"图没了，文件还在"）。
+			name: "★★ 不再核对「索引里还认这条记录吗」（删掉账本之外的副本）",
+			from: "\t\tif (!known || known.key !== victim.key) {",
+			to: "\t\tif (false) {",
+			expect: "索引里没有这条记录 ⇒ 不删",
+		},
+		{
+			// 后果：宿主索引滞后时退化成底层删除 —— 那是"绕过宿主直接删文件"，
+			// 回收站、文件监听、附件目录的簿记全都不会跟着更新。
+			name: "★ 宿主看不见这个文件时不再跳过（退化成底层删除）",
+			from: "\t\tif (!file) {",
+			to: "\t\tif (false) {",
+			expect: "宿主看不见 ⇒ 跳过（绝不退化成底层删除）",
 		},
 		{
 			// 后果：F18 的存量清理"问也问了、清单也列了"，执行时却一个都不删 ——

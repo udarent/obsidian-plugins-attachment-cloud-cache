@@ -65,6 +65,15 @@ export function runSettingsSuite(mod) {
 	assert.ok(!("localFileAction" in SETTINGS_DEFAULTS), "localFileAction 应已并入 localCopy");
 	assert.equal(SETTINGS_DEFAULTS.fallbackDownload, true, "回退下载默认开启（覆盖换设备场景）");
 
+	// ⭐ 1.7.0：「笔记里的链接谁打得开」不再默认要求公开读取，改为 `auto`（探测后决定）。
+	// 这条断言守的是**用户 2026-10-17 的原话**：公开读取是"为了让链接能粘到别的平台"，
+	// 没有这个需求的人不该被它绑住 —— 出厂就不许假定桶是公开的。
+	assert.equal(
+		SETTINGS_DEFAULTS.linkAccess,
+		"auto",
+		"访问方式默认必须是 auto（探测后决定）—— 不许出厂就假定桶可公开读"
+	);
+
 	// ⭐ 缓存清理**没有**「删除方式」这个设置项 —— 这个备选被有意去掉了。
 	//
 	// 加这条断言是因为它的失效方式很安静：把那个下拉框加回来不会有任何现有测试变红，
@@ -159,7 +168,13 @@ export function runSettingsSuite(mod) {
 
 	// 取值受限的字段必须换成**另一个合法值**，否则会被校验回落成默认值，
 	// 从而误报成"不能往返"。
-	const ALTERNATIVES = { localCopy: "trash", externalSiteMode: "allowlist", orphanAsk: "never" };
+	const ALTERNATIVES = {
+		localCopy: "trash",
+		externalSiteMode: "allowlist",
+		orphanAsk: "never",
+		// 1.7.0：`auto` 是默认值，往返必须换成**另一个**合法值才证明得了"存得进、读得出"
+		linkAccess: "private",
+	};
 	for (const key of Object.keys(ALTERNATIVES)) {
 		assert.ok(key in SETTINGS_DEFAULTS, `ALTERNATIVES 里的 ${key} 已不在 SETTINGS_DEFAULTS 中（死键）`);
 	}

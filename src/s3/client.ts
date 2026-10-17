@@ -39,7 +39,7 @@
 import { requestUrl } from "obsidian";
 import { toArrayBuffer } from "./hash";
 import { S3Error, isSuccess, networkError, responseError } from "./errors";
-import { S3_SERVICE, encodePath, formatAmzDate, payloadHashOf, signRequest, uriEncode } from "./sigv4";
+import { S3_SERVICE, encodePath, formatAmzDate, payloadHashOf, presignUrl, signRequest, uriEncode } from "./sigv4";
 
 // 上层（上传链路、渲染钩子）要按性质决定怎么办（重试 / 提示 / 降级），
 // 所以把错误类型从本模块转出去，省得它们再 import 一次内部路径。
@@ -478,6 +478,15 @@ function decodeXmlEntities(value: string): string {
 		.replace(/&amp;/g, "&");
 }
 
+/**
+ * 预签名 URL 的默认有效期：30 分钟。
+ *
+ * 为什么不是更短：一张笔记可能开着很久，滚动/切视图都可能让浏览器重新请求同一个地址；
+ * 太短会让"看着好好的图突然坏了"。为什么不更长：那条 URL 在内存里（DevTools 里可见），
+ * 有效期就是它的暴露窗口 —— 30 分钟够用，且不会变成一条长期通行证。
+ */
+const DEFAULT_PRESIGN_EXPIRES = 1800;
+
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_BASE_DELAY_MS = 250;
 const DEFAULT_MAX_DELAY_MS = 2_000;
@@ -766,6 +775,35 @@ export class S3Client {
 	/** 笔记里写的地址。 */
 	publicUrl(key: string): string {
 		return publicUrlFor(this.config, key);
+	}
+
+	/**
+	 * 一条**临时可用**的对象地址（预签名 URL，`X-Amz-Signature` 在查询串里）。
+	 *
+	 * 用途只有一处：私有存储 + 不留本地副本时，让 `<img>` 能直接取到对象
+	 *（判据在 `link-access.ts::usesSignedUrls`）。它**不写进笔记** ——
+	 * 写进去就是一批会过期的死链（见 `sigv4.ts::presignUrl` 的说明）。
+	 *
+	 * ⚠️ 用**对象地址**（`requestTargetFor`）而不是 `publicUrlFor`：后者可能是 CDN /
+	 * 自定义域名，而签名要由 S3 自己验 —— 打到 CDN 上的签名 URL 多半直接 404。
+	 *
+	 * 失败（凭据没配、地址不合法）会**抛错**：调用方是渲染路径，那里必须自己接住
+	 * 并降级（保持远端地址），不能让它冒到渲染器上。
+	 */
+	async presignedGetUrl(key: string, options: { expiresIn?: number } = {}): Promise<string> {
+		this.assertConfig();
+		const target = requestTargetFor(this.config, key);
+		return presignUrl({
+			method: "GET",
+			url: target.url,
+			path: target.path,
+			accessKeyId: this.config.accessKeyId,
+			secretAccessKey: this.config.secretAccessKey,
+			region: this.config.region,
+			...(this.config.service ? { service: this.config.service } : {}),
+			now: this.now(),
+			expiresIn: options.expiresIn ?? DEFAULT_PRESIGN_EXPIRES,
+		});
 	}
 
 	// ── 内部 ──

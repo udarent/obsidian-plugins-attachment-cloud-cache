@@ -429,5 +429,115 @@ export async function runReleaseSpaceFlowSuite(mod) {
 		assertNoNotice("没有目标不是用户的动作，别打扰他");
 	}
 
-	return { cases: 15 };
+	// ============================================================
+	// 7. ⭐⭐ 执行层的**每一条跳过**（`deleteVerifiedCopies`）
+	//
+	// 这条循环是"删用户附件目录里的文件"的唯一落点，而它有三道准入判据
+	// （索引里还认这条记录 / 云端此刻确实还有它 / 宿主索引看得见这个文件）。
+	// 流程层的用例只看到"删了几个"，看不出**是哪一道**拦下的 —— 而用户看到的
+	// 提示恰恰是那句原因（"跳过，这份是仅剩的副本"与"确认不了"的修法不同）。
+	// 所以这里直接调执行层，逐条把原因钉住。
+	// ============================================================
+	{
+		const { deleteVerifiedCopies } = mod;
+		assert.equal(typeof deleteVerifiedCopies, "function", "执行层必须可单测（`maintenance/run` 的导出）");
+
+		/** 一次调用的最小依赖；`overrides` 覆盖某一项（undefined 也照传）。 */
+		const runOnce = async (overrides) => {
+			const removed = [];
+			let persisted = 0;
+			const result = { evicted: 0, freed: 0, skipped: [], unindexed: 0 };
+			const deps = {
+				app: {
+					vault: {
+						getAbstractFileByPath: (path) => ({ path }),
+						delete: async () => {},
+					},
+				},
+				settings: () => ({}),
+				index: () => ({
+					findByCachePath: () => ({ key: "a.png", cachePath: "attachments/a.png" }),
+					remove: (key) => {
+						removed.push(key);
+						return true;
+					},
+				}),
+				persistIndex: async () => {
+					persisted += 1;
+				},
+				confirmRemote: async () => true,
+				t: (key) => translate("en", key, {}),
+				notify: () => {},
+				...overrides,
+			};
+			await deleteVerifiedCopies(deps, [{ key: "a.png", cachePath: "attachments/a.png", bytes: 100 }], result);
+			return { result, removed, persisted };
+		};
+
+		const reasonOf = (key) => translate("en", key, {});
+
+		// ① 索引已经不认这条记录（路径还在，但账本里没有）
+		{
+			const { result } = await runOnce({ index: () => ({ findByCachePath: () => undefined, remove: () => true }) });
+			assert.equal(result.evicted, 0, "索引里没有这条记录 ⇒ 不删");
+			assert.equal(result.skipped.length, 1, "跳过要留一条记录（否则界面上看不到为什么没删）");
+			assert.equal(result.skipped[0].reason, reasonOf("maintainSkipUnknownCopy"), "ⓘ 原因是「索引不再指向这份文件」");
+		}
+		// ② 同路径但 key 已经换了（路径被另一个对象复用）—— 同样不许删
+		{
+			const { result } = await runOnce({
+				index: () => ({ findByCachePath: () => ({ key: "other.png", cachePath: "attachments/a.png" }), remove: () => true }),
+			});
+			assert.equal(result.evicted, 0, "★ key 对不上 ⇒ 不删（路径相同不等于同一条记录）");
+			assert.equal(result.skipped[0].reason, reasonOf("maintainSkipUnknownCopy"), "与①同一句话：这条记录已经不认它了");
+		}
+		// ③ 连复核手段都没有（`confirmRemote` 未接线）⇒ 一律不删
+		{
+			const { result, removed } = await runOnce({ confirmRemote: undefined });
+			assert.equal(result.evicted, 0, "★ 确认不了就不删 —— 安全的一侧");
+			assert.equal(removed.length, 0, "也不许摘索引记录（文件还在）");
+			assert.equal(result.skipped[0].reason, reasonOf("maintainSkipUnconfirmed"), "原因是「确认不了云端是否还有它」");
+		}
+		// ④ 云端已经没有这个对象 ⇒ 本机这份是最后一份
+		{
+			const { result } = await runOnce({ confirmRemote: async () => false });
+			assert.equal(result.evicted, 0, "★ 云端没有 ⇒ 绝不删（那可能是仅剩的副本）");
+			assert.equal(result.skipped[0].reason, reasonOf("maintainSkipNotInCloud"), "这句话必须说清「仅剩的副本」");
+		}
+		// ⑤ 宿主索引看不见这个文件（磁盘上可能存在）⇒ 跳过而不是退化成底层删除
+		{
+			const { result } = await runOnce({
+				app: { vault: { getAbstractFileByPath: () => null, delete: async () => {} } },
+			});
+			assert.equal(result.evicted, 0, "宿主看不见 ⇒ 跳过（绝不退化成底层删除）");
+			assert.equal(result.skipped[0].reason, reasonOf("maintainSkipNotIndexed"), "原因是「Obsidian 还看不到这个文件」");
+		}
+		// ⑥ 删除本身抛错 ⇒ 计数为 0、原因如实带出来，且不中断
+		{
+			const { result, persisted } = await runOnce({
+				app: {
+					vault: {
+						getAbstractFileByPath: (path) => ({ path }),
+						delete: async () => {
+							throw new Error("EACCES");
+						},
+					},
+				},
+			});
+			assert.equal(result.evicted, 0, "删除失败 ⇒ 不许计入已删");
+			assert.ok(result.skipped[0].reason.includes("EACCES"), `原因要带出原始错误，实际：${result.skipped[0].reason}`);
+			assert.equal(persisted, 0, "一个都没删掉 ⇒ 没有索引要落盘");
+		}
+		// ⑦ 全部通过 ⇒ 删、计数、摘记录、落盘
+		{
+			const { result, removed, persisted } = await runOnce({});
+			assert.equal(result.evicted, 1, "复核全过 ⇒ 删掉");
+			assert.equal(result.freed, 100, "释放的字节取自索引记录（不是重新 stat）");
+			assert.deepEqual(removed, ["a.png"], "摘掉对应索引记录");
+			assert.equal(result.unindexed, 1, "摘掉的条数要计数");
+			assert.equal(persisted, 1, "摘了记录 ⇒ 必须落盘一次");
+		}
+	}
+
+	return { cases: 22 };
 }

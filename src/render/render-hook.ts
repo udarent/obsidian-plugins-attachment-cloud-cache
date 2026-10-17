@@ -53,8 +53,10 @@
 
 import type { PluginSettings } from "../types";
 import type { CacheIndex } from "../cache/index";
+import type { AccessProbe } from "../link-access";
+import { usesSignedUrls } from "../link-access";
 import { decideRenderTarget } from "./render-target";
-import { rebuildKindFor } from "./embed-rebuild";
+import { rebuildKindFor, signedMediaKindFor } from "./embed-rebuild";
 
 /** `<img>` 的最小形状（结构化类型，便于用假元素穷举）。 */
 export interface ImageElementLike {
@@ -62,6 +64,15 @@ export interface ImageElementLike {
 	setAttribute(name: string, value: string): void;
 	addEventListener?(type: string, callback: () => void): void;
 }
+
+/** 「这一格不是图片」的两个来路（见 {@link RenderHookDeps.onNonImageEmbed}）。 */
+export type NonImageTarget =
+	/** 有库内副本：交给宿主自己的嵌入渲染。 */
+	| { kind: "local"; localPath: string }
+	/** 私有存储 + 不留副本：只能自己造 `<video>`/`<audio>`（PDF 不支持）。 */
+	| { kind: "signed"; key: string }
+	/** 公开读取 + 不留副本：同样自己造节点，但**不签名**（地址就是笔记里那条）。 */
+	| { kind: "direct"; key: string; remoteUrl: string };
 
 /** 容器的形状：只需要能查出里面的图片。 */
 export interface ImageContainerLike {
@@ -81,6 +92,20 @@ export interface RenderHookDeps {
 	 * 不提供时"缺副本"的图保持远端地址（在线可用，离线不可用）。
 	 */
 	ensureLocalCopy?: (key: string, remoteUrl: string) => Promise<string | null>;
+	/**
+	 * 私有存储 + 不留副本（图床式）→ 一条**预签名地址**（失败返回 `null`）。
+	 *
+	 * ⚠️ 这条地址只存在内存里，**不进笔记** —— 有效期有限（见 `sigv4.ts::presignUrl`）。
+	 * 不提供时那种图保持远端地址（私有桶下就是坏图，与"不留副本"档的老行为一致）。
+	 */
+	signedUrlFor?: (key: string, remoteUrl: string) => Promise<string | null>;
+	/**
+	 * 当前的**匿名可达性探测结果** —— 只用来判"缺副本的图要不要改用预签名地址"。
+	 *
+	 * ⚠️ 是取值函数而不是快照：探测是异步刷新的，抓快照会让"启动那一次探测"
+	 * 永远不影响渲染（表现是"第一次打开是坏图，重开才好"）。
+	 */
+	accessProbe?: () => AccessProbe;
 	/** 发现索引指向的本地副本其实不存在 —— 交给调用方自愈。 */
 	onLocalCopyMissing?: (key: string) => void;
 	/**
@@ -113,16 +138,21 @@ export interface RenderHookDeps {
 	 */
 	onExternalSrc?: (element: ImageElementLike, src: string) => void;
 	/**
-	 * 判定的结果是"用本地副本"，但那份副本**不是图片**（音频/视频/PDF）——
-	 * 交出去给重建那一条路（`render/embed-rebuild.ts`）。
+	 * 判定的结果是"不是图片、要换节点"（音频/视频/PDF）—— 交出去给重建那一条路
+	 *（`render/embed-rebuild.ts`）。
 	 *
 	 * 为什么必须另走一条：宿主把远端 `![doc.pdf](url)` 渲染成 `<img>`，
-	 * 而 `<img>` **永远**显示不了 PDF/音频 —— 改 `src` 救不了，只能换节点。
+	 * 而 `<img>` **永远**显示不了 PDF/音频/视频 —— 改 `src` 救不了，只能换节点。
+	 *
+	 * 两种来路（1.7.0 起）：
+	 * - `local`：有库内副本 ⇒ 用宿主自己的嵌入渲染（最完整：PDF 也能开）；
+	 * - `signed`：私有存储 + 不留副本 ⇒ 只有音频/视频能救（自己造 `<video>`/`<audio>`），
+	 *   PDF 救不了（见 `embed-rebuild.ts::signedMediaKindFor`）。
 	 *
 	 * ⚠️ 实时预览那条路拿到它之后**不写 `src`**（元素保持空），
 	 * 于是"远端地址绝不进 DOM"这条结构性性质连情形都没变。
 	 */
-	onNonImageEmbed?: (element: ImageElementLike, localPath: string) => void;
+	onNonImageEmbed?: (element: ImageElementLike, target: NonImageTarget) => void;
 }
 
 export interface ProcessImagesResult {
@@ -160,19 +190,45 @@ export function processImages(
 		const img = images[i];
 		if (!img || typeof img.getAttribute !== "function") continue;
 
+		const settings = deps.settings();
 		const decision = decideRenderTarget({
 			src: img.getAttribute("src"),
-			settings: deps.settings(),
+			settings,
 			index: deps.index(),
+			// 判据只在 `link-access.ts` 一处（这里与下载闸门共用同一个函数）
+			useSignedUrls: usesSignedUrls(settings, deps.accessProbe?.()),
 		});
 
 		if (decision.action === "ignore") continue;
+
+		if (decision.action === "direct") {
+			// 公开 + 不留副本：远端地址本来就能取到字节，所以**不签名**；
+			// 音频/视频仍然要换节点（`<img>` 播不了），图片什么都不用做。
+			if (signedMediaKindFor(decision.key)) {
+				deps.onNonImageEmbed?.(img, { kind: "direct", key: decision.key, remoteUrl: decision.remoteUrl });
+			}
+			continue;
+		}
+
+		if (decision.action === "signed") {
+			// 私有 + 不留副本：音频/视频**换节点**（自建 `<video>`/`<audio>`），
+			// 图片才换 `src`。判据用扩展名 —— 与"宿主能不能预览它"是同一张表。
+			if (signedMediaKindFor(decision.key)) {
+				deps.onNonImageEmbed?.(img, { kind: "signed", key: decision.key });
+				continue;
+			}
+			// 给一张临时可用的地址（不落盘）。同样**不 await** ——
+			// 签名本身是纯计算 + 一次 KDF，但它仍是异步的（SubtleCrypto），
+			// 而这一层必须同步跑完（理由见模块头）。
+			deferSignedUrl(img, deps, decision, { result });
+			continue;
+		}
 
 		if (decision.action === "local") {
 			// ⚠️ 非图片（音频/视频/PDF）**不在这里处理**：`<img>` 显示不了它们，
 			// 改 `src` 只会得到一个坏图。交给重建那条路（同一个后处理器里紧接着跑）。
 			if (rebuildKindFor(decision.localPath)) {
-				deps.onNonImageEmbed?.(img, decision.localPath);
+				deps.onNonImageEmbed?.(img, { kind: "local", localPath: decision.localPath });
 				continue;
 			}
 			const resourceUrl = deps.resourceUrlFor(decision.localPath);
@@ -247,6 +303,39 @@ function deferLocalCopy(
 		})
 		.catch(() => {
 			// 补齐失败不是错误路径：图仍然按远端地址显示着（在线可见）。
+		});
+}
+
+/**
+ * 私有存储 + 不留副本 ⇒ 换成**预签名地址**（图床式：磁盘不落文件）。
+ *
+ * 与 `deferLocalCopy` 同形（`apply` 的两种写法、同样不 await），差别只在于"换来的是什么"：
+ * 那条路换来一个**本地文件**（落盘、离线可用），这条路换来一条**临时地址**
+ *（不落盘、离线不可用）。两者都遵循同一条纪律：**失败就什么都不改** ——
+ * 元素上原有的远端地址留着，用户看到的是一张坏图，而不是一个空框或一个错的地址。
+ *
+ * ⚠️ 与下载那条路一样，它会先让远端地址试一次（私有桶下必然 403）。这是已知代价：
+ * 想避免它就得先把 `src` 清空，而那会让"签名失败"变成一片空白 —— 宁可留一个坏图。
+ */
+function deferSignedUrl(
+	img: ImageElementLike,
+	deps: RenderHookDeps,
+	decision: { key: string; remoteUrl: string },
+	options: {
+		result?: ProcessImagesResult;
+		apply?: (element: ImageElementLike, url: string) => void;
+	} = {}
+): void {
+	if (!deps.signedUrlFor) return;
+	const apply = options.apply ?? ((element, url) => element.setAttribute?.("src", url));
+	void deps
+		.signedUrlFor(decision.key, decision.remoteUrl)
+		.then((url) => {
+			if (!url) return;
+			apply(img, url);
+		})
+		.catch(() => {
+			// 签不出来（凭据没配 / 地址不合法）不是错误路径：图保持远端地址。
 		});
 }
 
@@ -359,17 +448,19 @@ export function installImageSrcPatch(deps: RenderHookDeps, env: SrcPatchEnvironm
 				const element = this as unknown as ImageElementLike;
 				let next = value;
 				try {
+					const settings = deps.settings();
 					const decision = decideRenderTarget({
 						src: value,
-						settings: deps.settings(),
+						settings,
 						index: deps.index(),
+						useSignedUrls: usesSignedUrls(settings, deps.accessProbe?.()),
 					});
 
 					if (decision.action === "local" && rebuildKindFor(decision.localPath)) {
 						// ⚠️ **不写 `src`**：这是个 `<img>`，装不下 PDF/音频/视频。
 						// 保持空 src（不加载任何东西、更不会去连远端），
 						// 把元素交给重建队列换成正确的嵌入节点。
-						deps.onNonImageEmbed?.(element, decision.localPath);
+						deps.onNonImageEmbed?.(element, { kind: "local", localPath: decision.localPath });
 						return;
 					}
 
@@ -408,6 +499,25 @@ export function installImageSrcPatch(deps: RenderHookDeps, env: SrcPatchEnvironm
 							// 的 setter 内部，再走一次 setter 就是重入。
 							deferLocalCopy(element, deps, decision, { apply: applySrc });
 						}
+					} else if (decision.action === "direct") {
+						// 公开 + 不留副本：视频/音频换节点；图片保持这条远端地址（远端能显示）。
+						if (signedMediaKindFor(decision.key)) {
+							deps.onNonImageEmbed?.(element, {
+								kind: "direct",
+								key: decision.key,
+								remoteUrl: decision.remoteUrl,
+							});
+							return;
+						}
+					} else if (decision.action === "signed") {
+						// 私有 + 不留副本：音频/视频**换节点**（`src` 一个字节都不写）。
+						if (signedMediaKindFor(decision.key)) {
+							deps.onNonImageEmbed?.(element, { kind: "signed", key: decision.key });
+							return;
+						}
+						// 图片：稍后换成预签名地址（当前赋值仍是远端地址，
+						// 于是"在线时它至少会在签名回来之前先失败一次"—— 已知代价，见模块头）。
+						deferSignedUrl(element, deps, decision, { apply: applySrc });
 					} else if (decision.action === "fetch") {
 						// 不属于"已有本地副本"，但属于本存储 → 后台补齐，补上后换成本地。
 						// 这里**不改**当前赋值：线上用户应当立刻看到图（远端加载），

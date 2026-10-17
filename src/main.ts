@@ -56,6 +56,8 @@ import { planFileCards } from "./ui/file-cards";
 import type { FileCard, FileCardInput } from "./ui/file-cards";
 import type { S3Client } from "./s3/client";
 import { connectionReadiness } from "./s3/credentials";
+import { UNKNOWN_ACCESS_PROBE, probeAccess, probeUrlFor } from "./link-access";
+import type { AccessProbe } from "./link-access";
 import { createLocalCopyEnsurer } from "./core/download";
 import {
 	keyOfUrl,
@@ -85,7 +87,7 @@ import { installImageSrcPatch, processImages } from "./render/render-hook";
 import { createEmbedRebuildQueue, processEmbeds } from "./render/embed-rebuild";
 import type { EmbedRebuildDeps, EmbedRebuildQueue } from "./render/embed-rebuild";
 import { notePathForElement } from "./render/external-live";
-import type { ImageElementLike, RenderHookDeps } from "./render/render-hook";
+import type { ImageElementLike, NonImageTarget, RenderHookDeps } from "./render/render-hook";
 import { createExternalHook } from "./render/external-hook";
 import type { ExternalHook } from "./render/external-hook";
 import { createExternalLiveQueue } from "./render/external-live";
@@ -109,9 +111,39 @@ import type { ExternalPickItem, ExternalPickScope } from "./ui/external-picker-l
  */
 export type { ImportCredentialsOutcome } from "./plugin/credentials-flow";
 
+/**
+ * 预签名地址在本地的缓存时长：20 分钟。
+ *
+ * 签名本身是 30 分钟（`client.ts::DEFAULT_PRESIGN_EXPIRES`），留 10 分钟余量：
+ * 一张图可能在你切走一会儿之后又被重新请求，宁可在边缘之前重签一次。
+ */
+const SIGNED_URL_CACHE_MS = 20 * 60 * 1000;
+
+/** 缓存条数上限（防御用；超了整体清空，不做 LRU —— 这张表的体积本来就很小）。 */
+const SIGNED_URL_CACHE_LIMIT = 512;
+
 export default class AttachmentCloudCachePlugin extends Plugin {
 	settings: PluginSettings = { ...SETTINGS_DEFAULTS };
 	locale = "en";
+
+	/**
+	 * 「别人能不能打开笔记里那条链接」的**当前认知**（1.7.0）。
+	 *
+	 * 只有一份，三类读者共用：① 渲染/下载判定（要不要**强制**取回本地副本）；
+	 * ② 设置页（把探测结果原样告诉用户）；③ "测试连接"（刷新它并显示）。
+	 * 判据本身在 `link-access.ts`，这里只持有结果。
+	 *
+	 * ⚠️ 初值是 `UNKNOWN`（= 还没探测过），**不是**"假定公开"。`auto` 档下
+	 * `UNKNOWN` 会走内部路径（按私有处理）—— 安全方向，见那个模块的文件头。
+	 * 启动时探测一次，之后每次保存设置安排一次（带防抖），用户点"测试连接"时立刻刷新。
+	 */
+	private accessProbe: AccessProbe = UNKNOWN_ACCESS_PROBE;
+
+	/** 上一次探测用的地址 —— 用来避免"敲一个字就发一次 HEAD"。 */
+	private probedUrl: string | null = null;
+
+	/** 防抖句柄（`window.setTimeout` 的返回值是数字，见 {@link scheduleAccessProbe}）。 */
+	private accessProbeTimer: number | null = null;
 
 	/**
 	 * 这份 `data.json` 里带着**已被取消的 key 模板**（1.2.0），且我们已经清理过它。
@@ -273,6 +305,23 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 
 		await this.loadCacheIndex();
 
+		// ── 访问方式：启动后匿名摸一次「别人能不能打开笔记里那条链接」（1.7.0）──
+		//
+		// 为什么必须做：私有桶的用户在旧版本里看到的是**一屏坏图** —— 笔记里那条地址
+		// 对外 403，而 `<img>` 的 403 不弹任何提示（只有控制台一条）。探测结果决定
+		// 缺副本的图要不要**强制**取回（判据与降级规则见 `link-access.ts`）。
+		//
+		// ⚠️ 走 `scheduleAccessProbe`（定时器）而不是直接 `await`：
+		// ① `onload` 不该被一次网络请求拖住（离线时那是 5 秒的空白）；
+		// ② 定时器给了"卸载时清理"一个确定的对象（见下面的 `register`）。
+		this.register(() => {
+			// ⚠️ 即便它已经触发过，也要 clear 一次：`clearTimeout` 对已触发的 id 是空操作，
+			// 而"卸载要干净"这条承诺不该取决于"它跑完没有"。
+			if (this.accessProbeTimer !== null) window.clearTimeout(this.accessProbeTimer);
+			this.accessProbeTimer = null;
+		});
+		this.scheduleAccessProbe(0);
+
 		// 粘贴与拖拽注册在这两个事件上（`@since 1.1.0`），而不是 document 上的 DOM 事件：
 		// 宿主会把 `Editor` 直接递过来，不必自己判断"哪个编辑器有焦点"，
 		// 也不用猜移动端的事件路径是否一致。
@@ -355,6 +404,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			client: () => this.buildClient(),
 			index: () => this.currentIndex(),
 			persistIndex: () => this.hostContext().persistIndex(),
+			// ⭐ 1.7.0：私有存储下"缺副本必须取回"这条判据要读探测结果（见 `link-access.ts`）
+			accessProbe: () => this.accessProbe,
 			notify: (message) => new Notice(message),
 			t: (key, params) => this.t(key, params),
 		});
@@ -464,8 +515,9 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				// 站外候选只从**这条路**上报：阅读视图那边的外站图由上面的后处理器
 				// 整批交给编排（那里天然带着 `ctx.sourcePath`，不需要延后解析归属）。
 				onExternalSrc: (element) => this.externalLive?.see(element),
-				// 实时预览：非图片 ⇒ 不写 `src`，把元素交给重建队列
-				onNonImageEmbed: (element, localPath) => this.embedQueue().see(element, localPath, null),
+				// 实时预览：非图片 ⇒ 不写 `src`，把元素交给重建队列。
+				// 两条来路：有副本（用宿主渲染）／私有 + 不留副本（自己造 video/audio）。
+				onNonImageEmbed: (element, target) => this.routeNonImageEmbed(element, target),
 			},
 			{
 				view: typeof window === "undefined" ? null : window,
@@ -1016,6 +1068,78 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	}
 
 	/**
+	 * 「别人能不能打开我笔记里那条链接」的**当前认知**（1.7.0）。
+	 *
+	 * 设置页用它把探测结论原样显示出来（含"还没探测过"），渲染/下载判定用同一份。
+	 */
+	currentAccessProbe(): AccessProbe {
+		return this.accessProbe;
+	}
+
+	/**
+	 * 上一次探测**真正用过**的那条地址（没探测过为 `null`）。
+	 *
+	 * 设置页把它原样显示在结果里 —— 用户要能对照"我笔记里那条链接"与"它到底试了哪一条"。
+	 * 让界面自己再推一遍是不行的：推导与探测不同源时，用户看到的地址就不是真正被打的那个。
+	 */
+	currentAccessProbeUrl(): string | null {
+		return this.probedUrl;
+	}
+
+	/**
+	 * 匿名探测一次并**更新**认知。设置页的「测试连接」直接调它（`force: true`）。
+	 *
+	 * ## 三条刻意的边界
+	 *
+	 * 1. **不需要凭据**：探测是匿名 HEAD，所以"还没配密钥"时它照样能给出结论 ——
+	 *    而"桶是不是公开的"恰恰是配置阶段就该知道的事。
+	 * 2. **没有对象可试** ⇒ 认知退回 `UNKNOWN`（而不是沿用上一次的结论）：这可能是
+	 *    用户刚换了桶 / 清空了库，用旧结论去决定新地址的路径是错的。
+	 * 3. **探测期间配置又变了** ⇒ 丢弃这次结果（`probedUrl` 对不上）。否则会拿
+	 *    旧地址的结论决定新地址走哪条路，而那种错误只表现为"图时好时坏"。
+	 *
+	 * @param options.force 无视"地址没变"的短路（用户手点按钮时要真发一次）
+	 */
+	async refreshAccessProbe(options: { force?: boolean } = {}): Promise<AccessProbe> {
+		const url = probeUrlFor(this.settings.s3, this.sampleObjectKey());
+		if (!url) {
+			this.probedUrl = null;
+			this.accessProbe = UNKNOWN_ACCESS_PROBE;
+			return this.accessProbe;
+		}
+
+		// 地址没变、且已经有一个结论 ⇒ 不重复发请求（保存设置会走到这里，可能是每个字符一次）
+		if (!options.force && url === this.probedUrl && this.accessProbe.kind !== "unknown") {
+			return this.accessProbe;
+		}
+
+		this.probedUrl = url;
+		const probe = await probeAccess(url);
+		// 探测期间配置变了 ⇒ 这次结论不属于当前配置
+		if (this.probedUrl !== url) return this.accessProbe;
+		this.accessProbe = probe;
+		return probe;
+	}
+
+	/**
+	 * 安排一次探测（**防抖**）。`saveSettings` 每次改动都会调它 —— 包括每敲一个字符。
+	 *
+	 * 为什么不直接 `void this.refreshAccessProbe()`：那会在用户手打端点地址时
+	 * 每敲一个字符发一条 HEAD（每条最多等 5 秒），既是噪音也是浪费。
+	 */
+	scheduleAccessProbe(delay = 800): void {
+		if (this.accessProbeTimer !== null) window.clearTimeout(this.accessProbeTimer);
+		this.accessProbeTimer = window.setTimeout(() => {
+			// ⚠️ **不把字段置空**：卸载时那个 cleanup 要能对一个确定的句柄调 `clearTimeout`
+			// （对已触发的 id 调用是安全的空操作）。置空会让"清理是否真的生效"取决于时机。
+			void this.refreshAccessProbe().catch((error: unknown) => {
+				// 探测自己不会抛（见 `probeAccess`）；这里是最后一道，只为不留下未处理的拒绝
+				console.error("[attachment-cloud-cache] 更新访问方式探测结果失败", error);
+			});
+		}, delay);
+	}
+
+	/**
 	 * 从一份**凭据文件**导入连接参数（MinIO 控制台「下载凭据」给的那个 json）。
 	 *
 	 * ⚠️ 这里是**薄转发**，实现在 `plugin/credentials-flow.ts`。保留这个公开方法，是因为
@@ -1108,11 +1232,35 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 造不出来（文件不在、渲染器抛错）时返回 `null`：调用方**保留原元素**，
 	 * 绝不产出一个坏节点。
 	 */
+	/**
+	 * 「这一格不是图片」的三条来路，分别交给重建队列。
+	 *
+	 * ⚠️ 写成**具名方法**而不是嵌套三元：三条来路的差别不是"要不要重建"，而是
+	 * **地址从哪来**（库内路径 / 预签名 / 笔记里那条远端地址）—— 混在一个表达式里，
+	 * 加第四条时必然有人漏改一处，而症状只是"某些视频不显示"。
+	 */
+	private routeNonImageEmbed(element: Parameters<NonNullable<RenderHookDeps["onNonImageEmbed"]>>[0], target: NonImageTarget): void {
+		if (target.kind === "local") {
+			this.embedQueue().see(element, target.localPath, null);
+			return;
+		}
+		if (target.kind === "signed") {
+			this.embedQueue().seeSigned(element, target.key, null);
+			return;
+		}
+		this.embedQueue().seeDirect(element, target.key, target.remoteUrl, null);
+	}
+
 	private embedDeps(sourcePath: string | null = null): EmbedRebuildDeps {
 		return {
 			settings: () => this.settings,
 			index: () => this.currentIndex(),
 			resourceUrlFor: (path) => resourceUrlFor(this.app, path),
+			// ⭐ 1.7.0：私有存储 + 不留副本时，音频/视频改走**预签名地址**（自建节点）。
+			// 与图片那条路共用同一份探测结果与同一份签名缓存（`signedUrlFor`）。
+			accessProbe: () => this.accessProbe,
+			signedUrlFor: (key) => this.signedUrlFor(key),
+			createMediaNode: (kind, url) => this.createMediaNode(kind, url),
 			ensureLocalCopy: async (key, remoteUrl) => {
 				// ⭐ `sourcePath` 在这里闭包捕获：回退下载的落点要靠它推"附件目录"
 				// （宿主的 `attachmentFolderPath` 取 `./` 时 = 与这篇笔记同目录）。
@@ -1160,6 +1308,10 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			settings: () => this.settings,
 			index: () => this.currentIndex(),
 			resourceUrlFor: (path) => resourceUrlFor(this.app, path),
+			// ⭐ 1.7.0：私有存储 + 不留副本时改给预签名地址（图床式，不落盘）。
+			// 两个回调都只是转发，判据在 `link-access.ts` / `S3Client` 里。
+			accessProbe: () => this.accessProbe,
+			signedUrlFor: (key) => this.signedUrlFor(key),
 			// 渲染钩子只关心"补上了没有、在哪"，所以在这里把结果收敛成路径 ——
 			// 让渲染层不必知道下载层那套状态机（downloaded/reused/refused…）。
 			ensureLocalCopy: async (key, remoteUrl) => {
@@ -1174,6 +1326,69 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			onLocalCopyUsed: (key) => void this.indexStore?.touch(key),
 			notify: (message) => new Notice(message),
 		};
+	}
+
+	/**
+	 * 预签名地址的缓存：`key → {url, 到期时刻}`。
+	 *
+	 * 为什么要缓存：同一张图会在滚动、切视图、重渲染时被反复赋值，而签名是**异步**的
+	 * （SubtleCrypto 的 HMAC 链）。不缓存的话每滚一次都重算一遍，而且每次得到的 URL
+	 * 都不同 —— 浏览器会把它们当成不同的资源，**缓存全废**。
+	 *
+	 * ⚠️ 保存设置就整体清空（端点 / 桶 / 密钥都可能变了，旧签名随之失效）。
+	 * 上限只是防御：几千张图的库里不该攒着一个永不回收的表。
+	 */
+	private signedUrls = new Map<string, { url: string; expiresAt: number }>();
+
+	/**
+	 * 一张图在"私有存储 + 不留副本"下要用的**临时地址**（图床式：磁盘不落文件）。
+	 *
+	 * 失败一律返回 `null`（凭据没配、地址不合法、签名抛错）—— 调用方是渲染路径，
+	 * 它会在签不出来时保留远端地址。**绝不抛错**：那会让一张图拖垮整块渲染。
+	 *
+	 * ⚠️ 这里**不判**"该不该用预签名"：那是 `link-access.ts::usesSignedUrls` 的事，
+	 * 由渲染判定在调这里之前问过。两处各判一次必然分叉。
+	 */
+	private async signedUrlFor(key: string): Promise<string | null> {
+		const cached = this.signedUrls.get(key);
+		if (cached && cached.expiresAt > Date.now()) return cached.url;
+
+		const client = this.buildClient();
+		if (!client) return null;
+
+		try {
+			const url = await client.presignedGetUrl(key);
+			// 缓存留得比签名短：宁可早一点重签，也不要让一张图在有效期边缘忽然坏掉。
+			if (this.signedUrls.size >= SIGNED_URL_CACHE_LIMIT) this.signedUrls.clear();
+			this.signedUrls.set(key, { url, expiresAt: Date.now() + SIGNED_URL_CACHE_MS });
+			return url;
+		} catch (error) {
+			console.error("[attachment-cloud-cache] 生成预签名地址失败（图将保持远端地址）", error);
+			return null;
+		}
+	}
+
+	/**
+	 * 造一个媒体节点（私有 + 不留副本时，音频/视频没有本地文件可用）。
+	 *
+	 * 与"库内嵌入"那条路的差别如实说：宿主那条会给它套上 `internal-embed` 的包装与样式，
+	 * 这里给的是**裸的原生播放器**（`controls` / `preload=metadata`）。功能都在
+	 *（播放、进度、音量、全屏、画中画都由浏览器提供），只是外观不完全跟主题一致。
+	 *
+	 * ⚠️ 宽度用 CSS 收着（`styles.css` 里的 `.acc-signed-media`）：不设上限的话，
+	 * 一条 4K 视频会把整篇笔记撑出横向滚动条。
+	 */
+	private createMediaNode(kind: "audio" | "video", url: string): HTMLElement | null {
+		if (!url) return null;
+		try {
+			return createEl(kind, {
+				cls: "acc-signed-media",
+				attr: { src: url, controls: "true", preload: "metadata" },
+			});
+		} catch (error) {
+			console.error("[attachment-cloud-cache] 造媒体节点失败（保留原元素）", error);
+			return null;
+		}
 	}
 
 	/**
@@ -1304,6 +1519,14 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		// ⚠️ 这条路径每次改设置都会被调到（包括每敲一个字符），
 		// 所以轮换器自带**节流**，而门槛检查只花一次内存求和 —— 不会变成打字卡顿。
 		void this.rotation?.maybeRotate("settings");
+
+		// 访问方式可能刚变（换了桶 / 补了公开前缀 / 关掉了公开读）：
+		// 探测结果必须跟着走，否则"判定用的是上一个配置的结论"——表现为图时好时坏。
+		// ⚠️ 这条路径每敲一个字符都会被调到，所以是**防抖**的（见 `scheduleAccessProbe`）。
+		this.scheduleAccessProbe();
+
+		// 端点 / 桶 / 密钥可能都变了 ⇒ 旧的预签名地址立刻作废（它们签的是旧配置）
+		this.signedUrls.clear();
 
 		// 站外图那条链路的判定是**渲染时**做的，改设置不会让它重跑 ——
 		// 少了这一步，把「遇到外链图片时」改成「直接缓存」之后**什么都看不到**，

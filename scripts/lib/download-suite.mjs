@@ -153,6 +153,10 @@ async function harnessRoot() {
 			enabledExtensions: ["png"],
 			localCopy: "cache",
 			fallbackDownload: true,
+			// ⚠️ 1.7.0 起"要不要取回本地副本"还取决于**访问方式**（见 `link-access.ts`）：
+			// `auto` + 探测不出公开时会**强制**取回。这一套件测的是"开关本身"，所以基线
+			// 显式声明公开（= 不强制），需要私有语义的用例自己覆盖这一项。
+			linkAccess: "public",
 			s3: {
 				endpoint,
 				region: "auto",
@@ -186,6 +190,8 @@ async function harnessRoot() {
 			// 断言于是**与语言无关** —— 原先断言里那半句中文，正是核心层硬编码兜底留下的痕迹。
 			t: (key) => key,
 			now: () => NOW,
+			// 1.7.0：访问方式判定要读探测结果（默认"还没探测过"）
+			accessProbe: options.accessProbe,
 			onStaged: (path) => {
 				staged.push(path);
 				// ⭐ 顺序判据：登记这一刻文件还**不该**存在（写之前登记）——
@@ -397,6 +403,50 @@ async function harnessRoot() {
 			const outcome = await h.ensure(key, h.urlFor(key));
 			assert.equal(outcome.status, "disabled", "「不留副本」档下不做任何事");
 			assert.equal(h.server.countByMethod("GET"), 0, "★ 这一档绝不能联网（否则用户的选择被悄悄推翻）");
+		} finally {
+			await h.close();
+		}
+	}
+
+	// ============================================================
+	// 5c. ⭐ 1.7.0：**私有存储**下"关掉自动下载"不等于"不下载"
+	//
+	// 私有桶里远端地址会 403 —— 不取回本地副本就**什么都看不到**。所以那一档下
+	// 「缺本地副本时自动下载」这个开关不适用（它管的是省流量，不是宁可不看图）。
+	// 三种来路都要能强制取回：显式声明私有、探测到 403、以及**探测不出来**（降级方向）。
+	// ============================================================
+	{
+		for (const [label, settings, accessProbe] of [
+			["显式「仅内部访问」", { linkAccess: "private" }, undefined],
+			["自动 + 探测到 403", { linkAccess: "auto" }, () => ({ kind: "forbidden", status: 403, at: 1 })],
+			["自动 + 还没探测过（降级）", { linkAccess: "auto" }, undefined],
+		]) {
+			const h = await makeHarness({
+				settings: { fallbackDownload: false, ...settings },
+				...(accessProbe ? { accessProbe } : {}),
+			});
+			try {
+				const key = `private-${sha256Hex(HOSTILE_BYTES)}.png`;
+				h.putObject(key, HOSTILE_BYTES, "image/png");
+				const outcome = await h.ensure(key, h.urlFor(key));
+				assert.equal(outcome.status, "downloaded", `★ ${label}：关掉自动下载也必须取回（否则图根本不显示）`);
+				assert.equal(h.server.countByMethod("GET"), 1, `★ ${label}：要真的发一次 GET`);
+			} finally {
+				await h.close();
+			}
+		}
+
+		// 反方向：公开读取时那个开关照旧算数（不然就成了"这个设置项没用"）
+		const h = await makeHarness({
+			settings: { fallbackDownload: false, linkAccess: "public" },
+			accessProbe: () => ({ kind: "ok", status: 200, at: 1 }),
+		});
+		try {
+			const key = `public-${sha256Hex(HOSTILE_BYTES)}.png`;
+			h.putObject(key, HOSTILE_BYTES, "image/png");
+			const outcome = await h.ensure(key, h.urlFor(key));
+			assert.equal(outcome.status, "disabled", "★ 公开读取时关掉自动下载就是不下载（用户的选择要成立）");
+			assert.equal(h.server.countByMethod("GET"), 0, "★ 公开读取 + 关掉开关 ⇒ 一个请求都不该发");
 		} finally {
 			await h.close();
 		}

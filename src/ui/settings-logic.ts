@@ -6,14 +6,25 @@
  * 拆成纯函数才能穷举，也才能在不用真实 Obsidian 的情况下验证。
  */
 
-import type { ExternalSiteMode, LocalCopyAction, OrphanAskMode } from "../types";
+import type { ExternalSiteMode, LinkAccessMode, LocalCopyAction, OrphanAskMode } from "../types";
 import {
 	CACHE_LIMIT_MB_MAX,
 	EXTERNAL_SITE_MODES,
+	LINK_ACCESS_MODES,
 	LOCAL_COPY_ACTIONS,
 	ORPHAN_ASK_MODES,
 	isCacheDisabled,
 } from "../types";
+import { classifyPublicReach } from "../link-access";
+import type { PublicReachKind } from "../link-access";
+
+/**
+ * ⚠️ 公开可达性的归类**不在这里实现**了（1.7.0）：它同时也是一条**判定**（决定走公开读取
+ * 还是内部访问，见 `link-access.ts::resolveAccess`），而"给人看的一句话"与"给判定用的一格"
+ * 必须是同一套取值 —— 两份实现迟早分叉，分叉的表现是"界面说桶私有，判定却当公开"。
+ * 这里只把名字转出去，让设置页的既有调用点不必改。
+ */
+export { classifyPublicReach as classifyPublicLink };
 
 /**
  * 秘密访问密钥在钥匙串里那条槽位的名字前缀。
@@ -98,6 +109,19 @@ export function orphanAskOptions(labelOf: (value: OrphanAskMode) => string): Rec
 	for (const value of ORPHAN_ASK_MODES) options[value] = labelOf(value);
 	return options;
 }
+
+/** 同上，给「链接可访问性」那一档用。 */
+export function linkAccessOptions(labelOf: (value: LinkAccessMode) => string): Record<string, string> {
+	const options: Record<string, string> = {};
+	for (const value of LINK_ACCESS_MODES) options[value] = labelOf(value);
+	return options;
+}
+
+// ⚠️ 1.7.0 当天下架：这里曾有一个 `coherentLocalCopy`，用来把「仅内部访问 + 不留副本」
+// 当成**矛盾组合**纠正成「保留副本」。用户在评审时问了一句「仅内部就必须下载吗？
+// 不能像图床那样只存在 S3？」—— 于是那个组合不再矛盾，而是**第四种正常用法**：
+// 私有存储 + 不留副本 ⇒ 渲染时给 `<img>` 一条预签名地址（磁盘不落文件、离线看不到）。
+// 判据见 `link-access.ts::displayPathFor`。**没有这个函数了**，别再把它加回来。
 
 /**
  * ⚠️ 1.2.0（D-17）删掉了 `shouldShowCacheFolder`：那个选项是"选「移入缓存」才显示缓存目录"，
@@ -324,16 +348,10 @@ export function connectionFailureKey(kind: ConnectionFailureKind): string {
  * - `forbidden`：地址对、桶私有 ⇒ 开公开读，或配一个公开访问前缀（CDN / 自定义域名）
  * - `missing`：地址通、对象不在 ⇒ 多半前缀写错（例如少了桶名）
  * - `unreachable`：地址本身不对 ⇒ 前缀写错了
+ *
+ * ⚠️ 实现见 `link-access.ts::classifyPublicReach`（那里是唯一一份，因为它同时是一条判定）。
  */
-export type PublicLinkKind = "ok" | "forbidden" | "missing" | "unreachable" | "other";
-
-export function classifyPublicLink(status: number | null): PublicLinkKind {
-	if (status === null) return "unreachable";
-	if (status >= 200 && status < 300) return "ok";
-	if (status === 401 || status === 403) return "forbidden";
-	if (status === 404) return "missing";
-	return "other";
-}
+export type PublicLinkKind = PublicReachKind;
 
 export function publicLinkKey(kind: PublicLinkKind): string {
 	return `testPublic_${kind}`;

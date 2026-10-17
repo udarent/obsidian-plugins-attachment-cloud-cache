@@ -100,14 +100,25 @@ assert.ok(
 // 1. 必须真的发起匿名探测（删掉它，测试就退化成只验桶）；
 // 2. 探的必须是**真的要写进笔记的那个地址**（用 `publicUrlFor` 推导），
 //    不能另拼一个 —— 一分开算，检查就会开始骗人。
+// ⚠️ 1.7.0：这两条守的**事实**没变，但实现搬了家（探测收进 `link-access.ts`，
+// 由插件的 `refreshAccessProbe` 统一发起 —— 界面上显示的那一份必须与渲染判定用的
+// 是**同一份**结果，否则会出现"测试说公开、图却按私有取"）。所以守卫跟着通路走：
+// 「界面 → 那唯一一条探测路径」与「探测地址由 publicUrlFor 推导」。
 assert.ok(
-	tab.includes("probePublicLink("),
-	"★ 「测试连接」要真的匿名探测一次公开地址 —— 否则「别人能不能打开我的链接」没有任何检查"
+	tab.includes("this.plugin.refreshAccessProbe("),
+	"★ 「测试连接」必须真的探一次（走插件那唯一一条探测路径）—— 否则「别人能不能打开我的链接」没有任何检查"
 );
-assert.ok(
-	tab.includes("publicUrlFor(config, key)"),
-	"★ 探的必须是**真要写进笔记**的那个地址（同一个 publicUrlFor），不能自己另拼一个"
-);
+{
+	const linkAccess = read("src/link-access.ts");
+	assert.ok(
+		linkAccess.includes("return publicUrlFor(address, cleanKey);"),
+		"★ 探的必须是**真要写进笔记**的那个地址（同一个 publicUrlFor），不能自己另拼一个"
+	);
+	assert.ok(
+		linkAccess.includes("probePublicLink"),
+		"★ 探测必须走**不带签名**的那条实现 —— 带凭据去请求等于拿「我自己能打开」冒充「别人能打开」"
+	);
+}
 
 // ============================================================
 // 静态守卫：导入凭据文件时，秘密**只**进钥匙串

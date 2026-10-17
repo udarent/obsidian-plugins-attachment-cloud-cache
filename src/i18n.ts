@@ -42,7 +42,7 @@ export const I18N: Record<string, Locale> = {
 		s3PublicUrlBaseDesc:
 			"Image links are built from this prefix plus the object path. You can leave it empty: links then use the object address (endpoint + bucket), which needs the bucket to allow anonymous reads. On a CDN or a custom domain, fill this in.",
 		testConnection: "Test connection",
-		testConnectionDesc: "Sends one HEAD request to the bucket.",
+		testConnectionDesc: "Sends one request to your bucket.",
 		s3Import: "Import from a credentials file",
 		s3ImportDesc:
 			"Read the JSON your storage provider gives you (MinIO's “Download credentials” produces one) and fill in the fields below. Only the service address, the access key and the addressing mode are written to the plugin's data; the secret key goes straight into your OS keychain, and no copy of the file is kept.",
@@ -65,12 +65,32 @@ export const I18N: Record<string, Locale> = {
 		// ── 第二步：那个地址**别人**打得开吗（匿名探测）──
 		testPublic_ok: "The public link works — anyone can open it: {url}",
 		testPublic_forbidden:
-			"Reached that address, but it refuses anonymous access — other people cannot open your links. Make the bucket publicly readable, or set a Public URL base (a CDN or custom domain).",
+			"Reached that address, but it refuses anonymous access — other people cannot open your links. That is fine if the bucket is meant to stay private; if links should work elsewhere, make it publicly readable or set a Public URL base (a CDN or custom domain).",
 		testPublic_missing:
-			"Reached that address, but the object is not there (404) — the URL base is probably wrong. Checked: {url}",
+			"Reached that address, but the object is not there — the URL base is probably wrong. Checked: {url}",
 		testPublic_unreachable: "Could not reach that address at all — the URL base is probably wrong. Checked: {url}",
-		testPublic_other: "Could not tell whether the link works (HTTP {status}). Checked: {url}",
+		testPublic_other: "Could not tell whether the link works — your storage answered in a way we do not recognise. Checked: {url}",
 		testPublic_noSample: "Nothing uploaded yet, so there is no link to check — upload a file first.",
+
+		// ── 链接可访问性：访问方式与两种模式的差别（1.7.0）──
+		linkAccessName: "Who can open the links in your notes",
+		linkAccessDesc:
+			"Your notes hold ordinary URLs, so whether other people can open them depends on your bucket's permissions, not on this plugin. Public read: the bucket allows anonymous access, so a link keeps working after you paste it into another app or send it to someone — this is what you want for sharing, and it means anyone holding the URL can view the file. Internal access only: the bucket stays private, nothing is exposed, and links pasted elsewhere will not open; images are shown here by either keeping a local copy (offline works) or, if you chose not to keep one, by a short-lived signed URL (nothing lands on disk, but offline shows nothing — that is plain image-host behaviour). Automatic detects which one your storage allows and picks the path accordingly; when it cannot tell (offline, timeout, or nothing uploaded yet) it uses internal access. Switching this does not rewrite a single link in your notes — existing links stay exactly the same, and nothing is moved or deleted in your bucket; only who can open them, and how this device gets the bytes, changes.",
+		linkAccess_auto: "Automatic (detect)",
+		linkAccess_public: "Public read (links work anywhere)",
+		linkAccess_private: "Internal access only (links work here only)",
+		// 判定理由（`auto` 档下必须说清"我们凭什么"）
+		testAccess_public: "Links can be opened by anyone: {reason}",
+		testAccess_private: "Links are for this plugin only: {reason}",
+		testAccessReason_explicitPublic: "you chose public read.",
+		testAccessReason_explicitPrivate: "you chose internal access only.",
+		testAccessReason_probePublic: "anonymous access to that URL succeeded.",
+		testAccessReason_probeForbidden: "that URL refuses anonymous access, so the bucket is private.",
+		testAccessReason_probeMissing: "the URL answered but the object is gone, which does not prove the bucket is public.",
+		testAccessReason_probeUnreachable: "the probe did not complete, which does not prove the bucket is public.",
+		testAccessReason_probeUnknown: "nothing has been probed yet.",
+		testAccess_timedOut: "The probe timed out, so it is treated as private for now. Reopen this page or test again when the network settles.",
+		testAccess_unreachable: "The probe could not reach the address, so it is treated as private for now. If links should work elsewhere, check the endpoint and the Public URL prefix.",
 
 		// ── 上传 ──
 		autoUpload: "Upload new attachments automatically",
@@ -86,12 +106,12 @@ export const I18N: Record<string, Locale> = {
 		// ── 离线副本 ──
 		localCopy: "Where the local copy goes",
 		localCopyDesc:
-			"Where the local copy of an uploaded file is kept. The uploaded file itself is the copy — nothing is moved into a separate folder. Without a local copy, files cannot be shown offline. Choosing \"do not keep\" turns caching off: the plugin uploads and rewrites links, and never fetches a copy back.",
+			"Where the local copy of an uploaded file is kept. The uploaded file itself is the copy — nothing is moved into a separate folder. Without a local copy, files cannot be shown offline. Choosing \"do not keep\" turns caching off: the plugin uploads and rewrites links, and never fetches a copy back — if your storage is not publicly readable, images are then shown through a short-lived signed URL instead (still nothing on disk).",
 		localCopy_keep: "Keep the file where it is (offline works)",
 		localCopy_trash: "Delete the local file after uploading (offline unavailable)",
 		fallbackDownload: "Download missing copies",
 		fallbackDownloadDesc:
-			"For files from this storage that have no local copy, such as ones synced from another device. Only objects in your own storage are handled. Not used when no local copy is kept, since caching is off then.",
+			"For files from this storage that have no local copy, such as ones synced from another device. Only objects in your own storage are handled. Not used when no local copy is kept, since caching is off then. When your storage is not publicly readable, these downloads happen regardless — without them those images could not be shown at all.",
 
 		// ── 高级 ──
 		forcePathStyle: "Compatibility mode",
@@ -364,7 +384,7 @@ export const I18N: Record<string, Locale> = {
 		s3PublicUrlBaseDesc:
 			"笔记里的图片链接 = 这个前缀 + 对象路径。可以留空 —— 留空就用对象地址（服务地址 + 存储桶），那要求存储桶允许匿名读取；走 CDN 或自定义域名时必须填。",
 		testConnection: "测试连接",
-		testConnectionDesc: "会向存储桶发一次 HEAD 请求。",
+		testConnectionDesc: "会向存储桶发一次请求。",
 		s3Import: "从凭据文件导入",
 		s3ImportDesc:
 			"读取存储服务商给你的那份 JSON（MinIO 控制台的「下载凭据」就是这种），自动填好下面几栏。只有服务地址、访问密钥和寻址方式会写进插件的数据；秘密访问密钥直接进系统钥匙串，插件不留副本。",
@@ -387,11 +407,30 @@ export const I18N: Record<string, Locale> = {
 		// ── 第二步：那个地址**别人**打得开吗（匿名探测）──
 		testPublic_ok: "公开链接可用 —— 别人也能打开：{url}",
 		testPublic_forbidden:
-			"那个地址能连上，但拒绝匿名访问 —— 别人打不开你的链接。把存储桶设为公开读，或填一个公开访问前缀（CDN / 自定义域名）。",
-		testPublic_missing: "那个地址能连上，但对象不在（404）—— 多半是前缀写错了。检查的是：{url}",
+			"那个地址能连上，但拒绝匿名访问 —— 别人打不开你的链接。桶本来就不打算对外，这样是对的；若希望链接在别处也能打开，把存储桶设为公开读，或填一个公开访问前缀（CDN / 自定义域名）。",
+		testPublic_missing: "那个地址能连上，但对象不在 —— 多半是前缀写错了。检查的是：{url}",
 		testPublic_unreachable: "连不上那个地址 —— 前缀可能写错了。检查的是：{url}",
-		testPublic_other: "无法判断链接是否可用（HTTP {status}）。检查的是：{url}",
+		testPublic_other: "无法判断链接是否可用 —— 存储回了一个我们没预料到的结果。检查的是：{url}",
 		testPublic_noSample: "还没上传过任何东西，没有链接可检查 —— 先上传一个文件。",
+
+		// ── 链接可访问性：访问方式与两种模式的差别（1.7.0）──
+		linkAccessName: "笔记里的链接谁打得开",
+		linkAccessDesc:
+			"笔记里存的是普通地址，所以别人能不能打开，取决于你存储桶的权限，而不是这个插件。公开读取：桶允许匿名访问，链接粘到别的应用里、发给别人之后照样打得开 —— 需要对外分享就选它；代价是任何拿到地址的人都能看。仅内部访问：桶保持私有、什么都不对外暴露，粘到别处的链接会打不开；本机怎么显示图，取决于「本地副本」那一项 —— 保留副本就用副本显示（离线也能看），不留副本就改用一条短时签名地址（像图床一样：磁盘上不落文件，但离线看不到）。自动：先探测你的存储允许哪一种，再据此选路；探测不出来时（离线、超时、或还没上传过东西）按内部访问处理。切换这一项不会改写笔记里的任何一条链接 —— 已有链接一字不变，桶里的对象也不会被搬迁或删除；变的只是「谁能打开」与「本机怎么取到字节」。",
+		linkAccess_auto: "自动（探测后决定）",
+		linkAccess_public: "公开读取（链接在任何地方都能打开）",
+		linkAccess_private: "仅内部访问（链接只在装了本插件的地方能看）",
+		testAccess_public: "这些链接别人也能打开：{reason}",
+		testAccess_private: "这些链接只有本插件能取到：{reason}",
+		testAccessReason_explicitPublic: "你选的是公开读取。",
+		testAccessReason_explicitPrivate: "你选的是仅内部访问。",
+		testAccessReason_probePublic: "匿名访问那条地址成功了。",
+		testAccessReason_probeForbidden: "那条地址拒绝匿名访问，说明桶是私有的。",
+		testAccessReason_probeMissing: "地址能连上但对象不在，这证明不了桶是公开的。",
+		testAccessReason_probeUnreachable: "探测没有完成，这证明不了桶是公开的。",
+		testAccessReason_probeUnknown: "还没探测过。",
+		testAccess_timedOut: "探测超时了，暂时按私有处理。网络恢复正常后重新打开本页或再点一次测试。",
+		testAccess_unreachable: "探测没能连上那个地址，暂时按私有处理。如果希望链接在别处也能打开，请检查服务地址与公开访问前缀。",
 
 		autoUpload: "新增附件自动上传",
 		autoUploadDesc:
@@ -404,12 +443,12 @@ export const I18N: Record<string, Locale> = {
 
 		localCopy: "本地副本的处理",
 		localCopyDesc:
-			"上传后，本地副本放在哪里。上传的那份文件**本身就是**本地副本（不会搬去别的目录）。选「不留」等于关闭缓存：插件只负责上传与改写链接，不会把副本补回来。",
+			"上传后，本地副本放在哪里。上传的那份文件**本身就是**本地副本（不会搬去别的目录）。选「不留」等于关闭缓存：插件只负责上传与改写链接，不会把副本补回来 —— 若存储不可公开读取，图片会改用一条短时签名地址显示（磁盘上同样不落文件）。",
 		localCopy_keep: "留在附件目录（离线可用）",
 		localCopy_trash: "不留本地副本（等于关闭缓存，离线不可用）",
 		fallbackDownload: "缺本地副本时自动下载",
 		fallbackDownloadDesc:
-			"属于本存储、却没有本地副本的附件（例如从另一台设备同步来的）会自动下载。只处理你自己存储里的对象。选「不留副本」时不生效（那一档已关闭缓存）。",
+			"属于本存储、却没有本地副本的附件（例如从另一台设备同步来的）会自动下载。只处理你自己存储里的对象。选「不留副本」时不生效（那一档已关闭缓存）。存储不可公开读取时这一项不生效 —— 那时不取回就完全显示不出图。",
 
 		forcePathStyle: "兼容模式",
 		forcePathStyleDesc:

@@ -22,7 +22,10 @@ await runMutations({
 		// ⚠️ 这里原本有四条变异，锚在"扩展名列表的解析/格式化"上。那个设置项
 		//（以及它的两个纯函数）在 1.1.0 被删除（需求 R15：**附件**类型不再要白名单），
 		// 于是换成了**同一类后果**的三条 —— 它们同样是"不报错、只把用户带错路"的缺陷：
-		// 界面上出现假选项、401 被归成别的档、公开链接的文案 key 拼错。
+		// 界面上出现假选项、公开链接的文案 key 拼错。
+		// ⚠️ 1.7.0：原第三条（"401 不再归为拒绝匿名访问"）**搬到 `mutate-link-access.mjs`** ——
+		// 那个归类随访问方式的判定一起搬去了 `link-access.ts`（现在它同时是一条判定，
+		// 见那边的文件头）。锚在已搬走的代码上只会"找不到目标"，那是假绿。
 		{
 			// 后果：下拉里多出一个**从不生效**的值（假选项），用户选了它以为行为变了，
 			// 实际什么都没发生 —— 界面上能选的必须与类型清单完全一致。
@@ -30,14 +33,6 @@ await runMutations({
 			from: "\tfor (const value of EXTERNAL_SITE_MODES) options[value] = labelOf(value);",
 			to: '\tfor (const value of [...EXTERNAL_SITE_MODES, "always"]) options[value] = labelOf(value);',
 			expect: "选项集合必须与 EXTERNAL_SITE_MODES 完全一致",
-		},
-		{
-			// 后果：401 被归到"其它"⇒ 用户看到一句含糊的"无法判断"，
-			// 而真正该做的是"开公开读或配一个公开前缀"。提示指错方向。
-			name: "★ 401 不再归为「拒绝匿名访问」（提示退化成含糊的「无法判断」）",
-			from: '\tif (status === 401 || status === 403) return "forbidden";',
-			to: '\tif (status === 403) return "forbidden";',
-			expect: "401 同理",
 		},
 		{
 			// 后果：文案 key 拼错 ⇒ 界面上直接显示成 `public_ok` 这样的键名，
@@ -103,6 +98,20 @@ await runMutations({
 			to: '\tfor (const value of [...LOCAL_COPY_ACTIONS, "ask"]) options[value] = labelOf(value);',
 			expect: "选项集合必须与 LOCAL_COPY_ACTIONS 完全一致",
 		},
+		// ── 链接可访问性（1.7.0）──
+		{
+			// 后果：下拉里多出一个**从不生效**的访问方式（假选项）：用户选它以为
+			// "链接可以给外人看了"，实际判定层根本不认这个值 —— 而他很可能就是在
+			// 准备把链接发出去的时候选它的。
+			name: "★ 访问方式那一档多出一个假选项（用户以为选了「公开」）",
+			from: "\tfor (const value of LINK_ACCESS_MODES) options[value] = labelOf(value);",
+			to: '\tfor (const value of [...LINK_ACCESS_MODES, "shared"]) options[value] = labelOf(value);',
+			expect: "选项集合必须与 LINK_ACCESS_MODES 完全一致",
+		},
+		// ⚠️ 这里原有两条锚在 `coherentLocalCopy` 上的变异（"私有+不留副本被放行"、
+		// "坏副本策略被读成 trash"）。那个函数 1.7.0 当天**下架**：用户问「仅内部就必须下载吗？
+		// 不能像图床那样只存在 S3？」⇒ 那个组合不再是矛盾，改走预签名地址。
+		// 锚在已删代码上只会"找不到目标"（假绿）⇒ 两条一起删掉，判据转到 `link-access.ts`。
 
 		// ── 失败归类 ──
 		{
@@ -150,14 +159,6 @@ await runMutations({
 			from: '\tconst trimmed = String(existing ?? "").trim();',
 			to: '\tconst trimmed = String(existing ?? "");',
 			expect: "纯空白的槽位名视同没有",
-		},
-		{
-			// 后果：403（桶私有）被归到"其它"⇒ 用户看到一句含糊的"无法判断"，
-			// 而真正该做的是"开公开读或配公开前缀"。提示指错方向。
-			name: "★ 403 不再归为「拒绝匿名访问」（提示退化成含糊的「无法判断」）",
-			from: '\tif (status === 401 || status === 403) return "forbidden";',
-			to: '\tif (status === 401) return "forbidden";',
-			expect: "403 是「能连上但拒绝匿名访问」",
 		},
 		{
 			// 后果：桶私有被涂成红色 ⇒ 用户以为"连接坏了"，去改根本没坏的东西。

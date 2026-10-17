@@ -270,6 +270,140 @@ export async function runRenderHookSuite(mod) {
 	}
 
 	// ============================================================
+	// 7c. ⭐ 1.7.0：私有存储 + 不留副本 ⇒ 换成**预签名地址**（图床式，不落盘）
+	//
+	// 这条路的产出不是文件、而是一条临时 URL。它必须：
+	// ① 真的被换上（否则私有桶下就是坏图）；
+	// ② **不去下载**（"不留副本"档不许往库里写文件）；
+	// ③ 签不出来时什么都不改（保持远端地址，而不是写一个空 src）。
+	// ============================================================
+	{
+		const privateSettings = { ...settings, linkAccess: "private", localCopy: "trash" };
+		const signedBase = "https://s3.example.com/b/a.png?X-Amz-Signature=abc";
+		const signedCalls = [];
+		let fetchCalls = 0;
+
+		const imgSigned = fakeImage(`${BASE}/a.png`);
+		const before = imgSigned.writes.length;
+		processImages(
+			fakeContainer([imgSigned]),
+			depsWith({
+				settings: () => privateSettings,
+				// 探测还没回来 ⇒ 按私有处理（安全方向）
+				accessProbe: () => ({ kind: "unknown", status: null, at: 0 }),
+				signedUrlFor: async (key) => {
+					signedCalls.push(key);
+					return signedBase;
+				},
+				ensureLocalCopy: async () => {
+					fetchCalls += 1;
+					return "_attachment-cache/a.png";
+				},
+			})
+		);
+		// 签名是异步的：等它落地（一个 microtask 链足够，但用 setTimeout 更稳）
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		assert.deepEqual(signedCalls, ["a.png"], "★ 要按 key 去签一次（key 从地址反推，不是拼 URL）");
+		assert.equal(imgSigned.getAttribute("src"), signedBase, "★ 元素上应当是那条预签名地址");
+		assert.equal(fetchCalls, 0, "★ 「不留副本」档绝不能触发下载（那会往用户库里写文件）");
+		assert.equal(imgSigned.writes.length, before + 1, "只改一次 src（不要先清空再写）");
+
+		// 签不出来（没凭据 / 地址不合法）⇒ 什么都不改，图保持远端地址
+		const imgNoSign = fakeImage(`${BASE}/b.png`);
+		processImages(
+			fakeContainer([imgNoSign]),
+			depsWith({
+				settings: () => privateSettings,
+				accessProbe: () => ({ kind: "forbidden", status: 403, at: 1 }),
+				signedUrlFor: async () => null,
+			})
+		);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		assert.equal(imgNoSign.getAttribute("src"), `${BASE}/b.png`, "签不出来时保留远端地址（不写空 src）");
+		assert.equal(imgNoSign.writes.length, 0, "★ 签不出来时一次写入都不该发生");
+
+		// ⭐ 音频/视频在"私有 + 不留副本"下**换节点**（`src` 一个字节都不写）
+		{
+			const calls = [];
+			const imgVideo = fakeImage(`${BASE}/clip.mp4`);
+			processImages(
+				fakeContainer([imgVideo]),
+				depsWith({
+					settings: () => privateSettings,
+					accessProbe: () => ({ kind: "forbidden", status: 403, at: 1 }),
+					onNonImageEmbed: (element, target) => calls.push({ element, target }),
+					signedUrlFor: async () => "https://signed/clip.mp4?sig=1",
+				})
+			);
+			assert.deepEqual(
+				calls.map((call) => call.target),
+				[{ kind: "signed", key: "clip.mp4" }],
+				"★ 视频要走「换节点」那条路（改 src 救不了 <img>）"
+			);
+			assert.equal(imgVideo.writes.length, 0, "★ 换节点这条路**不写 src**（远端/签名地址都不进这个 <img>）");
+
+			// PDF 不在其列：签了也播不了，不接管（宁可不显示，也不造一个错节点）
+			const callsPdf = [];
+			const imgPdf = fakeImage(`${BASE}/doc.pdf`);
+			processImages(
+				fakeContainer([imgPdf]),
+				depsWith({
+					settings: () => privateSettings,
+					accessProbe: () => ({ kind: "forbidden", status: 403, at: 1 }),
+					onNonImageEmbed: (element, target) => callsPdf.push(target),
+					signedUrlFor: async () => "https://signed/doc.pdf?sig=1",
+				})
+			);
+			assert.deepEqual(callsPdf, [], "★ PDF 不走自建节点（pdf.js 只吃库内文件）");
+		}
+
+		// 公开读取 ⇒ **不该**去签（桶自己就能给，签了只是多一个过期窗口）
+		const imgPublic = fakeImage(`${BASE}/c.png`);
+		let signedInPublic = 0;
+		processImages(
+			fakeContainer([imgPublic]),
+			depsWith({
+				settings: () => ({ ...settings, linkAccess: "public", localCopy: "trash" }),
+				accessProbe: () => ({ kind: "ok", status: 200, at: 1 }),
+				signedUrlFor: async () => {
+					signedInPublic += 1;
+					return signedBase;
+				},
+			})
+		);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		assert.equal(signedInPublic, 0, "★ 公开读取时不许签名");
+		assert.equal(imgPublic.writes.length, 0, "公开读取 + 不留副本：图片什么都不改（远端地址本来就能用）");
+
+		// ⭐ 公开 + 不留副本的**视频**：不签名，但要换节点（否则 `<img>` 播不了）。
+		// 这一格是 2026-10-17 评审时补的 —— 之前它是「既没签名地址、也没副本」的死角。
+		{
+			const directCalls = [];
+			const imgVideoPublic = fakeImage(`${BASE}/clip.mp4`);
+			processImages(
+				fakeContainer([imgVideoPublic]),
+				depsWith({
+					settings: () => ({ ...settings, linkAccess: "public", localCopy: "trash" }),
+					accessProbe: () => ({ kind: "ok", status: 200, at: 1 }),
+					onNonImageEmbed: (element, target) => directCalls.push(target),
+					signedUrlFor: async () => {
+						signedInPublic += 1;
+						return signedBase;
+					},
+				})
+			);
+			assert.deepEqual(
+				directCalls,
+				[{ kind: "direct", key: "clip.mp4", remoteUrl: `${BASE}/clip.mp4` }],
+				"★ 公开 + 不留副本：视频要走「直连换节点」（不签名，用笔记里那条地址）"
+			);
+			assert.equal(imgVideoPublic.writes.length, 0, "★ 这条路不写 src（`<img>` 装不下视频）");
+			assert.equal(signedInPublic, 0, "★ 直连一次都不许签名");
+		}
+	}
+
+	// ============================================================
 	// 8. 实时预览的 setter 拦截：`src` 被赋成远端地址时，落到元素上的是本地地址
 	//
 	// 这是"编辑态离线可用"的关键 —— 如果没有这一层，用户在离线时编辑笔记
@@ -354,6 +488,48 @@ export async function runRenderHookSuite(mod) {
 		patchThrown = error;
 	}
 	assert.equal(patchThrown, null, "拿不到 prototype 时应静默跳过，而不是抛错");
+
+	// 8b. ⭐ 1.7.0：实时预览里，视频/音频在"私有 + 不留副本"下**换节点**，`src` 一个字节都不写
+	{
+		const { view: viewMedia, restore: restoreMedia } = makeFakeImageElementClass();
+		const mediaCalls = [];
+		const uninstallMedia = installImageSrcPatch(
+			{
+				settings: () => ({ ...settings, linkAccess: "private", localCopy: "trash" }),
+				index: () => index,
+				resourceUrlFor: (path) => `app://local/${path}`,
+				accessProbe: () => ({ kind: "forbidden", status: 403, at: 1 }),
+				onNonImageEmbed: (element, target) => mediaCalls.push(target),
+				signedUrlFor: async () => "https://signed/clip.mp4?sig=1",
+			},
+			{ view: viewMedia }
+		);
+
+		const videoEl = new viewMedia.HTMLImageElement();
+		videoEl.src = `${BASE}/clip.mp4`;
+		assert.deepEqual(
+			mediaCalls,
+			[{ kind: "signed", key: "clip.mp4" }],
+			"★ 编辑态里的视频也要走「换节点」（改 src 救不了 <img>）"
+		);
+		assert.equal(
+			videoEl.getAttribute("src"),
+			null,
+			"★ 这条路**不写 src**（远端地址与签名地址都不该进这个 <img>）"
+		);
+
+		// 图片照旧：换 src（不能被"换节点"那条路抢走）
+		const imgEl = new viewMedia.HTMLImageElement();
+		imgEl.src = `${BASE}/pic.png`;
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		assert.equal(
+			imgEl.getAttribute("src"),
+			"https://signed/clip.mp4?sig=1",
+			"★ 图片仍然走预签名改 `src`（媒体与图片的分流只按扩展名）"
+		);
+		uninstallMedia();
+		restoreMedia();
+	}
 
 	// ============================================================
 	// 9. ⭐ 实时预览里的**站外**图：把候选交给宿主

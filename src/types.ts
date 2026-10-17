@@ -92,6 +92,10 @@ export function isLocalCopyAction(value: unknown): value is LocalCopyAction {
  *
  * 判据写成"要不要写副本"，而不是"要不要用副本"：已经存在的副本不受影响
  * （用户显式缓存进来的站外图仍然离线可见）。
+ *
+ * ⚠️ 1.7.0 起这一档**不再等于"什么都不显示"**：存储不可公开读取时，缺副本的图改走
+ * **预签名地址**（`link-access.ts::displayPathFor`）—— 图照样显示，只是磁盘上不落文件、
+ * 离线看不到。所以"关闭缓存"这个说法只对"写不写副本"成立，不要读成"关掉显示"。
  */
 export function isCacheDisabled(action: unknown): boolean {
 	return action === "trash";
@@ -171,6 +175,50 @@ export function isOrphanAskMode(value: unknown): value is OrphanAskMode {
 	return typeof value === "string" && (ORPHAN_ASK_MODES as readonly string[]).includes(value);
 }
 
+/**
+ * 「笔记里那条链接**别人打得开吗**」—— 由谁决定，以及我们据此走哪条访问路径。
+ *
+ * ## 为什么这是一个必须由用户回答的问题
+ *
+ * 笔记里写的是**一条普通地址**（`publicUrlFor` 的产物），它能不能被打开取决于
+ * **桶的权限**，而那是用户在存储服务商那边配的东西。我们既不能替他开，也不能替他关：
+ * - 想让链接能粘到公众号 / 论坛 / 别人机器上打开 ⇒ 桶必须允许匿名读（公开读取）；
+ * - 只给自己看（敏感附件、内网 MinIO）⇒ 桶**不需要**公开读，我们走带签名取回的内部路径。
+ *
+ * 1.6.0 及以前这里没有选择：一律假定桶是公开的，于是私有桶的用户看到的是**一屏坏图** ——
+ * `<img>` 拿到 403 不会报任何错（只有控制台一条），用户只会以为"插件把我的图弄丢了"。
+ *
+ * ## 三档而不是两档
+ *
+ * | 取值 | 我们怎么想 | 谁来承担"桶到底是不是公开的"这个事实 |
+ * |---|---|---|
+ * | `auto` | 先**探测**一次匿名 HEAD，按结果选路径 | 探测（默认） |
+ * | `public` | 认为公开 ⇒ 不强制取回本地副本 | 用户的声明 |
+ * | `private` | 认为私有 ⇒ 图片**必须**先取回本地副本才显示 | 用户的声明 |
+ *
+ * `auto` 是为绝大多数人准备的：他们**不知道**自己的桶是公开还是私有（这恰恰是
+ * 本插件过去最大的静默失效来源）。两个显式档留给"我知道我在做什么"的人 ——
+ * 以及留给探测判断不了的情形（例如地址本身被中间设备劫持）。
+ *
+ * ⚠️ **三档都不改变笔记里的链接地址**（见 `Requirements` 的口径与 `link-access.ts`
+ * 的文件头）：链接照旧由 `publicUrlFor` 生成，切换模式只改变"别人能不能打开"
+ * 与"我们是否需要先取回本地副本"。
+ */
+export type LinkAccessMode =
+	/** 探测后决定（默认）。 */
+	| "auto"
+	/** 声明桶允许匿名读：链接在别处也能打开。 */
+	| "public"
+	/** 声明桶不公开：链接只在本机（有密钥的我们）可用。 */
+	| "private";
+
+/** 下拉里能选的值。**由它生成选项**，于是"界面能选的"与"类型允许的"只有一处定义。 */
+export const LINK_ACCESS_MODES: readonly LinkAccessMode[] = ["auto", "public", "private"];
+
+export function isLinkAccessMode(value: unknown): value is LinkAccessMode {
+	return typeof value === "string" && (LINK_ACCESS_MODES as readonly string[]).includes(value);
+}
+
 /** S3 兼容存储的连接参数。 */
 export interface S3Config {
 	/** 服务端点，如 `https://abc.r2.cloudflarestorage.com`。 */
@@ -248,6 +296,22 @@ export interface PluginSettings {
 	 * ⚠️ 它只管**本存储里的对象**（地址能反推出对象名）—— 范围之外的一律不碰。
 	 */
 	fallbackDownload: boolean;
+	/**
+	 * 远端存储的**访问方式**：公开读取（链接在别处也能打开）还是仅内部访问。
+	 *
+	 * 默认 `auto`：探测一次匿名能否取到对象，按结果选路径。判据与降级规则全部在
+	 * `link-access.ts`（**唯一一处**），这里只存用户的选择。
+	 *
+	 * ⚠️ 它**不改变**笔记里的链接地址（那由 `publicUrlFor` 生成，与本项无关）。
+	 * 改的是两件事：① 别人/别的平台能不能打开这条链接；② 本机是否需要**先取回本地副本**
+	 * 才显示得出图。后者正是私有桶在旧版本里"一屏坏图"的原因。
+	 *
+	 * ⚠️ 与 {@link localCopy} 的组合**没有矛盾档**：`private` + `"trash"`（仅内部 + 不留副本）
+	 * 是合法用法 —— 缺副本的图改用一条**短时签名地址**显示（磁盘不落文件，离线看不到）。
+	 * 三条显示路径的判据只在 `link-access.ts::displayPathFor` 一处；**没有**任何
+	 * "写入时自动纠正"的代码（曾经有过一个 `coherentLocalCopy`，1.7.0 当天下架）。
+	 */
+	linkAccess: LinkAccessMode;
 	/**
 	 * 是否把**站外文件当普通附件处理**（默认**关**）。
 	 *

@@ -147,14 +147,28 @@ async function main() {
 		// ⚠️ 这一行**必须是条件打印**。它曾经硬写着 ✓，于是"vault 里还是旧构建（4 条命令）"
 		// 这件事在输出里完全看不见 —— 总判定 ✗ 而明细行全是 ✓，谁也不知道该看哪里。
 		// 现在把期望值写进提示里，并且这个条件会出现在末尾的逐项清单中。
+		//
+		// ⭐ 2026-10-17 改成**精确集合**而不是"≥ 5"：
+		// ① 1.4.0 起命令面板**有意收敛到四条**（D-3x），"≥5"这条阈值从那天起就永远红；
+		// ② 阈值判不出方向：少一条（旧构建）与多一条（别人往这个 id 下挂了命令）都该报，
+		//    而"数量对了但换了一条"更该报 —— 那是接线被改过的直接证据。
+		// ③ 这正好对上本项目那条纪律：**能用"效果"判的别用阈值判**。
 		const commands = await evaluate(
 			client,
 			`Object.keys(app.commands.commands).filter((id) => id.startsWith(${JSON.stringify(`${PLUGIN_ID}:`)}))`
 		);
-		const EXPECTED_COMMANDS = 5;
-		const commandsOk = commands.length >= EXPECTED_COMMANDS;
+		const EXPECTED_COMMANDS = [
+			`${PLUGIN_ID}:audit-cache`,
+			`${PLUGIN_ID}:check-orphans`,
+			`${PLUGIN_ID}:upload-attachments`,
+			`${PLUGIN_ID}:pick-external-images`,
+		].sort();
+		const actualCommands = [...commands].sort();
+		const commandsOk =
+			actualCommands.length === EXPECTED_COMMANDS.length &&
+			actualCommands.every((id, index) => id === EXPECTED_COMMANDS[index]);
 		log(
-			`  ${commandsOk ? "✓" : "✗"} 已注册命令 ${commands.length} 条（期望 ≥ ${EXPECTED_COMMANDS}）：${JSON.stringify(commands)}`
+			`  ${commandsOk ? "✓" : "✗"} 已注册命令 ${commands.length} 条（期望恰好 ${EXPECTED_COMMANDS.length} 条、逐条同名）：${JSON.stringify(actualCommands)}`
 		);
 
 		// ⭐ 原型拦截是否真的装上了、且 setter 没有把普通赋值搞坏
@@ -495,7 +509,7 @@ async function main() {
 		// **能用"效果"判的别用阈值判** —— 但至少要让每个阈值都露出来。
 		const verdict = [
 			["插件已加载（_loaded）", loaded],
-			[`注册命令数 ${commands.length} ≥ ${EXPECTED_COMMANDS}`, commandsOk],
+			[`注册命令 ${commands.length} 条且与预期逐条一致`, commandsOk],
 			["HTMLImageElement.prototype.src 有 setter", patch.hasSetter],
 			["站外地址原样通过（没动别人的图）", patch.untouched],
 			["本地地址原样通过（幂等）", patch.idempotent],

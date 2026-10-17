@@ -30,6 +30,7 @@ export function runSettingsUiSuite(mod) {
 		publicLinkTone,
 		externalSiteModeOptions,
 		orphanAskOptions,
+		linkAccessOptions,
 		ensureSecretSlot,
 		SECRET_SLOT_PREFIX,
 		// settings-bindings
@@ -667,4 +668,25 @@ export function runSettingsUiSuite(mod) {
 		undefined,
 		"★ 不该去猜 region —— 猜错的表现是签名区域不符，而那个报错极难归因"
 	);
+
+	// ============================================================
+	// 11. 链接可访问性（1.7.0）：下拉选项 + 矛盾组合的纠正
+	// ============================================================
+	{
+		// 选项由类型清单生成：界面上能选的 = 类型允许的。
+		// ⚠️ 这里把三个取值写死是**有意的**：加一档时这条断言会红，逼着人确认
+		// "新档位的文案、判定、以及它跟「本地副本」的关系都想清楚了没有"。
+		const options = linkAccessOptions((value) => `label:${value}`);
+		assert.deepEqual(
+			Object.keys(options),
+			["auto", "public", "private"],
+			"★ 选项集合必须与 LINK_ACCESS_MODES 完全一致（界面上不许出现假选项）"
+		);
+		assert.equal(options.private, "label:private", "选项文案由调用方给（这一层不认识语言）");
+
+		// ⚠️ 这里曾断言 `coherentLocalCopy("private","trash")` 会把副本档纠正成 `keep`。
+		// 那个函数在 1.7.0 当天**下架**：用户问「仅内部就必须下载吗？不能像图床那样只存在 S3？」
+		// ⇒ 「私有 + 不留副本」不再是矛盾，而是第四种正常用法（预签名地址）。
+		// 现在这条组合的判据在 `link-access.ts::displayPathFor`，断言也在那边的套件里。
+	}
 }

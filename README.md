@@ -50,8 +50,10 @@ This does both — the file goes to your bucket, the copy that renders stays beh
 
 - **Obsidian 1.13.0 or newer**, desktop and mobile.
 - **An S3-compatible bucket you control**, plus an access key pair.
-- **The bucket must allow anonymous reads**, or you set a public URL prefix (CDN or custom domain) — otherwise the
-  links open for you but not for others. **Test connection** checks exactly this.
+- **The bucket does not have to be public.** If you want links pasted elsewhere to open, allow anonymous reads (or
+  set a public URL prefix). If it is just for you, keep the bucket private: the plugin fetches objects with your keys
+  and shows local copies — those links then only open where the plugin and your keys are. **Test connection** reports
+  which of the two you have, and which path the plugin takes.
 
 ## Installation
 
@@ -69,10 +71,11 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | --- | --- |
 | **Endpoint · Bucket · Region** | Where your storage lives (`us-east-1` is the usual filler for self-hosted). |
 | **Access key ID · Secret access key** | The secret goes into the OS keychain, never `data.json`. **Import from a credentials file** fills these in from MinIO's JSON and keeps no copy. |
-| **Public URL prefix** | Optional. Empty means `endpoint/bucket/key`, which requires anonymous reads. |
+| **Public URL prefix** | Optional. Empty means links use `endpoint/bucket/key`; those only work for other people if the bucket allows anonymous reads (see the row below). |
+| **Who can open the links in your notes** | **Automatic (detect)** by default — the plugin probes your storage once and picks a path; **Public read** if you want links to keep working after you paste them elsewhere, **Internal access only** to keep the bucket private (links then open only with this plugin and your keys). Detection that fails or times out is treated as *internal*, so images are still fetched instead of turning into broken images. Switching this **never rewrites a link in your notes** — the URL stays byte-identical, and nothing is moved or deleted in your bucket. |
 | **Test connection** | One signed request, then one **credential-free** request to the address your links would use. |
 | **Upload new attachments automatically** | On by default; off leaves new files local only. |
-| **Where the local copy goes** | **Keep the file where it is (offline works)** (default) or **Delete the local file after uploading (offline unavailable)**. With the second, uploads and link rewriting still happen, but nothing is fetched back, so **nothing works offline**. |
+| **Where the local copy goes** | **Keep the file where it is (offline works)** (default) or **Delete the local file after uploading (offline unavailable)**. With the second, uploads and link rewriting still happen, but nothing is fetched back, so **nothing works offline**. If your bucket is not publicly readable, that mode still shows **images, audio and video**: the renderer gets a **short-lived signed URL** instead (plain image-host behaviour — nothing on disk, nothing cached offline). PDFs still need a local copy, since the built-in viewer only opens vault files. |
 | **Free up local space** | Clears local copies of attachments still linked from a note — deleted **for good, not trashed**, so the space comes back at once. With a limit set it trims down **to that limit** only; copies no note links to are left to the unreferenced-attachment cleanup (they may need removing from your storage too). |
 | **Revert links to local paths** | Points note links back at the files in your vault instead of your storage. **Nothing is deleted** — cloud objects and local files stay as they are; only the links change. Uploaded files that no longer have a local copy are left pointing at your storage (rewriting them would only make broken links). Use it when you stop using the plugin.
 | **Local copy limit (MB) · Download missing copies** | `0` = no limit. Least-recently-used copies are trimmed first, and only after confirming the object is still in your storage. Auto-download stays off while "delete" is selected. |
@@ -111,7 +114,7 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | Symptom | What it means |
 | --- | --- |
 | *No appropriate version found.* | Your Obsidian is older than 1.13.0 — the installer refusing, not a broken plugin. |
-| Links open for you but not for others | No anonymous read and no public URL prefix; **Test connection** says exactly that. |
+| Links open for you but not for others | Expected if you chose *Internal access only* (or the bucket refuses anonymous reads). **Test connection** says which it is. |
 | Broken on a second device | No local copy there, and it could not download one. |
 | An off-site file refused as "a web page or plain text" | That address serves HTML, so it is refused on purpose. |
 
@@ -197,8 +200,9 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 
 - **Obsidian 1.13.0 或更新**，桌面端与移动端。
 - **一个你自己控制的 S3 兼容存储桶**，以及一对访问密钥。
-- **存储桶要允许匿名读取**，或者填一个公开访问前缀（CDN 或自定义域名）。否则写进笔记的链接你自己打得开、
-  别人打不开 —— **测试连接** 检查的正是这件事。
+- **存储桶不必是公开的。** 想让笔记里的链接粘到别的平台也能打开，就把桶设为允许匿名读取（或填一个公开访问
+  前缀）。只想自己看也没问题：插件会用你的密钥取回对象、靠本地副本显示 —— 那种情况下链接只在装了本插件的地方
+  能看，**测试连接** 会如实报出这两者的差别。
 
 ## 安装
 
@@ -216,10 +220,11 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | --- | --- |
 | **服务地址 · 存储桶 · 区域** | 你的存储在哪（自建服务填 `us-east-1` 之类的占位值即可）。 |
 | **访问密钥 ID · 秘密访问密钥** | 秘密密钥进系统钥匙串，绝不写进 `data.json`。**从凭据文件导入**会用 MinIO 的 JSON 填好这些，且不留副本。 |
-| **公开访问前缀** | 可留空。留空就用 `服务地址/存储桶/键`，那要求存储桶允许匿名读取。 |
+| **公开访问前缀** | 可留空。留空就用 `服务地址/存储桶/键`；这种链接要给别人打开，桶得允许匿名读取（见下一行）。 |
+| **笔记里的链接谁打得开** | 默认**自动（探测后决定）**：插件匿名探一次你的存储，据此选路。**公开读取** = 链接粘到别的平台仍能打开；**仅内部访问** = 桶保持私有，链接只在装了本插件、有密钥的地方能看。探测失败或超时按内部访问处理，所以图照样会被取回、不会变成坏图。切换这一项**不会改写笔记里的任何链接** —— 地址一字不变，桶里也不会搬迁或删除任何东西。 |
 | **测试连接** | 先发一次签名请求，再**不带凭据**请求一次「你笔记里会写的那条地址」。 |
 | **新增附件自动上传** | 默认开启；关闭后新文件只存在本地。 |
-| **本地副本的处理** | 留在附件目录（默认，**离线可用**），或**不留本地副本（等于关闭缓存，离线不可用）** —— 后者就是上传后把那份文件删掉：照常上传、照常改写链接，但不取回副本，所以**离线什么都看不到**。 |
+| **本地副本的处理** | 留在附件目录（默认，**离线可用**），或**不留本地副本（等于关闭缓存，离线不可用）** —— 后者就是上传后把那份文件删掉：照常上传、照常改写链接，但不取回副本，所以**离线什么都看不到**。⚠️ 若存储不可公开读取，这一档仍然能看**图片、音频与视频**：改给一条**短时签名地址**（就是图床的用法 —— 磁盘不留文件、离线仍看不到）。PDF 仍需本地副本（内置查看器只打开库内文件）。 |
 | **释放本地空间** | 清掉笔记里仍引用着的附件本地副本 —— **永久删除、不进回收站**，空间立刻释放。设了上限时只清**到上限为止**（不会全清）；没有任何笔记引用的副本留给「没人引用的附件」那条清理 —— 那些可能要连云端对象一起处理。 |
 | **把链接改回本地路径** | 把笔记里的链接改回指向库里那份文件（不再指向你的存储）。**什么都不删** —— 云端对象与本地文件都原样留着，只有链接会变。本地副本已经不在的那些会继续指向你的存储（改回去只会变成坏链）。准备停用这个插件时用它。
 | **本地副本上限（MB） · 缺本地副本时自动下载** | `0` 表示不限制。超限时按最近最少使用清理，且只有确认你的存储里仍有那个对象之后才会删。选「删除」时自动下载不生效。 |
@@ -253,7 +258,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | 现象 | 含义 |
 | --- | --- |
 | 社区目录说 *No appropriate version found.* | 你的 Obsidian 低于 1.13.0 —— 安装机制在拒绝，不是插件坏了。 |
-| 链接自己打得开、别人打不开 | 没开匿名读，也没填公开前缀；**测试连接** 会明确报出这一条。 |
+| 链接自己打得开、别人打不开 | 桶不是公开的（或者没填公开前缀）。这是「仅内部访问」的正常表现；想让链接在别处也能打开，见「笔记里的链接谁打得开」。**测试连接** 会明确报出这一条。 |
 | 换台设备就裂 | 那台设备没有本地副本，也补不下来。 |
 | 站外文件被以「返回的是网页或纯文本」拒收 | 那个地址回的是 HTML，所以刻意拒收。 |
 

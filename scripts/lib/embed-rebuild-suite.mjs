@@ -124,6 +124,10 @@ function makeDeps(overrides = {}) {
 		},
 		...(overrides.ensureLocalCopy ? { ensureLocalCopy: overrides.ensureLocalCopy } : {}),
 		...(overrides.onError ? { onError: overrides.onError } : {}),
+		// 1.7.0：私有 + 不留副本那条路（预签名地址 + 自建媒体节点）
+		...(overrides.accessProbe ? { accessProbe: overrides.accessProbe } : {}),
+		...(overrides.signedUrlFor ? { signedUrlFor: overrides.signedUrlFor } : {}),
+		...(overrides.createMediaNode ? { createMediaNode: overrides.createMediaNode } : {}),
 	};
 	return { deps, runFlush: () => flushFn?.() };
 }
@@ -137,6 +141,10 @@ export async function runEmbedRebuildSuite(mod) {
 		EMBED_MARK,
 		EMBED_PATH_ATTR,
 		EMBED_SOURCE_ATTR,
+		EMBED_SIGNED_ATTR,
+		EMBED_DIRECT_ATTR,
+		EMBED_URL_ATTR,
+		signedMediaKindFor,
 	} = mod;
 
 	// ============================================================
@@ -377,5 +385,165 @@ export async function runEmbedRebuildSuite(mod) {
 		assert.equal(el.getAttribute(EMBED_MARK), null, "补不上就不该标记（免得渲染一个坏节点）");
 	}
 
-	return { cases: 9 };
+	// ============================================================
+	// 10. ⭐ 1.7.0：私有存储 + 不留副本 ⇒ 音频/视频用**预签名地址**自建节点
+	//
+	// 用户 2026-10-17 的追问（"S3 不支持远程视频吗？"）之后真机量过：远端 `![]()` 全是 `<img>`，
+	// 但自建 `<video src="<签名地址>">` 能真播（真机量过：`loadeddata` 64ms、640x360、能 play）。
+	// 这条路的判据与图片那条**同一个**（`usesSignedUrls`）；这里只测"换了什么节点"。
+	// ============================================================
+	{
+		// 判据表：音频/视频能救，PDF 与图片不能
+		assert.equal(signedMediaKindFor("clip.mp4"), "video", "mp4 ⇒ 视频");
+		assert.equal(signedMediaKindFor("clip.webm"), "video", "webm ⇒ 视频");
+		assert.equal(signedMediaKindFor("song.mp3"), "audio", "mp3 ⇒ 音频");
+		assert.equal(signedMediaKindFor("voice.m4a"), "audio", "m4a ⇒ 音频");
+		assert.equal(signedMediaKindFor("doc.pdf"), null, "★ PDF 救不了（pdf.js 只吃库内路径）");
+		assert.equal(signedMediaKindFor("pic.png"), null, "图片不走这条路（改 src 就够）");
+
+		const privateTrash = { ...SETTINGS, linkAccess: "private", localCopy: "trash" };
+		const signedUrl = "https://s3.example.com/b/clip.mp4?X-Amz-Signature=abc";
+		const made = [];
+		const signedCalls = [];
+
+		// ① 视频：标记 + 排队 + 造 <video> + 替换原元素
+		const el = makeElement({ src: "https://img.example.com/clip.mp4" });
+		const replaced = [];
+		el.parentNode = makeParent(replaced);
+		const h = makeDeps({
+			accessProbe: () => ({ kind: "unknown", status: null, at: 0 }),
+			signedUrlFor: async (key) => {
+				signedCalls.push(key);
+				return signedUrl;
+			},
+			createMediaNode: (kind, url) => {
+				made.push({ kind, url });
+				return { tag: kind, url };
+			},
+		});
+		const deps = { ...h.deps, settings: () => privateTrash };
+		const queue = createEmbedRebuildQueue(deps);
+		const taken = processEmbeds({ querySelectorAll: () => [el] }, deps, "notes/a.md", queue);
+
+		assert.equal(taken, 1, "★ 私有 + 不留副本时，视频那一格要交给重建");
+		assert.equal(el.getAttribute(EMBED_SIGNED_ATTR), "1", "★ 要标明这一格走签名（不是库内副本）");
+		assert.equal(el.getAttribute(EMBED_PATH_ATTR), "clip.mp4", "记的是 key（没有本地文件）");
+		assert.equal(el.getAttribute("src"), "https://img.example.com/clip.mp4", "同步阶段不改 src（远端地址不主动写）");
+
+		h.runFlush();
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+
+		assert.deepEqual(signedCalls, ["clip.mp4"], "★ 按 key 签一次");
+		assert.deepEqual(made, [{ kind: "video", url: signedUrl }], "★ 造的是 <video>，地址是那条预签名地址");
+		assert.equal(replaced.length, 1, "原元素要被替换掉（否则用户只看到坏图）");
+		assert.equal(replaced[0]?.next?.tag, "video", "替换上去的是视频节点");
+
+		// ② PDF：同一档下**跳过**（救不了，如实留原样）
+		const pdf = makeElement({ src: "https://img.example.com/doc.pdf" });
+		pdf.parentNode = makeParent([]);
+		const h2 = makeDeps({ accessProbe: () => ({ kind: "forbidden", status: 403, at: 1 }) });
+		const deps2 = {
+			...h2.deps,
+			settings: () => privateTrash,
+			signedUrlFor: async () => "https://x/y.pdf?sig=1",
+			createMediaNode: () => ({ tag: "video" }),
+		};
+		const queue2 = createEmbedRebuildQueue(deps2);
+		const takenPdf = processEmbeds({ querySelectorAll: () => [pdf] }, deps2, null, queue2);
+		assert.equal(takenPdf, 0, "★ PDF 在「不留副本」下救不了 ⇒ 不接管（宁可留个坏图，也不造一个错节点）");
+		assert.equal(pdf.getAttribute(EMBED_SIGNED_ATTR), null, "PDF 不该被标记");
+
+		// ③ 签不出来 ⇒ 保留原元素（不替换、不空一格）
+		const el3 = makeElement({ src: "https://img.example.com/clip.mp4" });
+		const replaced3 = [];
+		el3.parentNode = makeParent(replaced3);
+		const h3 = makeDeps({
+			accessProbe: () => ({ kind: "forbidden", status: 403, at: 1 }),
+			signedUrlFor: async () => null,
+			createMediaNode: () => ({ tag: "video" }),
+		});
+		const deps3 = { ...h3.deps, settings: () => privateTrash };
+		const queue3 = createEmbedRebuildQueue(deps3);
+		processEmbeds({ querySelectorAll: () => [el3] }, deps3, null, queue3);
+		h3.runFlush();
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+		assert.equal(replaced3.length, 0, "★ 签不出来就不替换（保留原元素）");
+
+		// ④ 公开读取下**不许签名**，但仍然要接管音频/视频 —— 用远端地址**直连**。
+		// ⭐ 这一格是 2026-10-17 评审时补的：公开桶的字节谁都取得到，宿主的 `<img>`
+		// 却播不了视频 ⇒ 不给这条来路，「公开 + 不留副本」的音视频一帧都放不出来。
+		{
+			const el4 = makeElement({ src: "https://img.example.com/clip.mp4" });
+			let signedCalls = 0;
+			const made4 = [];
+			const h4 = makeDeps({
+				accessProbe: () => ({ kind: "ok", status: 200, at: 1 }),
+				signedUrlFor: async () => {
+					signedCalls += 1;
+					return "https://x/y.mp4?sig=1";
+				},
+				createMediaNode: (kind, url) => {
+					made4.push({ kind, url });
+					return { tag: kind };
+				},
+			});
+			const deps4 = { ...h4.deps, settings: () => ({ ...SETTINGS, linkAccess: "public", localCopy: "trash" }) };
+			const replaced4 = [];
+			el4.parentNode = makeParent(replaced4);
+			const queue4 = createEmbedRebuildQueue(deps4);
+			const taken4 = processEmbeds({ querySelectorAll: () => [el4] }, deps4, null, queue4);
+			assert.equal(taken4, 1, "★ 公开 + 不留副本：音频/视频仍要接管（否则播不了）");
+			assert.equal(el4.getAttribute(EMBED_DIRECT_ATTR), "1", "★ 标记成**直连**（不是签名那条路）");
+			assert.equal(
+				el4.getAttribute(EMBED_URL_ATTR),
+				"https://img.example.com/clip.mp4",
+				"直连要记下笔记里那条地址本身"
+			);
+			assert.equal(el4.getAttribute(EMBED_SIGNED_ATTR), null, "直连不许同时挂签名标记（两条来路互斥）");
+
+			h4.runFlush();
+			for (let i = 0; i < 4; i += 1) await Promise.resolve();
+			assert.equal(signedCalls, 0, "★ 公开读取时一次都不许签名（签了只是多一个过期窗口）");
+			assert.deepEqual(
+				made4,
+				[{ kind: "video", url: "https://img.example.com/clip.mp4" }],
+				"★ 造节点用的是那条远端地址本身"
+			);
+			assert.equal(replaced4.length, 1, "原元素要被换掉");
+		}
+
+		// ⑤ 同一档下的**图片**不接管：远端 `src` 本来就能显示，换节点是多此一举。
+		{
+			const el5 = makeElement({ src: "https://img.example.com/pic.png" });
+			const h5 = makeDeps({ accessProbe: () => ({ kind: "ok", status: 200, at: 1 }) });
+			const deps5 = { ...h5.deps, settings: () => ({ ...SETTINGS, linkAccess: "public", localCopy: "trash" }) };
+			const queue5 = createEmbedRebuildQueue(deps5);
+			assert.equal(
+				processEmbeds({ querySelectorAll: () => [el5] }, deps5, null, queue5),
+				0,
+				"★ 公开 + 不留副本的图片不进重建（直连只服务音频/视频）"
+			);
+		}
+
+		// ⑥ PDF 在公开档同样救不了（它要 pdf.js + 库内路径，与签名无关）。
+		{
+			const el6 = makeElement({ src: "https://img.example.com/doc.pdf" });
+			const h6 = makeDeps({ accessProbe: () => ({ kind: "ok", status: 200, at: 1 }) });
+			const deps6 = { ...h6.deps, settings: () => ({ ...SETTINGS, linkAccess: "public", localCopy: "trash" }) };
+			const queue6 = createEmbedRebuildQueue(deps6);
+			assert.equal(
+				processEmbeds({ querySelectorAll: () => [el6] }, deps6, null, queue6),
+				0,
+				"★ 公开 + 不留副本的 PDF 不接管（造一个播不了的东西更糟）"
+			);
+		}
+	}
+
+	return { cases: 10 };
 }

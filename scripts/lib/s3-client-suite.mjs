@@ -288,6 +288,60 @@ export async function runS3ClientSuite(mod) {
 	});
 
 	// ============================================================
+	// 1d. ⭐ 预签名 GET（"私有桶 + 不留副本"那条路的唯一凭据形式）
+	//
+	// 判据是**效果**：把生成的那条 URL 原样发出去（**不带任何头、不带凭据**），
+	// 由替身按服务端的方式独立重算签名并放行。预签名写错的表现是"用户那边一张坏图"，
+	// 而我们这边什么都不报 —— 所以这条必须真的走一次 HTTP。
+	// ============================================================
+	await withServer({}, async (server, endpoint) => {
+		const key = "报告 2026-10-17.png"; // 含空格与中文：编码错就签名不符
+		server.objects.set(key, { body: Buffer.from("presigned-body"), contentType: "image/png" });
+
+		const client = makeClient(mod, endpoint);
+		const url = await client.presignedGetUrl(key, { expiresIn: 600 });
+
+		assert.ok(url.includes("X-Amz-Signature="), "★ 预签名 URL 必须带签名（否则它只是一条普通地址）");
+		assert.ok(url.includes("X-Amz-Algorithm=AWS4-HMAC-SHA256"), "算法标识必须在查询串里");
+		assert.ok(url.includes("X-Amz-SignedHeaders=host"), "★ 只能签 host —— 浏览器不会替我们带别的头");
+		assert.ok(url.includes("X-Amz-Expires=600"), "有效期来自调用方");
+		assert.ok(!url.includes(CREDENTIALS.secretAccessKey), "★ 预签名 URL 里绝不能出现秘密访问密钥");
+		assert.ok(
+			url.startsWith(`${endpoint}/test-bucket/`),
+			"★ 必须签**对象地址**（而不是公开前缀）：签名要由存储自己验，CDN 域名上验不了"
+		);
+
+		// 真的发出去：不带头、不带凭据
+		const response = await nodeTransport()({ url, method: "GET", headers: {} });
+		assert.equal(response.status, 200, "★ 匿名 GET 一条预签名地址必须成功（这就是「图床效果」的全部依据）");
+		assert.equal(Buffer.from(response.body).toString(), "presigned-body", "取回的字节必须与桶里的一致");
+
+		const record = server.requests[server.requests.length - 1];
+		assert.equal(record.signatureOk, true, `替身独立重算签名必须通过，原因：${record.signatureReason}`);
+		assert.ok(!("authorization" in record.headers), "预签名请求不该带 Authorization 头");
+
+		// 篡改签名 ⇒ 必须被拒（否则"签名校验"这件事没被真的验证）
+		const tampered = url.replace(/X-Amz-Signature=[0-9a-f]{8}/, "X-Amz-Signature=00000000");
+		const rejected = await nodeTransport()({ url: tampered, method: "GET", headers: {} });
+		assert.equal(rejected.status, 403, "★ 签名被改动必须 403（不然替身的验签形同虚设）");
+	});
+
+	// 没有凭据时**抛配置错误**（调用方据此降级为"保持远端地址"，而不是发一条坏请求）
+	{
+		const client = makeClient(mod, "https://s3.example.com", { accessKeyId: "" });
+		await assert.rejects(
+			() => client.presignedGetUrl("a.png"),
+			(error) => {
+				// ⚠️ 判据用 `code` 而不是 `kind`：`kind === "client"` 那条规则由
+				// 「把配置错误归成网络故障」那个变异守着，用 kind 断言会把它挤成"原因不符"
+				// （最先失败的是这里）。`code` 同样唯一、且更具体。
+				assert.equal(error.code, "InvalidConfig", "没配凭据属于配置错误（不可重试），不该变成网络故障");
+				return true;
+			}
+		);
+	}
+
+	// ============================================================
 	// 2. ⭐ 上传：字节一致 + 服务端独立验签
 	// ============================================================
 	await withServer({}, async (server, endpoint) => {
@@ -820,5 +874,5 @@ export async function runS3ClientSuite(mod) {
 		assert.equal(sent.length, 1, "解析失败不该重试（重试拿到的还是同一段坏响应）");
 	}
 
-	return { scenarios: 13 };
+	return { scenarios: 14 };
 }

@@ -17,6 +17,11 @@
  * 于是不为任何图取回副本 —— 判定见 `types.ts` 的 `isCacheDisabled`。
  * 已经存在的副本不受影响（那由渲染判定使用，与"要不要写"是两件事）。
  *
+ * ⭐ 1.7.0：**"缓存开着"不等于"回退下载开着"**。存储是私有的时候（`linkAccess` 判为
+ * `private`，见 `link-access.ts`），这条链是图片**唯一**的显示来路 —— 远端地址会 403，
+ * 浏览器那边没有任何兜底。所以那一档下取字节不是可选项，用户关掉「缺本地副本时自动下载」
+ * 也照样要取（那个开关的本意是省流量，不是宁可不看图）。
+ *
  * ## 落点（1.2.0 / D-17：不再有缓存目录）
  *
  * 补回来的副本落在**附件目录**，文件名取**原始文件名**（三层兜底与撞名规则见
@@ -52,6 +57,8 @@ import type { App } from "obsidian";
 
 import type { PluginSettings } from "../types";
 import { isCacheDisabled } from "../types";
+import type { AccessProbe } from "../link-access";
+import { UNKNOWN_ACCESS_PROBE, requiresLocalCopy } from "../link-access";
 import type { CacheIndex, CacheEntry } from "../cache/index";
 import { hostAttachmentFolder, parentFolderOf } from "../vault-files";
 import { planDownloadTarget } from "../download-target";
@@ -72,6 +79,9 @@ export interface LocalCopyOutcome {
 		/**
 		 * 缓存被关掉，所以不下载：设置里关掉了回退下载，**或者**「本地副本的处理」选了
 		 * 「不留副本」（那一档等于关闭缓存，见 `types.ts` 的 `isCacheDisabled`）。
+		 *
+		 * ⚠️ 1.7.0 起"关掉了回退下载"**只在公开访问下**才构成这一档：私有存储
+		 * （`linkAccess` 判为 `private`）时取字节是唯一显示来路，那一档不成立（见 `run()`）。
 		 */
 		| "disabled"
 		/** 不下载：这个 URL 不属于本存储。 */
@@ -100,6 +110,17 @@ export interface LocalCopyDeps extends NotifySink {
 	client: () => S3Client | null;
 	index: () => CacheIndex;
 	persistIndex: () => Promise<void>;
+	/**
+	 * 当前的**匿名可达性探测结果**（"别人能不能打开笔记里那条链接"）。
+	 *
+	 * 用途只有一处：判"这条路上缺副本的图**必须**取回本地"（见 `link-access.ts`）。
+	 * 不提供时按"还没探测过"处理 —— 那会落到 `auto` 档的保守分支（按私有处理），
+	 * 于是私有桶的用户也能正常看图（多下一次而已）。
+	 *
+	 * ⚠️ 是**取值函数**而不是快照：探测结果是异步刷新的，抓快照会让"启动时那一次探测"
+	 * 永远不生效（表现为"第一次打开笔记全是坏的，重开才好"）。
+	 */
+	accessProbe?: () => AccessProbe;
 	now?: () => Date;
 	/**
 	 * ⭐ 刚刚往 vault 里写下了一份副本（落盘**之前**调用）。
@@ -228,7 +249,13 @@ export function createLocalCopyEnsurer(deps: LocalCopyDeps) {
 			return { status: "disabled", key, localPath: "" };
 		}
 
-		if (!settings.fallbackDownload) {
+		// ⭐ 1.7.0：`private`（含 `auto` 探测不出公开）时，**这一步不是可选项** ——
+		// 取不回字节就什么都看不到（远端地址会 403），所以用户关掉「缺本地副本时自动下载」
+		// 也照样要取。那个开关的意思是"省事"，不是"宁可不看图"。
+		// ⚠️ 判据只在 `link-access.ts::requiresLocalCopy` 一处（渲染判定用的是同一个函数）：
+		// 两处各自判一次，就会出现"判定说要、这里说不要"的分叉，而分叉不报错。
+		const forcedByAccess = requiresLocalCopy(settings, (deps.accessProbe ?? (() => UNKNOWN_ACCESS_PROBE))());
+		if (!settings.fallbackDownload && !forcedByAccess) {
 			return { status: "disabled", key, localPath: "" };
 		}
 

@@ -67,6 +67,9 @@ function canonicalizeQuery(rawQuery) {
  */
 export function verifySignature({ request, credentials, bodyBuffer }) {
 	const authHeader = request.headers["authorization"] ?? "";
+	// ⭐ 没有 Authorization 头 ⇒ 试着按**预签名 URL**（查询串签名）验。
+	// 见 `verifyPresignedSignature`：这是"私有桶 + 不留副本"那条路上唯一会被用到的形式。
+	if (!authHeader) return verifyPresignedSignature({ request, credentials });
 	const match = /^AWS4-HMAC-SHA256\s+Credential=([^,\s]+),\s*SignedHeaders=([^,\s]+),\s*Signature=([0-9a-fA-F]{64})\s*$/.exec(
 		authHeader
 	);
@@ -148,6 +151,119 @@ export function verifySignature({ request, credentials, bodyBuffer }) {
 		};
 	}
 
+	return { ok: true, detail: { canonicalRequest, stringToSign, signature: expected } };
+}
+
+/**
+ * 按**服务端的方式**验一条预签名 URL（签名在查询串里，没有 `Authorization` 头）。
+ *
+ * ## 为什么替身也要支持它
+ *
+ * 预签名错了的表现是"用户那边一张坏图"，而我们自己这边**什么都不报** ——
+ * 典型的"只有用户会碰到"的缺陷。所以这里独立重算一遍：canonical request 里
+ * - 查询串要**剔除 `X-Amz-Signature`**（它是签名的产物，不是输入）；
+ * - 载荷摘要是字面量 `UNSIGNED-PAYLOAD`（**不是**空串的 SHA-256）；
+ * - 签的头只有 `host`（浏览器不会替我们带别的头）。
+ * 任何一条写错，这里都会判签名不匹配。
+ *
+ * ⚠️ 刻意**不校验有效期**：夹具用固定的 `now` 签名（为了让签名可复现），
+ * 拿真实时钟去比会永远"已过期"。有效期是服务端的时间行为，客户端无法在单测里模拟 ——
+ * 这里只校验 `X-Amz-Expires` 落在 S3 允许的区间内。
+ */
+export function verifyPresignedSignature({ request, credentials }) {
+	const [, rawQuery] = splitRequestTarget(request.rawUrl);
+	// ⚠️ 两种形态都要：**解码后**的键值用于读取语义（`X-Amz-Credential` 里的 `/` 被编码成
+	// `%2F`，不decoded 会得到"段数不对"），而**原始编码形态**用于重算 canonical query
+	//（规范化必须用收到的字节，重新编码会变成双重编码）。真实 S3 也是这样：
+	// 语义上按解码看，签名上按原字节算。
+	const decode = (text) => {
+		try {
+			return decodeURIComponent(text);
+		} catch {
+			return text;
+		}
+	};
+	const params = new Map();
+	const rawParts = [];
+	for (const part of String(rawQuery ?? "").split("&")) {
+		if (part === "") continue;
+		const eq = part.indexOf("=");
+		const rawName = eq === -1 ? part : part.slice(0, eq);
+		const rawValue = eq === -1 ? "" : part.slice(eq + 1);
+		params.set(decode(rawName), decode(rawValue));
+		rawParts.push([rawName, rawValue]);
+	}
+
+	const providedSignature = params.get("X-Amz-Signature") ?? "";
+	if (!providedSignature) return { ok: false, reason: "既没有 Authorization 头，也没有 X-Amz-Signature" };
+
+	const algorithm = params.get("X-Amz-Algorithm") ?? "";
+	if (algorithm !== "AWS4-HMAC-SHA256") return { ok: false, reason: "X-Amz-Algorithm 不对：" + algorithm };
+
+	const credential = params.get("X-Amz-Credential") ?? "";
+	const credentialParts = credential.split("/");
+	if (credentialParts.length !== 5) return { ok: false, reason: "X-Amz-Credential 段数不对：" + credential };
+	const [accessKeyId, dateStamp, region, service, terminator] = credentialParts;
+	if (accessKeyId !== credentials.accessKeyId) {
+		return { ok: false, reason: "Access Key ID 不匹配（收到 " + accessKeyId + "）" };
+	}
+	if (terminator !== "aws4_request") return { ok: false, reason: "凭据作用域结尾不是 aws4_request" };
+	if (region !== credentials.region) return { ok: false, reason: "region 不匹配（收到 " + region + "）" };
+	if (service !== credentials.service) return { ok: false, reason: "service 不匹配（收到 " + service + "）" };
+
+	const amzDate = params.get("X-Amz-Date") ?? "";
+	if (amzDate.slice(0, 8) !== dateStamp) {
+		return { ok: false, reason: "X-Amz-Date(" + amzDate + ") 与凭据日期(" + dateStamp + ") 不一致" };
+	}
+	const expires = Number(params.get("X-Amz-Expires") ?? "");
+	if (!Number.isFinite(expires) || expires <= 0 || expires > 604800) {
+		return { ok: false, reason: "X-Amz-Expires 不合法：" + params.get("X-Amz-Expires") };
+	}
+
+	const signedHeadersList = params.get("X-Amz-SignedHeaders") ?? "";
+	const signedHeaderNames = signedHeadersList.split(";").filter(Boolean);
+	// 预签名 URL 由浏览器发出 ⇒ 只可能是 host（别的头我们没法附加）
+	if (signedHeaderNames.join(";") !== "host") {
+		return { ok: false, reason: "X-Amz-SignedHeaders 只能是 host，收到：" + signedHeadersList };
+	}
+	const host = request.headers["host"] ?? "";
+	if (!host) return { ok: false, reason: "请求里没有 host 头" };
+
+	// ⭐ 查询串必须**剔除签名本身**再规范化（这一步写错是预签名最常见的错）
+	const rawUnsignedQuery = rawParts
+		.filter(([name]) => name !== "X-Amz-Signature")
+		.map(([name, value]) => name + "=" + value)
+		.join("&");
+
+	const [rawPath] = splitRequestTarget(request.rawUrl);
+	const canonicalRequest = [
+		request.method.toUpperCase(),
+		rawPath,
+		canonicalizeQuery(rawUnsignedQuery),
+		"host:" + host + "\n",
+		"host",
+		"UNSIGNED-PAYLOAD",
+	].join("\n");
+
+	const scope = dateStamp + "/" + region + "/" + service + "/aws4_request";
+	const stringToSign = [
+		"AWS4-HMAC-SHA256",
+		amzDate,
+		scope,
+		sha256(canonicalRequest).toString("hex"),
+	].join("\n");
+
+	const expected = createHmac("sha256", signingKey(credentials.secretAccessKey, dateStamp, region, service))
+		.update(stringToSign)
+		.digest("hex");
+
+	if (expected !== providedSignature.toLowerCase()) {
+		return {
+			ok: false,
+			reason: "预签名不匹配",
+			detail: { expected, provided: providedSignature.toLowerCase(), stringToSign, canonicalRequest },
+		};
+	}
 	return { ok: true, detail: { canonicalRequest, stringToSign, signature: expected } };
 }
 

@@ -18,7 +18,9 @@ import { runReleaseSpaceFlowSuite } from "./lib/release-space-flow-suite.mjs";
  */
 await runMutations({
 	source: "src/plugin/release-space-flow.ts",
-	entries: ["src/plugin/release-space-flow", "src/i18n", "src/s3/client"],
+	// ⚠️「执行层模块」是删文件那一步的宿主模块：套件里有一节直接调它，
+	// 缺了它那个函数就是 undefined，基线直接失败。
+	entries: ["src/plugin/release-space-flow", "src/i18n", "src/s3/client", "src/maintenance/run"],
 	suite: runReleaseSpaceFlowSuite,
 	mutations: [
 		{

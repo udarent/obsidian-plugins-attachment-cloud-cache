@@ -14,6 +14,22 @@ await runMutations({
 	suite: runRenderHookSuite,
 	mutations: [
 		{
+			// 后果：公开 + 不留副本的视频**不换节点** ⇒ 用户只看到那张播不了的 `<img>`，
+			// 而这一档本来能播（公开桶取得到字节，只是宿主不肯把它当 `<video>`）。
+			name: "★ 公开 + 不留副本的视频不换节点（只留一张播不了的 <img>）",
+			from: '\t\t\t\tdeps.onNonImageEmbed?.(img, { kind: "direct", key: decision.key, remoteUrl: decision.remoteUrl });\n',
+			to: "\t\t\t\t// 变异：不换节点\n",
+			expect: "视频要走「直连换节点」",
+		},
+		{
+			// 后果：私有存储 + 不留副本时**不换地址** ⇒ 元素上留着那条必 403 的远端地址，
+			// 而用户以为"图床式"已经生效（他看到的是一屏坏图，却没有任何报错）。
+			name: "★ 私有 + 不留副本时不换预签名地址（一屏坏图，且不报错）",
+			from: "\t\t\tdeferSignedUrl(img, deps, decision, { result });\n",
+			to: "\t\t\t// 变异：不换预签名地址\n",
+			expect: "要按 key 去签一次",
+		},
+		{
 			// 后果：把 `src` 写成一个空/坏地址 —— 连**在线**都看不到图了，
 			// 比"不改"明显更糟。
 			name: "★ 拿不到本地可用地址时照样改写（把图写成坏地址）",

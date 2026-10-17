@@ -54,10 +54,30 @@ await runMutations({
 		},
 		{
 			// 后果：用户明确关掉了回退下载，插件还是偷偷联网 —— 这是对设置的违背。
+			// ⚠️ 1.7.0 起这一行的形状变了（多了一半 `forcedByAccess`），所以锚点跟着改；
+			// 但这条变异守的**语义**不变：公开读取下那个开关必须真的算数。
 			name: "忽略回退下载开关（用户关掉了仍然联网）",
-			from: "\t\tif (!settings.fallbackDownload) {\n\t\t\treturn { status: \"disabled\", key, localPath: \"\" };\n\t\t}\n",
+			from: "\t\tif (!settings.fallbackDownload && !forcedByAccess) {\n\t\t\treturn { status: \"disabled\", key, localPath: \"\" };\n\t\t}\n",
 			to: "\t\t// 变异：忽略开关\n",
-			expect: "关掉开关",
+			// ⚠️ 最先失败的是**第 5 节**那条（它更靠前），不是 5c —— 如实按"最先失败"写。
+			expect: "关掉开关时不做任何事",
+		},
+		{
+			// 后果：私有存储（远端 403）下"关掉自动下载"被当真 ⇒ 图**一张都显示不出来**，
+			// 而界面上没有任何解释。1.7.0 的核心修正就是这一句。
+			name: "★★ 私有存储下把「关掉自动下载」当真（图一张都显示不出来）",
+			from: "\t\tif (!settings.fallbackDownload && !forcedByAccess) {",
+			to: "\t\tif (!settings.fallbackDownload) {",
+			expect: "关掉自动下载也必须取回",
+		},
+		{
+			// 后果（反方向）：不管三七二十一总是取回 ⇒ 公开桶 + 关掉开关的用户
+			// 被每张图下载一遍（白花流量），而他明确说过"别自动下"。
+			name: "★ 公开存储也被强制取回（用户关掉了自动下载却每张都下）",
+			from: "\t\tif (!settings.fallbackDownload && !forcedByAccess) {",
+			to: "\t\tif (false) {",
+			// 同上：第 5 节先撞上（公开基线 + 关掉开关）。
+			expect: "关掉开关时不做任何事",
 		},
 		{
 			// 后果：用户选了「不留副本」（= 关闭缓存，见 `types.ts` 的 `isCacheDisabled`），

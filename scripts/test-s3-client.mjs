@@ -19,6 +19,8 @@ await withLoadedTs("src/s3/client.ts", async (mod) => {
 		`S3 client tests passed (${stats.scenarios} scenarios against a real local HTTP server that ` +
 			"independently recomputes SigV4: byte-identical upload, signed path includes the bucket, " +
 			"no hand-set Host, credential errors cost exactly 1 request, 5xx retries with exponential " +
-			"backoff up to the cap, config errors never reach the network, public URLs encoded once)."
+			"backoff up to the cap, config errors never reach the network, public URLs encoded once, and a " +
+			"presigned GET really works with no headers at all (the mock verifies it the way a server would, " +
+			"and a tampered signature is rejected)."
 	);
 });

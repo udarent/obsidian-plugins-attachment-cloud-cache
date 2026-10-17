@@ -241,8 +241,20 @@ export interface SignableRequest {
 	amzDate: string;
 }
 
+/**
+ * 拼装 canonical request 所需的最小输入。
+ *
+ * 抽出来是为了让**查询串签名**（{@link presignUrl}）也能复用同一份拼装逻辑：
+ * 那条路上没有 `accessKeyId` 之类的字段可填（凭据只进签名密钥，不进 canonical request）。
+ * 两种签名方式共用一段拼装 ⇒ "差的只是一个换行"这类缺陷不可能只改对一边。
+ */
+export type CanonicalRequestInput = Pick<
+	SignableRequest,
+	"method" | "path" | "query" | "headers" | "payloadHash"
+>;
+
 /** 拼装 canonical request（签名流程里唯一容易"差一个换行"的地方）。 */
-export function buildCanonicalRequest(request: SignableRequest): string {
+export function buildCanonicalRequest(request: CanonicalRequestInput): string {
 	const { canonical, signedHeaders } = canonicalHeaders(request.headers);
 	return [
 		request.method.toUpperCase(),
@@ -331,4 +343,107 @@ export async function signRequest(request: SignableRequest): Promise<SignedReque
 		dateStamp,
 		payloadHash: request.payloadHash,
 	};
+}
+
+// ─────────────────────────── 查询串签名（预签名 URL） ───────────────────────────
+
+/**
+ * 预签名里用的载荷摘要字面量。
+ *
+ * ⚠️ S3 对预签名 URL 只接受这一串（**不是**空串的 SHA-256）：预签名时服务器
+ * 根本不知道将来那个 GET 会带什么载荷，所以要求客户端声明"我没签载荷"。
+ * 写成空串摘要会得到 `SignatureDoesNotMatch`，而报错完全不提这件事。
+ */
+export const UNSIGNED_PAYLOAD = "UNSIGNED-PAYLOAD";
+
+/** 预签名有效期的上限（S3 的硬限制：7 天）。超了会被服务端拒绝。 */
+export const PRESIGN_MAX_EXPIRES = 604800;
+
+export interface PresignInput {
+	/** HTTP 方法（预签名读取是 `GET`）。 */
+	method: string;
+	/**
+	 * 对象的地址，**不带查询串**（`requestTargetFor` 的 `url`）。
+	 *
+	 * ⚠️ 必须用**对象地址**而不是笔记里那条链接（`publicUrlFor`）：后者可能是
+	 * CDN / 自定义域名，而签名要由 S3 自己验 —— 打到 CDN 上的签名 URL 多半直接 404。
+	 */
+	url: string;
+	/** 与 `url` 对应的**已编码**规范化路径（`requestTargetFor` 的 `path`）。 */
+	path: string;
+	accessKeyId: string;
+	secretAccessKey: string;
+	region: string;
+	service?: string;
+	/** 当前时间（注入以便断言；签名时间必须是新鲜的）。 */
+	now: Date;
+	/** 有效秒数；会被夹到 `[1, PRESIGN_MAX_EXPIRES]`。 */
+	expiresIn: number;
+}
+
+/**
+ * 生成一个**预签名 URL**：把签名放进查询串，于是浏览器/`<img>` 直接 GET 就能取到对象。
+ *
+ * ## 为什么需要它（它在产品里负责什么）
+ *
+ * 私有桶的对象**没有**一条"裸地址能打开"的链接。要让 `<img>` 显示它，只有两条路：
+ * 把字节取回来落成文件（本地副本），或者给浏览器一条**临时可用**的地址 —— 后者就是这里。
+ *
+ * 它只在"仅内部访问 + 不留本地副本"这一档被用到（判据在 `link-access.ts`）：
+ * 用户要的是"**像图床一样**用，磁盘上别落文件"，但桶又不公开。两条要求在 URL 上相遇：
+ * 签名只存在**内存里的那条 URL** 里，**绝不写进笔记**（写进去就是一批会过期的死链）。
+ *
+ * ## 三条容易踩的地方
+ *
+ * 1. **canonical query 里不能有 `X-Amz-Signature`** —— 它是签名的产物，不是输入；
+ *    先放进去再签，就永远对不上（而报错只有一句 `SignatureDoesNotMatch`）。
+ *    所以这里先算"不含签名"的规范化查询串，再把签名**追加**到 URL 尾部。
+ * 2. **载荷摘要必须是 `UNSIGNED-PAYLOAD`**（见上）。
+ * 3. **`X-Amz-SignedHeaders` 只能是 `host`**：预签名 URL 由浏览器发出，我们没法附加任何头。
+ *    想顺带签 `Content-Type` 之类的头，就等于要求浏览器带一个它不会带的头 ⇒ 永远失败。
+ *
+ * 正确性由 `test-sigv4.mjs` 钉住：`mock-s3` 会**按服务端的方式**重算这个签名
+ * （查询串形式），一条错的 URL 在那里会直接 403。这一点很重要 —— 预签名错了
+ * 的表现是"用户那边一张坏图"，而我们自己这里什么都不报。
+ */
+export async function presignUrl(input: PresignInput): Promise<string> {
+	const service = input.service ?? S3_SERVICE;
+	const { amzDate, dateStamp } = formatAmzDate(input.now);
+	const scope = credentialScope(dateStamp, input.region, service);
+
+	let host = "";
+	try {
+		host = new URL(input.url).host;
+	} catch {
+		throw new Error(`预签名需要一条可解析的对象地址，收到：${input.url}`);
+	}
+	if (!host) throw new Error(`预签名需要地址里带主机名，收到：${input.url}`);
+
+	const expiresIn = Math.min(PRESIGN_MAX_EXPIRES, Math.max(1, Math.trunc(input.expiresIn)));
+
+	// ① 参与签名的查询参数（**不含** X-Amz-Signature）
+	const query: Record<string, string> = {
+		"X-Amz-Algorithm": SIGV4_ALGORITHM,
+		"X-Amz-Credential": `${input.accessKeyId}/${scope}`,
+		"X-Amz-Date": amzDate,
+		"X-Amz-Expires": String(expiresIn),
+		"X-Amz-SignedHeaders": "host",
+	};
+
+	// ② 与 header 签名**同一段拼装逻辑**（只是载荷摘要换成了 UNSIGNED-PAYLOAD）
+	const canonicalRequest = buildCanonicalRequest({
+		method: input.method.toUpperCase(),
+		path: input.path,
+		query,
+		headers: { host },
+		payloadHash: UNSIGNED_PAYLOAD,
+	});
+
+	const hashedCanonicalRequest = await sha256Hex(canonicalRequest);
+	const stringToSign = buildStringToSign(amzDate, scope, hashedCanonicalRequest);
+	const signingKey = await deriveSigningKey(input.secretAccessKey, dateStamp, input.region, service);
+	const signature = hexEncode(await hmacSha256(signingKey, utf8Bytes(stringToSign)));
+
+	// ③ 只有**这一处**把签名拼进 URL，且用的是同一个 `canonicalQueryString`
+	return `${input.url}?${canonicalQueryString(query)}&X-Amz-Signature=${signature}`;
 }
