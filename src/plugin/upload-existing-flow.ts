@@ -134,7 +134,9 @@ export async function uploadExistingAttachments(ctx: PluginContext): Promise<voi
 		// `RELEASE_SPACE_LIST_MAX`、`orphan-flow` 自动那一路传 `LIST_MAX`，那里列表**被截断**，
 		// 「还有 N 个」是唯一能说明"还有多少没显示"的信息。两处的事实不同，处理也就不同：
 		// **列表全量 ⇒ 摘要不重复；列表截断 ⇒ 摘要必须补上**。
-		ctx.t("maintainBatchSummary", { count: selection.paths.length }),
+		// ⚠️ 这个数字**必须等于下面那张清单的行数**（`paths` + `externals`）：
+		// 只数 `paths` 时，真机上出现过"摘要说 0 个、清单列 8 行"的一屏（2026-10-17 真机复验）。
+		ctx.t("maintainBatchSummary", { count: selection.paths.length + externals.length }),
 		// ⚠️ 1.2.0（D-17）后这条必须照实说"什么都不搬"：文件留在原处就地当本地副本，
 		// 变的只有笔记里的链接。不写清楚，用户跑完发现文件还在会以为没生效
 		//（旧文案承诺的正是"会被搬进缓存目录"）。

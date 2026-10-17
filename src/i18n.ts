@@ -225,7 +225,8 @@ export const I18N: Record<string, Locale> = {
 		maintainNotConfigured: "The storage connection is not set up yet, so nothing was uploaded.",
 		maintainBatchNothing: "No attachments to upload (everything is already handled).",
 		maintainBatchTitle: "Upload attachments",
-		maintainBatchSummary: "Upload {count} file(s) and rewrite note links to point at your storage.",
+		maintainBatchSummary:
+			"Upload {count} file(s) — anything already in your storage is reused — and rewrite note links to point at your storage.",
 		// ⚠️ 1.2.0（D-17）起，"上传后把原文件搬走"这件事**不存在了** —— 那份文件留在原地、
 		// 就地作为本地副本（没有缓存目录可搬）。所以必须照实说"不移动、不改名"：
 		// 从前这里承诺的正是"附件目录里不再留一份"，照抄下来会让用户以为命令没生效。
@@ -509,7 +510,8 @@ export const I18N: Record<string, Locale> = {
 		maintainNotConfigured: "存储连接尚未配置，没有上传任何内容。",
 		maintainBatchNothing: "没有需要上传的附件（都已经处理过了）。",
 		maintainBatchTitle: "上传附件",
-		maintainBatchSummary: "将上传 {count} 个文件，并把笔记里的链接改成指向你的存储。",
+		maintainBatchSummary:
+			"将上传 {count} 个文件（已经传过的会直接复用），并把笔记里的链接改成指向你的存储。",
 		// ⚠️ 别在文案里写 markdown（`**加粗**`）：确认弹窗是 `createDiv({ text })`、
 		// 提示是宿主的 Notice，两者都**按纯文本**渲染 —— 星号会原样显示给用户。
 		// ⚠️ 1.2.0（D-17）：上传后文件**留在附件目录里**（它就是本地副本，没有缓存目录可搬）——

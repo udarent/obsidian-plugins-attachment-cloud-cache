@@ -1503,6 +1503,16 @@ ${text}`);
 				`★★ 原文仍要留在候选里兜底（宿主前缀不被认时还有一条路）：${JSON.stringify(realUrls)}`
 			);
 			const lines = (dialog.lines ?? []).join("\n");
+			// ⭐ 摘要里的数字**必须等于**下面清单的行数 —— 2026-10-17 真机复验实测到过
+			// 「将上传 0 个文件」而清单列了 8 行（`count` 只数库内待传，清单还含站外/本机/
+			// 已缓存过的）。同一屏两处对不上，用户会以为清单是无效的。
+			const summaryHead = (dialog.lines ?? [])[0] ?? "";
+			const declaredCount = Number((/\d+/.exec(summaryHead) ?? [])[0]);
+			assert.equal(
+				declaredCount,
+				(dialog.cards ?? []).length,
+				`★★ 摘要里的数字必须等于清单行数（不能一处说 0、一处列 8 行）：${summaryHead} ｜ 行数 ${(dialog.cards ?? []).length}`
+			);
 			assert.ok(lines.includes("definitely-not-here.png"), "★ 但要如实说出来 —— 它在笔记里正是坏链");
 			assert.ok(!lines.includes("**"), `★ 文案是纯文本，不许露出 Markdown 星号：${lines}`);
 

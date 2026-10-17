@@ -76,11 +76,21 @@ await runMutations({
 			// 下面的列表了，可以精简内容」。清单越长这条越像噪音，而下面那张清单本来就
 			// 带缩略图、能勾选、还自带滚动条。
 			name: "★★ 摘要里重复贴出文件名（与下面那张清单重复）",
-			from: '\t\tctx.t("maintainBatchSummary", { count: selection.paths.length }),\n',
+			from: '\t\tctx.t("maintainBatchSummary", { count: selection.paths.length + externals.length }),\n',
 			to:
-				'\t\tctx.t("maintainBatchSummary", { count: selection.paths.length }),\n' +
+				'\t\tctx.t("maintainBatchSummary", { count: selection.paths.length + externals.length }),\n' +
 				"\t\t...selection.paths.slice(0, 10),\n",
 			expect: "摘要里不该重复列出文件名",
+		},
+		{
+			// 后果：**摘要里的数字与下面那张清单对不上**。2026-10-17 真机复验实测：
+			// 摘要写「将上传 0 个文件」，而清单列了 8 行 —— 因为 `count` 只数库内待传，
+			// 清单还含站外、本机、以及已缓存过（只会被复用）的条目。用户读到的是
+			// "这屏没什么可传的"，而下面明明能勾 8 行。
+			name: "★★ 摘要只数库内待传（与清单行数对不上）",
+			from: '\t\tctx.t("maintainBatchSummary", { count: selection.paths.length + externals.length }),\n',
+			to: '\t\tctx.t("maintainBatchSummary", { count: selection.paths.length }),\n',
+			expect: "摘要里的数字必须等于清单行数",
 		},
 	],
 });
