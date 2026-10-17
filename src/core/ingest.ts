@@ -177,6 +177,18 @@ export interface IngestRequest {
 	 * 空串 / 缺省 = 普通粘贴路径（字节在内存里，必须先落盘）。
 	 */
 	existingPath?: string;
+	/**
+	 * 上传前先问云端"这个对象在不在"（只给**批量**那条路）。
+	 *
+	 * ⚠️ 为什么要一个开关、而不是默认开：粘贴/拖入是最常用的动作，每次都多一个往返
+	 * 换不到什么（新文件云端按定义没有它）。而批量上传的场景不同 ——
+	 * 换设备、重装、索引被覆盖，**台账答不上来**，但它要处理的那些文件很可能早就在
+	 * 云端了（这台设备的上一轮、或同一个桶的另一个库）。此时一次 HEAD 能省掉整份字节。
+	 *
+	 * ⚠️ 判据仍然先问**本地**：索引里已经有这条 key（`index.get(key)` 非空）就**不问**，
+	 * 直接走已有的"命中即复用"分支 —— 那是零请求。
+	 */
+	preflight?: boolean;
 }
 
 export interface IngestDeps extends NotifySink {
@@ -566,15 +578,44 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 	// 就是给"插图"这个最常用的动作每次都加一个往返。
 	//
 	// ⚠️ 探测**自己抛错**也当作"不在"（多一次 PUT 是幂等的，反过来会留下打不开的图）。
-	if (!reuseCloudObject && twinPath && deps.probeRemote) {
+	/**
+	 * 问云端"这个对象在不在"：在 ⇒ etag（服务端可能不给，返回空串）；不在 / 问不动 ⇒ `null`。
+	 *
+	 * ⚠️ **只有这一处实现**：下面两条路的**触发条件**不同（2c 靠库内事实，2d 靠批量意图），
+	 * 但"问不动算不算在"这条判据必须同源 —— 写两遍就会一处当"在"、一处当"不在"，
+	 * 而两侧都不报错。
+	 */
+	const askCloud = async (): Promise<string | null> => {
+		if (!deps.probeRemote) return null;
 		try {
-			const probedEtag = await deps.probeRemote(key);
-			if (probedEtag !== null) {
-				reuseCloudObject = true;
-				etag = probedEtag;
-			}
+			return await deps.probeRemote(key);
 		} catch {
-			// 问不动 ⇒ 当作"不在"，下面照常上传
+			// 问不动 ⇒ 当作"不在"（多一次 PUT 是幂等的；反过来会留下打不开的图）
+			return null;
+		}
+	};
+
+	if (!reuseCloudObject && twinPath) {
+		const probedEtag = await askCloud();
+		if (probedEtag !== null) {
+			reuseCloudObject = true;
+			etag = probedEtag;
+		}
+	}
+
+	// ── 2d. 批量那条路：台账不认识这条 key，就先问云端一句（LFS 的 batch 去重）──
+	//
+	// 与 2c 的区别只在**触发条件**：2c 靠"同目录有逐字节相同的兄弟文件"这个库内事实，
+	// 这里靠调用方的意图（批量上传）—— 因为它要处理的正是"历史上传过、但这台设备
+	// 现在答不上来"的那一批。代价是一次往返；收益是整份字节不用再走一遍。
+	//
+	// ⚠️ 只问"索引里没有这条 key"的：索引命中的那些会走 `decide` 的复用分支，零请求。
+	// ⚠️ 探测抛错仍当作"不在"（多一次 PUT 是幂等的，反过来会留下打不开的图）。
+	if (!reuseCloudObject && request.preflight && !index.get(key)) {
+		const probedEtag = await askCloud();
+		if (probedEtag !== null) {
+			reuseCloudObject = true;
+			etag = probedEtag;
 		}
 	}
 

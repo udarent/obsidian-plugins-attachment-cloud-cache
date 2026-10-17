@@ -248,5 +248,13 @@ await runMutations({
 			to: '\t\tvoid options.continuationToken;',
 			expect: "第二页接着上一页往后",
 		},
+		{
+			// 后果：**服务端只存了一半，客户端却当成成功** —— 用户看到"上传成功"、
+			// 笔记里却是半张图。这是本项目最警惕的"两侧都不报错"的慢失败。
+			name: "★★ 不核对服务端存了多少字节（半份字节也算成功）",
+			from: "if (stored && stored.size > 0 && stored.size !== data.length) {",
+			to: "if (false) {",
+			expect: "服务端少存了字节 ⇒ 必须报错（不许静默成功）",
+		},
 	],
 });

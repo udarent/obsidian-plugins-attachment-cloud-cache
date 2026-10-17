@@ -593,6 +593,9 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 				// 附件目录里就多出 N 个中转文件（搬移失败时永久残留），
 				// 而他要的只是"把这些图传上去"。
 				existingPath: path,
+				// ⭐ 只在这一条路上预检（见 `IngestRequest.preflight`）：批量要处理的
+				// 正是"历史上传过、这台设备答不上来"的那一批，一次 HEAD 能省整份字节。
+				preflight: true,
 			});
 		} catch {
 			failed();

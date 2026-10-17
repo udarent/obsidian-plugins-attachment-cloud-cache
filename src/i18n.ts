@@ -144,6 +144,23 @@ export const I18N: Record<string, Locale> = {
 		releaseSpaceCloudUntouched:
 			"Nothing in your storage is deleted and your notes are not changed — and each copy is only deleted after confirming it is still there.",
 		releaseSpaceCta: "Delete permanently",
+		revertName: "Revert links to local paths",
+		revertDesc:
+			"Point note links back at the files in your vault instead of your storage. Nothing is deleted: the cloud objects and the local files stay exactly as they are. Use this when you stop using the plugin.",
+		revertButton: "Revert links",
+		revertTitle: "Revert links to local paths",
+		revertSummary: "Rewrite {links} link(s) in {notes} note(s) back to the files in your vault.",
+		revertKeepsEverything:
+			"Nothing is deleted: every cloud object and every local file stays where it is. Only the links change.",
+		revertMissing:
+			"{count} uploaded file(s) no longer have a local copy, so their links are left pointing at your storage.",
+		revertCanvasSkipped: "Canvas files are not touched: their file nodes already point inside the vault.",
+		revertNothing: "Nothing to revert: no note link points at your storage.",
+		revertAllMissing:
+			"Nothing to revert: all {count} uploaded file(s) have no local copy left, and rewriting them would only create broken links.",
+		revertCta: "Revert links",
+		revertDone:
+			"Reverted {links} link(s) in {notes} note(s). Cloud objects and local files were left untouched.",
 		releaseSpaceDone: "Deleted {deleted} local copy(ies), freeing about {mb} MB. Skipped {skipped}.",
 		releaseSpaceNothingDeleted:
 			"Nothing was deleted: {skipped} copy(ies) could not be confirmed in your storage just now. A local copy is only deleted when the object is still there — it may be the last one. Local copies look fine; if the objects really are gone, your index and your storage have drifted apart.",
@@ -432,6 +449,19 @@ export const I18N: Record<string, Locale> = {
 		releaseSpaceCloudUntouched:
 			"云端对象与你的笔记都不会被改动；每一份都是在确认云端仍然有它之后才会删。",
 		releaseSpaceCta: "永久删除",
+		revertName: "把链接改回本地路径",
+		revertDesc:
+			"把笔记里的链接改回指向库里那份附件（不再指向你的存储）。什么都不删：云端对象与本地文件都原样留着。准备停用这个插件时用它。",
+		revertButton: "改回本地路径",
+		revertTitle: "把链接改回本地路径",
+		revertSummary: "把 {notes} 篇笔记里的 {links} 处链接改回指向库里的文件。",
+		revertKeepsEverything: "什么都不删：云端对象与本地文件都留在原处，只有链接会变。",
+		revertMissing: "有 {count} 份已上传的文件本地副本已经不在了，它们对应的链接会继续指向你的存储。",
+		revertCanvasSkipped: "画布不会被动：它的 file 节点本来就指向库内文件。",
+		revertNothing: "没有可改的：没有任何笔记链接指向你的存储。",
+		revertAllMissing: "没有可改的：{count} 份已上传文件都没有本地副本了，改回去只会得到坏链。",
+		revertCta: "改回本地路径",
+		revertDone: "已把 {notes} 篇笔记里的 {links} 处链接改回本地路径；云端对象与本地文件都没动。",
 		releaseSpaceDone: "已永久删除 {deleted} 个本地副本，释放约 {mb} MB；跳过 {skipped} 个。",
 		releaseSpaceNothingDeleted:
 			"一个都没删：有 {skipped} 份副本刚才没能确认云端仍然有它。只有在云端确实还在时才会删本地副本 —— 它可能是最后一份。图不受影响；如果云端确实已经没有了，说明索引与你的存储对不上了。",

@@ -306,6 +306,40 @@ export async function runS3ClientSuite(mod) {
 		assert.equal(result.size, payload.length, "返回值里的 size 应是真实字节数");
 		assert.equal(server.countByMethod("PUT"), 1, "上传应当**恰好** 1 次 PUT");
 		assert.equal(server.countByMethod("GET"), 0, "上传过程里不得有任何 GET");
+		// ⭐ **传后校验**（LFS 的 verify）：PUT 成功之后必须再核一次"服务端到底存了多少字节"。
+		// 多这一次往返是刻意的 —— 换掉的是"回了 200 却只落一半"这种只有用户会发现的失败。
+		assert.equal(
+			server.countByMethod("HEAD"),
+			1,
+			"★ 上传成功后要 HEAD 一次核对长度（宁可多一次往返，也不许把半份字节当成成功）"
+		);
+
+		// ⭐ 服务端说"只存了 1 字节" ⇒ 必须报错，而不是把这次上传当成成功
+		{
+			const original = client.headOnce;
+			client.headOnce = async () => ({ size: 1 });
+			try {
+				await assert.rejects(
+					() => client.putObject("short.png", new Uint8Array(10)),
+					(error) => String(error?.code ?? "") === "ChecksumMismatch",
+					"★ 服务端少存了字节 ⇒ 必须报错（不许静默成功）"
+				);
+			} finally {
+				client.headOnce = original;
+			}
+		}
+
+		// ⭐ 但"验不了"不算失败：服务端不返回 Content-Length / 断网时，不能把成功的上传判死
+		{
+			const original = client.headOnce;
+			client.headOnce = async () => null;
+			try {
+				const unchecked = await client.putObject("unverified.png", new Uint8Array(10));
+				assert.equal(unchecked.size, 10, "★ 校验做不成 ⇒ 仍按成功返回（否则会把好图判成失败）");
+			} finally {
+				client.headOnce = original;
+			}
+		}
 
 		const stored = server.stored(key);
 		assert.ok(stored, `服务端应存下对象 ${key}`);

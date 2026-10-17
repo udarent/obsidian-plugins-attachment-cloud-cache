@@ -539,6 +539,31 @@ export class S3Client {
 			if (!isSuccess(response.status)) {
 				throw this.fail(response, { operation: "PUT", key: target.path, attempt });
 			}
+
+			// ⭐ **传后校验**（对应 LFS 的 verify）：PUT 成功不代表服务端存对了 ——
+			// 代理截断、连接半途复位、服务端磁盘写满，都可能回 200 却只落了一半字节，
+			// 而用户看到的是"上传成功"、笔记里却是半张图。这是本项目最警惕的
+			// "两侧都不报错的慢失败"，所以宁可多一次往返。
+			//
+			// ⚠️ 问不动（断网 / 服务端不返回 Content-Length）**不算失败**：
+			// 不能因为"没验成"就把一次成功的上传判死。只有**明确不一致**才重试。
+			// ⚠️ 重试由 `withRetry` 负责：这里抛可重试的 `ChecksumMismatch`，
+			// 它会带着新的一次 PUT 再来，直到次数用尽。
+			const stored = await this.headOnce(target.path);
+			if (stored && stored.size > 0 && stored.size !== data.length) {
+				throw new S3Error({
+					kind: "server",
+					status: 0,
+					code: "ChecksumMismatch",
+					message: `上传校验失败：服务端记录 ${stored.size} 字节，本地是 ${data.length} 字节`,
+					requestId: "",
+					operation: "PUT",
+					key: target.path,
+					attempts: attempt,
+					secrets: this.secrets(),
+				});
+			}
+
 			return {
 				key: target.path,
 				url: publicUrl,
@@ -826,6 +851,28 @@ export class S3Client {
 
 	private secrets(): string[] {
 		return [this.config.secretAccessKey, this.config.accessKeyId];
+	}
+
+	/**
+	 * 单次 HEAD，**只为"传后校验"服务**。
+	 *
+	 * 与 `headObject()` 的区别：那个带重试、抛错，是给业务判据用的；
+	 * 这个只问一次、任何异常都返回 `null`（"验不了"），因为它的调用方
+	 * 不该因为"校验本身没做成"而把一次成功的上传判成失败。
+	 */
+	private async headOnce(key: string): Promise<{ size: number } | null> {
+		try {
+			const target = requestTargetFor(this.config, key);
+			const { headers } = await this.sign(target, "HEAD", await payloadHashOf(""));
+			const response = await this.send(
+				{ url: target.url, method: "HEAD", headers },
+				{ operation: "HEAD", key: target.path, attempt: 1 }
+			);
+			if (!isSuccess(response.status)) return null;
+			return { size: Number(response.headers["content-length"] ?? 0) || 0 };
+		} catch {
+			return null;
+		}
 	}
 
 	private async withRetry<T>(

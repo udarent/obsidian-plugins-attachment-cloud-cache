@@ -74,6 +74,7 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | **Upload new attachments automatically** | On by default; off leaves new files local only. |
 | **Where the local copy goes** | **Keep the file where it is (offline works)** (default) or **Delete the local file after uploading (offline unavailable)**. With the second, uploads and link rewriting still happen, but nothing is fetched back, so **nothing works offline**. |
 | **Free up local space** | Clears local copies of attachments still linked from a note — deleted **for good, not trashed**, so the space comes back at once. With a limit set it trims down **to that limit** only; copies no note links to are left to the unreferenced-attachment cleanup (they may need removing from your storage too). |
+| **Revert links to local paths** | Points note links back at the files in your vault instead of your storage. **Nothing is deleted** — cloud objects and local files stay as they are; only the links change. Uploaded files that no longer have a local copy are left pointing at your storage (rewriting them would only make broken links). Use it when you stop using the plugin.
 | **Local copy limit (MB) · Download missing copies** | `0` = no limit. Least-recently-used copies are trimmed first, and only after confirming the object is still in your storage. Auto-download stays off while "delete" is selected. |
 | **Handle files from other sites like ordinary files** | Off by default. On, an off-site file is downloaded, uploaded and its link rewritten exactly like a local paste — the copy setting included. **Which sites to handle** (`All` / `All except the ones listed` / `Only the ones listed`) filters the **automatic** path only; picking files by hand is never restricted. `example.com` also matches `img.example.com`. |
 | **Pick specific files** | Tick individual off-site files; only those are fetched. Works whether or not the switch above is on. **Files outside your vault** (`file:///D:/…`, e.g. a chat-app screenshot) are listed here too, and go through the same chain — desktop only, and only the kinds that can be embedded in a note (image/audio/video/PDF). |
@@ -220,6 +221,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | **新增附件自动上传** | 默认开启；关闭后新文件只存在本地。 |
 | **本地副本的处理** | 留在附件目录（默认，**离线可用**），或**不留本地副本（等于关闭缓存，离线不可用）** —— 后者就是上传后把那份文件删掉：照常上传、照常改写链接，但不取回副本，所以**离线什么都看不到**。 |
 | **释放本地空间** | 清掉笔记里仍引用着的附件本地副本 —— **永久删除、不进回收站**，空间立刻释放。设了上限时只清**到上限为止**（不会全清）；没有任何笔记引用的副本留给「没人引用的附件」那条清理 —— 那些可能要连云端对象一起处理。 |
+| **把链接改回本地路径** | 把笔记里的链接改回指向库里那份文件（不再指向你的存储）。**什么都不删** —— 云端对象与本地文件都原样留着，只有链接会变。本地副本已经不在的那些会继续指向你的存储（改回去只会变成坏链）。准备停用这个插件时用它。
 | **本地副本上限（MB） · 缺本地副本时自动下载** | `0` 表示不限制。超限时按最近最少使用清理，且只有确认你的存储里仍有那个对象之后才会删。选「删除」时自动下载不生效。 |
 | **站外文件按普通附件处理** | 默认关闭。打开后，站外文件会被下载、上传并改写链接 —— 与粘贴一张本地附件完全一样（副本那一档也一样适用）。**处理哪些站点**（`所有站点` / `除名单外` / `仅名单内`）只筛**自动**那一路；手动挑选不受限制。写 `example.com` 也会命中 `img.example.com`。 |
 | **挑选要缓存的文件** | 勾选具体的站外文件，只有勾中的会被取。开关关着也能用。**库外的本机文件**（`file:///D:/…`，比如聊天软件的截图）也在这里出现，走同一条链 —— 仅桌面端，且只收能嵌进笔记的那几类（图 / 音 / 视频 / PDF）。 |

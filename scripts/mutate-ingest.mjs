@@ -132,7 +132,7 @@ await runMutations({
 		{
 			// 后果：只要有对象就重传整份字节（用户明确说过"并不需要上传，只要更新链接"）。
 			name: "★ 撞名副本不再问云端（云端已有也照传一遍字节）",
-			from: "\tif (!reuseCloudObject && twinPath && deps.probeRemote) {",
+			from: "\tif (!reuseCloudObject && twinPath) {",
 			to: "\tif (false) {",
 			expect: "一个字节都不许重传",
 		},
@@ -140,8 +140,12 @@ await runMutations({
 			// 后果：把"答不上来"当成"在" ⇒ **跳过上传**。
 			// 这一条是**危险**的那一侧：对象其实不在云端时，笔记里会留下一个打不开的图。
 			name: "★★ 探测答不上来也当成'在'（跳过上传 ⇒ 笔记里出现打不开的图）",
-			from: "\t\t\tif (probedEtag !== null) {",
-			to: "\t\t\tif (true) {",
+			// ⚠️ 锚点必须带上下文：同一个判断在"重复副本"与"批量预检"两处各有一行，
+			// 只写那一行会被运行器判成不唯一（会静默改到另一处）。
+			from:
+				"\tif (!reuseCloudObject && twinPath) {\n\t\tconst probedEtag = await askCloud();",
+			to:
+				"\tif (!reuseCloudObject && twinPath) {\n\t\tconst probedEtag = await askCloud() ?? \"forced-etag\";",
 			expect: "必须传一次",
 		},
 		{
@@ -157,7 +161,7 @@ await runMutations({
 			// 而"问不动"本该稳稳落回"照常上传"那一侧。
 			name: "★ 探测抛错时不再兜底（问不动 = 上传链整体崩掉）",
 			from:
-				'\t\t} catch {\n\t\t\t// 问不动 ⇒ 当作"不在"，下面照常上传\n\t\t}',
+				'\t\t} catch {\n\t\t\t// 问不动 ⇒ 当作"不在"（多一次 PUT 是幂等的；反过来会留下打不开的图）\n\t\t\treturn null;\n\t\t}',
 			to: "\t\t} catch {\n\t\t\treuseCloudObject = true;\n\t\t}",
 			expect: "问不动（抛错）⇒ 当作",
 		},
@@ -170,6 +174,14 @@ await runMutations({
 			from: "\t\tname: fileName,\n\t\tdisplayName: displayFor(key),\n\t\tremoteUrl,",
 			to: "\t\tname: fileName,\n\t\tdisplayName: fileName,\n\t\tremoteUrl,",
 			expect: "★ 链接里该显示的名字要与**链接目标**逐字一致（不能用宿主的序号名）",
+		},
+		{
+			// 后果：**批量那一条退回"每件都整份重传"** —— 换设备/重装后明明云端已有，
+			// 却把整批字节又走一遍（用户等得更久，也不省钱）。
+			name: "★★ 批量上传不做云端预检（已有对象重新传一遍）",
+			from: "if (!reuseCloudObject && request.preflight && !index.get(key)) {",
+			to: "if (false) {",
+			expect: "云端已有 ⇒ 直接复用（不许再传一遍）",
 		},
 	],
 });

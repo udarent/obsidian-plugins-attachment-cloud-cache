@@ -75,6 +75,7 @@ import type { PluginContext } from "./plugin/context";
 import { localFileExists, localPathFromUrl, localThumbCandidates } from "./local-file";
 import { uploadExistingAttachments } from "./plugin/upload-existing-flow";
 import { releaseLocalSpace } from "./plugin/release-space-flow";
+import { revertLinksToLocal as revertLocalLinks } from "./plugin/revert-flow";
 import { createOrphanFlow } from "./plugin/orphan-flow";
 import { startBackgroundTasks } from "./plugin/background-tasks";
 import type { BackgroundTasks } from "./plugin/background-tasks";
@@ -765,6 +766,16 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 */
 	async freeUpLocalSpace(): Promise<void> {
 		await releaseLocalSpace(this.flowContext(), "notice");
+	}
+
+	/**
+	 * 「把链接改回本地路径」（**退出路径**）：不删云端、不删本地，只把笔记里的 URL 换回库内路径。
+	 *
+	 * ⚠️ 与 `freeUpLocalSpace` 方向**正好相反**，两者名字必须能一眼分开：
+	 * 那个删本地副本腾空间，这个把笔记改回指着本地那份、一个文件都不删。
+	 */
+	async revertLinksToLocal(): Promise<void> {
+		await revertLocalLinks(this.flowContext());
 	}
 
 

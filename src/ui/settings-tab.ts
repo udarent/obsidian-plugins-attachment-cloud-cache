@@ -501,6 +501,12 @@ export class SettingsTab extends PluginSettingTab {
 				render: (setting) => this.renderReleaseSpace(setting),
 			},
 			{
+				name: this.t("revertName"),
+				desc: this.t("revertDesc"),
+				aliases: ["revert", "export", "local", "undo", "回退", "导出", "本地", "退出"], 
+				render: (setting) => this.renderRevertLinks(setting),
+			},
+			{
 				name: this.t("cacheLimit"),
 				desc: this.t("cacheLimitDesc"),
 				// ⭐ P7 的关闭方式（1.2.0 / D-17）：可见性跟着"**这一档会不会产生副本**"走
@@ -663,6 +669,20 @@ export class SettingsTab extends PluginSettingTab {
 	 * 所以它是设置页里唯一一个不可撤销的按钮 —— 样式必须与"点开一个选择框"看起来不同。
 	 * 真正的确认在弹窗那一步（清单 + 总字节 + 不可撤销的说明）。
 	 */
+	/**
+	 * 「把链接改回本地路径」按钮（退出路径）。
+	 *
+	 * ⚠️ **不**标成破坏性：它不删文件、不删对象，只把链接换回库内路径 ——
+	 * 把它染成警示色会和"腾出空间"那颗按钮混成同一类动作。
+	 */
+	private renderRevertLinks(setting: Setting): void {
+		setting.addButton((button) =>
+			button.setButtonText(this.t("revertButton")).onClick(() => {
+				void this.plugin.revertLinksToLocal();
+			})
+		);
+	}
+
 	private renderReleaseSpace(setting: Setting): void {
 		setting.addButton((button) =>
 			button

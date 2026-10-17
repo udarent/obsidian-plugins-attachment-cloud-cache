@@ -654,6 +654,31 @@ export async function runIngestSuite(mod) {
 		assert.equal(h.server.countByMethod("PUT"), 1, "★ 探测失败不许变成'跳过上传'");
 	});
 
+	// ⭐ 批量那条路的预检（对应 LFS 的 batch 去重）：台账答不上来 ⇒ 先问云端一句。
+	await withHarness(mod, { probeRemote: async () => "etag-from-cloud" }, async (h) => {
+		const result = await ingestAttachment(h.deps, {
+			bytes: HOSTILE_BYTES,
+			name: "batch-preflight.png",
+			mime: "image/png",
+			preflight: true,
+		});
+		assert.equal(result.status, "reused", "云端已有 ⇒ 直接复用（不许再传一遍）");
+		assert.equal(h.server.countByMethod("PUT"), 0, "★ 预检命中时一次 PUT 都不该发");
+		assert.equal(result.etag, "etag-from-cloud", "把云端那个 etag 记下来（后续复核要用）");
+	});
+
+	// 对照：同一份字节、同一份探针，**只差没开 preflight** ⇒ 必须照常上传。
+	// 这条守的是"开关真的管着这件事"：否则粘贴那条最常用的路会凭空多一个往返。
+	await withHarness(mod, { probeRemote: async () => "etag-from-cloud" }, async (h) => {
+		const result = await ingestAttachment(h.deps, {
+			bytes: HOSTILE_BYTES,
+			name: "batch-preflight.png",
+			mime: "image/png",
+		});
+		assert.equal(result.status, "uploaded", "★ 没开预检 ⇒ 照常上传（粘贴不该多一个往返）");
+		assert.equal(h.server.countByMethod("PUT"), 1, "★ 没开预检时不该省掉这次 PUT");
+	});
+
 	await withHarness(mod, { probeRemote: null }, async (h) => {
 		await h.write("attachments/photo.png", Buffer.from(HOSTILE_BYTES));
 		await h.write("attachments/photo 1.png", Buffer.from(HOSTILE_BYTES));
