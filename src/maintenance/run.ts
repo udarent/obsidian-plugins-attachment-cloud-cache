@@ -22,6 +22,7 @@ import type { App } from "obsidian";
 
 import type { CacheIndex } from "../cache/index";
 import type { ExternalCandidate, NoteTextLike } from "./batch";
+import type { LocalFileProbe } from "../local-file";
 import type { PluginSettings } from "../types";
 import { auditCache } from "./audit";
 import type { CacheAudit, DiskFile } from "./audit";
@@ -75,6 +76,18 @@ export interface MaintenanceDeps {
 	 * 于是用户照着这个数字去清、或者后台淘汰把它排到最前面 —— 两个后果都是"图没了"。
 	 */
 	referencedPaths: (notes?: readonly NoteTextLike[]) => Promise<ReadonlySet<string>>;
+	/**
+	 * ⭐ 「这份**本机文件**（`file:///…`）现在还读得到吗」（列表阶段用：只 `stat`、**不读内容**）。
+	 *
+	 * ⚠️ 为什么要在**列清单之前**问一次：本机文件的判定是**纯**的（`decideLocalFile` 不碰磁盘），
+	 * 于是"文件早被删掉"的地址照样会进清单、而它**必然失败** —— 临时目录里的东西
+	 * （WPS 的 `Temp/ksohtml/…`）天天在消失。用户 2026-10-16 实测报的就是这个：
+	 * 一行 `file:///C:/…/Temp/ksohtml/wpsDD.tmp.jpg` 连缩略图都没有，文件已经不在了。
+	 *
+	 * 未提供 ⇒ 退回 `local-file.ts::localFileExists`（真去 `stat`；手机端走不到这里）。
+	 * ⚠️ 它是**安全的一侧**：问不出来只会少列一条，不会列出一条必然失败的。
+	 */
+	localFileExists?: LocalFileProbe;
 	notify: (message: string) => void;
 	t: (key: string, params?: Record<string, unknown>) => string;
 }

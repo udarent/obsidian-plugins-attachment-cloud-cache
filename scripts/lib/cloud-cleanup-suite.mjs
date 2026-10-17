@@ -1,76 +1,29 @@
 /**
  * 云端空间清理（`src/maintenance/cloud-cleanup.ts`）的断言套件 —— **需求 R17 / F15**。
  *
- * ## 这套断言守的是什么
+ * ⚠️ 2026-10-16：「清理云端未使用对象…」命令退役 ⇒ **候选挑选**（`selectCleanupCandidates`）
+ * 与**分页列举**（`listAllObjects`）随之下线，**第 1 节与第 4 节已整段删除**（编号保留原样，
+ * 免得与别处的交叉引用对不上）。候选改由**上传台账**产生，那条判据 —— 含
+ * **站外缓存整体排除** —— 现在住在 `maintenance/orphan-watch.ts::selectOrphanAsks`
+ * ⇒ **测在 `orphan-watch-suite` 里**（不要在本文件里再补一份）。
  *
- * 这一层唯一的"输出"是**一份删除清单**，而删错的方向只有一个：**删掉还在用的**。
- * 所以断言的重心全在"什么**不**该进候选"上：
+ * ## 本套件现在守的是什么
  *
- * - 仍被笔记/画布引用的；
- * - 站外缓存（它的引用可能写在别处，`CacheEntry.origin`）；
- * - 认不出形状的（宁可不动）；
- * - 列举**没读全**时（提前停下）不能假装清单是完整的。
- *
- * 另一头（`runCloudCleanup`）守的是"删成功才摘索引"与"一次失败不中断整批"：
- * 这两条错了都不会报错，只会让人在很久之后发现"占用统计对不上"。
+ * - 两个 key 工具：`referencedKeysFromUrls`（"谁被引用"的来源）与 `externalKeysOf`
+ *   （站外缓存的 key 集合 —— `plugin/orphan-flow.ts::presentOrphans` 拿它做 `isExternal`）；
+ * - `runCloudCleanup`：**删成功才摘索引**、**一次失败不中断整批**、**台账变了也要落盘**，
+ *   以及"404 = 目标状态已达成"。这些错了都不会报错，只会让人在很久之后
+ *   发现"占用统计对不上"。
  */
 
 import assert from "node:assert/strict";
 
 export async function runCloudCleanupSuite(mod) {
 	const {
-		selectCleanupCandidates,
 		referencedKeysFromUrls,
 		externalKeysOf,
-		listAllObjects,
 		runCloudCleanup,
 	} = mod;
-
-	// ============================================================
-	// 1. ⭐ 候选挑选：三条排除线
-	// ============================================================
-	{
-		const selection = selectCleanupCandidates({
-			objects: [
-				{ key: "used.png", size: 10 },
-				{ key: "external.png", size: 20 },
-				{ key: "orphan-a.png", size: 30 },
-				{ key: "orphan-b.png", size: 40 },
-				{ key: "", size: 5 },
-			],
-			referencedKeys: new Set(["used.png"]),
-			externalKeys: new Set(["external.png"]),
-		});
-
-		assert.deepEqual(
-			selection.candidates.map((object) => object.key),
-			["orphan-a.png", "orphan-b.png"],
-			"只挑既没被引用、也不是站外缓存的对象"
-		);
-		assert.equal(selection.bytes, 70, "总字节数要如实算出来（确认框要显示能腾出多少）");
-		const reasons = Object.fromEntries(selection.excluded.map((entry) => [entry.reason, entry.count]));
-		assert.equal(reasons["仍被笔记或画布引用"], 1, "被引用的要排除并计数");
-		assert.equal(reasons["站外缓存（不动）"], 1, "★ 站外缓存整体排除（它的引用可能写在别处）");
-		assert.equal(reasons["key 为空（不认识的形状）"], 1, "认不出的形状要跳过，而不是当成空 key 去删");
-	}
-
-	// 空输入 / 坏输入都要安全
-	{
-		const empty = selectCleanupCandidates({
-			objects: [],
-			referencedKeys: new Set(),
-			externalKeys: new Set(),
-		});
-		assert.deepEqual(empty, { candidates: [], bytes: 0, excluded: [] }, "空桶 ⇒ 空清单");
-
-		const messy = selectCleanupCandidates({
-			objects: [{ key: "a.png", size: Number.NaN }],
-			referencedKeys: new Set(),
-			externalKeys: new Set(),
-		});
-		assert.equal(messy.candidates.length, 1, "size 坏掉不该把整个对象丢掉");
-		assert.equal(messy.bytes, 0, "坏掉的 size 当 0（宁可显示得保守，也不要显示一个错数字）");
-	}
 
 	// ============================================================
 	// 2. URL → key 的换算（"仍被引用"判据的来源）
@@ -98,42 +51,6 @@ export async function runCloudCleanupSuite(mod) {
 		};
 		assert.deepEqual([...externalKeysOf(index)], ["cached.png"], "只有标记为 external 的才算站外缓存");
 		assert.equal(externalKeysOf(null).size, 0, "没有索引时返回空集合（不抛错）");
-	}
-
-	// ============================================================
-	// 4. ⭐ 分页列举：到底要停，页数上限要**如实标记**
-	// ============================================================
-	{
-		const pages = [
-			{ objects: [{ key: "a.png", size: 1 }], nextToken: "a.png" },
-			{ objects: [{ key: "b.png", size: 2 }], nextToken: null },
-		];
-		let call = 0;
-		const client = {
-			listObjects: async (options) => {
-				const page = pages[call] ?? { objects: [], nextToken: null };
-				call += 1;
-				assert.equal(options?.continuationToken ?? undefined, call === 1 ? undefined : "a.png", "第二页要带上第一页给的 token");
-				return page;
-			},
-		};
-		const result = await listAllObjects(client);
-		assert.deepEqual(result.objects.map((object) => object.key), ["a.png", "b.png"], "要把所有页拼起来");
-		assert.equal(result.truncated, false, "到底了就不该标记截断");
-
-		// 无限翻页的桶 ⇒ 到页数上限就停，并且**如实说清单可能不全**
-		let endless = 0;
-		const truncated = await listAllObjects(
-			{
-				listObjects: async () => {
-					endless += 1;
-					return { objects: [{ key: `k${endless}.png`, size: 1 }], nextToken: `k${endless}.png` };
-				},
-			},
-			{ maxPages: 3 }
-		);
-		assert.equal(endless, 3, "页数上限要生效（否则桶里有几十万个对象时会把内存打满）");
-		assert.equal(truncated.truncated, true, "★ 提前停下必须标记，绝不假装清单是完整的");
 	}
 
 	// ============================================================
@@ -209,7 +126,8 @@ export async function runCloudCleanupSuite(mod) {
 	// ⚠️ 这一节在 2026-10-11 被**改写过**。原断言是"算失败、且不摘索引"，理由写着
 	// "对象不在、笔记里的 URL 还在，那条记录让渲染能认出「这是我们存储的地址」"。
 	// 复查时发现那个理由**与候选公式矛盾**：能走进 `runCloudCleanup` 的 key 已经排除了
-	// "仍被引用"与"站外缓存"（见第 1 节），所以"URL 还在笔记里"这种情形**到不了这里**。
+	// "仍被引用"与"站外缓存"（那两条判据在 `orphan-watch.ts::selectOrphanAsks`），
+	// 所以"URL 还在笔记里"这种情形**到不了这里**。
 	// 反过来的代价是实打实的：`false` 记成失败 ⇒ 用户看到"有一个没删掉"（其实早就没了），
 	// 而那条指向 404 的记录会被 audit / 淘汰当成**有效记录**（"明明删了，占用还在涨"）。
 	// ⇒ 现在与入口 A 的解释统一（入口 A 从来就没检查过这个返回值）：404 = 已完成，并摘掉记录。
@@ -305,5 +223,5 @@ export async function runCloudCleanupSuite(mod) {
 		);
 	}
 
-	return { cases: 11 };
+	return { cases: 8 };
 }

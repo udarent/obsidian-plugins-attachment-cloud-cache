@@ -24,7 +24,9 @@ await withLoadedTs(["src/maintenance/orphan-watch"], async (mod) => {
 			"the missed one; deleting a note orphans what it linked while renaming keeps the count; reads that " +
 			"fail are recorded instead of being treated as 'no references'; the ask filter keeps only " +
 			"objects we have handled (from the upload ledger, NOT from the local-copy index - so the " +
-			"'no local copy' setting still gets asked) that have not been asked about yet; and the local-removal " +
+			"'no local copy' setting still gets asked) that have not been asked about yet, and never the ones " +
+			"cached from another site (their reference in the note is that site's own URL, which our key " +
+			"derivation cannot recognise - so they would look unlinked); and the local-removal " +
 			"plan produces targets only for copies the index vouches for (disposal is now fixed to the trash — " +
 			"there is only one kind of copy left, and it may well be the user's own attachment))."
 	);

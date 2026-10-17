@@ -11,7 +11,7 @@
 
 import assert from "node:assert/strict";
 
-export function runMaintenanceSuite(mod) {
+export async function runMaintenanceSuite(mod) {
 	const { auditCache } = mod;
 	const {
 		findLinkSpans,
@@ -764,16 +764,20 @@ export function runMaintenanceSuite(mod) {
 	// ⭐ 1.1.0 起候选是**排除制**（需求 R15）：除了"笔记/画布/数据库"这三种宿主自己的
 	// 文本文件之外，任何类型都可以上传 —— 所以 `notes.md` 仍然被跳过（它不是附件），
 	// 而 PDF / 音频 / 视频 / 压缩包全都该进来。
-	assert.deepEqual(
-		selection.paths,
-		["attachments/a.png", "attachments/b.jpg"],
-		"非空、未处理过、且被引用的附件才进候选"
-	);
+	//
+	// ⚠️ 顺序有意：**先让点名规则的那几条说话**（`reasons[...]` 的中文文案就是规则名），
+	// 再整表比对候选 —— 反过来的话，任何一条规则坏掉都只会报成
+	// "非空、未处理过、且被引用的附件才进候选"，变异验证就答不出"它因自己的原因失败"。
 	const reasons = Object.fromEntries(selection.skipped.map((s) => [s.reason, s.count]));
 	assert.equal(reasons["是笔记/画布/数据库文件，不是附件"], 1, "笔记文件不是附件，要跳过并计数");
 	assert.equal(reasons["文件为空（可能是同步中的占位）"], 1, "空文件应被跳过（传上去会得到坏对象）");
 	assert.equal(reasons["已经在缓存索引里"], 1, "已处理过的应被跳过");
 	assert.equal(reasons["路径为空"], 1, "坏输入应被跳过而不是让整批失败");
+	assert.deepEqual(
+		selection.paths,
+		["attachments/a.png", "attachments/b.jpg"],
+		"非空、未处理过、且被引用的附件才进候选"
+	);
 
 	// ⭐ 只处理**被笔记引用着**的文件：命令成功后会把它移进缓存目录，
 	// 而没有任何引用的文件搬走之后没有任何东西会把用户引到它的新位置。
@@ -843,12 +847,13 @@ export function runMaintenanceSuite(mod) {
 	assert.deepEqual(externalFileUrlsIn("![a](https://x.test/a.png)"), ["https://x.test/a.png"], "Markdown 图片要认");
 	// ⭐ 1.1.0（需求 R15）：普通链接**也要收** —— `[报告](https://…/report.pdf)` 是
 	// PDF / 音频 / 压缩包最常见的写法，不收它"支持所有格式"就只覆盖了 `![]` 那一半。
-	// ⚠️ 于是候选里会混进**网页**链接：它们在下载那一步被 `text/html` 判据挡掉，
-	// 用户看到一句如实的"该地址返回的是网页或纯文本"（原则⑥），而不是静默无事发生。
+	// ⚠️ 采集这一层**只判"是不是 http(s) 地址"** ⇒ 网页链接也会被收进来。它们**不会变成候选**：
+	// 判定层按形状把没有扩展名的挡掉（2026-10-16 用户实测报的，见下面那一段）；
+	// 而 `.txt` 这类"像文件的文本"仍会进候选，靠下载那一步的 `text/*` 判据如实拒收。
 	assert.deepEqual(
 		externalFileUrlsIn("[a](https://x.test/page)"),
 		["https://x.test/page"],
-		"★ 普通链接也要收（它可能是 PDF/音频/压缩包）；网页那一类由下载判定拒收"
+		"★ 采集只认地址形态（「像不像文件」是判定层的事）；网页那一类不会变成候选"
 	);
 	assert.deepEqual(
 		externalFileUrlsIn('<a href="https://x.test/doc.pdf">报告</a>'),
@@ -912,6 +917,135 @@ export function runMaintenanceSuite(mod) {
 			false,
 			"★ 自己存储的地址不该被当外链处理（判定层认得出，命令不另立标准）"
 		);
+
+		// ⭐⭐ 指向**宿主自己的文本文件**（笔记 / 画布 / 数据库）的远程地址**不算候选**
+		// （2026-10-16 用户实测报的：笔记里链接的远程 `.md` 出现在了
+		// 「上传附件」的清单里）。判据落在**判定层**
+		// （`decideExternalCache` 里的 `isNoteLikeExtension`），所以"打开笔记就搬"
+		// 那一路同样被拦住 —— 这里钉的是**候选清单**这一侧。
+		const noteLike = selectExternalUploadCandidates(
+			[
+				{
+					path: "notes/links.md",
+					text:
+						"![a](https://offsite.test/notes/intro.md)\n" +
+						"![b](https://offsite.test/boards/talk.canvas)\n" +
+						"![c](https://offsite.test/db/table.base)\n" +
+						"![ok](https://offsite.test/doc.pdf)",
+				},
+			],
+			options
+		);
+		assert.deepEqual(
+			noteLike.candidates.map((c) => c.url),
+			["https://offsite.test/doc.pdf"],
+			"★★ 指向笔记/画布/数据库的远程地址不算候选（搬下来会在库里凭空多出一篇笔记），而 PDF 照旧"
+		);
+		assert.deepEqual(
+			noteLike.sites,
+			[{ host: "offsite.test", count: 1 }],
+			"站点汇总也不能把它们算进去（确认框会据此列站点）"
+		);
+
+		// ⭐⭐ 从正文文本里读出来的地址**必须看起来像个文件**（2026-10-16 用户实测报的
+		// 第二件事）：笔记里那个**企业 wiki 页链接**（`…/wiki/资料归档管理规定?wfw…`，
+		// 没有扩展名）压根不该进清单 —— 用户原话「那个文件不应该进入列表选项」。
+		// 判据同样落在**判定层**（`decideExternalCache` 只对 `manual` 那一路），
+		// 这里钉的是**候选清单**这一侧。
+		const notFiles = selectExternalUploadCandidates(
+			[
+				{
+					path: "notes/links.md",
+					text:
+						"[wiki](https://offsite.test/projects/m23003/wiki/%E8%B5%84%E6%96%99?cfm=1)\n" +
+						"[页](https://offsite.test/some/page)\n" +
+						"[点在前面的目录里](https://offsite.test/2024.10/notes)\n" +
+						// ⭐ 网页类型（`.html`）**也不许**进来 —— 它尾巴有点、能过"像个文件名"那条，
+						// 但 R18「绝不抓网页」与下载端那一条（`text/html` 拒收）是同源的判据。
+						// 2026-10-16 用户第二次实测报的正是这个：B站播放器 `<iframe src="…/player.html">`。
+						'<iframe src="https://player.bilibili.com/player.html?aid=1&bvid=BV1"></iframe>\n' +
+						"[播放器](https://offsite.test/player.html)\n" +
+						// ⭐⭐ 第三次实测报的那一条：**后缀是页面程序**（`.jsp`）的地址同样是网页 ——
+						// 它尾巴也有点、后缀也不是 `text/html`，但内容是现算出来的一张页面
+						//（用户原话：「实际上这是一个网页地址」）。判据是 `isWebPageExtension`。
+						"[原文链接](https://offsite.test/pd.jsp?id=172#:~:text=HyperWire)\n" +
+						// ⭐⭐ 第五次实测报的那一条：**尾巴有点像、但后缀不是文件类型** ——
+						// GitHub 的分支名 `5.1-translation_terms`（点在 `5` 与 `1` 之间，取不出扩展名）。
+						// 判据是 `urlHasFileTypeSuffix`（**只对"只被指向"的地址施加**）。
+						"[分支](https://offsite.test/repo/tree/5.1-translation_terms)\n" +
+						"[版本](https://offsite.test/repo/tree/v1.2.3)\n" +
+						"[pdf](https://offsite.test/report.pdf)\n",
+				},
+			],
+			options
+		);
+		assert.deepEqual(
+			notFiles.candidates.map((c) => c.url),
+			["https://offsite.test/report.pdf"],
+			"★★ 没有扩展名的网页地址、网页类型（.html）、页面程序（.jsp）与「后缀不像文件类型」的地址（分支名 / 版本号）**都不算候选**，而 PDF —— 同样是普通链接 —— 照旧"
+		);
+		assert.deepEqual(
+			notFiles.sites,
+			[{ host: "offsite.test", count: 1 }],
+			"站点汇总也不能算进那些网页地址（确认框会据此列出即将访问哪些站点）"
+		);
+		assert.equal(
+			notFiles.skipped.some((s) => s.reason.includes("不是文件")),
+			true,
+			"★ 跳过的原因要照实记下来（诊断用）"
+		);
+		assert.equal(
+			notFiles.skipped.some((s) => s.reason.includes("后缀不像文件类型")),
+			true,
+			"★ 「后缀不像文件类型」（分支名 / 版本号那种）要能与「尾部没有后缀」分开说，诊断才用得上"
+		);
+		assert.equal(
+			notFiles.skipped.some((s) => s.reason.includes("网页")),
+			true,
+			"★ 页面程序（`…/pd.jsp?id=172`）那一条的原因要说得清是「网页」，不是笼统的「不是文件」"
+		);
+
+		// ⭐⭐ 本机文件候选：**列清单之前先问一句"还在不在"**（2026-10-16 用户实测报的：
+		// 一行连缩略图都没有的 `file:///C:/…/Temp/ksohtml/wpsDD.tmp.jpg` —— 文件其实已经不在了，
+		// 他的原话「没有缩略图的文件实际上已经不存在了，不应该上传，即便上传也会失败」）。
+		// ⚠️ "读得到吗"是 **I/O**（由 `LocalFileProbe` 注入）⇒ 这里用替身穷举**分流**那一半。
+		{
+			const asked = [];
+			const probe = async (path) => {
+				asked.push(path);
+				return path !== "C:/gone/wpsDD.tmp.jpg";
+			};
+			const { kept, missing } = await mod.dropMissingLocalCandidates(
+				[
+					{ url: "file:///C:/gone/wpsDD.tmp.jpg", notePath: "notes/a.md", host: "", local: true },
+					{ url: "file:///C:/kept/ok.png", notePath: "notes/a.md", host: "", local: true },
+					{ url: "https://offsite.test/a.png", notePath: "notes/a.md", host: "offsite.test", local: false },
+				],
+				probe
+			);
+			// ⚠️ **承重的那条先说话**：先钉"已经不在的必须被摘掉"（这是用户报的那件事），
+			// 再钉"其余照原样留着"。反过来的话，变异会以"另一件事"的理由失败（本项目踩过）。
+			assert.deepEqual(
+				missing.map((c) => c.url),
+				["file:///C:/gone/wpsDD.tmp.jpg"],
+				"★★ 已经不在的本机文件必须摘掉（列出来就是「点了一定失败」）"
+			);
+			assert.deepEqual(
+				kept.map((c) => c.url),
+				["file:///C:/kept/ok.png", "https://offsite.test/a.png"],
+				"★ 还在的本机文件与站外候选都要留下（顺序也照原样）"
+			);
+			assert.equal(
+				asked.length,
+				2,
+				"★ 只对**本机**文件问在不在；站外候选的「在不在」要联网才知道（那是执行层的事）"
+			);
+			assert.deepEqual(
+				asked,
+				["C:/gone/wpsDD.tmp.jpg", "C:/kept/ok.png"],
+				"★ 问的是**去掉 file:// 之后的本机路径**（探测函数只认路径）"
+			);
+		}
 
 		// 站点排序固定：输出稳定，展示与断言都不会因为扫库顺序而变
 		const again = selectExternalUploadCandidates([...notes].reverse(), options);

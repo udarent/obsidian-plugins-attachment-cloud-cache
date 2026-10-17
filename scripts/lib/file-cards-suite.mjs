@@ -19,9 +19,10 @@ import assert from "node:assert/strict";
  * **去下载那个对象**：这个对话框问的正是"要不要删掉它"。
  */
 export function runFileCardsSuite(mod) {
-	const { planFileCards, renderFileCards } = mod;
+	const { planFileCards, renderFileCards, externalRowMeta } = mod;
 	assert.ok(typeof planFileCards === "function", "应当导出清单判定");
 	assert.ok(typeof renderFileCards === "function", "应当导出清单渲染");
+	assert.ok(typeof externalRowMeta === "function", "应当导出站外/本机行的副标题拼法");
 
 	/** 替身：`missing/` 开头的路径"本地拿不到"，`nourl.png` 推不出远端地址。 */
 	const deps = {
@@ -52,7 +53,7 @@ export function runFileCardsSuite(mod) {
 			[{ id: "a1b2.png", localPath: "attachments-cache/a1b2.png", remoteKey: "a1b2.png" }],
 			deps
 		);
-		assert.equal(card.thumbUrl, "app://vault/attachments-cache/a1b2.png", "★ 本地副本优先（零网络）");
+		assert.deepEqual(card.thumbUrls, ["app://vault/attachments-cache/a1b2.png"], "★ 本地副本优先（零网络）");
 		assert.equal(card.fromLocalCopy, true, "要说清这张图是不是来自本地副本");
 	}
 
@@ -64,7 +65,7 @@ export function runFileCardsSuite(mod) {
 			[{ id: "a1b2.png", localPath: "missing/a1b2.png", remoteKey: "a1b2.png" }],
 			deps
 		);
-		assert.equal(card.thumbUrl, "https://cdn.example.com/a1b2.png", "本地拿不到时退到远端地址");
+		assert.deepEqual(card.thumbUrls, ["https://cdn.example.com/a1b2.png"], "本地拿不到时退到远端地址");
 		assert.equal(card.fromLocalCopy, false, "远端地址不是本地副本");
 	}
 
@@ -79,9 +80,9 @@ export function runFileCardsSuite(mod) {
 			],
 			deps
 		);
-		assert.equal(pdf.thumbUrl, null, "★ PDF 塞进 img 只会得到破图 ⇒ 不给缩略图");
+		assert.deepEqual(pdf.thumbUrls, [], "★ PDF 塞进 img 只会得到破图 ⇒ 不给缩略图");
 		assert.equal(pdf.badge, "PDF", "要给类型标记，让用户知道它是什么");
-		assert.equal(zip.thumbUrl, null, "未知类型同理");
+		assert.deepEqual(zip.thumbUrls, [], "未知类型同理");
 		assert.equal(zip.badge, "ZIP", "扩展名认不出来时也要如实显示它");
 	}
 
@@ -97,9 +98,9 @@ export function runFileCardsSuite(mod) {
 			],
 			deps
 		);
-		assert.equal(noRemote.thumbUrl, null, "★ 推不出远端地址 ⇒ null，不给空串");
-		assert.equal(noLocal.thumbUrl, null, "本地拿不到、又没有 key ⇒ null");
-		assert.equal(unconfigured.thumbUrl, null, "什么都没给 ⇒ null（不抛错）");
+		assert.deepEqual(noRemote.thumbUrls, [], "★ 推不出远端地址 ⇒ 空，不给空串或空地址");
+		assert.deepEqual(noLocal.thumbUrls, [], "本地拿不到、又没有 key ⇒ 空");
+		assert.deepEqual(unconfigured.thumbUrls, [], "什么都没给 ⇒ 空（不抛错）");
 	}
 
 	// ============================================================
@@ -125,12 +126,12 @@ export function runFileCardsSuite(mod) {
 			],
 			deps
 		);
-		assert.equal(image.thumbUrl, "https://example.com/a.png", "★ 调用方给的地址优先（否则站外/本机那些行永远没有图）");
+		assert.deepEqual(image.thumbUrls, ["https://example.com/a.png"], "★ 调用方给的地址优先（否则站外/本机那些行永远没有图）");
 		assert.equal(image.fromLocalCopy, false, "它不来自本地副本 —— 别把站外/本机图说成零网络");
-		assert.equal(pdf.thumbUrl, null, "非图片给地址也只显示类型标记");
-		assert.equal(
-			both.thumbUrl,
-			"app://elsewhere/d.png",
+		assert.deepEqual(pdf.thumbUrls, [], "非图片给地址也只显示类型标记");
+		assert.deepEqual(
+			both.thumbUrls,
+			["app://elsewhere/d.png"],
 			"★ 显式地址优先于本地副本与远端 key（三样都给时按这个顺序）"
 		);
 		assert.equal(both.fromLocalCopy, false, "显式地址那一档不算本地副本");
@@ -182,6 +183,12 @@ export function runFileCardsSuite(mod) {
 					el.children.push(child);
 					return child;
 				},
+				// ⚠️ 真实 DOM 元素一定有它，而"候选链"那一步走的正是 `setAttribute`
+				//（**不能**走 `img.src = …`：渲染钩子改写了那个 setter）⇒ 替身也得有，
+				// 否则"接着试下一条候选"在套件里根本走不到。
+				setAttribute: (name, value) => {
+					el.attrs[name] = value;
+				},
 				addClass: (cls) => el.classes.push(cls),
 				setText: (text) => {
 					el.text = text;
@@ -194,7 +201,9 @@ export function runFileCardsSuite(mod) {
 		};
 
 		const root = makeEl("root");
-		renderFileCards(root, [{ id: "a1b2.png", label: "报告.png", badge: "PNG", thumbUrl: "https://cdn.example.com/a1b2.png" }]);
+		renderFileCards(root, [
+			{ id: "a1b2.png", label: "报告.png", badge: "PNG", thumbUrls: ["https://cdn.example.com/a1b2.png"] },
+		]);
 
 		const row = root.children[0];
 		assert.ok(row, "每一行都要有个容器（否则两行会并在一起）");
@@ -217,17 +226,78 @@ export function runFileCardsSuite(mod) {
 		);
 		assert.equal(row.children[1].text, "报告.png", "名字要显示出来（那是核对的主要依据）");
 
-		// 加载失败 ⇒ 降级成类型标记，不留破图
+		// 一条候选都没有（或全试完了）⇒ 降级成类型标记，不留破图
 		row.children[0].children[0].onerror?.();
 		assert.ok(row.children[0].classes.includes("acc-file-badge"), "★ 图加载不出来要降级成标记");
 		assert.equal(row.children[0].text, "PNG", "降级后显示类型标记");
 
+		// ⭐⭐ 候选是**一串**：第一条画不出来要**接着试**第二条，全试完才降级（D-45）。
+		// 站外 `http(s)` 只有一条；库外本机文件有两条（宿主前缀 + 原文）——
+		// 而"宿主认哪一种"由**运行时**说了算 ⇒ 不接着试就等于把决定权又抢回我们手里。
+		const rootChain = makeEl("root");
+		renderFileCards(rootChain, [
+			{
+				id: "g7h8.png",
+				label: "截图.png",
+				badge: "PNG",
+				thumbUrls: ["app://local/D:/截图.png", "file:///D:/截图.png"],
+			},
+		]);
+		const chained = rootChain.children[0].children[0];
+		assert.equal(chained.children[0].attrs.src, "app://local/D:/截图.png", "★ 先试第一条候选");
+		chained.children[0].onerror?.();
+		assert.equal(
+			chained.children[0].attrs.src,
+			"file:///D:/截图.png",
+			"★★ 第一条画不出来要**接着试第二条**（不是立刻降级成标记）"
+		);
+		assert.ok(!chained.classes.includes("acc-file-badge"), "★ 还有候选没试完时不该降级");
+		chained.children[0].onerror?.();
+		assert.ok(chained.classes.includes("acc-file-badge"), "★★ 候选全试完才降级成类型标记");
+		assert.equal(chained.text, "PNG", "降级后显示类型标记");
+
 		// 非图片：直接就是标记，没有 img
 		const root2 = makeEl("root");
-		renderFileCards(root2, [{ id: "b7c8.pdf", label: "报告.pdf", badge: "PDF", thumbUrl: null }]);
+		renderFileCards(root2, [{ id: "b7c8.pdf", label: "报告.pdf", badge: "PDF", thumbUrls: [] }]);
 		assert.equal(root2.children[0].children[0].children.length, 0, "没有缩略图时不渲染 img");
 		assert.equal(root2.children[0].children[0].text, "PDF", "非图片显示类型标记");
 	}
 
-	return { cases: 12 };
+	// ============================================================
+	// ⑧ 站外 / 本机那一类行的**副标题**（⚠️ 全库只能有一处拼它）
+	// ============================================================
+	{
+		// ⚠️⚠️ **这一段走过三轮弯路，别再走回去**（2026-10-16）：用户三次报「清单里出现了 `.md`」，
+		// 我前两轮都在改**文案**（先加「笔记：」前缀、再去掉笔记后缀），两次都被否掉 ——
+		// 第三次他把话说到最清楚：「**这个链接对应的文件不是附件，不应该进入上传列表**」。
+		// ⇒ 真正该做的两条：① 那样的地址压根不该变成候选（判定层的形状/网页判据）；
+		//   ② 这一行**压根不该出现库内路径**（下面这条断言 + 入参里根本不收 `notePath`）。
+		// ⭐ ② 是**结构性**的：没有那个字段 ⇒ 想写也写不出来，
+		// 不需要"再立一条规则、指望没人违反"（本项目最贵的一课）。
+		const row = externalRowMeta({ host: "wiki.example.cn:666", notePath: "pages/方案.md", url: "https://x/y" });
+		assert.equal(row, "wiki.example.cn:666", "★ 站外那一行只给**主机**");
+		assert.ok(
+			!row.includes(".md") && !row.includes("pages/"),
+			"★★ 副标题里不许出现库内路径（否则会被读成「清单里进了一个 .md 文件」）"
+		);
+
+		// ⚠️ 本机文件（`file:///D:/…`）**没有主机** ⇒ 副标题要给那条**绝对路径**
+		//（用户勾中它就是签了"读这条路径"，只显示一个空主机名等于让人盲签）。
+		assert.equal(
+			externalRowMeta({ host: "", notePath: "notes/x.md", url: "file:///D:/企业微信文件/截图.png" }),
+			"file:///D:/企业微信文件/截图.png",
+			"★ 本机文件（host 为空）要显示那条路径，而不是空串"
+		);
+
+		// 缺字段不能拼出半截字符串
+		assert.equal(externalRowMeta({ host: "example.cn" }), "example.cn", "没有 URL 时只说主机");
+		assert.equal(externalRowMeta({}), "", "什么都没有时返回空串");
+		assert.equal(externalRowMeta(null), "", "null 不能抛错");
+		assert.equal(externalRowMeta(undefined), "", "undefined 也不能抛错");
+	}
+
+	// ⚠️ 这里**不印"多少例"**：那个数是手工维护的，而"加一节"就把它变成假话
+	//（2026-10-16 查出它停在 12，而套件此前已经加过两节）。规模数一律由跑测试时现算 ——
+	// 参考 `test-transfer.mjs` 那种把计数**算出来**的写法。
+	return {};
 }

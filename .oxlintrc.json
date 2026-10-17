@@ -124,6 +124,13 @@
 					}
 				]
 			}
+		},
+		{
+			"files": ["src/local-file.ts"],
+			"rules": {
+				"no-require-imports": "off",
+				"no-restricted-globals": "off"
+			}
 		}
 	]
 }

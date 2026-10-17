@@ -39,14 +39,16 @@ import type { MaintenanceDeps } from "./maintenance/run";
 import { createCacheRotator } from "./maintenance/rotation";
 import type { CacheRotator } from "./maintenance/rotation";
 import {
+	dropMissingLocalCandidates,
 	selectExternalUploadCandidates,
 } from "./maintenance/batch";
 import { createAttachWatcher, createSelfWriteLedger } from "./maintenance/attach-watch";
 import type { AttachWatcher } from "./maintenance/attach-watch";
-import { CONFIRM_IMMEDIATELY, createAbsenceConfirmer, runSelfHeal } from "./maintenance/self-heal";
+import { createAbsenceConfirmer, runSelfHeal } from "./maintenance/self-heal";
 import type { SelfHealResult } from "./maintenance/self-heal";
 
 import type { ExternalCandidate } from "./maintenance/batch";
+import { describeError } from "./error-text";
 import { ingestAttachment } from "./core/ingest";
 import { confirmWithModal } from "./ui/confirm-modal";
 import type { ConfirmOptions } from "./ui/confirm-modal";
@@ -70,7 +72,7 @@ import {
 } from "./plugin/credentials-flow";
 import type { ImportCredentialsOutcome } from "./plugin/credentials-flow";
 import type { PluginContext } from "./plugin/context";
-import { cleanupCloudObjects } from "./plugin/cloud-cleanup-flow";
+import { localFileExists, localPathFromUrl, localThumbCandidates } from "./local-file";
 import { uploadExistingAttachments } from "./plugin/upload-existing-flow";
 import { releaseLocalSpace } from "./plugin/release-space-flow";
 import { createOrphanFlow } from "./plugin/orphan-flow";
@@ -246,6 +248,9 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				scopeName: this.t("externalPickScope"),
 				scopeNote: this.t("externalPickScopeNote"),
 				scopeVault: this.t("externalPickScopeVault"),
+				// ⭐ 库外文件那几行的缩略图候选（本机 `file:///…` 用宿主自己的本地前缀，
+				// 见 `localThumbUrls`）—— 界面层不碰宿主，所以从装配点注入。
+				localThumbUrls: (url) => this.localThumbUrls(url),
 				// "全选 / 全不选 / 取消"由共用那份给（同一句话只维护一处）；
 				// ⚠️ 空清单那句**按这条链覆盖**：它要说清"为什么可能是空的"（已缓存过 / 没配好）
 				// ⚠️ `this.t` 必须包一层箭头函数再传（eslint 的 unbound-method 在拦：摘下来的方法丢了 this）
@@ -544,6 +549,28 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	}
 
 	/**
+	 * 跑一件**异步的**活，并保证**失败一定有人看见**。
+	 *
+	 * ⚠️ 这条兜底不是"顺手更稳一点"，它补的是一处**真实发生过的静默**
+	 *（2026-10-16 用户实测）：命令回调是异步的，它一旦抛（那天是取 `fs` 的写法在宿主里不成立），
+	 * 抛出的错就只是控制台里一条 unhandled rejection —— **界面上什么都不发生**。
+	 * 用户看到的就是「**点击命令没有反应**」：他既不知道出了什么事，也无从报告。
+	 * ⇒ 命令面板那几条**一律**从这里过：日志留完整错误（含堆栈，供排查），
+	 * 提示里只给一句可读的话（"哪条命令 + 什么原因"）。
+	 *
+	 * ⚠️ 用 `Promise.resolve().then(run)` 而不是 `run().catch(...)`：后者只接得住
+	 * **异步**失败，`run()` 自己**同步**抛的那一下照样静默（本项目吃过"一半路径有兜底"的亏）。
+	 */
+	private runCommand(id: string, run: () => Promise<void> | void): void {
+		void Promise.resolve()
+			.then(run)
+			.catch((error: unknown) => {
+				console.error(`[attachment-cloud-cache] 命令 ${id} 执行失败`, error);
+				new Notice(this.t("cmdFailed", { error: describeError(error) }));
+			});
+	}
+
+	/**
 	 * 注册维护命令（P1 #8/#9/#10）。
 	 *
 	 * ⚠️ 破坏性命令（清理缓存）**必须先出确认框**，而且要写清"删几个、占多少空间"。
@@ -553,35 +580,35 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		this.addCommand({
 			id: "audit-cache",
 			name: this.t("cmdAuditCache"),
-			callback: () => void this.reportCacheUsage(),
+			callback: () => this.runCommand("audit-cache", () => this.reportCacheUsage()),
 		});
 
-		this.addCommand({
-			id: "cleanup-cloud",
-			name: this.t("cmdCleanupCloud"),
-			callback: () => void cleanupCloudObjects(this.flowContext()),
-		});
-
-		// ⭐ 用户 2026-10-14 在 Android 上要的那条：那次三档询问**只自动出现一次**，
-		// 而弹窗可能被误关（点背景 / ESC，"点一下边上就不见了"）⇒ 他需要一条能自己重来的路。
-		// ⚠️ 与「清理云端未使用对象…」不是一件事：那条列全桶（要 ListBucket 权限、慢），
-		// 这条只看**我们上传过的**（台账），因此快、也不需要列举权限。
+		// ⭐⭐ **唯一**的清理入口（2026-10-16 合并了原来那条「清理云端未使用对象…」）。
+		//
+		// ## 为什么只留这一条
+		//
+		// 原命令列的是**整个桶**（要 `ListBucket` 权限、慢、有页数上限），而它的独占能力是
+		// "处理**不属于本插件**的对象" —— 那与这条的纪律**直接冲突**：候选的筛除里明写着
+		// 「对不属于我们的对象，我们**没有任何处置权** —— 不问，也不删」（`selectOrphanAsks`
+		// 的 `not-ours`）。⚠️ 而需求文档里也**查不到**"要处理桶里别人的对象"这个诉求。
+		// ⇒ 候选改由**上传台账**产生（快、不需要列举权限、清单完整），并**继承了**那条命令
+		// 唯一的正面贡献：**站外缓存的对象一律排除**（它的引用可能写在别处 —— 链接改写失败时
+		// 笔记里留着的是**原来的站外地址**，而按 URL 回算 key 的判据根本认不出它）。
+		//
+		// ## 它同时是"那次询问被误关"的解药
+		//
+		// 三档询问**只自动出现一次**（冷却记住之后不再问），而弹窗可能被误关
+		//（用户 2026-10-14 在 Android 上："点一下边上就不见了"）⇒ 他需要一条能自己重来的路。
 		this.addCommand({
 			id: "check-orphans",
 			name: this.t("cmdCheckOrphans"),
-			callback: () => void this.orphanFlow?.checkNow(),
-		});
-
-		this.addCommand({
-			id: "repair-index",
-			name: this.t("cmdRepairIndex"),
-			callback: () => void this.repairIndex(),
+			callback: () => this.runCommand("check-orphans", () => this.orphanFlow?.checkNow()),
 		});
 
 		this.addCommand({
 			id: "upload-attachments",
 			name: this.t("cmdUploadAttachments"),
-			callback: () => void uploadExistingAttachments(this.flowContext()),
+			callback: () => this.runCommand("upload-attachments", () => uploadExistingAttachments(this.flowContext())),
 		});
 
 		// ⭐ 逐张挑选要缓存的外链图。
@@ -592,7 +619,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		this.addCommand({
 			id: "pick-external-images",
 			name: this.t("cmdPickExternal"),
-			callback: () => void this.cachePickedExternalImages(),
+			callback: () => this.runCommand("pick-external-images", () => this.cachePickedExternalImages()),
 		});
 	}
 
@@ -602,6 +629,9 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			settings: () => this.settings,
 			index: () => this.currentIndex(),
 			persistIndex: () => this.hostContext().persistIndex(),
+			// ⭐ 本机文件的"还在不在"探测（列表阶段用：只 `stat`、不读内容）——
+			// 缺了它，清单会开始列"点了一定失败"的条目（用户 2026-10-16 实测报的）。
+			localFileExists: (path) => localFileExists(path),
 			ingest: async (request) => {
 				const client = this.buildClient();
 				if (!client) throw new Error(this.t("maintainNotConfigured"));
@@ -713,13 +743,14 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 
 		// ⚠️ 失效记录**要单独说清它会自己消失**：那行数字本身不带处置办法，
 		// 用户 2026-10-14 在 Android 上把它读成了"插件把索引弄坏了"（其实是"删掉本地副本"
-		// 的正常中间态：后台自检两轮确认后摘掉，或跑一次修复命令立刻摘）。
+		// 的正常中间态：后台自检两轮确认后摘掉）。
+		// ⚠️ 2026-10-16 起**不再指路任何命令** ——「自检并修复本地副本索引」命令已退役，
+		// "立刻核一遍"的入口随之消失，只剩后台这一条线（文案也已同步去掉 `{command}`）。
 		// 只在真有失效时加这一句 —— 每次运行都写一遍会变成没人看的噪音。
 		if (audit.missingCopies.length > 0) {
 			new Notice(
 				this.t("maintainUsageMissingHint", {
 					count: audit.missingCopies.length,
-					command: this.t("cmdRepairIndex"),
 				})
 			);
 		}
@@ -738,50 +769,28 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 
 
 	/**
-	 * 「自检并修复本地副本索引」命令。
+	 * 跑一轮索引自愈（**只剩后台这一条线**：两轮确认）。
 	 *
-	 * ⚠️ 它调的是**与后台自愈同一份实现**（`maintenance/self-heal.ts`）。
-	 * 早先这里走的是"列出缓存目录 + **扫全库笔记** → 分类 → 只摘失效记录" ——
-	 * 而自愈根本不需要扫笔记（那只影响"未引用 vs 健康"的区分），
-	 * 于是这条命令白付了一次全库读；更糟的是它按"文件是否在缓存目录的列表里"判存在，
-	 * 于是**`keep` 档（副本留在附件目录）的失效记录永远修不到**。
+	 * ⚠️ 2026-10-16：「自检并修复本地副本索引」命令退役 ⇒ 原先给命令用的两个参数
+	 * **都没有了生产者** ⇒ 一并删掉（`CONFIRM_IMMEDIATELY` 也随之删除）：
+	 * - `silent`：让这一层不出声、由命令自己回话；
+	 * - `immediate`：**单轮即摘**（显式动作、用户正等着结果，让他按两次才是坏体验）。
 	 *
-	 * 现在的判据是"逐条路径问一下在不在"：既便宜（宿主索引是内存查表），
-	 * 也不再有"只管缓存目录"这个盲区。
+	 * ⭐ 后果如实记：**"立刻核一遍"这条能力现在没有入口** —— 剩下的只有这一条
+	 * 「第一次判'不在'只标记、下一轮仍不在才摘」的线。那不是保守过头：
+	 * 换设备 / 同步进行中时"这一轮读不到"很常见，一次就摘会把**还在路上**的记录
+	 * 一起删掉（新设备上那可能就是整份索引）。
 	 */
-	private async repairIndex(): Promise<void> {
-		const result = await this.runIndexSelfHeal({ silent: true, immediate: true });
-		new Notice(
-			result.healed > 0
-				? this.t("repairIndexFound", { count: result.healed })
-				: this.t("repairIndexNothing")
-		);
-	}
-
-	/**
-	 * 跑一轮索引自愈。
-	 *
-	 * @param options.silent `true` = 给命令用（结果由调用方回话，这一层不出声）；
-	 *   `false`（默认）= 后台用，只在真的修了东西时通知（0 条不打扰）。
-	 * @param options.immediate `true` = **单轮即摘**（只给命令用）。后台那条线走**两轮确认**：
-	 *   第一次判"不在"只标记，下一轮仍不在才摘 —— 否则换设备/同步进行中会把
-	 *   "还在路上"的记录一起摘掉（新设备上那可能是整份索引）。
-	 */
-	private runIndexSelfHeal(options: { silent?: boolean; immediate?: boolean } = {}): Promise<SelfHealResult> {
-		const silent = options.silent ?? false;
+	private runIndexSelfHeal(): Promise<SelfHealResult> {
 		return runSelfHeal({
 			entries: () => this.currentIndex().toArray(),
 			exists: (path) => vaultPathExists(this.app, path),
 			forget: (key) => this.currentIndex().remove(key),
 			persist: () => this.hostContext().persistIndex(),
-			// ⚠️ 命令走 `CONFIRM_IMMEDIATELY`：显式动作、用户正等着结果，让他按两次才是坏体验。
-			// 后台那份确认器的状态在**进程内**（见 `createAbsenceConfirmer` 的取舍）。
-			confirmAbsent: options.immediate ? CONFIRM_IMMEDIATELY : this.absenceConfirmer,
-			// ⚠️ `silent` 时把通知吞掉（命令自己会回话），而不是在这里分叉两套逻辑 ——
-			// 分叉过一次的路径，下一次改行为只会改到其中一边。
-			notify: (message) => {
-				if (!silent) new Notice(message);
-			},
+			// 确认器的状态在**进程内**（见 `createAbsenceConfirmer` 的取舍）。
+			confirmAbsent: this.absenceConfirmer,
+			// ⚠️ 不分叉两套逻辑：`runSelfHeal` 自己只在"真的修了东西"时通知，0 条不打扰。
+			notify: (message) => new Notice(message),
 			t: (key, params) => this.t(key, params),
 			yieldNow: () => new Promise<void>((resolve) => window.setTimeout(resolve, 0)),
 			onError: (error) => console.error("[attachment-cloud-cache] 索引自愈出错", error),
@@ -864,7 +873,14 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			// ⭐ 平台判据（与 `flowContext().isDesktop` 同源）—— 本机文件只有桌面读得到
 			isDesktop: this.isDesktopHost(),
 		});
-		return selection.candidates;
+		// ⭐⭐ 本机文件先问一句"还在不在"（只 `stat`、不读内容）—— 与批量命令那条链**同一个判据**
+		//（`dropMissingLocalCandidates`）：临时目录里的东西天天在消失，列出来就是"点了一定失败"。
+		// ⚠️ 这条链与批量命令的**分工**：这里没有"另有 N 个…"那种交代的地方，
+		// 摘掉就是摘掉（用户看到的是清单里没有它）。
+		const { kept } = await dropMissingLocalCandidates(selection.candidates, (path) =>
+			localFileExists(path)
+		);
+		return kept;
 	}
 
 
@@ -1192,6 +1208,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			pickTasks: (options) => this.pickTasks(options),
 			maintenanceDeps: () => this.maintenanceDeps(),
 			isDesktop: () => this.isDesktopHost(),
+			localThumbUrls: (url) => this.localThumbUrls(url),
 		};
 	}
 
@@ -1204,6 +1221,25 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 */
 	private isDesktopHost(): boolean {
 		return Platform.isDesktopApp === true;
+	}
+
+	/**
+	 * 一条库外文件地址 → 清单行里**该用哪些地址当缩略图**（按优先次序）。
+	 *
+	 * ⚠️ 全库只有这里问 `Platform.resourcePathPrefix`（宿主自己的本地文件前缀：
+	 * 移动端 `file:///`、桌面 `app://random-id/`）。理同 {@link isDesktopHost}：
+	 * "谁去问宿主"只有一处，流程层与界面层收的是**结果**。
+	 *
+	 * ⚠️ 三种输入不到位时都会**少给一条候选**而不是抛错（`localPathFromUrl` 解析不出来
+	 * 就只剩原地址那一条）—— 判据本身在 `local-file.ts::localThumbCandidates`（纯函数，
+	 * 可以穷举）；这里只负责把宿主那一段补上。
+	 */
+	private localThumbUrls(url: string): string[] {
+		return localThumbCandidates({
+			url,
+			path: localPathFromUrl(url),
+			prefix: Platform.resourcePathPrefix,
+		});
 	}
 
 	async loadSettings(): Promise<void> {

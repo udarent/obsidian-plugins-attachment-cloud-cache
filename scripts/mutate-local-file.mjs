@@ -86,9 +86,20 @@ await runMutations({
 			// 后果：文件被挪走/删掉与"读不了"混成一个结局 ⇒ 用户看到的是一句泛泛的失败，
 			// 而这一类恰恰最常见、也最容易自己修（重新截一张 / 改一下链接）。
 			name: "★ 文件不在与读不了混成一类（最常见的失败说不清原因）",
-			from: '\t\tif (code === "ENOENT") return { status: "missing" };',
-			to: '\t\tif (false) return { status: "missing" };',
+			from: '\t\tif (isMissingError(error)) return { status: "missing" };',
+			to: "\t\tif (false) return { status: \"missing\" };",
 			expect: "文件不在了单独一个结局",
+		},
+		{
+			// 后果：**把"读不到"也算成"不在"** ⇒ 用户看到「有 N 个本机文件在这台电脑上
+			// 已经找不到了」，而那些文件**好好地在磁盘上**（2026-10-16 用户实测报的正是这个：
+			// `D:/企业微信文件/…/企业微信截图_…png`，74909 字节、就在那儿）。
+			// ⚠️ 代价是**误导** —— 他会以为笔记里那条链接坏了，甚至去把引用删掉。
+			// ⚠️ 权限 / 被占用 / 路径过长 / 设备不可用 都会被 `stat` 抛出来，而它们**不是**"没了"。
+			name: "★★ 把「读不到」当成「不在」（文件明明在却说找不到）",
+			from: '\treturn code === "ENOENT" || code === "ENOTDIR";',
+			to: "\treturn true;",
+			expect: "不是「不在」",
 		},
 	],
 });

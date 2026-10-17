@@ -17,8 +17,8 @@ await withLoadedTs(
 		"src/types",
 		"src/render/external-decide",
 	],
-	(mod) => {
-		runMaintenanceSuite(mod);
+	async (mod) => {
+		await runMaintenanceSuite(mod);
 		console.log(
 			"Maintenance planners passed (audit classes derived from the index alone — a file the index never " +
 				"recorded is ignored by every class and never counted, byte totals come from the disk rather than from " +
@@ -30,7 +30,13 @@ await withLoadedTs(
 				"reference scan only counts our own storage; " +
 				"batch candidates skip note/canvas/database files, empty and already-indexed files and every file no " +
 				"note refers to (canvas references count the same as Markdown ones); off-site candidates cover " +
-				"embeds, plain links, img and anchor tags alike (web pages are refused later, by content type), they " +
+				"embeds, plain links, img and anchor tags alike (a wiki page with no file-ish tail, a page " +
+				"whose extension says text/html or names a server-side page program such as .jsp/.php/.do, and " +
+				"an address whose suffix does not look like a file type at all — a repo branch or release " +
+				"number such as 5.1-translation_terms or v1.2.3 — are all refused up front and never offered, " +
+				"while a text-like extension that may still be a real " +
+				"file gets through the candidate stage and is refused later " +
+				"by content type), they " +
 				"include the ones the default setting leaves alone — otherwise turning that default off would leave " +
 				"these explicit actions with an empty list — and they are never produced when the feature is off, the " +
 				"host is loopback, or the storage is not ready)."

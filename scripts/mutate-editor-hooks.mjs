@@ -40,10 +40,13 @@ await runMutations({
 		// 两条变异的 `from` 都带上了各自的下一行做区分：两个函数里那句检查
 		// 逐字相同，而 `String.replace` 只替换**第一处** —— 不带上文的话，
 		// 第二条变异的 `from` 会被 `from === ""` 的检查或"只改了粘贴那处"悄悄糊弄过去。
+		// ⚠️ 2026-10-16：粘贴那条的下一行改成了 `const raw = ...`（载荷先收集、
+		// 再逐份剔除笔记类文件）—— 锚点跟着更新。拖拽那条的下一行仍是
+		// `const rawFiles = toArray(...)`，两处因此依然各不相同 ✓。
 		{
 			name: "粘贴开关被忽略（用户关掉自动上传，粘贴仍然被接管）",
-			from: '\tif (!settings.autoUpload) return refuse("自动上传已关闭");\n\n\tconst files = filesFromTransfer(transfer);',
-			to: '\tconst files = filesFromTransfer(transfer);',
+			from: '\tif (!settings.autoUpload) return refuse("自动上传已关闭");\n\n\tconst raw = filesFromTransfer(transfer);',
+			to: '\tconst raw = filesFromTransfer(transfer);',
 			expect: "关闭自动上传后不该接管粘贴",
 		},
 		{
@@ -76,7 +79,7 @@ await runMutations({
 			// 于是它放不出任何一条会红的断言 —— 变异验证如实报"漏过"，是对的信号：
 			// 一条测不到东西的变异留着只会让人以为那段代码被守住了。
 			// 它守的那个失效模式（"部分接管 ⇒ 剩下的被吞掉"）现在由**结构**消除：
-			// 任何真实文件都接管，所以不存在"剩下那些"。
+			// 没有"我认识的类型"白名单了（只排除宿主自己的三种文本文件），所以不存在"剩下那些"。
 			name: "★ 接管时不交出自列表（调用方拿到空列表 ⇒ 什么都没上传）",
 			from: "\treturn { intercept: true, files, reason: okReason };",
 			to: "\treturn { intercept: true, files: [], reason: okReason };",
@@ -188,6 +191,17 @@ await runMutations({
 			from: '\treturn [file.name ?? "", file.size ?? "", file.type ?? ""].join("\\u0000");',
 			to: '\treturn [file.name ?? "", file.size ?? "", file.lastModified ?? "", file.type ?? ""].join("\\u0000");',
 			expect: "时间戳不是身份的一部分",
+		},
+		{
+			// ⚠️ 2026-10-16（D-34 的后半）：用户纠正了措辞 —— 「任何类型都接管」不准确，
+			// 「应该排除掉 `.md`/`.canvas`/`.base`，只含**附件**类型才是对的」。
+			// 后果：粘/拖进来一份**宿主自己的文档**（笔记 / 画布 / 数据库）会被当附件上传并
+			// 改写它正文里的链接，而宿主仍按后缀把它当笔记索引 —— 与库内那条同一种坏法。
+			// ⚠️ 判据本体在 `vault-files.ts`（四条链共用），这里锚的是**这条链上的过滤**。
+			name: "★ 载荷里的笔记/画布/数据库文件不再剔除（把宿主的文档当附件上传）",
+			from: "return files.filter((file) => !isNoteLikeExtension(extensionOfName(file.name)));",
+			to: "return [...files];",
+			expect: "只粘一个 .md 时不该接管",
 		},
 	],
 });

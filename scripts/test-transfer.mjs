@@ -28,8 +28,10 @@ await withLoadedTs(
 		console.log(
 			`Transfer tests passed (${stats.pasteCases} paste + ${stats.dropCases} drop decision cases + ` +
 				`${stats.executionCases} execution scenarios: plain text pastes and in-vault drags are ` +
-				"deliberately let through, every real file type is taken over now that the type gate is " +
-				"gone (a mixed batch goes through together rather than leaving anything behind), files are " +
+				"deliberately let through, every **attachment** type is taken over — there is no extension " +
+				"whitelist — while the host's own text files (.md/.canvas/.base) are dropped from the payload " +
+				"**one by one**, so a mixed batch still uploads its real attachments and nothing is left " +
+				"behind, files are " +
 				"de-duplicated when they appear in both `files` and `items`, duplicates are never merged " +
 				"when they cannot be identified, and execution " +
 				"inserts `![]()` only for types the host can render and plain links otherwise (on upload " +

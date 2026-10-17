@@ -175,7 +175,6 @@ export async function runExternalCacheSuite(mod) {
 		isAttachmentResponse,
 		headerOf,
 		mimeFromContentType,
-		extensionFromUrl,
 		fileNameFromUrl,
 		fetchExternalImage,
 		createExternalCacher,
@@ -195,10 +194,9 @@ export async function runExternalCacheSuite(mod) {
 	assert.equal(mimeFromContentType("IMAGE/PNG"), "image/png", "要归一大小写");
 	assert.equal(mimeFromContentType(undefined), "", "非字符串 → 空串");
 
-	assert.equal(extensionFromUrl("https://x.com/a.png?v=1#f"), "png", "★ 扩展名要切掉查询串与锚点");
-	assert.equal(extensionFromUrl("https://x.com/a.PNG"), "png", "大小写归一");
-	assert.equal(extensionFromUrl("https://x.com/a"), "", "没有扩展名");
-	assert.equal(extensionFromUrl(null), "", "非字符串");
+	// ⚠️ `extensionFromUrl` 的断言 2026-10-16 挪去了 `vault-files-suite` ——
+	// 那个函数跟着"扩展名怎么取"整体搬进了 `vault-files.ts`（站外判定层也要用它，
+	// 而 external-cache 已 import external-decide，反向 import 会成环）。
 
 	assert.equal(fileNameFromUrl("https://x.com/dir/a%20b.png"), "a b.png", "★ 文件名要百分号解码");
 	assert.equal(fileNameFromUrl("https://x.com/dir/"), undefined, "只到目录 → 交给调用方兜底");

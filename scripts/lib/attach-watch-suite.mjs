@@ -204,11 +204,11 @@ export async function runAttachWatchSuite(mod) {
 	);
 	cases.decision += 1;
 
-	// ⑥ 任何类型都算附件（需求 R15：排除制，不是白名单）
+	// ⑥ 任何类型的**附件**都算（需求 R15：排除制、不是白名单；⚠️ 宿主自己的三种文本文件除外）
 	assert.equal(
 		decide(file("attachments/backup.zip", 999), { referencedPaths: new Set(["attachments/backup.zip"]) }).adopt,
 		true,
-		"任何类型的附件都要接管（需求 R15）"
+		"任何类型的附件都要接管（需求 R15；宿主自己的三种文本文件不是附件）"
 	);
 	cases.decision += 1;
 

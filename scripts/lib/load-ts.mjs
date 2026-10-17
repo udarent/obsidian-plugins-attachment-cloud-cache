@@ -89,6 +89,21 @@ export async function bundleEntries(entries, outfile, options = {}) {
 	// 用 stdin + resolveDir 而不是写一个临时 barrel 文件：少一次落盘，
 	// 崩了也不会在仓库里留垃圾。resolveDir 设成仓库根，于是 `./src/...` 能解析。
 	const contents = [
+		// ⭐⭐ **照实补上宿主一定有的那个 CJS 全局**（2026-10-16）。
+		//
+		// 产物在宿主里跑的是 **CJS**，`require` 由宿主的模块系统提供；而这条加载器打的是
+		// **ESM** —— 那个环境里**没有** `require`。`src/local-file.ts` 正是用
+		// `require("node:fs/promises")` 取本机 fs（**动态 `import()` 在宿主的 `app://obsidian.md`
+		// 原点下被 CORS 拒**，见那个函数的说明），于是这套里它会 `ReferenceError: require is not defined`。
+		// ⇒ 补上它，让套件跑在与宿主一致的前提下。
+		//
+		// ⚠️ **只补 `require`**：宿主只保证这一个（产物里成片的 `require("obsidian")` 就是证据）。
+		// `module` / `exports` 一概不补 —— 夹具**不许凭空多出真机没有的东西**。
+		//（2026-10-16 的教训：验收夹具曾自己往 `module` 上挂 `require`，于是产品代码里那句
+		// `module.require(...)` 在套件里跑得通、在真机上抛 `TypeError` ⇒ 用户看到"点击命令没有反应"，
+		// 而全套测试是绿的。）
+		'import { createRequire as __accCreateRequire } from "node:module";',
+		"globalThis.require = __accCreateRequire(import.meta.url);",
 		...list.map((entry) => `export * from ${JSON.stringify(`./${entry}`)};`),
 		...defaults.map((entry) => `export { default } from ${JSON.stringify(`./${entry}`)};`),
 	].join("\n");

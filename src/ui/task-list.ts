@@ -4,8 +4,8 @@
  * ## 为什么需要一个共用模块
  *
  * 插件里有三条"列出一批东西、用户勾一批、然后逐个处理"的链：
- * **上传已有附件**（`plugin/upload-existing-flow.ts`）、**清理云端空间**
- * （`plugin/cloud-cleanup-flow.ts`）、**挑选要缓存的文件**（`main.ts` + `ui/external-picker-modal.ts`）。
+ * **上传附件**（`plugin/upload-existing-flow.ts`）、**检查未被引用的云端附件**
+ * （`plugin/orphan-flow.ts` 的命令那条路）、**挑选要缓存的文件**（`main.ts` + `ui/external-picker-modal.ts`）。
  * 它们要展示的东西是同一件事（缩略图 + 名字 + 勾选框 + 每项的状态 + 总体进度），
  * 而**判定**（哪些行、勾了什么、还剩几件没做完）与**画出来**必须分开：
  * 弹窗那一层进不了单测（宿主的 `Modal` 没有可编程的 DOM，只能真机驱动），

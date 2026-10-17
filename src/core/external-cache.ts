@@ -49,7 +49,7 @@ import { decideLocalFile, readLocalFileBytes } from "../local-file";
 import type { LocalFileReader } from "../local-file";
 import { keyFromUrl } from "../render/render-target";
 import { hostOf, isBlockedHost } from "../render/external-decide";
-import { resolveExtension } from "../vault-files";
+import { extensionFromUrl } from "../vault-files";
 import { describeError } from "../error-text";
 import { notifyUser } from "../notify-user";
 import type { NotifySink } from "../notify-user";
@@ -206,14 +206,6 @@ export function isAttachmentResponse(input: { contentType: unknown; url: unknown
 	// ⭐ 网页与纯文本一律拒收（见上）
 	if (type === "text/html" || type.startsWith("text/")) return false;
 	return true;
-}
-
-/** 从 URL 的路径部分取扩展名（不含点，小写）。取不到返回空串。 */
-export function extensionFromUrl(url: unknown): string {
-	if (typeof url !== "string") return "";
-	// 先切掉查询串与锚点：`a.png?v=1` 的扩展名是 `png`，不是 `png?v=1`
-	const path = url.split("#")[0].split("?")[0];
-	return resolveExtension(path, "");
 }
 
 /**

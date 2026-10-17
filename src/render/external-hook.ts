@@ -129,6 +129,10 @@ export function createExternalHook(deps: ExternalHookDeps): ExternalHook {
 						// ⭐ 渲染路径 = **自动**处理：受功能开关与站点名单约束。
 						// 显式工具（挑选 / 批量）用 `"manual"`，两者不受约束。
 						purpose: "auto",
+						// ⭐⭐ 这里遍历的是**宿主已经渲染出来的 `<img>`** ⇒ 它天然是"被**显示**的资源"。
+						// 于是"地址像不像文件"那两道形状判据**不施加**（见 `decideExternalCache`
+						// 那里 `embedded` 的说明）—— 图片 CDN 的无后缀地址在这儿很常见。
+						embedded: true,
 						blockedHost: deps.blockedHost,
 					});
 

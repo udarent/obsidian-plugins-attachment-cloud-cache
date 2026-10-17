@@ -37,16 +37,79 @@
  * 写法就是把结果当参数注入（`decideLocalFile` 的 `isDesktop`）—— 于是纯判据可穷举，
  * 而"谁去问平台"只有入口那一处。
  *
- * ## ⚠️ 懒加载 `node:fs`
+ * ## ⚠️ 懒加载 `node:fs` —— ⚠️⚠️ 而且**必须用宿主作用域里的 `require`**（2026-10-16 两次真机实测）
  *
- * 产物是 **CJS 单文件**（`esbuild.config.mjs`：`format: "cjs"`，Node 内置模块列在 `external` 里），
- * 于是**顶层** `import "node:fs/promises"` 会在手机端**加载插件时**就抛错 ——
- * 那不是"这个功能不可用"，而是**整个插件都装不上**。所以 `readLocalFileBytes` 把 `import()`
- * 写在函数体里（cjs + external 下 esbuild 会把它编译成**调用时才 require**），
- * 而且调用点全都在 `decideLocalFile` 说了"桌面 + 可读"之后。
+ * 顶层 `import "node:fs/promises"` 不行：产物是 **CJS 单文件**（`esbuild.config.mjs`：
+ * `format: "cjs"`，Node 内置模块列在 `external` 里），顶层导入会让**手机端在加载插件时**
+ * 就抛错 —— 那不是"这个功能不可用"，而是**整个插件都装不上**。
+ *
+ * ⭐⭐ 但"写在函数体里"**只有配上 `require` 才成立**：`await import("node:fs/promises")`
+ * 看着更现代，可 esbuild 在 CJS 输出里**不会**把它改写成 `require`（两者语义不同：
+ * 动态 import 走 ESM 加载器）⇒ 产物里留着原样的 `import("node:fs/promises")`，
+ * 而**那一句在宿主里被 CORS 拦下**（`app://obsidian.md` 的协议白名单里没有 `node:`，
+ * 原文见 {@link fsPromises}）⇒ 每一份本机文件都被报成「已经找不到了」，
+ * 而用户指着的那份文件好好地在磁盘上（2026-10-16 实测：
+ * `![](file:///D:/企业微信文件/…/企业微信截图_…png)`，74909 字节、就在那儿）。
+ *
+ * ⚠️⚠️ 同样**不能**写 `module.require(...)` —— 那是第一次修完之后换上的写法，
+ * 也已被真机否掉：能证明的只有"宿主提供了 **`require` 这个标识符**"
+ *（产物里成片的 `require("obsidian")`，插件能加载起来就说明它可用）；
+ * 而**宿主那个 `module` 对象上有没有 `require` 方法，没有任何证据**。
+ * 写 `module.require` 的后果是**整条命令静默死掉**：那句调用抛 `TypeError`，
+ * 而命令是异步的 ⇒ 用户看到的就是"**点击命令没有反应**"（2026-10-16 实测）。
+ * ⇒ 只用**宿主自己用的那一个** `require`。
+ *
+ * ⚠️⚠️ 这条链**此前从没在真机上成功过**，而所有测试都是绿的 —— 因为验收跑在 **Node** 里，
+ * 那里的动态 `import()` 是好的，而且夹具**自己往 `module` 上挂了 `require`**：
+ * **夹具比真机宽容**，于是"测试全绿而功能一直不工作"。
+ * ⇒ 这是"**夹具与真机不一致时先怀疑夹具**"那条教训的**第三次**应验 ——
+ * 这次不是夹具伪造了缺陷，而是**夹具掩盖了它**（夹具照实的那一半已同步修正）。
+ *
+ * ⇒ 现在只走 {@link fsPromises}：函数体**内**的 `require()`（CJS 环境同步可用，
+ * 而"写在函数里"保住了手机端那条纪律）。
  */
 
 import { contentTypeForExtension, extensionOfName, isEmbeddable } from "./vault-files";
+
+/**
+ * 拿本机 `fs/promises` —— 本模块唯一的加载入口（**桌面专有**）。
+ *
+ * ## ⚠️⚠️ 为什么是宿主的 `require`（2026-10-16 真机实测，两次否掉两个写法）
+ *
+ * **① 不能用 `await import()`** —— 动态 `import()` 走的是**浏览器的 ESM 加载器**：
+ * 它把 `node:fs/promises` 当成一个 **URL** 去 fetch，而宿主渲染进程的 origin 是
+ * `app://obsidian.md`，协议白名单里没有 `node:` ⇒ 必被 CORS 拦下。
+ * 用户从控制台抄回来的原文：
+ *
+ * ```
+ * Access to script at 'node:fs/promises' from origin 'app://obsidian.md' has been blocked by
+ * CORS policy: Cross origin requests are only supported for protocol schemes:
+ * app, chrome, chrome-extension, chrome-untrusted, data, http, https.
+ * Uncaught (in promise) TypeError: Failed to fetch dynamically imported module: node:fs/promises
+ * ```
+ *
+ * **② 也不能用 `module.require(...)`** —— 宿主给的 `module` 上**没有** `require` 这个方法。
+ * 它看着像"同一个东西的另一种写法"，但那只是 CJS 里的**约定**，不是保证：
+ * 能证明的只有"宿主提供了 `require` 这个标识符"（产物里成片的 `require("obsidian")`
+ * 在那儿，插件能加载起来就说明它可用）。⚠️ 后果特别隐蔽 —— 那句调用抛 `TypeError`，
+ * 而命令是异步的 ⇒ **整条命令静默死掉**，用户看到的是"点击没有反应"。
+ *
+ * ⇒ 用**宿主自己用的那一个** `require`。⚠️ 它仍然只能在**平台守卫之后**被调用 ——
+ * 手机端没有 `node:fs`（调用点都在 `decideLocalFile` 说了"桌面 + 可读"之后）。
+ *
+ * ## ⚠️ 它与本项目 `no-restricted-globals` 的关系（那处例外是**有意**开的）
+ *
+ * 那条规则禁 `require`，理由写得很清楚：*"移动端不可用"* —— 那是**对的**，
+ * 而这里恰恰靠"调用点全在 `Platform.isDesktopApp` 之后"来满足它。
+ * 这与 Obsidian 官方 `obsidianmd/no-nodejs-modules` 提示里的写法是同一句：
+ * *"use a dynamic `import()` **or `require()`** guarded by `Platform.isDesktop`"*。
+ * 我们原先用的是前半句（`import()`）—— **真机证明它在宿主里不可用**，于是改用后半句。
+ * ⇒ 例外开在 `eslint.config.mts` 里、**只到这一个文件**，并且仍然拦着
+ * `Buffer` / `process` / `__dirname`（那三个在本文件里没有正当用途）。
+ */
+function fsPromises(): typeof import("node:fs/promises") {
+	return require("node:fs/promises") as typeof import("node:fs/promises");
+}
 
 /**
  * 本机文件的大小上限（默认值，调用方应当传自己的上限进来）。
@@ -177,7 +240,43 @@ export function decideLocalFile(input: { src: unknown; isDesktop: boolean }): Lo
 	return { action: "read", path, name, ext, contentType: contentTypeForExtension(ext) };
 }
 
-/** 读一份本机文件的结局。 */
+/**
+ * 本机文件行的**缩略图候选**（按优先次序）—— **一处定义**，两条入口共用
+ * （批量命令 `plugin/upload-existing-flow.ts` 与挑选弹窗 `ui/external-picker-modal.ts`）。
+ *
+ * ## ⚠️ 为什么要给"候选"而不是一个地址（2026-10-16 用户第二次报同一件事之后定的）
+ *
+ * 清单行左侧那张图是"确认这是不是我要传的那张图"的**唯一**手段。而库外文件的地址形式
+ * **不由我们定**：`file:///D:/…` 是从笔记里读到的原文，而**宿主画不出来** ——
+ * Chromium 拒绝从 `app://` 原点的页面加载 `file://` 子资源（那正是"协议白名单"
+ * 那句话的适用范围）。用户看到的就是「列表上有对应文件了，但是**预览看不到**」：
+ * D-44 把那处加工撤销、把原地址递了出去，**判定的结果就是它不显示**。
+ *
+ * 宿主自己的做法是给一个**前缀**（`Platform.resourcePathPrefix`）——它的文档写着
+ * *"The path prefix for resolving **local files** on this platform"*：移动端是 `file:///`、
+ * 桌面是 `app://random-id/`（取代旧的 `app://local/`）。⭐ 拼的是**绝对路径** ——
+ * 移动端那一档要是拼库里相对路径就毫无意义，所以这个前缀存在的意义正是"前缀 + 绝对路径"。
+ *
+ * ⚠️ 而**原来那条地址仍留在候选里**：我们对宿主内部协议的了解只到"文档这么写"这一步，
+ * 而"画不出来"的代价仅仅是降级成类型标记（`ui/file-cards.ts::renderThumb` 的 `onerror`）。
+ * ⇒ 优先用宿主自己的前缀，不行就退回原文 —— **把决定权留给运行时**（D-44 记下的那条）。
+ *
+ * ⚠️ 三个入参都按 `unknown` 收、不给就少给一条候选：调用方那边 `localPathFromUrl` 可能解析不出来
+ *（不是本机路径 / 形态不认识），这时**只有原地址**这一条候选 —— 不给空串、也不抛错。
+ */
+export function localThumbCandidates(input: { url: unknown; path: unknown; prefix: unknown }): string[] {
+	const url = typeof input.url === "string" ? input.url.trim() : "";
+	const path = typeof input.path === "string" ? input.path.trim() : "";
+	const prefix = typeof input.prefix === "string" ? input.prefix.trim() : "";
+	const candidates: string[] = [];
+	if (path && prefix) candidates.push(prefix + path);
+	if (url) candidates.push(url);
+	// 去重：移动端那个前缀就是 `file:///`，两条会撞成同一个地址
+	return [...new Set(candidates)];
+}
+
+/**
+ * 读一份本机文件的结局。 */
 export type LocalFileReadResult =
 	| { status: "ok"; bytes: Uint8Array; name: string; ext: string }
 	| { status: "missing" }
@@ -191,6 +290,73 @@ export type LocalFileReader = (
 ) => Promise<LocalFileReadResult>;
 
 /**
+ * 「这份本机文件**现在还读得到吗**」的探测接缝（默认实现是 `localFileExists`）。
+ *
+ * ⚠️ 与 `LocalFileReader` 分开：那个**读字节**（一次 `readFile` 把整份文件搬进内存），
+ * 这个只回答"在不在"。列清单的阶段只能用它 —— 那一层还没有任何"用户同意读它"。
+ */
+export type LocalFileProbe = (path: string) => Promise<boolean>;
+
+/**
+ * 这份本机文件**现在还读得到吗**：只 `stat`，**不读一个字节**。
+ *
+ * ## 为什么必须问这一句（2026-10-16 用户实测报的）
+ *
+ * `decideLocalFile` 是**纯**判据（不碰磁盘 —— "读得到吗"由读取层回答），于是
+ * **文件早被删掉**的地址照样会进候选清单，而它**必然失败**。临时目录里的东西
+ * （WPS 的 `Temp/ksohtml/…`、企业微信的截图缓存）天天在消失 —— 用户看到的就是
+ * **一行没有缩略图、点了一定失败**的条目，他的原话：「没有缩略图的文件实际上已经不存在了，
+ * 不应该上传，即便上传也会失败」。
+ * ⇒ 列清单之前先问一句。**不问内容、只问在不在**：`stat` 不读字节，
+ * 与"逐份勾选才读"那条纪律不冲突（真正读字节仍在同意之后，见 `LocalFileReader`）。
+ *
+ * ⚠️ 取 `fs` 这一步写在函数里（与 `readLocalFileBytes` 同一条理由：顶层导入会让**手机端
+ * 整个插件加载失败**）。手机上这条路根本不会被调用 —— `decideLocalFile` 在平台那一步就拦了。
+ */
+export async function localFileExists(path: string): Promise<boolean> {
+	// ⚠️ 取 `fs` 这一步**放在 try 外面**：它失败 = 这台机器上根本读不到本机文件
+	//（不是"这份文件不在"）—— 两件事混成一档，症状就是用户看到"文件明明在却说找不到"。
+	// 让它抛出去，由命令层如实报出来；下面那个 `catch` 只管**文件自己**的事。
+	const fs = fsPromises();
+	try {
+		const info = await fs.stat(path);
+		return info.isFile();
+	} catch (error) {
+		// ⭐⭐ **只有"确实没有这条路"才算"不在"**（判据是 `isMissingError`，一处定义）。
+		//
+		// ⚠️⚠️ 其余**一律不能**当成"不在"（2026-10-16 用户实测报的：那份
+		// `D:/企业微信文件/…/企业微信截图_…png` **74909 字节、就在磁盘上**，而清单里
+		// 说它"已经找不到了"）。权限、被占用、路径过长、设备不可用……这些都会让 `stat` 抛，
+		// 而它们说的都是"**这台机器上读不到**"，不是"这张图没了"。
+		if (isMissingError(error)) return false;
+		// 分类说不清的，如实说出去（命令层会把这条错误显示出来）——
+		// ⚠️ 让"本机文件全被判成不在"这件事**有人看得见**，而不是靠一条静默的 `false` 撑着。
+		console.warn(`[attachment-cloud-cache] 本机文件探测失败（不是「不在」）：${path}`, error);
+		throw error;
+	}
+}
+
+/**
+ * 这个 `fs` 错误算不算"**这份文件确实不在**"。
+ *
+ * ⭐⭐ 只有两种：`ENOENT`（没有这条路）与 `ENOTDIR`（路中间有一段不是目录）。
+ * **其余一律不算** —— 权限、被占用、路径过长、设备不可用……它们说的都是
+ * "**这台机器上读不到**"，不是"这张图没了"。
+ *
+ * ⚠️⚠️ 判据**只此一份**，`localFileExists` 与 `readLocalFileBytes` 共用：
+ * 两处各写一遍"哪些 code 算不在"，迟早分叉成"清单说它不在、真去读又读得到"。
+ *
+ * ⚠️ 为什么必须把这两件事分开（2026-10-16 用户实测报的）：那份
+ * `D:/企业微信文件/…/企业微信截图_…png` **74909 字节、就在磁盘上**，
+ * 而清单里说它「已经找不到了」。把"读不到"当成"不在"的代价是**用户被误导** ——
+ * 他会以为链接坏了、甚至去删笔记里那条引用。
+ */
+export function isMissingError(error: unknown): boolean {
+	const code = (error as { code?: unknown } | null)?.code;
+	return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/**
  * 从本机磁盘读一份文件。**桌面专有**（手机上调它会抛 —— 所以调用点都在平台判据之后）。
  *
  * ⚠️ **先 `stat` 再 `readFile`**：不先量大小的后果是"一份 2 GB 的文件被整个读进内存"，
@@ -201,10 +367,10 @@ export async function readLocalFileBytes(
 	options: { maxBytes?: number } = {}
 ): Promise<LocalFileReadResult> {
 	const maxBytes = options.maxBytes ?? DEFAULT_LOCAL_FILE_MAX_BYTES;
+	// ⚠️ 同 `localFileExists`：取 `fs` 在 try 外面 —— "这台机器读不了本机文件"与
+	// "这份文件读不了"是两件事，混进下面的 `unreadable` 会让用户按错的方向去查。
+	const fs = fsPromises();
 	try {
-		// ⚠️ `import()` 写在函数里（而不是顶层）：见模块头"懒加载 node:fs"那段 ——
-		// 顶层导入会让**手机端整个插件加载失败**。
-		const fs = await import("node:fs/promises");
 		const info = await fs.stat(path);
 		if (!info.isFile()) return { status: "unreadable", error: new Error("不是普通文件") };
 		if (info.size > maxBytes) return { status: "too-large", size: info.size };
@@ -212,10 +378,11 @@ export async function readLocalFileBytes(
 		const name = baseNameOfLocalPath(path);
 		return { status: "ok", bytes: new Uint8Array(data), name, ext: extensionOfName(name) };
 	} catch (error) {
-		const code = (error as { code?: unknown } | null)?.code;
 		// 文件被删/挪走是最常见的一种，单独成一个结局：它值得一句**具体**的话
 		//（"那个文件不在了"），而不是混进"读不了"。
-		if (code === "ENOENT") return { status: "missing" };
+		// ⚠️ 判据与 `localFileExists` **同一份**（`isMissingError`）：两处各写一遍
+		// "哪些 code 算不在"，迟早分叉成"清单说它不在、真去读又读得到"。
+		if (isMissingError(error)) return { status: "missing" };
 		return { status: "unreadable", error };
 	}
 }

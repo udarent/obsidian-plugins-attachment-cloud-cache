@@ -17,7 +17,7 @@
  *
  * | 结果 | 含义 |
  * |---|---|
- * | `ignore` | **根本不该处理**：地址形态不对、属于本存储、回环/链路本地、存储未就绪，以及（**仅自动**）功能关着或站点被名单挡住 |
+ * | `ignore` | **根本不该处理**：地址形态不对、指向**宿主自己的文本文件**（笔记/画布/数据库）、**指向网页**（后缀是页面或页面程序，**两路**）、**"只被指向"的地址看起来不像文件**（两道形状判据，闸门是 `embedded` —— 笔记真正**显示**它时不施加）、属于本存储、回环/链路本地、存储未就绪，以及（**仅自动**）功能关着或站点被名单挡住 |
  * | `cache` | 该搬 —— **自动**路径直接入队，**候选**路径把它列进清单 |
  *
  * ⭐ `purpose` 决定"功能开关与站点名单这一次管不管"：
@@ -47,6 +47,14 @@
  */
 
 import type { PluginSettings } from "../types";
+import {
+	NOTE_LIKE_REASON,
+	extensionFromUrl,
+	isNoteLikeExtension,
+	isWebPageExtension,
+	urlHasFileTypeSuffix,
+	urlLooksLikeFileName,
+} from "../vault-files";
 import { keyFromUrl, urlPrefixes } from "./render-target";
 
 /** `urlPrefixes` / `ownHosts` 需要的最小地址形状（`S3Config` 天然满足）。 */
@@ -86,6 +94,19 @@ export interface ExternalCacheInput {
 	configured: boolean;
 	/** 谁在问 —— 决定功能开关与站点名单这一次生不生效。 */
 	purpose: ExternalCachePurpose;
+	/**
+	 * 这条地址在笔记里是**被显示**（`![]()` / `<img>` / `<video>` …）还是**只被指向**
+	 * （`[]()` / `<a>` / `<iframe>`）。
+	 *
+	 * ⭐ 它是"地址像不像文件"那两道形状判据的**闸门**：**只有"指向"的地址才要过它们**。
+	 * 理由：笔记在**显示**一个资源时，那个地址长什么样与"它是不是文件"无关 ——
+	 * 图片 CDN 的令牌形状地址（`…/OIP-C.sPb8lvTxu-…`）、`/photo?id=5` 都很常见，
+	 * 而它们**确实是文件**；拿形状去问会把它误伤（而且**不报错**）。
+	 *
+	 * ⚠️ **必填**：漏传等于把这条判据静默关掉（本项目最警惕的失败形态）。
+	 * `auto` 那一路传 `true` —— 它处理的是宿主**已经渲染出来**的元素，那些天然是"被显示的"。
+	 */
+	embedded: boolean;
 	/** 安全拦截的可替换接缝；默认 {@link isBlockedHost}。 */
 	blockedHost?: (host: string) => boolean;
 }
@@ -290,6 +311,24 @@ export function siteListAllows(mode: unknown, list: unknown, host: unknown): boo
 }
 
 /**
+ * 「这条地址看起来不是个文件」的原因文案 —— **只用在这一处**
+ *（`NOTE_LIKE_REASON` 那种要跨层共用的才放到 `vault-files.ts`）。
+ */
+const NOT_A_FILE_REASON = "地址看起来不是文件（尾部没有后缀）";
+
+/**
+ * 「这条地址的后缀不像文件类型」的原因文案 —— **只用在这一处**。
+ * 与上一条是**递进的两道**：先"尾巴得有点"，再"那个后缀得像文件类型"。
+ */
+const NOT_FILE_TYPE_REASON = "地址看起来不是文件（后缀不像文件类型）";
+
+/**
+ * 「这条地址指向的是**网页**」的原因文案 —— **只用在这一处**。
+ * 判据（含"脚本后缀的页面"那半边）与下载端拒收网页那一句同源，见 {@link isWebPageExtension}。
+ */
+const PAGE_REASON = "地址指向网页（不是附件）";
+
+/**
  * 判定一张站外文件该怎么处理。**同步、无 I/O** —— 它跑在渲染路径上。
  */
 export function decideExternalCache(input: ExternalCacheInput): ExternalCacheDecision {
@@ -317,6 +356,84 @@ export function decideExternalCache(input: ExternalCacheInput): ExternalCacheDec
 
 	const isBlocked = input.blockedHost ?? isBlockedHost;
 	if (isBlocked(host)) return { action: "ignore", reason: "本地/链路本地地址（安全）" };
+
+	// ⭐⭐ 指向**宿主自己的文本文件**（笔记 / 画布 / 数据库）的地址**不搬**。
+	//
+	// 判据与库内那条（`selectUploadCandidates` 的「是笔记/画布/数据库文件，不是附件」）
+	// **是同一份**（`vault-files.ts::isNoteLikeExtension`），理由也一样：搬下来的那份会
+	// **落进库里**，而宿主按后缀把它当笔记索引 ⇒ 用户的库里凭空多出一篇笔记。
+	// （2026-10-16 用户实测报的：笔记里链接的远程 `.md` 出现在了「上传附件」的清单里 ——
+	// 那不只是"多一行"，真搬下来就是多一篇笔记。）
+	//
+	// ⚠️ **两路都要拦**：`auto`（打开笔记就搬）与 `manual`（列进候选清单）。
+	// ⚠️ 位置刻意在**安全拦截之后**（回环/元数据端点是更高的优先级）、在**存储就绪之前**
+	//（"这是个什么文件"是形态判据，不该被环境问题掩盖）。它排在"本存储"之后：
+	// 自己桶里的 `.md` 该给的原因仍然是"属于本存储"（那才指向紧接着要走的渲染判定）。
+	const extension = extensionFromUrl(src);
+	if (isNoteLikeExtension(extension)) {
+		return { action: "ignore", reason: NOTE_LIKE_REASON };
+	}
+
+	// ⭐⭐ **网页地址一律不是附件**（R18「绝不抓网页」）—— 两路都拦。
+	//
+	// 判据是 `isWebPageExtension`（收在 `vault-files.ts` 一处），它回答
+	// "这个后缀指向的是一张页面，还是一个文件"。两半：
+	// - **静态页面**：`html` / `htm` —— 就是类型表里的 `text/html`，
+	//   与**下载端**拒收网页那一句（`external-cache.ts::isAttachmentResponse`）**同源**；
+	// - **服务端页面**：`php` / `asp` / `jsp` / `do` / `action` … —— 后缀只是脚本语言的名字。
+	//
+	// ⚠️ 为什么必须提前到候选层（2026-10-16 用户**两次**实测报的都是这个）：
+	// ① 上一版只判了"尾巴得像文件名"（`urlLooksLikeFileName`），而
+	// `…/player.html` **尾巴有点**，照样进了清单 —— 他新写的一篇 `.md` 笔记里三个
+	// `<iframe src="https://player.bilibili.com/player.html?…">`，整行都出现在
+	// 「上传附件」的清单里；
+	// ② 补了 `.html` 之后**还漏着一类**：`…/pd.jsp?id=172` —— 尾巴同样有点、
+	// 后缀也不是 `text/html`，但它是**企业系统现算出来的一张页面**。用户的原话：
+	// 「实际上这是一个网页地址」，并补了界限「**如果是外部网站的文件下载链接，
+	// 应该看做是附件才对**」⇒ 闸门按"是不是页面"来判，**不按"我们认不认识这个后缀"**。
+	// 而这两种地址都**永远搬不成**（下载端必拒 `text/html`）⇒ 与"清单里只列真能搬下来的东西"相冲。
+	//
+	// ⚠️ 它排在笔记类之后：`.md` 该给的原因仍然是"是笔记/画布/数据库文件，不是附件"。
+	// ⚠️ 只拦**页面**，不顺手拦真实文件类型：`.txt` / `.csv` / `.json` / `.md` 那类照旧放行，
+	// 能不能缓存由服务端的真实 Content-Type 说了算（下载端如实拒收）。判定套件里有
+	// **两个方向**的反向断言守着这条边界。
+	if (isWebPageExtension(extension)) {
+		return { action: "ignore", reason: PAGE_REASON };
+	}
+
+	// ⭐⭐ **"只被指向"的地址**必须"看起来像个文件" —— 两道形状判据（闸门是 `embedded`）。
+	//
+	// ## 为什么是 `embedded` 而不是 `purpose`
+	//
+	// 这两道判据要问的是「**这条地址看起来是不是一个文件**」，而它**只对"指向"的地址才可判**：
+	// 笔记在**显示**一个资源时（`![]()` / `<img>`），那个地址长什么样与"它是不是文件"无关 ——
+	// 图片 CDN 的令牌形状地址（`…/th/id/OIP-C.sPb8lvTxu-zlEqgEmUgCTwAAAA?w=208`）、
+	// `/photo?id=5`、`/p/2024/10/1` 都很常见，而它们**确实是文件**。
+	// ⇒ 判据挂在"**谁在显示它**"上，比挂在"谁在问"（`purpose`）上更本质：
+	// `auto` 那一路处理的元素（img / audio / video）天然全是"被显示的" ⇒ 它传 `embedded: true`，
+	// 于是自动那条链**照旧不受形状约束**（判定套件里有**反向**断言守着这个边界）。
+	//
+	// ## 两道判据（都是用户实测报出来的，各有一个反例）
+	//
+	// 1. **尾巴得有 `.`** —— 没有点的尾巴是"页面 / 目录 / 接口"的形状
+	//（2026-10-16 第二次报的：企业 wiki 页 `…/wiki/资料归档管理规定?cfw=…`）；
+	// 2. **那个后缀得像文件类型** —— `…/tree/5.1-translation_terms`（第五次报的：
+	// GitHub 的分支名，点在 `5` 与 `1` 之间）、`…/tree/v1.2.3` 与 `…/releases/1.0`
+	//（点后面是**纯数字**，那是版本号 / 编号的形状）都在这一道被拦下。
+	//
+	// ⚠️⚠️ **为什么第二道不能写成"后缀得是我们认识的类型"（白名单）**：那会把类型表里没有的
+	// **真实文件**（`.exe` / `.iso` / `.bin`）**静默**拦在清单外 —— 用户既看不到也不报错。
+	// 2026-10-16 差一点就这么修，是用户那句「**如果是外部网站的文件下载链接，应该看做是附件才对**」
+	// 把方向掰回来的。⇒ 只问"**像不像**文件类型"，不问"认不认识"。
+	// 判据本身（含"怎么取后缀"）都收在 `vault-files.ts` 一处。
+	if (!input.embedded) {
+		if (!urlLooksLikeFileName(src)) {
+			return { action: "ignore", reason: NOT_A_FILE_REASON };
+		}
+		if (!urlHasFileTypeSuffix(src)) {
+			return { action: "ignore", reason: NOT_FILE_TYPE_REASON };
+		}
+	}
 
 	// 没配好存储：连客户端都没有 ⇒ 搬不了，也就不该出现在候选清单里
 	//（列出来只会让用户勾完才发现做不成）

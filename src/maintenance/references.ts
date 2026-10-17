@@ -256,12 +256,33 @@ function frontmatterRange(text: string): { start: number; end: number } | null {
 }
 
 /**
+ * 这些标签上的地址是**被显示**的资源；其余（`a` / `iframe` / `link` / `script`）只是**指向**某处。
+ *
+ * ⚠️ 用途只有一个：站外候选采集（`maintenance/batch.ts`）要告诉判定层
+ * "这条地址在笔记里是被**显示**，还是只被**指向**"（`decideExternalCache` 的 `embedded`）——
+ * 笔记在显示一个资源时，那个地址长什么样与"它是不是文件"无关（图片 CDN 的令牌形状地址、
+ * `/photo?id=5` 都很常见，而它们**确实是文件**）。
+ *
+ * ⚠️ 名单刻意**只收"渲染出一个文件"的标签**：`iframe` 看着像"显示"，但它渲染出来的是一张
+ * **页面**（B站播放器那种）—— 用户 2026-10-16 第二次实测报的正是它。
+ */
+export const EMBED_TAGS = new Set(["img", "video", "audio", "source", "track", "embed"]);
+
+/**
  * 取出标签属性里的地址，并**带上它在原文里的位置**（改写要按位置替换）。
  *
  * `start` 是值的起点、`tagStart`/`tagEnd` 是整条标签的范围（只用于诊断；替换永远只动值）。
+ * `tag` 是**小写的标签名** —— 站外候选采集据此判断"这条地址是被显示还是只被指向"
+ *（见 {@link EMBED_TAGS}）。
  */
-export function htmlAttributeTargets(text: string): { value: string; start: number; tagStart: number; tagEnd: number }[] {
-	const out: { value: string; start: number; tagStart: number; tagEnd: number }[] = [];
+export function htmlAttributeTargets(text: string): {
+	value: string;
+	tag: string;
+	start: number;
+	tagStart: number;
+	tagEnd: number;
+}[] {
+	const out: { value: string; tag: string; start: number; tagStart: number; tagEnd: number }[] = [];
 	if (typeof text !== "string" || text === "") return out;
 	for (const match of text.matchAll(HTML_ATTRIBUTE)) {
 		const double = match[1];
@@ -274,7 +295,13 @@ export function htmlAttributeTargets(text: string): { value: string; start: numb
 		// 用"两端带引号"去找值的位置：单靠值本身会在标签里出现两次时找错
 		const inner = body.lastIndexOf(quote + value + quote);
 		if (inner < 0) continue;
-		out.push({ value, start: tagStart + inner + 1, tagStart, tagEnd: tagStart + body.length });
+		out.push({
+			value,
+			tag: (/^<([a-z][a-z0-9]*)/i.exec(body)?.[1] ?? "").toLowerCase(),
+			start: tagStart + inner + 1,
+			tagStart,
+			tagEnd: tagStart + body.length,
+		});
 	}
 	return out;
 }

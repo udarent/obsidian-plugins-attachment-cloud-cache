@@ -165,5 +165,48 @@ await runMutations({
 			to: '		.replace(/\\\\/g, "/");',
 			expect: "宿主填 `/` = 没指定目录",
 		},
+		{
+			// ⚠️ 2026-10-16：这条判据原来住在 `maintenance/batch.ts`，现在搬来这里
+			//（站外判定层 `decideExternalCache` 也要用它，而那边不能反向 import batch）。
+			// 后果：**两个入口同时失守** —— 库内那一路会把用户的笔记当附件上传并改写它
+			// 正文里的链接；站外那一路会把远程的 `.md` 搬进库，于是清单上多一行
+			// "看起来像附件"的东西、用户库里凭空多出一篇笔记（他实测报的正是后者）。
+			name: "★ 认不出「宿主自己的文本文件」（笔记/画布/数据库被当附件）",
+			from: 'const NOTE_LIKE_EXTENSIONS = new Set(["md", "canvas", "base"]);',
+			to: "const NOTE_LIKE_EXTENSIONS = new Set([]);",
+			expect: "笔记（.md）要认出来",
+		},
+		{
+			// 后果：**归一化退化**（不容忍带点的写法 / 不去空白 / 不统一小写）⇒ 用它当入口的
+			// 那 4 个判据（可嵌入 / 笔记类 / 网页 / Content-Type）对同一种输入给出不同答案 ——
+			// 症状是"某条入口偏偏漏了这一类"，**不报错**。
+			// ⚠️ 这条锚点只有一条，是因为归一化本身**只有一份**（`normalizeExtension`）；
+			// 从前它是 4 处各写一遍、靠注释人肉保持一致（2026-10-16 收成一处时顺手补上）。
+			name: "★ 扩展名归一化退化（带点 / 大写的写法判不出来）",
+			from: '\treturn extension.trim().toLowerCase().replace(/^\\./, "");',
+			to: "\treturn String(extension);",
+			expect: "调用方可能带着点",
+		},
+		{
+			// 后果：**只剩静态页面那一半** ⇒ 后缀是脚本语言名字的地址（`…/pd.jsp?id=172`、
+			// `…/product.do?id=7`）又被当成"文件"，重新出现在「上传附件」的清单里，
+			// 而它们**永远搬不成**（下载端拿到的是现算出来的 `text/html`，必拒）。
+			// 2026-10-16 用户第三次实测报的正是这一类，他的原话：「实际上这是一个网页地址」。
+			name: "★★ 网页判据漏掉服务端页面（`…/pd.jsp?id=172` 又进清单）",
+			from: '\treturn CONTENT_TYPE_BY_EXTENSION[ext] === "text/html" || PAGE_EXTENSIONS.has(ext);',
+			to: '\treturn CONTENT_TYPE_BY_EXTENSION[ext] === "text/html";',
+			expect: "服务端页面（后缀是脚本语言 / 框架的名字）同样不算附件",
+		},
+		{
+			// 后果：**"后缀得像文件类型"这道退化成"有点就行"** ⇒ GitHub 分支名
+			//（`…/tree/5.1-translation_terms` —— 点在 `5` 与 `1` 之间）、版本号
+			//（`…/tree/v1.2.3` —— 点后面是纯数字）这类地址又被当成文件，
+			// 重新出现在「上传附件」的清单里 —— 而它们永远搬不成（那是一条页面）。
+			// 2026-10-16 用户第五次实测报的正是这一类。
+			name: "★★ 后缀类型判据退化成「有点就行」（分支名 / 版本号又进清单）",
+			from: "\treturn !/^[0-9]+$/.test(ext);",
+			to: "\treturn true;",
+			expect: "后缀不像文件类型（分支名 / 版本号 / 无后缀）",
+		},
 	],
 });

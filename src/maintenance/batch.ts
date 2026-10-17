@@ -29,7 +29,7 @@
  *   用户放在附件目录里、**没有任何笔记引用**的文件一概不碰（既不传也不动）——
  *   那种文件多半是废弃的旧图，动了只会让人以为丢东西。
  * - ⭐ 1.1.0 起**不再按类型白名单挑**，而是**排除制**：排除"笔记/画布/数据库"这三种
- *   宿主自己的文本文件（它们不是附件），其余一律可处理（需求 R15：任何类型都能上传）。
+ *   宿主自己的文本文件（它们不是附件），其余一律可处理（需求 R15：**附件**类型不再要白名单）。
  *   ⚠️ 这条把候选面从"十来个图片后缀"放大到"库里每一个文件"，所以**排除列表是硬要求**，
  *   测试逐项钉住（没有它，一条命令会把整个库搬空）；
  * - 跳过**已经在索引里**的（同一个 key = 同一份内容，重复上传没有意义，
@@ -43,8 +43,10 @@ import type { CacheIndex } from "../cache/index";
 import { decideExternalCache } from "../render/external-decide";
 // ⭐ 本机文件（`file:///D:/…`）的判定 —— 与站外那份**并列**，不是套在它里面（两者的判据不同，
 // 一个看主机/站点名单，一个看平台/扩展名；混成一个函数会让两边的 reason 说不清是谁给的）。
-import { decideLocalFile } from "../local-file";
-import { htmlAttributeTargets, linkTargetForms, normalizeLinkTarget } from "./references";
+import { decideLocalFile, localPathFromUrl } from "../local-file";
+import type { LocalFileProbe } from "../local-file";
+import { NOTE_LIKE_REASON, isNoteLikeExtension } from "../vault-files";
+import { EMBED_TAGS, htmlAttributeTargets, linkTargetForms, normalizeLinkTarget } from "./references";
 
 /** 库内文件的最小形状。 */
 export interface VaultFileLike {
@@ -116,22 +118,10 @@ export function referencedPathsFrom(resolvedLinks: unknown): Set<string> {
 }
 
 /**
- * 这些扩展名是**宿主自己的文本文件**，不是用户的附件。
- *
- * ⚠️ 排除它们的理由不是"传上去没用"，而是**传上去会坏**：
- * 一个 `.md` 被当附件上传，它**正文里的链接会被改写成远端地址**（这条命令的本职），
- * 而宿主仍按后缀把它当笔记索引 —— 结果是一篇笔记被当成图片对象，笔记之间的 wikilink 也跟着断掉。
- * `.canvas` 同理（它引用别的文件），`.base` 是数据库。
- *
- * 用**扩展名**而不是 MIME/内容判断：这一步是纯判定（不读文件字节），
- * 而这三类后缀是宿主的约定（宿主自己也按后缀识别它们）。
+ * ⭐ 2026-10-16：判据与它的文案都挪进了 `vault-files.ts`（`isNoteLikeExtension`
+ * 与 `NOTE_LIKE_REASON`）—— 因为**站外那一路也要用它**（`decideExternalCache`），
+ * 而那个模块不能 import 这里（会成环）。判据仍然只有一份。
  */
-const NOTE_LIKE_EXTENSIONS = new Set(["md", "canvas", "base"]);
-
-/** 这个扩展名是不是"宿主自己的文本文件"（笔记/画布/数据库）—— 见上面的说明。 */
-export function isNoteLikeExtension(extension: unknown): boolean {
-	return typeof extension === "string" && NOTE_LIKE_EXTENSIONS.has(extension.trim().toLowerCase());
-}
 
 /**
  * 把"画布文本里写的链接目标"解析成库里**真实存在**的文件路径。
@@ -228,7 +218,7 @@ export function selectUploadCandidates(files: readonly VaultFileLike[], options:
 
 		const extension = String(file.extension ?? "").replace(/^\./, "").toLowerCase();
 		if (isNoteLikeExtension(extension)) {
-			bump("是笔记/画布/数据库文件，不是附件");
+			bump(NOTE_LIKE_REASON);
 			continue;
 		}
 
@@ -333,14 +323,73 @@ export interface ExternalSelection {
 }
 
 /**
- * 找出笔记里**指向站外文件**的地址。
+ * 把**已经不在了**的本机文件候选摘掉（`file:///…` 指着的那个东西没了）。
+ *
+ * ## 为什么需要这一步（2026-10-16 用户实测报的）
+ *
+ * `decideLocalFile` 是**纯**判据（不碰磁盘），所以"文件还在不在"它答不上来 ⇒
+ * 临时目录里的东西（WPS 的 `Temp/ksohtml/…`、企业微信的截图缓存）天天在消失，
+ * 用户看到的是一行**没有缩略图、点了一定失败**的条目。他的原话：
+ * 「没有缩略图的文件实际上已经不存在了，**不应该上传，即便上传也会失败**」。
+ *
+ * ## 分工（与 `decideLocalFile` 一样是"纯的那半"）
+ *
+ * "读得到吗"**由调用方注入**（`LocalFileProbe`）—— 这一层不碰磁盘，
+ * 只按探测结果把候选分成"留着"和"没了"两拨。于是判据可穷举、I/O 只有一处。
+ *
+ * ⚠️ **站外候选一律保留**：它们的"在不在"要联网才知道，那是执行层的事
+ *（那时会如实报"该地址返回 404 / 不是附件"）。
+ * ⚠️ 本机路径解析不出来时按"没了"处理（`decideLocalFile` 保证这走不到，
+ * 但分流函数不该因为一个坏输入把整批拖垮）。
+ */
+export async function dropMissingLocalCandidates(
+	candidates: readonly ExternalCandidate[],
+	probe: LocalFileProbe
+): Promise<{ kept: ExternalCandidate[]; missing: ExternalCandidate[] }> {
+	const kept: ExternalCandidate[] = [];
+	const missing: ExternalCandidate[] = [];
+	for (const candidate of candidates ?? []) {
+		if (!candidate) continue;
+		if (!candidate.local) {
+			kept.push(candidate);
+			continue;
+		}
+		const path = localPathFromUrl(candidate.url);
+		if (!path || !(await probe(path))) {
+			missing.push(candidate);
+			continue;
+		}
+		kept.push(candidate);
+	}
+	return { kept, missing };
+}
+
+/**
+ * 一处地址 + 它在笔记里是**被显示**还是**只被指向**。
+ *
+ * ⚠️ 这个区分不是"锦上添花"：判定层那两道形状判据（"尾巴得像文件名"+"后缀得像文件类型"）
+ * **只对"指向"的地址施加** —— 笔记在**显示**一个资源时（`![]()` / `<img>`），
+ * 那个地址长什么样与"它是不是文件"无关（图片 CDN 的令牌形状地址、`/photo?id=5` 都很常见，
+ * 而它们**确实是文件**）。少了这个字段，那类图会在候选清单里**静默消失**。
+ */
+export interface ExternalUrlEntry {
+	url: string;
+	/**
+	 * 笔记是在**显示**它（`![]()` / `<img>` / `<video>`）还是只**指向**它（`[]()` / `<a>` / `<iframe>`）。
+	 * ⚠️ 同一个地址出现多次时，**任一次是"显示"就算显示** —— 笔记确实在显示它。
+	 */
+	embedded: boolean;
+}
+
+/**
+ * 找出笔记里**指向站外文件或本机文件**的地址，**并带上"它是不是被显示"**。
  *
  * 1.1.0 起不再只认图片（需求 R15）—— 音频、视频、PDF、压缩包同样可以缓存。
  * 收这四种写法：
- * - `![说明](https://…)`（嵌入，可带尖括号与标题）
- * - `[说明](https://…)`（**普通链接** —— 它可能是 PDF、也可能是网页）
- * - `<img src="https://…">`
- * - `<a href="https://…">`
+ * - `![说明](https://…)`（**显示**，可带尖括号与标题）
+ * - `[说明](https://…)`（**指向** —— 它可能是 PDF、也可能是网页）
+ * - `<img src="https://…">` 之类（标签名决定，见 `references.ts::EMBED_TAGS`）
+ * - `<a href="https://…">`（**指向**）
  *
  * ## 为什么现在敢收普通链接
  *
@@ -349,28 +398,44 @@ export interface ExternalSelection {
  * 而 `[说明](url)` 正是 PDF / 音频 / 压缩包最常见的写法 —— 不收它，
  * "支持所有格式"就只覆盖用户用 `![]` 写的那部分。
  *
- * ⚠️ 于是候选里会混进**网页链接**。它们会在下载那一步被 `text/html` 判据挡掉，
- * 用户看到的是"该地址返回的是网页或纯文本" —— 一句**如实**的说明，
- * 而不是静默什么都不发生（原则⑥）。判定（要不要碰）仍然完全交给
- * `decideExternalCache`，这里只负责"从正文里挑出候选地址"。
+ * ⚠️ 一个**网页**链接同样会被收进来（这里只判「是不是 http(s) 地址」），
+ * 但它**不会变成候选** —— 判定层有三道闸门，各自对应一次实测（2026-10-16 连着五次）：
+ * - **网页**（后缀是页面 / 页面程序：`…/player.html`、`…/pd.jsp?id=172`）—— **两路都拦**；
+ * - **形状**（只对"指向"的地址）：尾巴得有点（`…/wiki/资料归档管理规定` 没有），
+ *   且那个后缀得像文件类型（`…/tree/5.1-translation_terms` 的点后面是分支名、
+ *   `…/tree/v1.2.3` 是纯数字 —— 那都是版本号 / 分支名的形状）。
+ *（三处说明都在 `decideExternalCache`。）
+ * ⇒ 这个函数的产物是「**可能是文件的地址**」，不是「候选」：候选由判定层定，
+ * 这里只负责「从正文里挑出地址、并记下笔记是显示它还是指向它」。
  *
  * wikilink（`![[…]]`）不可能是外链（它指的是库内路径），所以不用管。
  */
-export function externalFileUrlsIn(text: string): string[] {
+export function externalUrlEntriesIn(text: string): ExternalUrlEntry[] {
 	if (typeof text !== "string" || text === "") return [];
-	const urls = new Set<string>();
+	// 两桶分开收：http 那一路与 `file:` 那一路的**分界规则不同**（见下面），
+	// 但两桶都要保序、去重、并合并"是否被显示"。`true` 覆盖 `false`：任一次显示就算显示。
+	const http = new Map<string, boolean>();
+	const local = new Map<string, boolean>();
+	const add = (bucket: Map<string, boolean>, raw: string, embedded: boolean) => {
+		const seen = bucket.get(raw);
+		if (seen === undefined || (embedded && !seen)) bucket.set(raw, embedded);
+	};
 
 	// Markdown：嵌入与普通链接都收 —— **不需要**写 `!?`：`![a](url)` 里的 `[a](url)`
 	// 本来就会被 `\[` 命中（锚点在 `[` 上，`!` 不属于匹配的一部分）。
+	// ⚠️ 正因为锚在 `[` 上，"上一格是不是 `!`"就足以判"这是显示还是指向"。
 	for (const match of text.matchAll(/\[[^\]\n]*\]\(\s*(<[^>)\n]*>|[^)\s\n]+)/g)) {
 		const raw = stripAngles(match[1]);
-		if (isHttpUrl(raw)) urls.add(raw);
+		if (!isHttpUrl(raw)) continue;
+		const at = match.index ?? 0;
+		add(http, raw, at > 0 && text[at - 1] === "!");
 	}
 	// 行内 HTML：标签属性里的地址 —— ⚠️ 正则与解析层**共用一份**（`references.ts` 的
 	// `HTML_ATTRIBUTE`）：各写一遍迟早分叉成"改写认得、候选不认得"（而且不报错）。
-	// 标签集因此也一致（img / a / video / audio / source 这类带 src|href 的都算）。
-	for (const { value } of htmlAttributeTargets(text)) {
-		if (isHttpUrl(value)) urls.add(value);
+	// 标签集因此也一致（img / a / video / audio / source 这类带 src|href 的都算）——
+	// 而"哪个标签是显示"由 `EMBED_TAGS` 一处定。
+	for (const { value, tag } of htmlAttributeTargets(text)) {
+		if (isHttpUrl(value)) add(http, value, EMBED_TAGS.has(tag));
 	}
 
 	// ⭐ 本机文件（`file:///D:/…`）—— 与上面两段**刻意分开**，因为分界规则不同：
@@ -380,14 +445,25 @@ export function externalFileUrlsIn(text: string): string[] {
 	for (const match of text.matchAll(/\[[^\]\n]*\]\(\s*(<[^>)\n]*>|[^)\n]*)/g)) {
 		const raw = stripMarkdownTitle(stripAngles(match[1]));
 		// 只认 `file:`（http 那一路由上面的规则管，两边的分界规则不同，不能混着用）
-		if (/^file:/i.test(raw)) urls.add(raw);
+		if (!/^file:/i.test(raw)) continue;
+		const at = match.index ?? 0;
+		add(local, raw, at > 0 && text[at - 1] === "!");
 	}
 	// 行内 HTML 里的本机路径：`<img src="file:///D:/…">`（引号形状本就允许空格，与上面共用一条规则）
-	for (const { value } of htmlAttributeTargets(text)) {
-		if (/^file:/i.test(value)) urls.add(value);
+	for (const { value, tag } of htmlAttributeTargets(text)) {
+		if (/^file:/i.test(value)) add(local, value, EMBED_TAGS.has(tag));
 	}
 
-	return [...urls];
+	// 顺序照旧：http 那一路在前、`file:` 那一路在后（两桶各自保序）。
+	return [
+		...[...http].map(([url, embedded]) => ({ url, embedded })),
+		...[...local].map(([url, embedded]) => ({ url, embedded })),
+	];
+}
+
+/** 只要地址（`externalUrlEntriesIn` 的薄包装，供既有调用点与诊断用）。 */
+export function externalFileUrlsIn(text: string): string[] {
+	return externalUrlEntriesIn(text).map((entry) => entry.url);
 }
 
 /**
@@ -451,11 +527,11 @@ export function selectExternalUploadCandidates(
 		const path = typeof note?.path === "string" ? note.path.trim() : "";
 		if (!path) continue;
 
-		// 同一篇笔记里同一个地址写两遍只产生一个候选 —— 去重**在 `externalFileUrlsIn` 里**已经做了
+		// 同一篇笔记里同一个地址写两遍只产生一个候选 —— 去重**在 `externalUrlEntriesIn` 里**已经做了
 		//（它按地址去重）。这里曾经还有一层"按笔记 + 地址"的去重，**变异验证证明它永远走不到**：
 		// `getMarkdownFiles()` 不会给出重复路径，而每篇笔记的地址表本来就已去重。
 		// 与其留一段看起来在防什么、实际防不住的代码，不如删掉并把"去重来自哪里"写清楚。
-		for (const url of externalFileUrlsIn(note?.text ?? "")) {
+		for (const { url, embedded } of externalUrlEntriesIn(note?.text ?? "")) {
 			// ⭐ 两类地址**各有各的判定，但都在判定层里** —— 这里只负责分流，不另写一套。
 			// `not-mine` = 不是本机文件写法 ⇒ 交给站外那份判定。
 			const localDecision = decideLocalFile({ src: url, isDesktop: options.isDesktop });
@@ -477,7 +553,14 @@ export function selectExternalUploadCandidates(
 				settings: options.settings,
 				configured: options.configured,
 				// ⭐ 显式工具：功能开关与站点名单都不约束它（见上面的小节）。
+				// ⚠️⚠️ 这是 `purpose: "manual"` 的**唯一调用点**，而 `manual` 多一条硬性判据：
+				// 地址只能是**从正文文本里读出来的** ⇒ 必须"看起来像个文件"
+				//（没有扩展名的地址、后缀不像文件类型的地址、以及后缀是页面/页面程序的地址
+				// 一律不算候选，见判定层那三处说明）。
 				purpose: "manual",
+				// ⭐ 而"要不要过那两道形状判据"由**这条地址是不是被显示**决定 —— 采集层刚算好
+				//（`![]()` / `<img>` 是显示，`[]()` / `<a>` 只是指向）。
+				embedded,
 				blockedHost: options.blockedHost,
 			});
 

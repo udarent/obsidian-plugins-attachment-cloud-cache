@@ -184,6 +184,7 @@ export async function runOrphanWatchSuite(mod) {
 		const context = {
 			isOurs: (key) => key !== "theirs.png",
 			hasAsked: (key) => key === "asked.png",
+			isExternal: () => false,
 		};
 		const selection = selectOrphanAsks(
 			["ours.png", "theirs.png", "asked.png", "ours.png"],
@@ -201,7 +202,11 @@ export async function runOrphanWatchSuite(mod) {
 
 		// ⚠️ 反向：全都不是我们的 ⇒ **一个都不问**（对别人的对象我们没有处置权）
 		assert.deepEqual(
-			selectOrphanAsks(["theirs.png"], { isOurs: () => false, hasAsked: () => false }).asks,
+			selectOrphanAsks(["theirs.png"], {
+				isOurs: () => false,
+				hasAsked: () => false,
+				isExternal: () => false,
+			}).asks,
 			[],
 			"★ 不是我们经手过的对象，绝不拿去问（更没有删的道理）"
 		);
@@ -210,7 +215,11 @@ export async function runOrphanWatchSuite(mod) {
 		// 这一格就是「不留副本」档的形态：对象是我们上传的（台账有），
 		// 而本地没有副本（索引里没有条目）。判据写成"查条目"就会在这一格静默失效。
 		{
-			const ledgerOnly = { isOurs: (key) => key === "no-local-copy.png", hasAsked: () => false };
+			const ledgerOnly = {
+				isOurs: (key) => key === "no-local-copy.png",
+				hasAsked: () => false,
+				isExternal: () => false,
+			};
 			assert.deepEqual(
 				selectOrphanAsks(["no-local-copy.png"], ledgerOnly).asks,
 				["no-local-copy.png"],
@@ -221,6 +230,31 @@ export async function runOrphanWatchSuite(mod) {
 		// 反向：空输入 ⇒ 空结果（不该崩，也不该产出）
 		assert.deepEqual(selectOrphanAsks([], context).asks, [], "空候选不产出");
 		assert.deepEqual(selectOrphanAsks(["", "  "], context).asks, [], "空串/空白要被跳过");
+
+		// ⭐⭐ **站外缓存的对象一律不列**（2026-10-16 从退役的「清理云端未使用对象…」继承来）。
+		//
+		// 为什么：站外缓存的链接**改写失败**时，笔记里留着的是**原来的站外地址**（别人的域名）
+		// —— 而"谁在引用"的判据是**按 URL 回算对象 key**，它根本认不出那种地址，于是这个对象
+		// 会被误判成"没人引用"。那条老命令为此把站外缓存**整体排除**（宁可多留）；
+		// 它退役之后，这条排除必须跟着搬过来 —— 否则会**悄悄丢掉**（而两侧都不报错）。
+		{
+			const withExternal = {
+				isOurs: () => true,
+				hasAsked: () => false,
+				isExternal: (key) => key === "from-site.png",
+			};
+			const sel = selectOrphanAsks(["mine.png", "from-site.png"], withExternal);
+			assert.deepEqual(
+				sel.asks,
+				["mine.png"],
+				"★★ 站外缓存的对象不列（它的引用可能长成认不出的站外地址）"
+			);
+			assert.deepEqual(
+				sel.skipped,
+				[{ key: "from-site.png", reason: "external" }],
+				"★ 跳过原因要分开记「站外缓存」（诊断时看得出是哪种）"
+			);
+		}
 	}
 
 	// ============================================================

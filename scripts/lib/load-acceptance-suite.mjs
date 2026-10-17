@@ -239,10 +239,34 @@ function loadBuiltBundle() {
 	const require = createRequire(import.meta.url);
 	const source = readFileSync(join(ROOT, "main.js"), "utf8");
 	const moduleObject = { exports: {} };
+	// ⚠️⚠️ **不许往 `module` 上挂 `require`**（2026-10-16 第二次真机实测之后删掉的）。
+	//
+	// 这里曾经有一行 `moduleObject.require = (id) => require(id);`，注释写着"宿主里就在那儿"——
+	// **那是猜的，而且猜错了**：宿主给的 `module` 上并没有 `require` 这个方法
+	//（能证明的只有"宿主提供了 `require` 这个标识符"）。那一行让夹具**凭空多出真机没有的东西**，
+	// 于是 `src/local-file.ts` 里那句 `module.require(...)` 在套件里跑得通、在真机上抛
+	// `TypeError` ⇒ 用户看到的是"点击命令没有反应"，而全套测试是绿的。
+	// ⭐ 与本项目"垃圾夹具"那条教训是同一个形状，只是方向相反：**夹具比真机宽容，掩盖了缺陷**。
+	// ⇒ 现在只喂 CJS 的调用约定本身（下面那三个参数），产品代码用什么写法，夹具就照什么写法给。
 
+	// ⚠️⚠️ **刻意不给动态 `import` 回调**（2026-10-16 真机确证之后定的）。
+	//
+	// 产物跑在**宿主的 CJS 环境**里，而**动态 `import()` 在那条路上是不可用的**：
+	// 它走浏览器的 ESM 加载器 ⇒ 把 `node:fs/promises` 当 URL fetch ⇒ CORS 拒
+	//（`app://` 白名单里没有 `node:`）⇒ 那句 import 必抛，抛出又被 `catch` 吞成"读不到"
+	// ⇒ 症状是**每一份本机文件都被报成「已经找不到了」**（用户 2026-10-16 实测）。
+	//
+	// ⭐ 所以这里**故意**不给回调：`vm` 沙箱默认就没有 ⇒ 产物里一旦再出现动态 `import`，
+	// 套件会**当场红**，而不必等人拿真机去撞。
+	// ⚠️ 这条是**踩反了两次**才定下来的（记在这里免得再踩）：D-38 那次看到"本机文件全被判成不在"，
+	// 我判断成"夹具不够像真机"、于是给加载器**补上**了这个回调，还写了句"真机里 import() 是好的"
+	// —— 那句话是**猜的**，而且**猜错了**。⇒ 判据：**修夹具之前先问「真机凭什么是好的？」**，
+	// 答不上来就别动夹具，去查产品代码；而且**沙箱里看到的现象不算真机证据**。
 	const factory = compileFunction(source, ["module", "exports", "require"], {
 		filename: join(ROOT, "main.js"),
 	});
+	// ⚠️ 第三个参数就是**宿主给的那个 `require` 的替身**（CJS 调用约定里的那一个）——
+	// 产品代码只许用它，别的写法在这里会当场红（那正是我们要的）。
 	factory(moduleObject, moduleObject.exports, (id) => (id === "obsidian" ? mockObsidian : require(id)));
 
 	return moduleObject.exports;
@@ -444,7 +468,7 @@ export async function runLoadAcceptance(options = {}) {
 	const plugin = new PluginClass(app, { id: "attachment-cloud-cache", dir: ".obsidian/plugins/attachment-cloud-cache" });
 
 	/**
-	 * 清单式弹窗的替身（2026-10-15 起「上传已有附件 / 清理云端空间 / 检查未引用的云端附件」
+	 * 清单式弹窗的替身（2026-10-15 起「上传附件 / 检查未被引用的云端附件 / 检查未引用的云端附件」
 	 * 都走它）。真弹窗在 Node 里点不了（宿主的 `Setting.addButton` 是空操作 ⇒ 连按钮都不会建），
 	 * 所以这里换成「**全选 + 按主按钮**」—— 与用户「全选 → 确认」是同一条路径。
 	 * ⚠️ 它的 `run` 必须**真的跑**：上传/删除/进度都在那里面。
@@ -821,15 +845,21 @@ export async function runLoadAcceptance(options = {}) {
 		[
 			"audit-cache",
 			"check-orphans",
-			"cleanup-cloud",
 			"pick-external-images",
-			"repair-index",
 			"upload-attachments",
 		],
-		// ⚠️ 1.2.0（D-17）：从六条变五条 —— `clean-cache` 退役（设计 §20.16 #5）。
-		// 它原来的两个职责都有新家：自愈已自动化；删未引用副本由 R17 的询问与 cleanup-cloud 承担。
-		// ⚠️ 2026-10-14 又回六条：新增 `check-orphans`（用户报"那次询问被误关后没法重来"）。
-		"★ 六条维护命令都要注册（少一条就是「功能写了但用户找不到」）"
+		// ⚠️ 这条断言的沿革（每次增删命令都要改这里，历史写下来的目的是别让下一个人猜）：
+		// - 1.1.0：六条。1.2.0（D-17）**减到五条** —— `clean-cache` 退役（设计 §20.16 #5）。
+		// - 2026-10-14：**回到六条** —— 新增 `check-orphans`（用户报"那次询问被误关后没法重来"）。
+		// - 2026-10-16：**先到七条** —— 新增 `release-local-space`（R10 要的"能列出**并清理**"
+		//   缺命令入口，那条链此前只挂在设置页按钮上）。
+		// - 2026-10-16 同日稍后：**减到四条**，一次撤掉三条 ——
+		//   ① `cleanup-cloud` 的候选并入 `check-orphans`：它列**整个桶**，独占能力是"处理不属于
+		//      本插件的对象"，与那条链「对不属于我们的对象我们没有处置权」**直接冲突**，
+		//      且需求文档里查不到那个诉求（站外缓存那条排除已随之搬进 `selectOrphanAsks`）；
+		//   ② `release-local-space` 撤**命令入口**（能力仍在设置页那颗按钮上）；
+		//   ③ `repair-index` 撤**命令入口**（只剩后台自检那条线，走两轮确认）。
+		"★ 四条维护命令都要注册（少一条就是「功能写了但用户找不到」）"
 	);
 
 		const runCommand = (id) => {
@@ -932,7 +962,9 @@ ${text}`);
 		const linksBefore = app.metadataCache.resolvedLinks ?? {};
 		harness.setResolvedLinks({
 			...linksBefore,
-			[noteWithLink]: { ...(linksBefore[noteWithLink] ?? {}), [unusedPath]: 1 },
+			// ⚠️ `...(x ?? {})` 里的空对象兜底是**多余**的（展开 `undefined` 本来就不添加任何属性）——
+			// oxlint 的快档会报出来（`no-useless-fallback-in-spread`）。行为与原来完全一致。
+			[noteWithLink]: { ...linksBefore[noteWithLink], [unusedPath]: 1 },
 		});
 		const withLocalLink = await readReport();
 		assert.equal(
@@ -962,15 +994,20 @@ ${text}`);
 		);
 		assert.equal(filesIn(withStale), files0 + 1, `★ 失效那条**不算副本** 实际：${withStale}`);
 
-		// ④ ⭐ 跑一次「自检并修复」⇒ 那条失效记录**真的被摘掉**（不只是被报出来）。
+		// ④ ⭐ 那条失效记录**真的会被摘掉**（不只是被报出来）。
 		// ⚠️ 这一层此前只有注释在承诺（上面那句"自愈会摘掉这条"），**没有任何断言** ——
 		// 而用户 2026-10-14 在 Android 上正是看到"索引指向的文件已不在 1 条"来报的：
-		// 他要的是"这数字会不会自己消失 / 怎么让它消失"，所以这里钉住**命令那条线**。
-		// （后台那条线走**两轮确认**，见 `self-heal` 套件与 `createAbsenceConfirmer`。）
-		runCommand("repair-index");
+		// 他要的是"这数字会不会自己消失 / 怎么让它消失"。
+		// ⚠️ 2026-10-16：「自检并修复本地副本索引」命令退役 ⇒ 这里**不再驱动命令**，
+		// 改成驱动**后台那一条线**（它仍在跑）。判据随之变成"**两轮**确认"：
+		// 第一轮只记下"这一轮它不在"，第二轮才摘 —— 那是后台自愈防误摘的机制
+		//（见 `createAbsenceConfirmer`；它正是"立刻核一遍"那条命令用 `CONFIRM_IMMEDIATELY`
+		// 绕开的东西，那条路现在没有入口了）。
+		await plugin.runIndexSelfHeal();
+		await plugin.runIndexSelfHeal();
 		await waitFor(
 			async () => missingIn(await readReport()) === missing0,
-			"★ 修复命令要把失效记录摘掉（占用报告里的失效数回到基线）",
+			"★ 后台自检两轮之后要把失效记录摘掉（占用报告里的失效数回到基线）",
 			5000,
 			diagnose
 		);
@@ -1033,6 +1070,21 @@ ${text}`);
 		assert.ok(
 			!noteText.includes("attachments/pic.png"),
 			`★ 两条本地链接都应被改写（短名与完整路径都要认）：${noteText}`
+		);
+
+		// ⭐⭐ 确认框的**摘要**里不再重复"下面那张清单"的内容（2026-10-16 用户实测提的：
+		// 「在上部有文件列表的摘要，但其实已经做了下面的列表了，可以精简内容」）。
+		// 判据：这个文件**只该出现在清单行里**（它是弹窗下半部分的一行，带缩略图、能勾选），
+		// 不该在摘要文字里再被贴一次 —— 同一份清单写两遍，用户看到的就是一屏噪音。
+		// ⚠️ 这条断言**是有牙的**：改动之前摘要里会贴出前 10 条路径（这里就是 `attachments/pic.png`），
+		// 那时的表现正是用户截图里那句「……还有 424 个」。
+		// ⚠️ 而"还有 N 个"这种句子在**列表被截断**的界面里是必需的
+		//（`release-space-flow` / `orphan-flow` 自动那一路传的是 `*_LIST_MAX`）——
+		// 判据是**清单全不全**，不是"哪个界面更好看"，所以那条边界不在这里钉。
+		const batchLines = (pickAsks.at(-1)?.lines ?? []).join(" ｜ ");
+		assert.ok(
+			!batchLines.includes(attachmentPath),
+			`★★ 摘要里不该重复列出文件名（那是下面那张清单的事）：${batchLines}`
 		);
 		// ⭐ 1.2.0（D-17）：上传成功后那份原文件**留在原地** —— 它本身就是本地副本，
 		// 没有缓存目录可搬（从前这里断言的是"原文件不在了"）。
@@ -1274,6 +1326,228 @@ ${text}`);
 			);
 
 			plugin.settings.externalImageCache = false;
+		}
+
+		// ============================================================
+		// 8b2. ⭐⭐ 指向笔记/画布/数据库的**远程**地址不算候选（2026-10-16 用户实测报的）
+		//
+		// 用户的场景：笔记里链接了一个远程 `.md`，它出现在了「上传附件」的清单里。
+		// 那不只是"清单里多一行" —— 真搬下来会在库里**凭空多出一篇笔记**（宿主按后缀把它
+		// 当笔记索引），理由与库里那条同款闸门（`.md`/`.canvas`/`.base` 不是附件）完全一样。
+		// ⚠️ 判据只有一份（`decideExternalCache` 里的 `isNoteLikeExtension`），所以
+		// "打开笔记就搬"那一路同时被拦住；这里钉的是**端到端接线**。
+		// ============================================================
+		{
+			const notePath = "notes/远程笔记链接.md";
+			const mdUrl = `https://${EXTERNAL_HOST}/notes/intro.md`;
+			// ⚠️ 刻意配一张**同一站点的 .png**（桩回 404，什么都不落库）：它的作用是让这趟
+			// 真的有东西可处理（于是"少请求一次"的断言不是恒真的假绿）。
+			const pngUrl = `https://${EXTERNAL_HOST}/b.png`;
+			// ⭐⭐ 另一半（2026-10-16 用户实测报的）：**没有扩展名的网页地址**（他笔记里那个
+			// 企业 wiki 页链接）压根不该进候选 —— 它不是"搬下来失败"，而是根本不该出现。
+			const pageUrl = `https://${EXTERNAL_HOST}/projects/m23003/wiki/%E9%A1%B5%E9%9D%A2?cfm=1`;
+			// ⭐⭐ 还有**网页类型**那一半（用户第二次实测报的）：B站播放器那种
+			// `<iframe src="…/player.html?…">` —— 尾巴有点、能过"像个文件名"那条，但它是**网页**，
+			// 下载端必拒（`text/html`），所以压根不该进清单。
+			const playerUrl = `https://${EXTERNAL_HOST}/player.html?aid=1055609428&bvid=BV1Zn4y19743`;
+			// ⭐⭐ 第三次实测报的那一条：**后缀是页面程序**（`.jsp`）的地址同样是网页 ——
+			// 尾巴也有点、后缀也不是 `.html`，但内容是服务端**现算**出来的一张页面
+			//（用户原话：「实际上这是一个网页地址」，并补了界限：
+			// 「如果是外部网站的文件下载链接，应该看做是附件才对」）。
+			const scriptPageUrl = `https://${EXTERNAL_HOST}/pd.jsp?id=172`;
+			// ⭐⭐ 第五次实测报的那一条：**尾巴有点像、但后缀不是文件类型** ——
+			// GitHub 的分支名 `5.1-translation_terms`（点在 `5` 与 `1` 之间，取不出扩展名）。
+			// 它是**普通链接**（`[]()`），所以那两道形状判据都该管它。
+			const branchUrl = `https://${EXTERNAL_HOST}/repo/tree/5.1-translation_terms`;
+			await writeFile(
+				join(root, notePath),
+				`![md](${mdUrl})\n![png](${pngUrl})\n[页](${pageUrl})\n<iframe src="${playerUrl}"></iframe>\n[原文链接](${scriptPageUrl})\n[分支](${branchUrl})\n`,
+				"utf8"
+			);
+			await harness.refreshPathCache();
+
+			externalHostRequests.length = 0;
+			mockObsidian.Notice.instances.length = 0;
+			runCommand("upload-attachments");
+			// ⚠️ 先等"该发生的事"发生（那张 `.png` 被请求），再断言"不该发生的一次都没有"。
+			// 反过来直接等"什么都没发生"，今天就会**因为别的原因**（比如命令压根没跑完）
+			// 恒真通过 —— 本项目踩过这种假绿。
+			await waitFor(
+				async () => externalHostRequests.some((url) => url.includes("/b.png")),
+				"该搬的那张 .png 被请求了",
+				10000,
+				diagnose
+			);
+			// 再等这趟**真的结束**（它一定会给出一条提示）：不等的话，它会带着
+			// "failed 1" 的结果飘到后面几段里去。
+			await waitFor(
+				async () => mockObsidian.Notice.instances.length > 0,
+				"这趟命令给出了结果",
+				10000,
+				diagnose
+			);
+
+			assert.equal(
+				externalHostRequests.some((url) => url.includes("intro.md")),
+				false,
+				`★★ 指向 .md 的远程地址一次都不许请求（搬下来会在库里多出一篇笔记）：${JSON.stringify(externalHostRequests)}`
+			);
+			assert.ok(
+				(await readFile(join(root, notePath), "utf8")).includes(mdUrl),
+				"★ 那条 .md 链接必须原样留着（我们根本没碰它）"
+			);
+			assert.equal(
+				externalHostRequests.some((url) => url.includes("/wiki/")),
+				false,
+				`★★ 没有扩展名的网页地址一次都不许请求（它不是文件，压根不该进候选）：${JSON.stringify(externalHostRequests)}`
+			);
+			assert.equal(
+				externalHostRequests.some((url) => url.includes("player.html")),
+				false,
+				`★★ 网页类型（.html）一次都不许请求（R18 绝不抓网页）：${JSON.stringify(externalHostRequests)}`
+			);
+			assert.equal(
+				externalHostRequests.some((url) => url.includes("pd.jsp")),
+				false,
+				`★★ 页面程序（.jsp）一次都不许请求（它同样是网页，下载端必拒）：${JSON.stringify(externalHostRequests)}`
+			);
+			assert.equal(
+				externalHostRequests.some((url) => url.includes("5.1-translation_terms")),
+				false,
+				`★★ 后缀不像文件类型的地址（分支名）一次都不许请求（它不是文件）：${JSON.stringify(externalHostRequests)}`
+			);
+			assert.ok(
+				(await readFile(join(root, notePath), "utf8")).includes(pageUrl),
+				"★ 那个网页链接也必须原样留着"
+			);
+			assert.ok(
+				(await readFile(join(root, notePath), "utf8")).includes(scriptPageUrl),
+				"★ 那条页面程序地址也必须原样留着"
+			);
+			assert.ok(
+				(await readFile(join(root, notePath), "utf8")).includes(branchUrl),
+				"★ 那条分支地址也必须原样留着"
+			);
+
+			// ⚠️ **收尾必须删掉这条笔记**：候选清单是**全库**的，留在库里会被后面每一段的
+			// `upload-attachments` 重新扫到（那条 404 的 `b.png` 于是变成它们的 `failed 1`，
+			// 把与它无关的收尾断言打断 —— 2026-10-16 就这么踩过一次）。
+			await rm(join(root, notePath), { force: true });
+			await harness.refreshPathCache();
+		}
+
+		// ============================================================
+		// 8b5. ⭐⭐ 本机文件（`file:///…`）：列清单**之前**先问一句"还在不在"
+		// ============================================================
+		// 2026-10-16 用户实测报的：清单里出现过一行**连缩略图都没有**的
+		// `file:///C:/…/Temp/ksohtml/wpsDD.tmp.jpg` —— WPS 的临时文件，早就被删了。
+		// 他的原话：「没有缩略图的文件实际上已经不存在了，**不应该上传，即便上传也会失败**」。
+		//
+		// ⚠️ 这一段**看完清单就取消**（不真的执行）：真执行会把那份**库外**文件的字节传上去、
+		// 并在库里写一份本地副本 —— 那会污染后面每一段（与上面那条"夹具收尾"同一类坑）。
+		{
+			const localDir = await mkdtemp(join(tmpdir(), "acc-local-"));
+			const realFile = join(localDir, "acc-real-local.png");
+			await writeFile(realFile, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x55]));
+			/** 本机路径 → `file:///` 写法（Windows 的反斜杠要换成正斜杠）。 */
+			const toUrl = (path) => `file:///${path.split("\\").join("/")}`;
+			// 同一个临时目录下、**故意不存在**的一份（模拟"文件被删了"）
+			const goneFile = join(localDir, "acc-gone", "definitely-not-here.png");
+			const notePath = "notes/本机文件.md";
+			await writeFile(
+				join(root, notePath),
+				`![real](${toUrl(realFile)})\n![gone](${toUrl(goneFile)})\n`,
+				"utf8"
+			);
+			await harness.refreshPathCache();
+
+			const asks = [];
+			plugin.pickTasks = async (options) => {
+				asks.push(options);
+				return null; // 看完清单就取消 —— 这一段不真的执行
+			};
+			runCommand("upload-attachments");
+			await waitFor(async () => asks.length > 0, "本机文件那一趟弹出了确认框", 10000, diagnose);
+			plugin.pickTasks = pickTasksAll; // 恢复默认替身（后面的用例还要用）
+
+			const dialog = asks.at(-1);
+			const ids = (dialog.cards ?? []).map((card) => card.id).join(" | ");
+			assert.ok(
+				ids.includes("acc-real-local.png"),
+				`★★ 还在的本机文件要照常列出来（这条链唯一能读库外文件的地方）：${ids}`
+			);
+			assert.equal(
+				ids.includes("definitely-not-here.png"),
+				false,
+				`★★ 已经不在的本机文件**不许**出现（列出来就是"点了一定失败"）：${ids}`
+			);
+			// ⭐⭐ 而**还在**的那一行**必须把地址交给宿主去画**（`file:///…`）：能不能画出来
+			// **由宿主说了算**，画不出来由 `file-cards.ts::renderThumb` 的 `onerror` 静默降级。
+			// ⚠️ 这条守的是「**不许提前把图掐掉**」：上一轮我们出于一个**错误的归因**
+			//（把控制台那条 `net::ERR_FILE_NOT_FOUND` 读成了"协议被拒"，其实那是"文件不存在"）
+			// 把本机行的缩略图直接设成"不给" ⇒ 用户看到的是「列表上有文件了，但是**预览看不到**」
+			//（2026-10-16）。⚠️ 递回原文之后**真机判定结果是它画不出来**（Chromium 拒绝从
+			// `app://` 原点加载 `file://` 子资源），用户又报了一次同一句话。
+			// ⇒ 判据：行里要带着**一串候选** —— 宿主自己的本地前缀在前、原文在后，
+			// 画不画得出来**由运行时逐个试**（`local-file.ts::localThumbCandidates`）。
+			const realRow = (dialog.cards ?? []).find((card) =>
+				String(card?.id ?? "").includes("acc-real-local.png")
+			);
+			const realUrls = realRow?.thumbUrls ?? [];
+			assert.ok(
+				Array.isArray(realUrls) && realUrls[0]?.startsWith("app://"),
+				`★★ 本机文件行要优先给**宿主认得的形态**（本地文件前缀），而不是「file:」原文：${JSON.stringify(realUrls)}`
+			);
+			assert.ok(
+				realUrls.includes(`file:///${realFile.split("\\").join("/")}`),
+				`★★ 原文仍要留在候选里兜底（宿主前缀不被认时还有一条路）：${JSON.stringify(realUrls)}`
+			);
+			const lines = (dialog.lines ?? []).join("\n");
+			assert.ok(lines.includes("definitely-not-here.png"), "★ 但要如实说出来 —— 它在笔记里正是坏链");
+			assert.ok(!lines.includes("**"), `★ 文案是纯文本，不许露出 Markdown 星号：${lines}`);
+
+			// 收尾：库外那个临时目录 + 这篇笔记都要清掉（候选清单是**全库**的）
+			await rm(join(root, notePath), { force: true });
+			await rm(localDir, { recursive: true, force: true });
+			await harness.refreshPathCache();
+		}
+
+		// ============================================================
+		// 8b6. ⭐⭐ 命令**失败**必须有人说话（2026-10-16 用户实测：「点击命令没有反应」）
+		//
+		// 命令回调是异步的，它一旦抛，抛出的错就只是控制台里一条 unhandled rejection
+		// —— **界面上什么都不发生**。用户既不知道出了什么事，也无从报告；
+		// 他 2026-10-16 报的正是这一句（真因是取 `fs` 的写法在宿主里不成立，
+		// 而当时**所有测试都是绿的** —— 夹具自己补了真机没有的东西）。
+		// ⇒ 这条钉的是那条**兜底**本身：让命令在中途抛，看界面有没有说话。
+		// ⚠️ 制造失败用的是**覆写接缝**（`maintenanceDeps` 由 `flowContext()` 转调，
+		// 所以覆写实例字段就生效），不必真去弄坏环境。
+		// ============================================================
+		{
+			const upload = plugin.commands.find((command) => command.id === "upload-attachments");
+			assert.ok(upload, "★ 命令表里得找得到 upload-attachments（找不到就说明这条断言自己失效了）");
+			const original = plugin.maintenanceDeps;
+			plugin.maintenanceDeps = () => {
+				throw new Error("探针：命令第一步就失败");
+			};
+			mockObsidian.Notice.instances.length = 0;
+			try {
+				// ⚠️ 这一句**必须同步不抛**：抛到宿主那里就是真机上的"点了没反应"。
+				upload.callback();
+				await waitFor(
+					async () => mockObsidian.Notice.instances.length > 0,
+					"命令失败之后界面说了句话",
+					5000,
+					diagnose
+				);
+				const said = mockObsidian.Notice.instances.map((notice) => notice.message).join(" | ");
+				assert.ok(
+					said.includes("探针：命令第一步就失败"),
+					`★★ 命令失败必须把原因说出来（用户看到的不能是「没有反应」）：${said}`
+				);
+			} finally {
+				plugin.maintenanceDeps = original;
+			}
 		}
 
 		// ============================================================
@@ -1948,6 +2222,8 @@ ${text}`);
 			// 任何一次 `saveSettings` 都想去淘汰（虽然也会被 60 s 节流挡下）—— 不留这种尾巴。
 			plugin.settings.cacheLimitMb = 0;
 			await plugin.saveSettings();
+
+			// ============================================================
 		}
 
 		// ============================================================
@@ -1995,8 +2271,8 @@ ${text}`);
 				const row = (pickAsks.at(-1)?.cards ?? []).find((card) => card.id === twinPath);
 				assert.ok(row, `★ 清单里应当有 ${twinPath} 这一行`);
 				assert.ok(
-					typeof row.thumbUrl === "string" && row.thumbUrl.startsWith("app://"),
-					`★ 库内图片那一行必须有缩略图地址（用磁盘上那份，零网络）：实际 ${JSON.stringify(row.thumbUrl)}`
+					row.thumbUrls?.[0]?.startsWith("app://"),
+					`★ 库内图片那一行必须有缩略图地址（用磁盘上那份，零网络）：实际 ${JSON.stringify(row.thumbUrls)}`
 				);
 				assert.equal(row.fromLocalCopy, true, "★ 库内那一行必须用本地副本（不联网）");
 			}
@@ -2338,7 +2614,7 @@ ${text}`);
 						(notice) =>
 							notice.message ===
 							// ⚠️ 指路指向的是**新那条命令**（"检查未被引用的云端附件…"）：它按同一批
-							// 判据再列一次，正是"想再处理一次"该去的地方（`cleanup-cloud` 走列桶，是另一件事）。
+							// 判据再列一次，正是"想再处理一次"该去的地方。
 							plugin.t("orphanNotice", { count: 1, command: plugin.t("cmdCheckOrphans") })
 					),
 				"★ 引用消失了 ⇒ 必须出声（`notice` 档：一条通知，且数量如实）",

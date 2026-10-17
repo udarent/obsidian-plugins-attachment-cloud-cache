@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 const SANDBOX = join(tmpdir(), "acc-local-file");
 
 export async function runLocalFileSuite(mod) {
-	const { localPathFromUrl, decideLocalFile, readLocalFileBytes, DEFAULT_LOCAL_FILE_MAX_BYTES } = mod;
+	const { localPathFromUrl, decideLocalFile, localFileExists, isMissingError, localThumbCandidates, readLocalFileBytes, DEFAULT_LOCAL_FILE_MAX_BYTES } = mod;
 
 	// ============================================================
 	// 1. 形态解析：认得的写法
@@ -169,7 +169,46 @@ export async function runLocalFileSuite(mod) {
 				32 * 1024 * 1024,
 				"默认上限是 32 MB（与站外那份同值，刻意各留一份定义）"
 			);
-		} finally {
+
+			// ⭐⭐ 「还在不在」的探测：**只有"确实没有这条路"才算"不在"**（2026-10-16 用户实测报的）
+			// —— 那份 `D:/企业微信文件/…/企业微信截图_…png` 就在磁盘上（74909 字节），
+			// 而清单里说它「已经找不到了」。当时的实现把**所有**异常都吞成 `false`。
+			// ⇒ 判据与 `readLocalFileBytes` **同一份**：`ENOENT` / `ENOTDIR` ⇒ `false`；
+			// **其余一律抛出去**（它们是"这台机器上读不到"，不是"这张图没了"）。
+			// ⚠️ 分类说不清却硬说"不在"，代价是**用户被误导** —— 他会以为链接坏了，
+			// 甚至去删笔记里那条引用。
+			assert.equal(await localFileExists(file), true, "★ 存在的文件 ⇒ true");
+			assert.equal(
+				await localFileExists(join(SANDBOX, "没有这个文件.png")),
+				false,
+				"★ 真的没有这条路 ⇒ false（ENOENT）"
+			);
+			assert.equal(await localFileExists(SANDBOX), false, "★ 路径是个目录 ⇒ false（不是普通文件）");
+			assert.equal(
+				await localFileExists(join(file, "后面还有一段")),
+				false,
+				"★ 路径中间那一段不是目录 ⇒ false（ENOTDIR）"
+			);
+			// ⭐⭐ "说不清的那一类（权限 / 路径过长 / 设备不可用）**不许**被当「不在」"这条判据，
+			// **不能**靠"造一个非 ENOENT 的 stat 失败"来测：Windows 上超长路径照样报 `ENOENT`
+			//（实测：`assert.rejects` 当场失败）⇒ 那种场景本来就跨平台不稳定。
+			// ⇒ 改测**纯判据本身**：`isMissingError` ——"哪些 `fs` 错误算「这份文件确实不在」"，
+			// 它是一处定义（`localFileExists` 与 `readLocalFileBytes` 共用），可以穷举。
+			// ⚠️ 用户 2026-10-16 实测报的那件事（"文件明明在却说找不到"）正是"把读不到当不在"：
+			// 权限 / 被占用 / 路径过长 / 设备不可用 都会被 `stat` 抛出来，而它们**不是**"没了"。
+			for (const code of ["ENOENT", "ENOTDIR"]) {
+				assert.equal(isMissingError({ code }), true, `★ ${code} = 确实没有这条路`);
+			}
+			for (const [label, error] of [
+				["权限不足", { code: "EACCES" }],
+				["被占用", { code: "EBUSY" }],
+				["路径过长", { code: "ENAMETOOLONG" }],
+				["设备不可用", { code: "ENODEV" }],
+				["看不出来历的错", new Error("whatever")],
+				["连 error 都不是", null],
+			]) {
+				assert.equal(isMissingError(error), false, `★★ 「${label}」不是「不在」—— 别把读不到当不在`);
+			}		} finally {
 			await rm(SANDBOX, { recursive: true, force: true });
 			const left = await readdir(tmpdir()).catch(() => []);
 			assert.ok(
@@ -180,7 +219,41 @@ export async function runLocalFileSuite(mod) {
 	}
 
 	// ============================================================
-	// 5. ⚠️ **产物形状**：`node:fs` 必须是**函数内** import
+	// 4b. ⭐⭐ 缩略图**候选**：库外文件那条路的地址形式（D-45）
+	//
+	// 用户 2026-10-16 **第二次**报同一件事（「列表上有对应文件了，但是预览看不到」）：
+	// `file:///D:/…` 在宿主里**画不出来**（Chromium 拒绝从 `app://` 原点的页面加载
+	// `file://` 子资源），而宿主**自己**的本地文件前缀（`Platform.resourcePathPrefix`：
+	// 移动端 `file:///`、桌面 `app://random-id/`）才是它认的形式。
+	// ⇒ 判据只有这一处（`local-file.ts::localThumbCandidates`），穷举也放这里。
+	// ============================================================
+	{
+		assert.deepEqual(
+			localThumbCandidates({ url: "file:///D:/a/b.png", path: "D:/a/b.png", prefix: "app://vault/" }),
+			["app://vault/D:/a/b.png", "file:///D:/a/b.png"],
+			"★★ 宿主自己的前缀优先、原文兜底（画不出来的是原文那一形态）"
+		);
+		assert.deepEqual(
+			localThumbCandidates({ url: "file:///C:/a.png", path: "C:/a.png", prefix: "file:///" }),
+			["file:///C:/a.png"],
+			"★ 候选要去重（移动端那个前缀正好就是 `file:///`，两条会完全相同）"
+		);
+		assert.deepEqual(
+			localThumbCandidates({ url: "file:///D:/a.png", path: null, prefix: "app://vault/" }),
+			["file:///D:/a.png"],
+			"★ 解析不出路径时只剩原文这一条（不抛错、也不给空串）"
+		);
+		assert.deepEqual(
+			localThumbCandidates({ url: "file:///D:/a.png", path: "D:/a.png", prefix: null }),
+			["file:///D:/a.png"],
+			"★ 拿不到前缀时同理（宿主没给就退回原文）"
+		);
+		assert.deepEqual(localThumbCandidates({ url: "  ", path: null, prefix: null }), [], "什么都给不出 ⇒ 空数组");
+		assert.deepEqual(localThumbCandidates({ url: null, path: undefined, prefix: 1 }), [], "非字符串不抛错");
+	}
+
+	// ============================================================
+	// 5. ⚠️ **产物形状**：`node:fs` 必须在**函数体**里取
 	//
 	// 这一条不是行为断言，而是**源码形状**断言 —— 因为它是套件**测不出来**的那种性质：
 	// 产物是 CJS 单文件，顶层 `import "node:fs/promises"` 会被编译成模块加载期的 `require`，
@@ -197,9 +270,19 @@ export async function runLocalFileSuite(mod) {
 			[],
 			"★★ 不许顶层 import node:* —— 那会让手机端**整个插件**加载失败（不是这一个功能不可用）"
 		);
+		// ⚠️⚠️ 这两条**曾经是假绿的**（2026-10-16 发现）：原来断言的是源码里含
+		// `await import("node:fs/promises")` —— 而那句**只出现在注释里**了（真机上动态
+		// `import()` 被宿主的协议白名单拒，早已换成 `require`）。⇒ 断言"找得到某个字符串"
+		// 的形式，在字符串**被别的用途复用**（注释、文档）时会静静地失效，
+		// 而它看起来一直在跑。⇒ 改成问**那件事本身**：取 fs 的那句是不是 `require`、
+		// 以及它**不在顶层**（顶层 require 会让手机端整个插件加载失败）。
 		assert.ok(
-			source.includes('await import("node:fs/promises")'),
-			"★ 读磁盘那句必须是**函数内**的动态 import（cjs + external 下才会编译成「调用时才 require」）"
+			source.includes('require("node:fs/promises")'),
+			"★ 取 fs 必须在**函数体内**（真机实测：动态 `import()` 被宿主的协议白名单拒）"
+		);
+		assert.ok(
+			!/^require\(/m.test(source),
+			"★★ 不许在**顶层** require —— 那会让手机端**整个插件**加载失败（不是这一个功能不可用）"
 		);
 	}
 

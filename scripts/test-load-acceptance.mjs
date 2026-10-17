@@ -39,5 +39,11 @@ console.log(
 		"clear the copies that were already there — the copy a note still links to was deleted outright (not trashed) " +
 		"with its index row removed while the upload ledger kept it, and three copies were left alone: the one no note " +
 		"links to, the one whose object could not be confirmed in storage, and the one that was never uploaded; " +
-		"running it again deletes nothing and says so, including why))."
+		"running it again deletes nothing and says so, including why; a note's off-site addresses are only " +
+		"offered when they really are files — a wiki page with no file-ish tail, a player.html page and a " +
+		"server-rendered pd.jsp are never even requested, while a real .pdf/.zip download link still is — and the " +
+		"local files a note points at outside the vault are listed only while they are actually still on disk " +
+		"(one that is gone is reported instead of offered, and never requested); and a command that throws " +
+		"half-way still tells the user what went wrong — an async command failure must never be silence, " +
+		"which is exactly what \"the command did nothing when I clicked it\" looked like))."
 );

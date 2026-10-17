@@ -41,7 +41,7 @@
 
 import { Notice, TFile } from "obsidian";
 import { describeError } from "../error-text";
-import { runCloudCleanup } from "../maintenance/cloud-cleanup";
+import { externalKeysOf, runCloudCleanup } from "../maintenance/cloud-cleanup";
 import type { CloudCleanupResult } from "../maintenance/cloud-cleanup";
 import type { DeletedObjectRecord } from "../maintenance/delete-log";
 import {
@@ -238,15 +238,27 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 	 */
 	async function presentOrphans(keys: readonly string[], bypassCooldown: boolean): Promise<void> {
 		const index = ctx.currentIndex();
+		// ⚠️ 站外缓存的 key 集合**在循环外算一次**：放进 `isExternal` 里逐个查索引
+		// 会让这一遍变成 O(n²)（清单可能几百行）。
+		const external = externalKeysOf(index);
 		const selection = selectOrphanAsks(keys, {
 			// ⭐ 判"是不是我们的"必须查**上传台账**，不能查"索引里有没有条目"：
 			// 条目只管"本地副本在哪"，而「不留副本」那一档没有副本、按纪律不写条目
 			// ⇒ 问条目会在那一档对**所有**对象答"不是我们的"，这个询问于是永不出现
 			// （N11，与 P8 同一形状）。台账不看副本，三档都答得对。
 			isOurs: (key) => index.wasUploaded(key),
+			// ⭐ 站外缓存一律不问（判据的完整理由在 `selectOrphanAsks` 的 `isExternal`）——
+			// 2026-10-16 从退役的「清理云端未使用对象…」继承来，**两条路共用这一处**。
+			isExternal: (key) => external.has(key),
 			hasAsked: (key) => (bypassCooldown ? false : asked.has(key)),
 		});
-		if (selection.asks.length === 0) return;
+		if (selection.asks.length === 0) {
+			// ⚠️ **命令那条路必须出声**（2026-10-16 加）：用户特地按了它，静默会被读成"命令坏了"
+			//（D-43 的同一形状）。而"候选被筛空"从此有了新的来路 —— 站外缓存的对象会被
+			// `isExternal` 挡掉，所以"台账里明明有一堆已上传对象却一个都不问"是**正常可达**的。
+			if (bypassCooldown) new Notice(ctx.t("orphanNoneToCheck"));
+			return;
+		}
 
 		// ⭐ 问过就记住，**无论用户怎么回答** —— 这是"不打扰"的底线
 		//（他可能还在整理笔记，同一条引用被删掉的原因有很多种）
@@ -396,6 +408,9 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 			title: ctx.t("orphanTitle"),
 			lines: [
 				ctx.t("orphanBody", { count: selection.asks.length }),
+				// ⚠️ 上面 `cards` 传的是 `LIST_MAX` ⇒ **列表被截断**，所以这一句必须说
+				//（与「上传附件」那边正好相反：那里列表是全量的，摘要里的举例已删掉）。
+				// ⭐ 判据是**列表全不全**，不是"哪个界面更好看"。
 				...(selection.asks.length > LIST_MAX
 					? [ctx.t("orphanMore", { count: selection.asks.length - LIST_MAX })]
 					: []),

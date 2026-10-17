@@ -11,9 +11,9 @@ import { runFileCardsSuite } from "./lib/file-cards-suite.mjs";
  * 断言在 `lib/file-cards-suite.mjs`（与变异验证共用）。
  */
 await withLoadedTs("src/ui/file-cards", (mod) => {
-	const stats = runFileCardsSuite(mod);
+	runFileCardsSuite(mod);
 	console.log(
-		`File-cards tests passed (${stats.cases} cases: a row shows the original file name when the ` +
+		"File-cards tests passed (a row shows the original file name when the " +
 			"index still knows it and falls back to the raw key otherwise, never inventing a name; " +
 			"the thumbnail comes from the local copy first (so nothing is fetched) and only then from " +
 			"the derived storage address; only images get a thumbnail - a PDF or an archive gets a type " +
@@ -21,6 +21,12 @@ await withLoadedTs("src/ui/file-cards", (mod) => {
 			"an address the row simply has no image rather than an empty one; blank entries are skipped; " +
 			"and the address is written through attr rather than img.src, because the render hook patches " +
 			"that setter and would download the very object this dialog is asking about - with a failed " +
-			"load degrading to the badge instead of leaving a broken icon)."
+			"load degrading to the badge instead of leaving a broken icon, and a row may carry *several* " +
+			"candidate addresses which are tried one after another before degrading (a file outside the " +
+			"vault has no address form we get to choose: the host decides which one actually draws); " +
+			"and the subtitle of an off-site " +
+			"or local-file row is composed in exactly one place - the host for an off-site row, the absolute " +
+			"path when there is no host, and never a vault path (naming the note a link came from reads as if " +
+			"a note file had entered the list of files about to be uploaded)."
 	);
 });

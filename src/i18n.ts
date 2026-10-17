@@ -127,23 +127,9 @@ export const I18N: Record<string, Locale> = {
 
 		// ── 维护命令 ──
 		// ── 云端空间清理（F15）──
-		cmdCleanupCloud: "Clean up unused objects in the cloud…",
 		cmdCheckOrphans: "Check for unreferenced attachments in the cloud…",
-		cloudCleanupTitle: "Clean up the cloud",
-		cloudCleanupSummary:
-			"{count} object(s), about {mb} MB, are not referenced by any note in this vault:",
-		cloudCleanupCta: "Delete these objects",
 		cloudCleanupDeviceBlindSpot:
 			"Only this device's references can be seen. Other devices (or another vault sharing this storage) may still be using some of these files — deleting cannot be undone.",
-		cloudCleanupCannotUndo: "The objects are deleted from your storage; local copies are kept.",
-		cloudCleanupTruncatedWarning:
-			"The listing stopped early (too many objects), so this list may be incomplete.",
-		cloudCleanupNothing: "Nothing to clean up: every object in your storage is still referenced.",
-		cloudCleanupTruncatedNothing:
-			"Nothing to clean up in the part that was listed, and the listing stopped early — try again later.",
-		cloudCleanupDone:
-			"Deleted {deleted} object(s); {alreadyGone} were already gone; {failed} failed. {unindexed} index record(s) removed.",
-		cloudCleanupListFailed: "Could not list the objects in your storage: {error}",
 		cloudCleanupPersistFailed: "Could not save the local-copy index: {error}",
 		cloudCleanupUnreadableNote: "Could not read {path}, so the cleanup was cancelled.",
 		// F18：清理本地占用（并入「不留副本」档，见设计 §20.10）
@@ -195,18 +181,23 @@ export const I18N: Record<string, Locale> = {
 		orphanDismissed:
 			"Nothing was deleted. To ask again, run “{command}”.",
 		orphanNoneToCheck:
-			"No unreferenced attachments found — everything we have uploaded is still linked from a note or canvas.",
+			"No unreferenced attachments found — everything we uploaded is either still linked from a note or canvas, or came in from another site (those are never handled here).",
 		cloudDeleteFailed: "Could not delete the object: {error}",
 		cmdAuditCache: "Show local copy usage",
-		cmdRepairIndex: "Repair the local-copy index",
-		cmdUploadAttachments: "Upload existing attachments",
+		// ⭐ 与设置页那颗「Delete local copies…」是**同一条链**（`releaseLocalSpace`），
+		// 命令面板侧多一个限定词：这里说的是**清理哪些**（没有任何笔记引用的那些）。
+		cmdUploadAttachments: "Upload attachments",
+		// ⭐ 命令**失败**时必须有人说话（2026-10-16 用户实测："点击命令没有反应"）。
+		// 以前异步命令抛错只留一条控制台记录，界面上什么都不发生 —— 那是最坏的失败形态。
+		// ⚠️ 不写命令名：用户刚点过它，而 `{error}` 才是他要看的东西（命令 id 进控制台日志）。
+		cmdFailed: "The command could not run: {error}",
 
 		maintainUsageReport:
 			"Local copies: {totalMb} MB in {count} files. Not linked from any note: {unused} ({reclaimableMb} MB — an estimate: nothing is removed before your storage is confirmed to still have it). {missing} index entr(ies) point at files that are gone. Limit: {limit}.",
 		// ⚠️ 只在真有失效记录时单独弹这一句（见 `auditCache` 命令的接线）：
 		// 那行数字本身不带处置办法，用户 2026-10-14 在 Android 上把它读成了"索引坏了"。
 		maintainUsageMissingHint:
-			"Those {count} stale record(s) are harmless — the background check drops them on its own. To clear them right now, run “{command}”.",
+			"Those {count} stale record(s) are harmless — the background check drops them on its own.",
 		selfHealRepaired:
 			"Local-copy index repaired automatically: {count} record(s) pointed at files that are no longer there.",
 		legacyKeyTemplateUpgraded:
@@ -216,11 +207,9 @@ export const I18N: Record<string, Locale> = {
 		legacyExternalKeptOn: "automatic handling stays on",
 		legacyExternalKeptOff:
 			"automatic handling stays off, because you had it set to do nothing automatically — you can still pick files one by one",
-		repairIndexFound: "Index repaired: {count} stale record(s) dropped.",
-		repairIndexNothing: "Index is fine — no stale records.",
 		maintainMoreItems: "…and {count} more",
 		maintainCancelled: "Cancelled — nothing was changed.",
-		// ── 清单类弹窗（缩略图 + 勾选 + 进度）：上传已有附件 / 清理云端空间 / 挑选要缓存的文件共用 ──
+		// ── 清单类弹窗（缩略图 + 勾选 + 进度）：上传附件 / 检查未被引用的云端附件 / 挑选要缓存的文件共用 ──
 		taskListEmpty: "Nothing to show here.",
 		taskProgressRunning: "Working… {finished}/{total}",
 		taskProgressFinished: "Finished: {done} done, {skipped} skipped, {failed} failed.",
@@ -235,7 +224,7 @@ export const I18N: Record<string, Locale> = {
 		maintainSkipNotIndexed: "Obsidian cannot see this file yet — skipped instead of deleting it directly",
 		maintainNotConfigured: "The storage connection is not set up yet, so nothing was uploaded.",
 		maintainBatchNothing: "No attachments to upload (everything is already handled).",
-		maintainBatchTitle: "Upload existing attachments",
+		maintainBatchTitle: "Upload attachments",
 		maintainBatchSummary: "Upload {count} file(s) and rewrite note links to point at your storage.",
 		// ⚠️ 1.2.0（D-17）起，"上传后把原文件搬走"这件事**不存在了** —— 那份文件留在原地、
 		// 就地作为本地副本（没有缓存目录可搬）。所以必须照实说"不移动、不改名"：
@@ -257,7 +246,13 @@ export const I18N: Record<string, Locale> = {
 		// ⚠️ 本机文件那条**必须带路径**：不加目录白名单（用户 2026-10-15 定）之后，
 		// "看得见要读哪条路径"是那次授权唯一能成立的前提。⚠️ `{count}` 是**全部**条数，
 		// 列表最多三条（多的省略）—— 数字准确、清单诚实。
+		// ⚠️ 这一行是**纯文本**（Confirm 的正文，不渲染 Markdown）⇒ 不许写 `**强调**`
+		//（2026-10-16 用户实测看到的就是一对露出来的星号）。
 		maintainBatchLocalFiles: "Also {count} local file(s) on this computer (outside the vault): {paths}",
+		// ⭐ 已经**不在本机**的那些（列清单前问过一次 `stat`）：它们不进清单（点了一定失败），
+		// 但必须说出来 —— 在笔记里它们正是**坏链**，用户找不到会以为漏了。
+		maintainBatchLocalFilesMissing:
+			"There are {count} local file(s) that are no longer on this computer (nothing to upload): {paths}",
 		maintainBatchDone:
 			"Uploaded {uploaded}, already there {reused}, failed {failed}. Rewrote {links} link(s) across {notes} note(s).",
 
@@ -419,20 +414,9 @@ export const I18N: Record<string, Locale> = {
 		ingestIndexPersistFailed: "文件已上传，但本地副本索引保存失败：{error}",
 
 		// ── 云端空间清理（F15）──
-		cmdCleanupCloud: "清理云端未使用对象…",
 		cmdCheckOrphans: "检查未被引用的云端附件…",
-		cloudCleanupTitle: "清理云端空间",
-		cloudCleanupSummary: "有 {count} 个对象没有被本库任何笔记引用，约占 {mb} MB：",
-		cloudCleanupCta: "删除这些对象",
 		cloudCleanupDeviceBlindSpot:
 			"只能看到本设备的引用情况。其他设备（或共用这个存储的另一个库）可能还在用其中一些文件 —— 删除后无法恢复。",
-		cloudCleanupCannotUndo: "删除的是云端对象；本地副本会保留。",
-		cloudCleanupTruncatedWarning: "列举提前结束了（对象太多），所以这份清单可能不全。",
-		cloudCleanupNothing: "没有需要清理的：你存储里的对象都还被引用着。",
-		cloudCleanupTruncatedNothing: "已列出的部分没有可清理的对象，而列举提前结束了 —— 可以稍后再试。",
-		cloudCleanupDone:
-			"已删除 {deleted} 个对象；另有 {alreadyGone} 个本来就不存在；失败 {failed} 个；摘掉 {unindexed} 条索引记录。",
-		cloudCleanupListFailed: "无法列出你存储里的对象：{error}",
 		cloudCleanupPersistFailed: "本地副本索引保存失败：{error}",
 		cloudCleanupUnreadableNote: "读不到 {path}，因此取消了这次清理。",
 		// F18：清理本地占用（并入「不留副本」档，见设计 §20.10）
@@ -483,17 +467,22 @@ export const I18N: Record<string, Locale> = {
 		orphanDismissed:
 			"什么都没删。想再问一次：运行「{command}」。",
 		orphanNoneToCheck:
-			"没有发现未被引用的云端附件 —— 我们记录里每一个已上传的附件，都还有笔记或画布在引用它。",
+			"没有需要处理的 —— 已上传的附件要么还有笔记或画布在引用它，要么是站外缓存来的（那一类不在这里处理）。",
 		cloudDeleteFailed: "删除对象失败：{error}",
 		cmdAuditCache: "查看本地副本占用",
-		cmdRepairIndex: "自检并修复本地副本索引",
-		cmdUploadAttachments: "上传已存在的附件",
+		// ⭐ 与设置页那颗「清理本地副本…」是**同一条链**（`releaseLocalSpace`），
+		// 命令面板侧多一个限定词：这里说的是**清理哪些**（没有任何笔记引用的那些）。
+		cmdUploadAttachments: "上传附件",
+		// ⭐ 命令**失败**时必须有人说话（2026-10-16 用户实测："点击命令没有反应"）。
+		// 以前异步命令抛错只留一条控制台记录，界面上什么都不发生 —— 那是最坏的失败形态。
+		// ⚠️ 不写命令名：用户刚点过它，而 `{error}` 才是他要看的东西（命令 id 进控制台日志）。
+		cmdFailed: "命令执行失败：{error}",
 
 		maintainUsageReport:
 			"本地副本共 {count} 个文件、{totalMb} MB。其中没有任何笔记引用的 {unused} 个（{reclaimableMb} MB —— 这是估算：真正删除前会先确认你的存储里仍然有它）。索引指向的文件已不在 {missing} 条。上限：{limit}。",
 		// ⚠️ 同上：只在真有失效记录时弹（那行数字不带处置办法，会被读成"索引坏了"）。
 		maintainUsageMissingHint:
-			"那 {count} 条失效记录无害 —— 后台自检会自己摘掉；想立刻清掉就跑一次「{command}」。",
+			"那 {count} 条失效记录无害 —— 后台自检会自己摘掉。",
 		selfHealRepaired: "本地副本索引已自动修复：{count} 条记录指向的本地副本已经不在了。",
 		legacyKeyTemplateUpgraded:
 			"「对象 key 模板」设置已取消：之后上传的对象固定命名为「原文件名-内容哈希.扩展名」，存储里可以按名字找到文件（文件名因此也会出现在你的存储服务商那边）。已有链接不受影响；按旧命名传过的内容若再贴一次，会在云端多存一份。",
@@ -502,11 +491,9 @@ export const I18N: Record<string, Locale> = {
 		legacyExternalKeptOn: "自动处理保持开启",
 		legacyExternalKeptOff:
 			"自动处理保持关闭（你原本选的是「什么都不做」）；「挑选要缓存的文件」仍然随时可用",
-		repairIndexFound: "索引已修复：摘掉 {count} 条失效记录。",
-		repairIndexNothing: "索引没有失效记录，无需修复。",
 		maintainMoreItems: "……还有 {count} 个",
 		maintainCancelled: "已取消，没有改动任何内容。",
-		// ── 清单类弹窗（缩略图 + 勾选 + 进度）：上传已有附件 / 清理云端空间 / 挑选要缓存的文件共用 ──
+		// ── 清单类弹窗（缩略图 + 勾选 + 进度）：上传附件 / 检查未被引用的云端附件 / 挑选要缓存的文件共用 ──
 		taskListEmpty: "这里没有可处理的条目。",
 		taskProgressRunning: "正在处理…… {finished}/{total}",
 		taskProgressFinished: "已结束：完成 {done} 个、跳过 {skipped} 个、失败 {failed} 个。",
@@ -521,7 +508,7 @@ export const I18N: Record<string, Locale> = {
 		maintainSkipNotIndexed: "Obsidian 还看不到这个文件 —— 已跳过，而不是直接删除",
 		maintainNotConfigured: "存储连接尚未配置，没有上传任何内容。",
 		maintainBatchNothing: "没有需要上传的附件（都已经处理过了）。",
-		maintainBatchTitle: "上传已存在的附件",
+		maintainBatchTitle: "上传附件",
 		maintainBatchSummary: "将上传 {count} 个文件，并把笔记里的链接改成指向你的存储。",
 		// ⚠️ 别在文案里写 markdown（`**加粗**`）：确认弹窗是 `createDiv({ text })`、
 		// 提示是宿主的 Notice，两者都**按纯文本**渲染 —— 星号会原样显示给用户。
@@ -541,7 +528,13 @@ export const I18N: Record<string, Locale> = {
 		// ⚠️ 本机文件那条**必须带路径**：不加目录白名单（用户 2026-10-15 定）之后，
 		// "看得见要读哪条路径"是那次授权唯一能成立的前提。⚠️ `{count}` 是**全部**条数，
 		// 列表最多三条（多的省略）—— 数字准确、清单诚实。
-		maintainBatchLocalFiles: "另有 {count} 个是**本机文件**（在你电脑上、不在库里）：{paths}",
+		// ⚠️ 这一行是**纯文本**（弹窗正文，不渲染 Markdown）⇒ 不许写 `**强调**`
+		//（2026-10-16 用户实测看到的就是一对露出来的星号）。
+		maintainBatchLocalFiles: "另有 {count} 个是本机文件（在你电脑上、不在库里）：{paths}",
+		// ⭐ 已经**不在本机**的那些（列清单前问过一次 `stat`）：它们不进清单（点了一定失败），
+		// 但必须说出来 —— 在笔记里它们正是**坏链**，用户找不到会以为漏了。
+		maintainBatchLocalFilesMissing:
+			"有 {count} 个本机文件在这台电脑上已经找不到了，没有可上传的内容：{paths}",
 		maintainBatchDone:
 			"上传 {uploaded} 个、已存在 {reused} 个、失败 {failed} 个。在 {notes} 篇笔记里改写了 {links} 处链接。",
 

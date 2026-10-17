@@ -34,7 +34,8 @@ This does both — the file goes to your bucket, the copy that renders stays beh
 
 ## Features
 
-- **Any S3-compatible storage, any file type** — images, audio, video, PDF, archives, documents, extension-less files.
+- **Any S3-compatible storage, and any attachment type** — images, audio, video, PDF, archives, documents,
+  extension-less files.
   What Obsidian can preview becomes an embed; everything else, a clickable link.
 - **Any way in** — pasted, dropped, from your phone's gallery or camera, shared into Obsidian, or copied into the vault.
 - **The same file twice is one object.** The key is the file name plus its full content hash, so even `photo 1.png`
@@ -71,7 +72,7 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | **Public URL prefix** | Optional. Empty means `endpoint/bucket/key`, which requires anonymous reads. |
 | **Test connection** | One signed request, then one **credential-free** request to the address your links would use. |
 | **Upload new attachments automatically** | On by default; off leaves new files local only. |
-| **Where the local copy goes** | Keep the file where it is (default) or delete it after uploading. ⚠️ Delete turns caching off: uploads and link rewriting still happen, but nothing is fetched back, so **nothing works offline**. |
+| **Where the local copy goes** | **Keep the file where it is (offline works)** (default) or **Delete the local file after uploading (offline unavailable)**. With the second, uploads and link rewriting still happen, but nothing is fetched back, so **nothing works offline**. |
 | **Free up local space** | Clears local copies of attachments still linked from a note — deleted **for good, not trashed**, so the space comes back at once. With a limit set it trims down **to that limit** only; copies no note links to are left to the unreferenced-attachment cleanup (they may need removing from your storage too). |
 | **Local copy limit (MB) · Download missing copies** | `0` = no limit. Least-recently-used copies are trimmed first, and only after confirming the object is still in your storage. Auto-download stays off while "delete" is selected. |
 | **Handle files from other sites like ordinary files** | Off by default. On, an off-site file is downloaded, uploaded and its link rewritten exactly like a local paste — the copy setting included. **Which sites to handle** (`All` / `All except the ones listed` / `Only the ones listed`) filters the **automatic** path only; picking files by hand is never restricted. `example.com` also matches `img.example.com`. |
@@ -84,11 +85,9 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | Command | What it does |
 | --- | --- |
 | **Show local copy usage** | What your local copies hold, and how much of it no note refers to any more — an estimate: nothing is removed before your storage is confirmed to still have the object. |
-| **Repair the local-copy index** | Drops index entries whose files are already gone. |
-| **Upload existing attachments** | Lists what your notes link to (a thumbnail and a tick box per row), then uploads the ticked ones and rewrites those links. Your files stay where they are — that copy *is* the local copy. |
+| **Upload attachments** | Lists what your notes link to (a thumbnail and a tick box per row), then uploads the ticked ones and rewrites those links. Your files stay where they are — that copy *is* the local copy. |
 | **Cache external files…** | Lists files that live outside your vault (thumbnails, tick boxes, per-item progress); tick individual ones — on other sites, or on this computer — and only those are fetched. Picking them is the consent. |
-| **Clean up unused objects in the cloud…** | The same list, for objects no note here refers to; deletes what you tick. |
-| **Check for unreferenced attachments in the cloud…** | The same list again, and applies your choice to the ticked ones; re-runs the "these are no longer linked" prompt on demand: everything this vault uploaded, minus everything still linked. |
+| **Check for unreferenced attachments in the cloud…** | Everything this vault uploaded, minus everything still linked — a row with a thumbnail and a tick box each. The ticked ones then take your choice: keep them, delete only the local copy (to the trash), or delete the local copy and the stored object. Also how you re-run the automatic prompt if you dismissed it. |
 
 ## Good to know
 
@@ -219,7 +218,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | **公开访问前缀** | 可留空。留空就用 `服务地址/存储桶/键`，那要求存储桶允许匿名读取。 |
 | **测试连接** | 先发一次签名请求，再**不带凭据**请求一次「你笔记里会写的那条地址」。 |
 | **新增附件自动上传** | 默认开启；关闭后新文件只存在本地。 |
-| **本地副本的处理** | 留在原处（默认）或上传后删除。⚠️ 选「删除」等于关闭缓存：照常上传、照常改写链接，但不取回副本，所以**离线什么都看不到**。 |
+| **本地副本的处理** | 留在附件目录（默认，**离线可用**），或**不留本地副本（等于关闭缓存，离线不可用）** —— 后者就是上传后把那份文件删掉：照常上传、照常改写链接，但不取回副本，所以**离线什么都看不到**。 |
 | **释放本地空间** | 清掉笔记里仍引用着的附件本地副本 —— **永久删除、不进回收站**，空间立刻释放。设了上限时只清**到上限为止**（不会全清）；没有任何笔记引用的副本留给「没人引用的附件」那条清理 —— 那些可能要连云端对象一起处理。 |
 | **本地副本上限（MB） · 缺本地副本时自动下载** | `0` 表示不限制。超限时按最近最少使用清理，且只有确认你的存储里仍有那个对象之后才会删。选「删除」时自动下载不生效。 |
 | **站外文件按普通附件处理** | 默认关闭。打开后，站外文件会被下载、上传并改写链接 —— 与粘贴一张本地附件完全一样（副本那一档也一样适用）。**处理哪些站点**（`所有站点` / `除名单外` / `仅名单内`）只筛**自动**那一路；手动挑选不受限制。写 `example.com` 也会命中 `img.example.com`。 |
@@ -232,11 +231,9 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | 命令 | 做什么 |
 | --- | --- |
 | **查看本地副本占用** | 本地副本占了多少、其中多少已经没有笔记引用了 —— 这是**估算**：真正删除前会先确认你的存储里仍然有这个对象。 |
-| **自检并修复本地副本索引** | 丢掉那些文件已经不在的索引记录。 |
-| **上传已存在的附件** | 列出笔记里引用着的附件（**每条带缩略图与勾选框**），只上传你勾中的那些并改写链接。文件**留在原地** —— 那份就是本地副本。 |
+| **上传附件** | 列出笔记里引用着的附件（**每条带缩略图与勾选框**），只上传你勾中的那些并改写链接。文件**留在原地** —— 那份就是本地副本。 |
 | **缓存外部文件（可挑选）…** | 列出**库外**的文件（缩略图 + 勾选框 + 逐项进度）：别处服务器上的、或你这台电脑上的，勾中的才会被取回 —— 勾选本身就是同意。 |
-| **清理云端未使用对象…** | 同一套清单，列的是「本库没有笔记引用」的对象；只删你勾中的那些。 |
-| **检查未被引用的云端附件…** | 还是那套清单，按你选的那一档处理勾中的那些；随时重新问一次「这些附件已经没人引用了」：候选 = 本库上传过的、减去仍被笔记或画布引用的。 |
+| **检查未被引用的云端附件…** | 候选 = 本库上传过的、减去仍被笔记或画布引用的 —— 每条带缩略图与勾选框。勾中的按你选的那一档处理：保留 / 只删本地副本（进回收站）/ 连本地带云端一起删。那次自动询问被误关之后，也从这里重新要一次。 |
 
 ## 需要注意的
 

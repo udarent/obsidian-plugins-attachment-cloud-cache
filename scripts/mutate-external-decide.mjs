@@ -76,5 +76,83 @@ await runMutations({
 			to: "\t// 变异：不看配置状态\n",
 			expect: "未配置时不该动手",
 		},
+		{
+			// 后果：**指向笔记 / 画布 / 数据库的地址会被搬进库** —— 搬下来那份落进库里
+			// 就变成一篇笔记（宿主按后缀识别），于是用户的库里凭空多出一篇笔记、
+			// 候选清单上多一行"看起来像附件"的东西。2026-10-16 用户实测报的正是这个症状
+			//（笔记里链接的远程 `.md` 出现在「上传附件」的清单里）。
+			// ⚠️ 判据本体住在 `vault-files.ts`，这里锚的是**调用**那一侧 ——
+			// 与 `mutate-vault-files` / `mutate-batch` 的两条一起覆盖完整通路。
+			name: "★ 不再拦「指向笔记/画布/数据库」的地址（把远程 .md 搬进库）",
+			from: '\tif (isNoteLikeExtension(extension)) {\n\t\treturn { action: "ignore", reason: NOTE_LIKE_REASON };\n\t}\n',
+			to: "\t// 变异：不拦笔记类文件\n",
+			expect: "不该被搬走",
+		},
+		{
+			// 后果：**"只被指向"的地址不再判形状** ⇒ 网页 / 目录 / 接口 / 分支名形态的地址
+			// 又进了候选清单 —— 用户看到的是一张"待上传文件"的清单里列着搬不下来的页面。
+			//（2026-10-16 用户实测连着报的第二次与第五次，他的原话：
+			// 「那个文件压根就不该进入列表选项」/「实际上这是一个网页地址」。）
+			name: "★★ 站外候选不再判形状（网页 / 分支名又进了清单）",
+			from:
+				"\tif (!input.embedded) {\n" +
+				"\t\tif (!urlLooksLikeFileName(src)) {\n" +
+				"\t\t\treturn { action: \"ignore\", reason: NOT_A_FILE_REASON };\n" +
+				"\t\t}\n" +
+				"\t\tif (!urlHasFileTypeSuffix(src)) {\n" +
+				"\t\t\treturn { action: \"ignore\", reason: NOT_FILE_TYPE_REASON };\n" +
+				"\t\t}\n" +
+				"\t}\n",
+			to: "\t// 变异：不判形状\n",
+			expect: "只被指向的地址必须看起来像个文件",
+		},
+		{
+			// 后果：**形状判据没有闸门**（对每一条地址都施加）⇒ 笔记在**显示**的真实图被反手拦下：
+			// 图片 CDN 的令牌形状地址（`…OIP-C.sPb8lvTxu-…`）取不出扩展名 ⇒ 不再进候选；
+			// `auto` 那一路（宿主渲染 `<img>` 时）同样全军覆没 —— 而且**不报错**，
+			// 用户只会发现"图缓存不了了"。
+			// ⚠️ 这正是 D-36 时代的原样（当时那两句判据没有闸门），所以必须有一条锚点守着它。
+			name: "★★ 形状判据没有闸门（被显示的图也要过形状判据，令牌形状的图被误伤）",
+			from: "\tif (!input.embedded) {\n",
+			to: "\tif (true) {\n",
+			expect: "同一条地址被**显示**时不受形状约束",
+		},
+		{
+			// 后果：**第二道判据（"后缀得像文件类型"）没了** ⇒ `…/tree/5.1-translation_terms`
+			//（GitHub 分支名 —— 点在 `5` 与 `1` 之间）、`…/tree/v1.2.3`（版本号，点后面是纯数字）
+			// 这类地址又混进候选清单，而它们**永远搬不成**（那是一条页面）。
+			// 2026-10-16 用户**第五次**实测报的正是这个。
+			name: "★★ 漏掉「后缀得像文件类型」那道（分支名 / 版本号又进清单）",
+			from:
+				"\t\tif (!urlHasFileTypeSuffix(src)) {\n" +
+				"\t\t\treturn { action: \"ignore\", reason: NOT_FILE_TYPE_REASON };\n" +
+				"\t\t}\n",
+			to: "\t\t// 变异：只看「尾巴有没有点」，不问后缀像不像文件类型\n",
+			expect: "后缀不像文件类型的地址不该进清单",
+		},
+		{
+			// 后果：**网页地址又进了候选**（`.html` 尾巴有点，能过"像个文件名"那条）⇒
+			// 用户看到的是一张"待上传文件"的清单里列着一个**永远搬不成**的页面
+			//（下载端必拒 `text/html`）。2026-10-16 用户第二、三次实测报的正是这个：
+			// 先是 B站播放器的 `<iframe src="…/player.html?…">`，后是企业系统的
+			// `[原文链接](…/pd.jsp?id=172#:~:text=…)`。
+			name: "★★ 不拦网页地址（.html 页 / .jsp 页面程序又进清单）",
+			from:
+				'\tif (isWebPageExtension(extension)) {\n' +
+				"\t\treturn { action: \"ignore\", reason: PAGE_REASON };\n" +
+				"\t}\n",
+			to: "\t// 变异：不拦网页\n",
+			expect: "网页地址不许进候选",
+		},
+		{
+			// 后果：**判据放宽成"把真实文件后缀也拦掉"** ⇒ 用户笔记里那些
+			// `[下载](…/readme.txt)` 这类**可以缓存**的链接再也不出现（功能静默少一半）。
+			// ⚠️ 最先失败的断言是**更早**那条"不许过度拦截"（2b 节直接问 `a.mp3` / `readme.txt`），
+			// 所以 `expect` 抄的是它 —— 后面 2c 那组反向断言守的是同一件事的另一半。
+			name: "★★ 网页判据放宽成「顺手把真实文本后缀也拦掉」（过度拦截）",
+			from: '\tif (isWebPageExtension(extension)) {',
+			to: '\tif (isWebPageExtension(extension) || ["txt", "csv", "json", "xml", "py"].includes(String(extension))) {',
+			expect: "不许过度拦截",
+		},
 	],
 });

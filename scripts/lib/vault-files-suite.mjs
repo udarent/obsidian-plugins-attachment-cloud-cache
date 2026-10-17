@@ -30,16 +30,23 @@ export async function runVaultFilesSuite(mod) {
 		DEFAULT_CONTENT_TYPE,
 		embedKindFor,
 		extensionFromMime,
+		extensionFromUrl,
 		extensionOfName,
 		fallbackFileName,
 		hostAttachmentFolder,
 		isEmbeddable,
+		isNoteLikeExtension,
+		isWebPageExtension,
+		looksLikeFileName,
+		NOTE_LIKE_REASON,
 		parentFolderOf,
 		resolveContentType,
 		resolveExtension,
 		uniqueVaultPath,
 		normalizeVaultPath,
 		baseNameForDuplicate,
+		urlHasFileTypeSuffix,
+		urlLooksLikeFileName,
 	} = mod;
 
 	// ============================================================
@@ -58,6 +65,53 @@ export async function runVaultFilesSuite(mod) {
 	assert.equal(extensionOfName("   "), "");
 	assert.equal(extensionOfName(null), "", "非字符串不应抛错");
 	assert.equal(extensionOfName(42), "", "非字符串不应抛错");
+
+	// ⭐ `extensionFromUrl`：从**地址**取扩展名 —— 与文件名那条共用同一个形状判据，
+	// 差别只有"先切掉查询串与锚点"。2026-10-16 从 `core/external-cache.ts` 挪来这里
+	// （站外判定层 `decideExternalCache` 也要用它，而那边不能反向 import external-cache），
+	// 断言跟着搬 —— 于是"扩展名怎么取"全库仍只有一处定义、一处穷举。
+	assert.equal(extensionFromUrl("https://x.com/a.png?v=1#f"), "png", "★ 扩展名要切掉查询串与锚点");
+	assert.equal(extensionFromUrl("https://x.com/a.PNG"), "png", "大小写归一");
+	assert.equal(extensionFromUrl("https://x.com/a"), "", "没有扩展名");
+	assert.equal(extensionFromUrl(null), "", "非字符串");
+
+	// ⭐⭐ `urlLooksLikeFileName` / `looksLikeFileName`：**"尾巴像不像文件名"** ——
+	// 只要求末尾那一段里有点，**不要求后缀可信**。它与上面那条的差别是刻意的：
+	// 上面那条决定落盘的文件名与 Content-Type（所以要过形状检查、会退到 MIME），
+	// 这一条只回答"这条地址看起来是不是一个文件"（站外候选的形状判据）。
+	assert.equal(urlLooksLikeFileName("https://x.com/a.png?v=1#f"), true, "★ 后缀在查询串之前");
+	assert.equal(urlLooksLikeFileName("https://x.com/page"), false, "★ 没有点的尾巴是页面/目录的形状");
+	assert.equal(urlLooksLikeFileName("https://x.com/download/"), false, "只有结尾斜杠");
+	assert.equal(urlLooksLikeFileName("https://x.com/2024.10/notes"), false, "★ 点在前面的目录里不算");
+	// ⚠️ **后缀不可信 ≠ 不是文件**：令牌形状（Bing CDN 那种）末尾带点，它就是个文件。
+	assert.equal(
+		urlLooksLikeFileName("https://x.com/th/id/OIP-C.sPb8lvTxu-zlEqgEmUgCTwAAAA?w=208"),
+		true,
+		"★★ 后缀是令牌也算文件（不能被「后缀得可信」误伤）"
+	);
+	assert.equal(looksLikeFileName(".gitignore"), false, "★ 开头的点不算后缀（与 extensionOfName 同一条）");
+	assert.equal(looksLikeFileName("a.b"), true, "带点的名字");
+	assert.equal(urlLooksLikeFileName(null), false, "非字符串不抛错");
+	assert.equal(looksLikeFileName(undefined), false, "非字符串不抛错");
+
+	// ⭐⭐ 宿主自己的文本文件（笔记 / 画布 / 数据库）**不是附件** ——
+	// 两个入口（库内候选 `selectUploadCandidates` / 站外判定 `decideExternalCache`）
+	// 共用这一份判据，所以穷举也放在这里。
+	assert.equal(isNoteLikeExtension("md"), true, "★ 笔记（.md）要认出来");
+	assert.equal(isNoteLikeExtension("canvas"), true, "画布");
+	assert.equal(isNoteLikeExtension("base"), true, "数据库");
+	assert.equal(isNoteLikeExtension(".MD"), true, "⭐ 调用方可能带着点、也可能大写");
+	assert.equal(isNoteLikeExtension("  Canvas  "), true, "空白要能容忍");
+	assert.equal(isNoteLikeExtension("markdown"), false, "⚠️ 只有这三种（宿主不把 .markdown 当笔记）");
+	assert.equal(isNoteLikeExtension("mdx"), false, "⚠️ 不许前缀式放行");
+	assert.equal(isNoteLikeExtension("png"), false, "图片不是笔记");
+	assert.equal(isNoteLikeExtension(""), false);
+	assert.equal(isNoteLikeExtension(undefined), false, "非字符串不应抛错");
+	assert.equal(
+		NOTE_LIKE_REASON,
+		"是笔记/画布/数据库文件，不是附件",
+		"★ 判据的文案只有一份（两个调用点共用，别让它漂成两种说法）"
+	);
 
 	// ⭐⭐ "最后一个点之后的东西"不一定是扩展名。
 	//
@@ -100,6 +154,42 @@ export async function runVaultFilesSuite(mod) {
 		"",
 		"⭐ 前导点是隐藏文件而不是扩展名（短名字也要挡住 —— 长名字会被长度检查顺手挡掉，测不出这一条）"
 	);
+
+	// ⭐⭐ `urlHasFileTypeSuffix`：**"那个后缀像不像文件类型"** —— 站外候选的**第二道**形状判据
+	//（第一道是上面那条"尾巴得有点"）。两道合起来才拦得住用户 2026-10-16 报的那一串：
+	// 尾巴有点、可后缀取不出来（分支名）或是纯数字（版本号）。
+	//
+	// ⚠️ 位置刻意在**"扩展名必须长得像扩展名"那一组之后**：这条判据**依赖**它
+	//（`extensionFromUrl` 取不出后缀时这里必须答 false）—— 断言顺序反过来的话，
+	// "形状检查被去掉"那个既有变异的**最先失败**会挪到这一组来，把它的锚点带偏
+	//（2026-10-16 当场踩到：报「期望含『长令牌』、实际『后缀不像文件类型』」）。
+	for (const src of [
+		// 分支名 / 版本号：点后面取不出扩展名（含 `-`）或纯数字
+		"https://github.com/maxrossello/redmine_translation_terms/tree/5.1-translation_terms",
+		"https://x.com/tree/v1.2.3",
+		"https://x.com/releases/1.0",
+		"https://x.com/page", // 没有点（第一道判据负责，这里也答 false）
+		"https://x.com/download/",
+		"https://x.com/2024.10/notes",
+	]) {
+		assert.equal(urlHasFileTypeSuffix(src), false, `★ 后缀不像文件类型（分支名 / 版本号 / 无后缀）：${src}`);
+	}
+	for (const src of [
+		"https://x.com/report.pdf",
+		"https://x.com/tools/installer.exe",
+		"https://x.com/os/ubuntu.iso",
+		"https://x.com/backup.7z",
+		"https://x.com/2024.10/photo.jpg",
+		"https://x.com/a.b",
+		"https://x.com/some/file.PDF?v=1#f",
+	]) {
+		assert.equal(
+			urlHasFileTypeSuffix(src),
+			true,
+			`★★ 真实文件类型后缀要放行（**不按「我们认不认识」判**）：${src}`
+		);
+	}
+	assert.equal(urlHasFileTypeSuffix(null), false, "非字符串不抛错");
 
 	// ============================================================
 	// 2. 从 MIME 推扩展名
@@ -190,6 +280,48 @@ export async function runVaultFilesSuite(mod) {
 	);
 	assert.equal(resolveContentType("photo.png", ""), "image/png", "空 MIME 应按扩展名推");
 	assert.equal(resolveContentType("photo.xyz", ""), DEFAULT_CONTENT_TYPE, "推不出就兜底");
+
+	// ⭐⭐ isWebPageExtension：**这个后缀指向的是页面，还是一个文件**。
+	// 站外候选那一层的"网页不算附件"闸门用的就是它（`decideExternalCache`），
+	// 而判据的**定义**在这里 —— 所以这一组断言与 `external-decide-suite` 里那一组
+	// 是同一条通路的两个端点，各有一条变异锚点守着。
+	//
+	// 2026-10-16 用户**第三次**实测报的：他笔记里 `[原文链接](…/pd.jsp?id=172#:~:text=…)`
+	// 进了「上传附件」的清单。它尾巴有点（过了"像个文件名"那条），
+	// 后缀也不是 `text/html`（过了第一版网页闸门），但它是**服务端现算出来的一张页面**。
+	// 用户的原话：「实际上这是一个网页地址」；同时补了界限：
+	// 「如果是外部网站的文件下载链接，应该看做是附件才对」。
+	for (const ext of ["html", "htm", ".HTML"]) {
+		assert.equal(isWebPageExtension(ext), true, `★ 静态页面不算附件（后缀 ${ext}）`);
+	}
+	// ⚠️ 顺序刻意：**集合那半**的断言放在类型表那半之后，而且从"服务端页面"这一组开始 ——
+	// 于是"集合判据被删掉"这个变异会**首先**红在这一组的第一条上（锚点的 `expect` 抄的就是它）。
+	for (const ext of ["php", "php5", "asp", "aspx", "jsp", "jspx", "do", "action", "cgi", "cfm", "phtml"]) {
+		assert.equal(
+			isWebPageExtension(ext),
+			true,
+			`★★ 服务端页面（后缀是脚本语言 / 框架的名字）同样不算附件：${ext}`
+		);
+	}
+	// 静态页面的**同类写法**（类型表里没有它们，所以它们由上面那个集合负责）
+	for (const ext of ["xhtml", "shtml"]) {
+		assert.equal(isWebPageExtension(ext), true, `★ 静态页面的同类写法不算附件（后缀 ${ext}）`);
+	}
+	// ⚠️ 反向：**真实文件后缀照旧是文件** —— 闸门按"是不是页面"判，
+	// 不按"我们认不认识这个后缀"（后者会把用户的真实文件静默拦在清单外）。
+	for (const ext of ["pdf", "zip", "png", "mp3", "txt", "csv", "json", "xml", "docx", "exe", "iso"]) {
+		assert.equal(
+			isWebPageExtension(ext),
+			false,
+			`★ 真实文件后缀不是页面，别一起拦掉：${ext}`
+		);
+	}
+	// ⚠️ 反向之二：**脚本文件 ≠ 页面程序**。`py` / `rb` / `pl` 是可以下载的源码文件。
+	for (const ext of ["py", "rb", "pl"]) {
+		assert.equal(isWebPageExtension(ext), false, `★ 脚本文件（源码可下载）不是页面：${ext}`);
+	}
+	assert.equal(isWebPageExtension(""), false, "空扩展名不是页面（由形状判据负责）");
+	assert.equal(isWebPageExtension(null), false, "非字符串不抛错");
 
 	// ============================================================
 	// 5. 无文件名时造一个（截图粘贴）

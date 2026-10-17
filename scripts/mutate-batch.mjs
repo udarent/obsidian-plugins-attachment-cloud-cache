@@ -34,11 +34,10 @@ await runMutations({
 			// 锚点因此改成打在**调用**上（那个正则本身在另一个文件里）。
 			name: "★ 外链候选漏掉行内 HTML（普通链接指向的文件永远进不了候选）",
 			from:
-				"\tfor (const { value } of htmlAttributeTargets(text)) {\n" +
-				"\t\tif (isHttpUrl(value)) urls.add(value);",
-			to:
-				"\tfor (const { value } of []) {\n" +
-				"\t\tif (isHttpUrl(value)) urls.add(value);",
+				"\tfor (const { value, tag } of htmlAttributeTargets(text)) {\n" +
+				"\t\tif (isHttpUrl(value)) add(http, value, EMBED_TAGS.has(tag));\n" +
+				"\t}\n",
+			to: "\t// 变异：漏掉行内 HTML\n",
 			expect: "行内 HTML",
 		},
 		{
@@ -136,6 +135,36 @@ await runMutations({
 			from: "\t\tconst forms = linkTargetForms(target);",
 			to: "\t\tconst forms = linkTargetForms(target).slice(0, 1);",
 			expect: "画布文本里的编码写法也要解析到真实文件",
+		},
+		{
+			// ⚠️ 2026-10-16：判据本身住在 `vault-files.ts`（站外那一路也要用它），
+			// 所以这里锚的是**调用**（与 `mutate-vault-files` 那条一起才覆盖完整通路）。
+			// 后果：**笔记被当附件上传** —— 它正文里的链接会被改写成远端地址，
+			// 而宿主仍按后缀把它当笔记索引 ⇒ 一篇笔记被当成图片对象，wikilink 也跟着断。
+			name: "★ 库内候选不再排除笔记/画布/数据库文件（把笔记当附件上传）",
+			from: "\t\tif (isNoteLikeExtension(extension)) {\n",
+			to: "\t\tif (false) {\n",
+			expect: "笔记文件不是附件",
+		},
+		{
+			// 后果：**已经不在了的本机文件候选不会被摘掉** ⇒ 清单里出现"点了一定失败"的条目
+			//（2026-10-16 用户实测报的：WPS 的 `Temp/ksohtml/wpsDD.tmp.jpg` —— 文件早被删了）。
+			// ⚠️ "在不在"是 I/O（探测由调用方注入），所以这里锚的是**分流**那一句。
+			name: "★★ 不按探测结果摘掉已不在的本机文件（清单里留一条必然失败的条目）",
+			from: "\t\tif (!path || !(await probe(path))) {\n",
+			to: "\t\tif (!path) {\n",
+			expect: "已经不在的本机文件必须摘掉",
+		},
+		{
+			// 后果：**采集层把每条地址都当成"笔记在显示它"** ⇒ 判定层那两道形状判据整个失效，
+			// 正文里的**普通链接**（wiki 页、GitHub 分支名、版本号）又出现在候选清单里 ——
+			// 而它们在笔记里只是一条**链接**，不是附件。
+			// ⚠️ 这一条锚在**采集层**（`!` 前缀那一格）：判据住在判定层，
+			// 而"这条地址是不是被显示"这个**输入**是从这里喂过去的 —— 喂错了，判据再对也没用。
+			name: "★★ 采集层不看「是显示还是指向」（普通链接绕开形状判据）",
+			from: '\t\tadd(http, raw, at > 0 && text[at - 1] === "!");\n',
+			to: "\t\tadd(http, raw, true);\n",
+			expect: "都不算候选",
 		},
 	],
 });

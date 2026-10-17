@@ -383,7 +383,7 @@ export async function runTransferSuite(mod) {
 	}
 
 	// ============================================================
-	// 3. isHookableFile —— ⭐ 1.1.0 起**任何真实文件**都算（需求 R15）
+	// 3. isHookableFile —— ⭐ 1.1.0 起**不再有"我认识的类型"白名单**（需求 R15）
 	//
 	// 判据从"类型在用户勾选的清单里"变成"这是个文件"：
 	// 用户粘一个文件的意思就是"帮我传上去"，而不是"帮我传上去，但前提是我
@@ -442,8 +442,10 @@ export async function runTransferSuite(mod) {
 	);
 
 	// ⭐ 1.1.0：混合载荷（图 + PDF）→ **照样整批接管**。
-	// 以前这里是"有一个不认识就整批放行"；类型闸门移除之后不再有"不认识"的文件，
-	// 这条断言因此反向 —— 它守的是"用户粘什么就传什么"这个新语义。
+	// 以前这里是"有一个不认识就整批放行"；白名单取消之后不再有"我**不认识**"的文件，
+	// 这条断言因此反向 —— 它守的是"**附件**粘什么就传什么"这个语义。
+	// ⚠️ 但"任何类型"这个说法不准确（用户 2026-10-16 纠正）：宿主自己的三种文本文件
+	// 会被**逐份**剔除，见下面那一段。
 	assert.equal(
 		pastePlan(makeTransfer({ files: [png(), pdf()] })).intercept,
 		true,
@@ -451,6 +453,41 @@ export async function runTransferSuite(mod) {
 	);
 	assert.equal(pastePlan(makeTransfer({ files: [pdf()] })).intercept, true, "只粘一个 PDF 也要接管");
 	assert.equal(pastePlan(makeTransfer({ files: [png(), makeFile("b.jpg", "image/jpeg")] })).intercept, true, "全是图片应接管");
+
+	// ⭐⭐ 载荷里那些"宿主自己的文本文件"（笔记 / 画布 / 数据库）要**逐份剔除** ——
+	// 它们不是附件。判据与库内候选 / 站外候选**同一份**（`vault-files.ts::isNoteLikeExtension`）。
+	// 用户 2026-10-16 定的口径：「任何类型都接管」这个说法不准确，只含**附件类型**才对。
+	assert.equal(
+		pastePlan(makeTransfer({ files: [makeFile("笔记.md", "text/markdown")] })).intercept,
+		false,
+		"★★ 只粘一个 .md 时不该接管（它是宿主的笔记，不是附件）"
+	);
+	{
+		// ⚠️ **逐份过滤，不是"有一个不合格就整批放行"**：混着粘进来时，其余那些是真附件，
+		// 必须照旧上传 —— 整批放行会让用户以为"粘了没反应"（那是另一种坏法）。
+		const mixed = pastePlan(makeTransfer({ files: [png(), makeFile("笔记.md", "text/markdown")] }));
+		assert.equal(mixed.intercept, true, "⭐ 图 + 笔记混在一起仍要接管（笔记去掉，图照传）");
+		assert.deepEqual(
+			mixed.files.map((file) => file.name),
+			["shot.png"],
+			"★★ 载荷里的 .md 必须被**逐份**剔除，而不是整批放行"
+		);
+	}
+	for (const name of ["boards/x.canvas", "db/x.base", "NOTES.MD"]) {
+		assert.equal(
+			pastePlan(makeTransfer({ files: [makeFile(name, "application/octet-stream")] })).intercept,
+			false,
+			`★ 只粘 ${name} 时不该接管（画布 / 数据库 / 大写后缀是同一类）`
+		);
+	}
+	// ⚠️ 反向：只排除**宿主自己的那三种文本文件**，其余一概照旧（R15「全格式支持」没有变）
+	for (const name of ["data.txt", "archive.zip", "id_rsa", "notes.markdown", "x.mdx"]) {
+		assert.equal(
+			pastePlan(makeTransfer({ files: [makeFile(name, "application/octet-stream")] })).intercept,
+			true,
+			`★ ${name} 仍要接管（只排除宿主自己的那三种文本文件）`
+		);
+	}
 
 	// getData 缺失时按"没有文本"处理（否则功能会静默失效）
 	const noGetData = { files: [png()] };
@@ -506,6 +543,22 @@ export async function runTransferSuite(mod) {
 	);
 	// 混合与"以前不可处理"的文件 —— 现在都要接管
 	assert.equal(dropPlan(makeTransfer({ files: [png(), pdf()] })).intercept, true, "混合载荷也要接管");
+
+	// ⭐⭐ 拖入的载荷同样**逐份剔除**"宿主自己的文本文件"（与粘贴那条共用同一份判据）
+	assert.equal(
+		dropPlan(makeTransfer({ files: [makeFile("笔记.md", "text/markdown")] })).intercept,
+		false,
+		"★★ 拖进来一个 .md 时不该接管"
+	);
+	{
+		const mixed = dropPlan(makeTransfer({ files: [png(), makeFile("笔记.md", "text/markdown")] }));
+		assert.equal(mixed.intercept, true, "⭐ 拖入「图 + 笔记」仍要接管");
+		assert.deepEqual(
+			mixed.files.map((file) => file.name),
+			["shot.png"],
+			"★★ 拖入时那 .md 也要逐份剔除（图照传）"
+		);
+	}
 	assert.equal(dropPlan(makeTransfer({ files: [pdf()] })).intercept, true, "拖入 PDF 同样要接管");
 
 	// ============================================================

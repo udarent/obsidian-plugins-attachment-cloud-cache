@@ -193,6 +193,8 @@ export function createOrphanWatcher(deps: OrphanWatchDeps): OrphanWatcher {
 export type OrphanSkipReason =
 	/** 不是我们经手过的对象 ⇒ 我们不该动它。 */
 	| "not-ours"
+	/** 站外缓存（`origin: "external"`）⇒ 一律不问，理由见 `selectOrphanAsks` 的 `isExternal`。 */
+	| "external"
 	/** 这个会话里已经问过它了（用户做过选择，别再追着问）。 */
 	| "already-asked";
 
@@ -224,6 +226,17 @@ export function selectOrphanAsks(
 	context: {
 		/** 这个 key 是不是我们经手过的（上传台账 —— 见上面那条警告）。 */
 		isOurs: (key: string) => boolean;
+		/**
+		 * 这个 key 是不是**站外缓存**（`origin: "external"`）—— 是则一律不问。
+		 *
+		 * ⭐ 理由（2026-10-16 从退役的「清理云端未使用对象…」**继承**来的，判据只有这一处）：
+		 * 站外缓存的链接**改写失败**时，笔记里留着的是**原来的站外地址**（别人的域名），
+		 * 而"谁在引用它"的判据是**按 URL 回算对象 key** —— 那种地址回算不出我们的 key，
+		 * 于是这个对象会被**误判成"没人引用"**。那条老命令为此把站外缓存**整体排除**
+		 *（它当年的模块头写着"宁可多留"）；它退役之后这条排除必须留在这里 ——
+		 * 否则会**悄悄丢掉**（两侧都不报错，只有用户会碰到）。
+		 */
+		isExternal: (key: string) => boolean;
 		/** 这个 key 在本会话里是否已经问过。 */
 		hasAsked: (key: string) => boolean;
 	}
@@ -243,6 +256,12 @@ export function selectOrphanAsks(
 
 		if (!context.isOurs(key)) {
 			skipped.push({ key, reason: "not-ours" });
+			continue;
+		}
+		// ⚠️ 顺序刻意排在 `isOurs` **之后**：站外缓存的对象**也在台账里**（是我们上传的），
+		// 所以两个条件会同时成立 —— 让"更具体的那一个"（站外缓存）成为记下来的原因。
+		if (context.isExternal(key)) {
+			skipped.push({ key, reason: "external" });
 			continue;
 		}
 		if (context.hasAsked(key)) {

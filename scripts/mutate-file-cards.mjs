@@ -41,24 +41,38 @@ await runMutations({
 			// 后果：拿不到地址时给一个空串/半截地址 ⇒ 界面拿它去加载，得到一次必然失败的请求，
 			// 且失败的表现与"这张图真的加载不出来"分不开（事后没法判断是数据问题还是网络问题）。
 			name: "★ 拿不到地址也给一个（空地址也是一次注定失败的请求）",
-			from: "\t\t\t\tthumbUrl = key ? deps.remoteUrl(key) : null;",
-			to: '\t\t\t\tthumbUrl = deps.remoteUrl(key) ?? "";',
+			from: "\t\t\t\tthumbUrls = remote ? [remote] : [];",
+			to: '\t\t\t\tthumbUrls = remote ? [remote] : [""];',
 			expect: "不给空串",
 		},
 		{
 			// 后果：图片加载失败时什么都不做 ⇒ 界面上留一个破图图标。
 			// 而它最常见的成因（桶私有 / 匿名读没开）**不是故障** —— 显示得像故障就会把人引去查错的东西。
 			name: "★ 图加载失败时不降级（界面留一个破图）",
-			from: "\t\timage.onerror = () => {\n\t\t\timage.remove();\n\t\t\tthumb.addClass(\"acc-file-badge\");\n\t\t\tthumb.setText(card.badge);\n\t\t};",
-			to: "\t\tvoid image;",
+			from:
+				"\t\t\timage.remove();\n" +
+				'\t\t\tthumb.addClass("acc-file-badge");\n' +
+				"\t\t\tthumb.setText(card.badge);\n",
+			to: "\t\t\tvoid image;\n",
 			expect: "降级成标记",
+		},
+		{
+			// 后果：**候选链只试第一条** —— 库外文件那条路给的是"宿主前缀 + 原文"两条
+			//（`file:///…` 在宿主里画不出来），只试第一条就等于把"宿主认哪一种"
+			// **又替运行时做了决定**：用户看到的还是"列表里有文件、预览看不到"。
+			// ⚠️ 这条链上"替宿主提前断言"已经错两次（D-42 的 `module.require`、
+			// D-44 的反向提前掐掉），所以这一条必须有人守。
+			name: "★★ 候选链只试第一条（库外文件仍然是「预览看不到」）",
+			from: "\t\t\tif (next) {\n",
+			to: "\t\t\tif (false) {\n",
+			expect: "接着试第二条",
 		},
 		{
 			// 后果：站外图 / 本机文件那些行**永远没有缩略图** —— 它们的图既不在库内、
 			// 也不是本存储的对象，上面那两条推导（本地副本 / 远端 key）一个都推不出来，
 			// 只能靠调用方把地址递进来（`thumb`）。忽略了它就只剩一个类型标记。
 			name: "★ 忽略调用方直接给的地址（站外 / 本机文件的行永远没有图）",
-			from: "\t\t\tif (explicit) {",
+			from: "\t\t\tif (explicit.length > 0) {",
 			to: "\t\t\tif (false) {",
 			expect: "调用方给的地址优先",
 		},
@@ -69,9 +83,21 @@ await runMutations({
 			// 可能根本不触发；更糟的是不触发时**连 `onerror` 都没有** ⇒
 			// "降级成类型标记"那条兜底也走不到，界面上就是一块空白。
 			name: "★★ 缩略图加回原生懒加载（图可能永远不出现，且连错误都不报）",
-			from: '\t\t\tattr: { src: card.thumbUrl, alt: "" },',
-			to: '\t\t\tattr: { src: card.thumbUrl, alt: "", loading: "lazy" },',
+			from: '\t\t\tattr: { src: first, alt: "" },',
+			to: '\t\t\tattr: { src: first, alt: "", loading: "lazy" },',
 			expect: "不许带 loading",
+		},
+		{
+			// 后果：**本机文件（`file:///D:/…`）那一行不再显示那条绝对路径** ⇒ 用户勾中它就是
+			// 签了"读这条路径"，而屏幕上只剩一个空副标题 —— 等于让他在**看不见风险**的情况下
+			// 点确认（本机路径正是这条披露里唯一承重的内容）。
+			// ⚠️ 这一行**不含库内路径**（"出自哪篇笔记"由运行结果说，列出来会被读成
+			// 「清单里进了一个 `.md` 文件」—— 用户 2026-10-16 三次报的同一件事）；
+			// 那条规则是**结构性**的（入参里不收 `notePath`）⇒ 不需要锚点守着，这里只守披露那半。
+			name: "★ 副标题丢掉本机文件的绝对路径（让人盲签读本机文件）",
+			from: "\treturn host || url;\n",
+			to: "\treturn host;\n",
+			expect: "本机文件（host 为空）要显示那条路径",
 		},
 	],
 });

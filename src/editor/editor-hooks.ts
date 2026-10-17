@@ -17,15 +17,18 @@
  *
  * 凡是"用户的意图不明确"的情况，一律**不接管**。理由同上：
  * 不接管的代价是"没上传"，接管的代价可能是"内容没了"。
- * 具体体现为下面三条偏保守的规则：
+ * 具体体现为下面四条偏保守的规则：
  * 1. 剪贴板里同时有文本 → 不接管（用户可能在粘文字，抢过来会丢文字）；
  * 2. 拖拽事件里**没有 files** → 是宿主的内部拖动（拖笔记/拖库内附件），必须放行；
  * 3. ⭐ 只要**有一个**文件不认识，就**整批都不接管** —— 若只接管认识的那几个，
  *    剩下那些会被我们一起挡掉、又没人插回去，等于把它们吞了。
+ * 4. ⭐⭐ **"宿主自己的文本文件"（`.md` / `.canvas` / `.base`）不是附件** ⇒ 逐份剔除。
+ *    ⚠️ 措辞上**别说成"任何类型都接管"** —— 用户 2026-10-16 明确纠正过这句：
+ *    「应该排除掉 `.md`/`.canvas`/`.base`，只含**附件**类型才是对的」。
  */
 
 import type { PluginSettings } from "../types";
-import { isEmbeddable } from "../vault-files";
+import { extensionOfName, isEmbeddable, isNoteLikeExtension } from "../vault-files";
 
 /** 文件的最小形状。用结构化类型而不是 DOM 的 `File`，便于穷举测试。 */
 export interface TransferFileLike {
@@ -136,9 +139,14 @@ export function filesFromTransfer(transfer: TransferLike | null | undefined): Tr
 /**
  * 这个载荷里的文件**可不可以交给我们**。
  *
- * ⭐ 1.1.0 起**任何真实文件都算**（含没有扩展名的）—— 用户把"哪些类型参与"
+ * ⭐ 1.1.0 起**不再有"我认识的类型"白名单** —— 用户把"哪些类型参与"
  * 交回给了插件：他粘贴一个文件，意思就是"帮我传上去"，
  * 而不是"帮我传上去，但前提是我三十个字符之前在设置里勾过这个后缀"。
+ *
+ * ⚠️⚠️ **但别把这句读成"任何类型都接管"** —— 用户 2026-10-16 明确纠正过这句描述：
+ * 「应该排除掉 `.md`/`.canvas`/`.base`，只含**附件**类型才是对的」。
+ * 那三种是**宿主自己的文档**，由 `withoutNoteLikeFiles` 在收集之后**逐份剔除**
+ * （不在这里挡 —— 这里只答"它是不是一个像文件的东西"，见下面"为什么这个函数留着不删"）。
  *
  * ## 为什么这个函数留着不删
  *
@@ -149,6 +157,40 @@ export function filesFromTransfer(transfer: TransferLike | null | undefined): Tr
  */
 export function isHookableFile(file: TransferFileLike | null | undefined): boolean {
 	return Boolean(file) && typeof file === "object";
+}
+
+/**
+ * 把"宿主自己的文本文件"（笔记 / 画布 / 数据库）从载荷里**逐份**去掉。
+ *
+ * ## 为什么它们不算附件（用户 2026-10-16 定的口径）
+ *
+ * 原文：「任何类型都接管，描述不准确，应该排除掉 `.md` / `.canvas` / `.base`，
+ * 只含**附件**类型才是对的。」⇒ 接管的是**附件**；这三类是**宿主自己的文档**。
+ * 被当附件上传的后果与库内那一条完全相同：它正文里的链接会被改写成远端地址，
+ * 而宿主仍按后缀把它当笔记索引。
+ *
+ * ⚠️ **逐份过滤，不是"有一个不合格就整批放行"**：混着粘/拖进来时，其余那些是真附件，
+ * 必须照旧上传 —— 整批放行会让用户以为"粘了没反应"（那是另一种坏法）。
+ *
+ * ⚠️ **不要**把这道闸门下沉进 `ingestAttachment`：那条链也负责**回退下载写本地副本**，
+ * 而"已经缓存过的对象"必须还能落地（旧版本可能存过这类对象）—— 否则换设备时
+ * 那份东西彻底补不回来。闸门只该放在"要不要收它进来"的**入口**层
+ *（粘贴/拖入、批量候选、站外候选、本机候选，共四处）。
+ */
+function withoutNoteLikeFiles(files: readonly TransferFileLike[]): TransferFileLike[] {
+	// ⚠️ 用**文件名**判，不看 MIME：这三类后缀是宿主的约定，而 `.md` 的 MIME 在
+	// 不同来源下五花八门（`text/markdown` / `text/plain` / `application/octet-stream`…）。
+	return files.filter((file) => !isNoteLikeExtension(extensionOfName(file.name)));
+}
+
+/**
+ * "载荷里没有可处理的文件" —— 但**两种"空"要分开说**（诊断用）：
+ * 压根没有文件，还是有文件却**全是宿主自己的文本文件**（`.md` / `.canvas` / `.base`）。
+ *
+ * ⚠️ 抽出来只为一件事：那句话只能有**一处**。两处各写一遍，改了一处另一处就悄悄变成假话。
+ */
+function refuseEmptyPayload(raw: readonly TransferFileLike[], emptyReason: string): TransferPlan {
+	return refuse(raw.length > 0 ? "载荷里只有笔记/画布/数据库文件（它们不是附件）" : emptyReason);
 }
 
 /** 剪贴板里是否还有**文本**内容（用于判断用户是不是在粘文字）。 */
@@ -176,8 +218,9 @@ export function shouldInterceptPaste(
 ): TransferPlan {
 	if (!settings.autoUpload) return refuse("自动上传已关闭");
 
-	const files = filesFromTransfer(transfer);
-	if (files.length === 0) return refuse("载荷里没有文件");
+	const raw = filesFromTransfer(transfer);
+	const files = withoutNoteLikeFiles(raw);
+	if (files.length === 0) return refuseEmptyPayload(raw, "载荷里没有文件");
 
 	// ⚠️ 保守规则：剪贴板里同时有文本 → 不接管。
 	// 用户很可能在粘一段文字（有些应用复制图片时也会带上文本），
@@ -205,8 +248,9 @@ export function shouldInterceptDrop(
 		return refuse("载荷里没有 files（很可能是库内拖动，应由宿主处理）");
 	}
 
-	const files = filesFromTransfer(transfer);
-	if (files.length === 0) return refuse("载荷里没有可用文件");
+	const raw = filesFromTransfer(transfer);
+	const files = withoutNoteLikeFiles(raw);
+	if (files.length === 0) return refuseEmptyPayload(raw, "载荷里没有可用文件");
 
 	return accept(files, "有外部拖入的文件");
 }
@@ -218,7 +262,7 @@ export function shouldInterceptDrop(
  * 我们仍然 `preventDefault()` 了，剩下的会被宿主跳过、而我们也不管 → 它们就消失了。
  * 宁可整批放行（文件没上传），也不能吞。
  *
- * ⚠️ 1.1.0 起类型闸门没了、任何真实文件都会接管，所以这一段**当前不可达**：
+ * ⚠️ 1.1.0 起没有"我认识的类型"白名单了（只排除宿主自己的那三种文本文件），所以这一段**当前不可达**：
  * `filesFromTransfer` 只产出对象，而 `isHookableFile` 也只挡非对象 ——
  * 过滤结果必然为空。这一点被变异验证如实报了"漏过"（那条变异抓不住）。
  *

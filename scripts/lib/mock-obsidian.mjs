@@ -469,6 +469,15 @@ export const Platform = {
 	isDesktopApp: true,
 	isIosApp: false,
 	isAndroidApp: false,
+	/**
+	 * ⭐ 宿主自己的**本地文件前缀**（`main.ts::localThumbUrls` 要它）。
+	 *
+	 * 真机上桌面端是 `app://random-id/`（取代旧的 `app://local/`）、移动端是 `file:///`；
+	 * 这里取 `app://local/`，与下面 `getResourcePath` 那一份（用的正是它）保持一致。
+	 * ⚠️ 替身给的值只要**形状对**（`app://` + 结尾斜杠）—— 断言要的是"库外文件行
+	 * 不再只有 `file:///…` 一条候选"，而不是某个具体的主机名。
+	 */
+	resourcePathPrefix: "app://local/",
 };
 
 /** 按 `mobile` 选项设置 Platform 标志。 */
@@ -1012,7 +1021,7 @@ export function createAppMock(rootDir, opts = {}) {
 		/**
 		 * 填宿主的链接索引（`metadataCache.resolvedLinks`）。
 		 *
-		 * ⚠️ 没填时它是**空的** —— 于是"上传已存在的附件"这条命令什么都不会处理
+		 * ⚠️ 没填时它是**空的** —— 于是"上传附件"这条命令什么都不会处理
 		 * （候选只收被引用着的文件）。所以用到那条命令的用例**必须**显式声明引用，
 		 * 否则会看到命令空转；那时断言会响亮地失败，而不是悄悄放过。
 		 */

@@ -63,7 +63,7 @@ export interface PluginContext {
 	readonly confirmMaintenance: (options: ConfirmOptions) => Promise<boolean>;
 	/**
 	 * 开一个**清单式弹窗**（缩略图 + 勾选（含全选/全不选）+ 进度），三条链共用
-	 * （上传已有附件 / 清理云端空间 / 挑选要缓存的文件）。返回 `null` = 取消或直接关掉。
+	 * （上传附件 / 检查未被引用的云端附件 / 挑选要缓存的文件）。返回 `null` = 取消或直接关掉。
 	 *
 	 * ⚠️ 与 `confirmMaintenance` 的分工：那个只有"是/否"，用于**一批已经确定的动作**；
 	 * 这个用于"先让用户挑出要处理哪些，再看着它们逐个跑完"。两者都还在用。
@@ -73,7 +73,7 @@ export interface PluginContext {
 	 * 维护类流程共用的依赖装配（`maintenance/run.ts` 那一家）。
 	 *
 	 * ⚠️ 它进这里而不是进某一条流程的文件：**四条**流程都要它
-	 * （批量上传、淘汰、上传已有附件、空间回收）—— 按本项目的归位判据
+	 * （批量上传、淘汰、上传附件、空间回收）—— 按本项目的归位判据
 	 * （"一个东西进哪个文件看谁在用"），共用的就得放在共用层。
 	 *
 	 * ⚠️ 与 `PluginContext` 的其它成员一样是**函数**而不是字段：它读 `settings`
@@ -91,4 +91,16 @@ export interface PluginContext {
 	 * 而不是在这里判断"是不是 Electron"（那样一处判断会慢慢承载好几个不相干的功能）。
 	 */
 	readonly isDesktop: () => boolean;
+	/**
+	 * 一条库外文件地址（`file:///D:/…`）在清单行里**该用哪些地址当缩略图**（按优先次序）。
+	 *
+	 * ⚠️ 为什么这也要一个接缝（而不是在流程层直接拼）：它要用**宿主自己的**本地文件前缀
+	 * （`Platform.resourcePathPrefix`）—— 那是一次宿主调用，而"谁去问宿主"按纪律只有一处
+	 * （`main.ts`）；流程层与界面层收到的是**结果**（一串候选地址）。
+	 *
+	 * ⚠️ 为什么不给单个地址：库外文件的地址形式**不由我们定**（`file:///…` 在宿主里画不出来，
+	 * 见 `local-file.ts::localThumbCandidates`），而"宿主认哪一种"由**运行时**说了算 ——
+	 * 渲染时逐个试、全失败才降级成类型标记。
+	 */
+	readonly localThumbUrls: (url: string) => string[];
 }

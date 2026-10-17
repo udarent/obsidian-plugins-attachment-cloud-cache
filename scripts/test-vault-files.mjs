@@ -19,7 +19,15 @@ await withLoadedTs("src/vault-files", async (mod) => {
 			"is not an extension, and an extension has to *look* like one — the token a CDN leaves " +
 			"after the last dot in a URL is not a type, so it falls back to the MIME (otherwise the " +
 			"cached copy is named after the token and Obsidian does not even show unknown extensions); " +
-			"Content-Type derived and defaulted for every common attachment kind (pdf/audio/video/archives/docs) so public links preview instead of force-downloading, with the embeddable table pinned row by row (tiff/heic/ico are deliberately not embeddable in the host, so they degrade to plain links); parentFolderOf normalises " +
+			"Content-Type derived and defaulted for every common attachment kind (pdf/audio/video/archives/docs) so public links preview instead of force-downloading, with the embeddable table pinned row by row (tiff/heic/ico are deliberately not embeddable in the host, so they degrade to plain links); and \"is this suffix a page or a file\" answered in one place — static pages (html/htm/xhtml/shtml) " +
+			"and server-side page programs (php/asp/jsp/do/action/cgi/cfm) are pages, while real file " +
+			"suffixes are not — including ones our type table does not know (exe/iso) and script *files* " +
+			"(py/rb/pl), because the question is \"does this point at a page\", not \"do we recognise this " +
+			"suffix\"; and \"does this address look like a file\" answered by two shape questions — the tail " +
+			"must contain a dot, and that suffix must *look* like a file type (a repo branch such as " +
+			"5.1-translation_terms or a version such as v1.2.3 is refused there) — while both stay silent for " +
+			"an address the note is merely *pointing at* rather than displaying, and neither is ever a " +
+			"whitelist (exe/iso are real files we simply do not know); parentFolderOf normalises " +
 			"separators; uniqueVaultPath never overwrites — it consults both the host index and the " +
 			"real disk, is capped, and fails loudly rather than looping or clobbering; and the host's " +
 			"own duplicate-name convention (\"name 1.ext\") parses back to \"name.ext\" — and only that " +

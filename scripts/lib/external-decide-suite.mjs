@@ -62,6 +62,10 @@ export function runExternalDecideSuite(mod) {
 			configured: options.configured ?? true,
 			// 默认按**自动**那一路问；要问显式工具就显式传 `purpose: "manual"`。
 			purpose: options.purpose ?? "auto",
+			// ⭐ 默认按"**笔记在显示它**"（`![]()` / `<img>` —— 渲染路径那一路的语义）。
+			// 要问"**只被指向**"的地址（正文里的普通链接 `[]()` / `<a>`）就显式传 `embedded: false`
+			// —— 那两道形状判据只对后者施加（见 `decideExternalCache` 里 `embedded` 的说明）。
+			embedded: options.embedded ?? true,
 			blockedHost: options.blockedHost,
 		});
 
@@ -105,6 +109,249 @@ export function runExternalDecideSuite(mod) {
 	// 解析不出主机名的 http(s) 地址也 ignore
 	assert.equal(decide("https://").action, "ignore", "（无主机名）应 ignore");
 	assert.equal(decide("not a url").action, "ignore", "（不是 URL）应 ignore");
+
+	// ============================================================
+	// 2b. ⭐⭐ 指向**宿主自己的文本文件**（笔记 / 画布 / 数据库）的地址 → ignore
+	// ============================================================
+	// 判据与库里那条（`selectUploadCandidates` 的「是笔记/画布/数据库文件，不是附件」）
+	// **是同一份** `isNoteLikeExtension`，理由也一样：搬下来的那份会落进库，
+	// 而宿主按后缀把它当笔记索引 ⇒ 用户的库里凭空多出一篇笔记。
+	// ⚠️ **两路都要拦**：`auto`（打开笔记就搬）与 `manual`（列进候选清单）。
+	// 用户 2026-10-16 报的正是后者：笔记里链接的远程 `.md` 出现在了
+	// 「上传附件」的清单里。
+	for (const [label, src] of [
+		["笔记", "https://third-party.example.net/notes/intro.md"],
+		["带查询串的笔记", "https://third-party.example.net/notes/intro.md?raw=1"],
+		["带锚点的笔记", "https://third-party.example.net/notes/intro.md#%E6%A0%87%E9%A2%98"],
+		["大写后缀", "https://third-party.example.net/NOTES/INTRO.MD"],
+		["画布", "https://third-party.example.net/boards/talk.canvas"],
+		["数据库", "https://third-party.example.net/db/table.base"],
+	]) {
+		for (const purpose of ["auto", "manual"]) {
+			assert.equal(
+				decide(src, { settings: { externalImageCache: true }, purpose }).action,
+				"ignore",
+				`★ 指向${label}的地址不该被搬走（purpose=${purpose}）：${src}`
+			);
+		}
+	}
+
+	// ⚠️ 反向断言：**不许**顺手把"凡文档皆拦掉"。R15 明确要 PDF / 压缩包 / 音频进来，
+	// 而 `.txt` 这类不在宿主笔记的三种后缀里，仍按原样进候选（下载时由 `text/*` 拒收）。
+	for (const src of [
+		"https://third-party.example.net/doc.pdf",
+		"https://third-party.example.net/pack.zip",
+		"https://third-party.example.net/a.mp3",
+		"https://third-party.example.net/readme.txt",
+	]) {
+		assert.equal(decide(src).action, "cache", `★ 这些仍要能进候选（不许过度拦截）：${src}`);
+	}
+
+	// ============================================================
+	// 2c. ⭐⭐ "**只被指向**"的地址必须看起来像个**文件**（闸门是 `embedded`，不是 `purpose`）
+	// ============================================================
+	// R15 起「普通链接一律收」（动机是 `[报告](…/report.pdf)` 这种最常见的写法），
+	// 代价是候选里会混进**网页**。以前靠"下载那一步的 `text/html` 判据"兜底 ——
+	// 用户 2026-10-16 实测报的正是这个代价：「上传附件」的清单里出现了笔记里的
+	// **企业 wiki 页链接**（`…/wiki/资料归档管理规定?wfw…`，没有扩展名）。
+	// 用户的原话：**那个文件压根就不该进列表选项** —— 它不是"搬下来失败"，而是根本不该出现。
+	// ⇒ 两道判据（见下面两组），**闸门是"笔记在显示它还是只指向它"**。
+	// ⚠️ **`auto` 那一路不受约束**：它处理的元素是宿主**已经渲染出来的资源**
+	//（img / audio / video —— 天然全是"被显示的"），地址有没有扩展名与"它是不是图"毫无关系
+	//（`/photo?id=5`、`/p/2024/10/1` 这类很常见）—— 把这条也套上去，
+	// 等于让那类图**永远不被缓存**（而且不报错）。§2e 有**反向**断言守着这个边界。
+	//
+	// 第一道：**尾巴得有点**（没有点的尾巴是页面 / 目录 / 接口的形状）
+	for (const [label, src] of [
+		[
+			"知识库页面（没有扩展名）",
+			"https://third-party.example.net/projects/m23003/wiki/%E8%B5%84%E6%96%99%E5%BD%92%E6%A1%A3%E7%AE%A1%E7%90%86%E8%A7%84%E5%AE%9A?wework_cfm_code=x",
+		],
+		["没有扩展名的路径", "https://third-party.example.net/some/page"],
+		["只有结尾斜杠", "https://third-party.example.net/download/"],
+		["点在前面的目录里（文件名没有后缀）", "https://third-party.example.net/2024.10/notes"],
+	]) {
+		const d = decide(src, { purpose: "manual", embedded: false });
+		assert.equal(
+			d.action,
+			"ignore",
+			`★★ 只被指向的地址必须看起来像个文件，否则不该进清单（${label}）：${src}`
+		);
+		assert.ok(String(d.reason).includes("不是文件"), `★ 跳过的原因要说得出为什么（${label}）：${d.reason}`);
+	}
+
+	// ⭐⭐ 第二道：**那个后缀得像文件类型** —— `…/tree/5.1-translation_terms`（用户**第五次**实测报的：
+	// GitHub 的分支名，点在 `5` 与 `1` 之间，取不出扩展名）、`…/tree/v1.2.3` 与 `…/releases/1.0`
+	//（点后面是**纯数字** —— 版本号 / 编号的形状；真实文件类型不会只由数字组成：`.7z`/`.3gp` 都带字母）。
+	// ⚠️⚠️ 这一道**绝不能**写成"后缀得是我们认识的类型"（白名单）：那会把类型表里没有的**真实文件**
+	//（`.exe` / `.iso`）**静默**拦在清单外。用户的原话：「**如果是外部网站的文件下载链接，
+	// 应该看做是附件才对**」—— §2d 那组就是它的反向断言。
+	for (const [label, src] of [
+		[
+			"GitHub 分支名（点后面是分支名，取不出扩展名）",
+			"https://github.com/maxrossello/redmine_translation_terms/tree/5.1-translation_terms",
+		],
+		["版本号分支（点后面是纯数字）", "https://third-party.example.net/tree/v1.2.3"],
+		["版本号目录（点后面是纯数字）", "https://third-party.example.net/releases/1.0"],
+		// ⚠️ 刻意**不**收"点后面是一串十六进制"那种（`…/x/ab.1f2e3d`）：它的形状与令牌形状的
+		// 真实文件**无法区分**（见下面那一组），判据按"像不像文件类型"判 ⇒ 它会进候选。
+	]) {
+		const d = decide(src, { purpose: "manual", embedded: false });
+		assert.equal(
+			d.action,
+			"ignore",
+			`★★ 后缀不像文件类型的地址不该进清单（${label}）：${src}`
+		);
+		assert.ok(
+			String(d.reason).includes("不是文件"),
+			`★ 跳过的原因要说得出为什么（${label}）：${d.reason}`
+		);
+		// ⚠️ 而**同一条地址在"笔记显示它"时照旧进候选** —— 形状判据问的是"这条地址像不像文件"，
+		// 只有"指向"它的时候才可判（笔记在显示一个资源时，地址长什么样与"它是不是文件"无关）。
+		assert.equal(
+			decide(src, { purpose: "manual", embedded: true }).action,
+			"cache",
+			`★ 同一条地址被**显示**时不受形状约束（${label}）`
+		);
+	}
+
+	// ⭐⭐ 网页地址**一律不是候选**（R18「绝不抓网页」）——
+	// 判据是 `vault-files.ts::isWebPageExtension`，它回答"这个后缀指向的是页面还是文件"：
+	// **静态页面**（`html` / `htm`，即类型表里的 `text/html`，与下载端拒收网页那句**同源**）
+	// 与**服务端页面**（`php` / `asp` / `jsp` / `do` / `action` … 后缀只是脚本语言的名字）。
+	// ⚠️ 这一节是**用户连着三次实测**报出来的同一件事的三次收窄：
+	// ① 第一次：没有扩展名的 wiki 页地址（→ 形状判据，上面那一组）；
+	// ② 第二次：`…/player.html`（B站播放器的 `<iframe src>`）—— 尾巴有点、能过形状判据，
+	//    但他新写的那篇 `.md` 笔记里整行都出现在「上传附件」的清单里；
+	// ③ 第三次：`…/pd.jsp?id=172` —— 同样尾巴有点、后缀也不是 `text/html`，
+	//    可它是**企业系统现算出来的一张页面**。用户的原话：「实际上这是一个网页地址」。
+	// ⚠️ **两路都拦**：网页在 `auto` 上也搬不成（下载端必拒），列出来只是让人白勾一次。
+	for (const [label, src] of [
+		[
+			"B站播放器页（iframe）",
+			"https://player.bilibili.com/player.html?isOutside=true&aid=1055609428&bvid=BV1Zn4y19743&p=1",
+		],
+		["html", "https://third-party.example.net/a.html"],
+		["htm", "https://third-party.example.net/a.htm"],
+		["大写 + 查询串", "https://third-party.example.net/A.HTML?x=1"],
+		// ⭐ 第三次实测报的那一条（连锚点里的 `#:~:text=` 碎片也照原样带上）
+		[
+			"服务端页面（企业系统的 pd.jsp）",
+			"https://www.pmbj.com.cn/pd.jsp?id=172#:~:text=HyperWire%20%E5%8D%8F%E8%AE%AE",
+		],
+		["php 页面", "https://third-party.example.net/index.php?s=1"],
+		["Struts 的 .do", "https://third-party.example.net/product.do?id=7"],
+		["Struts2 的 .action", "https://third-party.example.net/list.action"],
+		["aspx 页面", "https://third-party.example.net/show.aspx?id=9"],
+	]) {
+		for (const purpose of ["auto", "manual"]) {
+			const d = decide(src, { settings: { externalImageCache: true }, purpose });
+			assert.equal(
+				d.action,
+				"ignore",
+				`★★ 网页地址不许进候选（R18「绝不抓网页」）：${label} · ${src} · purpose=${purpose}`
+			);
+			assert.ok(String(d.reason).includes("网页"), `★ 原因要说得出是网页（${label}）：${d.reason}`);
+		}
+	}
+
+	// ⚠️ 反向之一：**不许顺手把"凡文本皆拦掉"** —— `.txt` / `.csv` / `.json` / `.xml` 那类
+	// 后缀写的就是**一个文件**（能不能缓存由服务端的真实 Content-Type 说了算），
+	// 而不是"页面"（`php` / `jsp` 那种后缀只是脚本语言的名字，内容现算）。
+	// 这条与上面那条互为边界，两个方向各有一条锚点守着。
+	for (const src of [
+		"https://third-party.example.net/readme.txt",
+		"https://third-party.example.net/data.csv",
+		"https://third-party.example.net/config.json",
+		"https://third-party.example.net/feed.xml",
+	]) {
+		assert.equal(
+			decide(src, { purpose: "manual", embedded: false }).action,
+			"cache",
+			`★ 真实文件后缀不该被顺手拦掉（它不一定是网页）：${src}`
+		);
+	}
+
+	// ⚠️ 反向之二：**脚本文件 ≠ 页面程序**。`py` / `rb` / `pl` 不在"页面"那一批里 ——
+	// `…/train.py` 是可以下载的源码文件，而 `…/pd.jsp?id=172` 是现算出来的一张页面。
+	// 这一条钉住的是"页面后缀集合别扩成'凡代码后缀皆拦'"。
+	for (const src of [
+		"https://third-party.example.net/scripts/train.py",
+		"https://third-party.example.net/src/main.rb",
+	]) {
+		assert.equal(
+			decide(src, { purpose: "manual", embedded: false }).action,
+			"cache",
+			`★ 脚本文件（可下载的源码）不是页面，别一起拦掉：${src}`
+		);
+	}
+
+	// ⭐⭐ 而**外部网站的文件下载链接照旧是附件候选**（用户 2026-10-16 的原话：
+	// 「如果是外部网站的文件下载链接，应该看做是附件才对」）——
+	// 那些闸门**绝不许**扩成"普通链接一律不收"：`[下载](…/setup.zip)` 这种写法
+	// 正是 R15 要覆盖的最常见场景（PDF / 压缩包 / 音频）。
+	// ⚠️ 这里刻意用**我们类型表里没有**的后缀（`exe` / `iso`）：判据按"这看起来是不是一个文件"判，
+	// **不按"我们认不认识这个后缀"** —— 后者（白名单）会把用户的真实文件静默拦在清单外。
+	// ⚠️ 这一组全按"**只被指向**"问（`embedded: false`），也就是最严的那一档。
+	for (const [label, src] of [
+		["PDF", "https://third-party.example.net/report.pdf"],
+		["压缩包", "https://third-party.example.net/files/setup.zip"],
+		["Windows 安装包（类型表里没有的后缀）", "https://third-party.example.net/tools/installer.exe"],
+		["光盘映像（类型表里没有的后缀）", "https://third-party.example.net/os/ubuntu.iso"],
+		["音频", "https://third-party.example.net/track.mp3"],
+		["表格", "https://third-party.example.net/data.xlsx"],
+		// `7z` 也是"点后面带字母"的写法（防"后缀不许是数字开头"之类的顺手收严把它误伤）
+		["7z 压缩包", "https://third-party.example.net/backup.7z"],
+	]) {
+		assert.equal(
+			decide(src, { purpose: "manual", embedded: false }).action,
+			"cache",
+			`★★ 外部站点的文件下载链接**照旧算候选**（别把闸门扩成"普通链接一律不收"）：${label} · ${src}`
+		);
+	}
+
+	// ⚠️ **后缀不可信 ≠ 不是文件**：令牌形状的 URL（Bing 图片 CDN 那种
+	// `…/th/id/OIP-C.sPb8lvTxu-zlEqgEmUgCTwAAAA?w=208&h=169`）**取不出扩展名**，
+	// 但它**确实是个文件**（而且是有专门落盘命名判据的一类：缓存副本必须仍叫 `…png`）。
+	//
+	// ⭐⭐ 它凭什么还能进候选 —— **因为笔记在显示它**（`![z](…)` / `<img src>`）：
+	// 那两道形状判据问的是"这条地址像不像文件"，而这个问题**只对"只被指向"的地址才可判**。
+	// 笔记在**显示**一个资源时，地址长什么样与"它是不是文件"无关（这里就是活例子）。
+	// ⇒ 下面这一组刻意传 `embedded: true`；**同一批地址在 `embedded: false` 下会被拦**
+	//（那是正确的：一条指向 CDN 图片的**普通链接**，从地址上确实看不出是文件）。
+	for (const src of [
+		"https://third-party.example.net/th/id/OIP-C.sPb8lvTxu-zlEqgEmUgCTwAAAA?w=208&h=169",
+		"https://third-party.example.net/a.b",
+		"https://third-party.example.net/2024.10/photo.jpg",
+	]) {
+		assert.equal(
+			decide(src, { purpose: "manual", embedded: true }).action,
+			"cache",
+			`★ 笔记在**显示**它时不受形状约束（后缀不可信不等于不是文件），仍要进候选：${src}`
+		);
+	}
+	assert.equal(
+		decide("https://third-party.example.net/th/id/OIP-C.sPb8lvTxu-zlEqgEmUgCTwAAAA?w=208", {
+			purpose: "manual",
+			embedded: false,
+		}).action,
+		"ignore",
+		"★ 同一串令牌地址**只被指向**时不算候选（从地址上看不出它是文件）"
+	);
+
+	// ⭐⭐ 而**自动**那一路不许要求扩展名 —— 它遍历的是宿主**已经渲染出来的元素**
+	//（`external-hook.ts` 传 `embedded: true`），所以形状判据天然不施加。
+	// 这条反向断言是"闸门别放错层"的守门人。
+	for (const src of [
+		"https://third-party.example.net/photo?id=5",
+		"https://third-party.example.net/p/2024/10/1",
+	]) {
+		assert.equal(
+			decide(src, { settings: { externalImageCache: true } }).action,
+			"cache",
+			`★★ 自动那一路不许要求扩展名（元素是宿主渲染出来的真实资源）：${src}`
+		);
+	}
 
 	// ============================================================
 	// 3. ⭐ 自己的存储 → ignore（绝不当站外）

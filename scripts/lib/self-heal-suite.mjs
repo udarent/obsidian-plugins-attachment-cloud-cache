@@ -76,12 +76,13 @@ function harness(options = {}) {
 }
 
 export async function runSelfHealSuite(mod) {
-	const { planSelfHeal, runSelfHeal, SELF_HEAL_BATCH, createAbsenceConfirmer, CONFIRM_IMMEDIATELY } = mod;
+	const { planSelfHeal, runSelfHeal, SELF_HEAL_BATCH, createAbsenceConfirmer } = mod;
 	assert.ok(typeof planSelfHeal === "function", "应当导出 planSelfHeal");
 	assert.ok(typeof runSelfHeal === "function", "应当导出 runSelfHeal");
 	assert.ok(Number.isInteger(SELF_HEAL_BATCH) && SELF_HEAL_BATCH > 0, "应当导出一个正整数批大小");
 	assert.ok(typeof createAbsenceConfirmer === "function", "应当导出 createAbsenceConfirmer");
-	assert.equal(CONFIRM_IMMEDIATELY("_cache/a.png", true), true, "命令那条线的确认器：单轮即摘");
+	// ⚠️ 这里曾经还断言 `CONFIRM_IMMEDIATELY`（命令那条线的"单轮即摘"确认器）——
+	// 2026-10-16「自检并修复本地副本索引」命令退役后它**没有生产者**，已从源码删除。
 
 	// ============================================================
 	// 1. planSelfHeal：按路径归组、去重、跳过空白

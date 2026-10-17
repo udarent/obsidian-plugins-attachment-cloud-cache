@@ -6,7 +6,7 @@
  * 同一张图会被两条不同的路径写进 vault：
  * - **粘贴/拖拽**：我们先把字节落到附件目录 —— ⚠️ 1.2.0（D-17）起那份字节**原地就是**本地
  *   副本，没有"上传成功后再搬进缓存"这一步了；
- * - **上传已有附件**：文件本来就在附件目录里，我们改的是笔记与索引。
+ * - **上传附件**：文件本来就在附件目录里，我们改的是笔记与索引。
  *
  * 两条路如果各自实现"扩展名怎么推""重名怎么办"，就会**分叉**：
  * 同一张图的副本落在两个不同路径，索引只认得其中一个，另一个永远清不掉。
@@ -80,15 +80,32 @@ const EMBED_KIND_BY_EXTENSION: Record<string, EmbedKind> = {
 };
 
 /**
+ * 扩展名的**唯一**归一化入口：去首尾空白、统一小写、去掉可能带着的那个点。
+ *
+ * ⭐ 收在一处是刻意的：调用方给的"扩展名"写法从来不统一 ——
+ * 可能来自 `file.extension`（无点）、`extensionOfName`（无点）、用户手写的 `.PNG`
+ * （大写带点）、或设置界面里那一串。这个文件里已经有 **4 个**消费者
+ *（{@link embedKindFor} / {@link isNoteLikeExtension} / {@link isWebPageExtension} /
+ * {@link contentTypeForExtension}），此前**各写一遍**同一行、靠注释人肉保持一致 ——
+ * 而分叉的症状是"某条入口偏偏漏了这一类"，**不报错**。
+ *
+ * ⚠️ 非字符串给**空串**（不是抛出、也不是 `String(ext)`）：空串在所有消费者那里
+ * 都落到"未知"那一档，这正是我们要的答案。
+ */
+function normalizeExtension(extension: unknown): string {
+	if (typeof extension !== "string") return "";
+	return extension.trim().toLowerCase().replace(/^\./, "");
+}
+
+/**
  * 这个扩展名能不能被宿主**直接预览**；不能则返回 `null`（调用方走普通链接）。
  *
- * 输入容错（去点、小写、去空白）与 `contentTypeForExtension` 一致：
- * 调用方拿到的扩展名可能来自文件名、MIME 反查或用户配置，写法不统一。
+ * 输入容错（去点、小写、去空白）交给 {@link normalizeExtension}：
  * 非字符串 / 空串 / 未知一律 `null` —— **未知类型走普通链接**是原则④的落法。
  */
 export function embedKindFor(ext: unknown): EmbedKind | null {
 	if (typeof ext !== "string") return null;
-	const key = ext.trim().toLowerCase().replace(/^\./, "");
+	const key = normalizeExtension(ext);
 	return EMBED_KIND_BY_EXTENSION[key] ?? null;
 }
 
@@ -96,6 +113,45 @@ export function embedKindFor(ext: unknown): EmbedKind | null {
 export function isEmbeddable(ext: unknown): boolean {
 	return embedKindFor(ext) !== null;
 }
+
+/**
+ * 这些扩展名是**宿主自己的文本文件**，不是用户的附件。
+ *
+ * ## 两个入口，同一条理由
+ *
+ * - **库内**（`selectUploadCandidates`）：一个 `.md` 被当附件上传，它**正文里的链接会被
+ *   改写成远端地址**（那条命令的本职），而宿主仍按后缀把它当笔记索引 ⇒ 结果是一篇笔记
+ *   被当成图片对象，笔记之间的 wikilink 也跟着断掉。`.canvas` 同理（它引用别的文件），
+ *   `.base` 是数据库。
+ * - **站外**（`decideExternalCache`）：把远程的 `.md` 搬下来，那份会**落进库里**变成一篇
+ *   笔记（同一个后缀判据）—— 用户要的只是"收藏那个文件"，而他的库里凭空多出一篇笔记。
+ *   2026-10-16 用户实测报的正是这一条：笔记里链接的远程 `.md` 出现在
+ *   「上传附件」的清单里。
+ *
+ * 用**扩展名**而不是 MIME/内容判断：这一步是纯判定（不读文件字节），
+ * 而这三类后缀是宿主的约定（宿主自己也按后缀识别它们）。
+ */
+const NOTE_LIKE_EXTENSIONS = new Set(["md", "canvas", "base"]);
+
+/**
+ * 这个扩展名是不是"宿主自己的文本文件"（笔记 / 画布 / 数据库）—— 见上面的说明。
+ *
+ * 输入容错（去点、小写、去空白）交给 {@link normalizeExtension}：调用方给的"扩展名"
+ * 可能来自 `file.extension`（无点）、`extensionOfName`（无点）或别处的原始写法，
+ * 几个兄弟判据对同一种输入该有同样的答案 —— 一个容忍、一个不容忍，
+ * 症状是"某条入口偏偏漏了这一类"，且不报错。
+ */
+export function isNoteLikeExtension(extension: unknown): boolean {
+	return NOTE_LIKE_EXTENSIONS.has(normalizeExtension(extension));
+}
+
+/**
+ * 上面那条判据的**唯一文案**（诊断用，进各层的 `skipped` 统计）。
+ *
+ * ⚠️ 两个调用点（库内候选 / 站外判定）**共用同一个字符串**：同一件事不该有两种说法 ——
+ * 两份文案漂开之后，"为什么它没被处理"就要看好几处才答得上，而且没人会发现它们不一致。
+ */
+export const NOTE_LIKE_REASON = "是笔记/画布/数据库文件，不是附件";
 
 /**
  * 把"可能是路径的东西"归一成宿主认得的写法。
@@ -182,6 +238,7 @@ const CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
 	// 文本类（浏览器可直接显示）
 	csv: "text/csv",
 	html: "text/html",
+	htm: "text/html",
 	json: "application/json",
 	md: "text/markdown",
 	txt: "text/plain",
@@ -190,6 +247,66 @@ const CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
 
 /** 上传不认识的后缀时的兜底类型（对象存储要求这个头）。 */
 export const DEFAULT_CONTENT_TYPE = "application/octet-stream";
+
+/**
+ * 这些后缀指向的是一张**网页**，而不是一个可供下载的文件。
+ *
+ * 判据分两半，合起来回答同一个问题（"这条地址指向的是页面，还是文件"）：
+ *
+ * 1. **静态页面** —— `html` / `htm` 就是类型表里那两条（`text/html`），
+ *    所以这里**不重复列**它们（见 {@link isWebPageExtension}）；
+ *    `xhtml` / `shtml` 是同类写法的补齐。
+ * 2. **服务端页面** —— 后缀只是**脚本语言 / 框架**的名字：`php` / `asp` / `jsp` /
+ *    `do`（Struts）/ `action`（Struts2）/ `cgi` / `cfm` / `phtml`。这类地址后面常跟着
+ *    查询串（`…/pd.jsp?id=172`），它到底给回一张页面还是一段字节流，**只有请求了才知道**
+ *    —— 而那个"文件"形状是假象：内容是**现算**出来的。
+ *
+ * ⭐ 为什么要有第 2 半（2026-10-16 用户**第三次**实测报的）：他笔记里
+ * `[原文链接](https://www.pmbj.com.cn/pd.jsp?id=172#:~:text=…)` —— 尾巴有点、
+ * 能过"像个文件名"那条（`urlLooksLikeFileName`），于是进了「上传附件」的清单，
+ * 而它**永远搬不成**（下载端拿到的是 `text/html`，必拒）。用户的原话：
+ * 「**实际上这是一个网页地址**」。同一次他还补了界限：
+ * 「**如果是外部网站的文件下载链接，应该看做是附件才对**」——
+ * ⇒ 这道闸门只拦"页面"，**绝不**碰真实的文件后缀。
+ *
+ * ⚠️ 边界（两个方向都有反向断言守着）：`txt` / `csv` / `json` / `xml` / `md` 这类
+ * **真实文件后缀**照旧放行（能不能缓存由服务端的真实 Content-Type 说了算）；
+ * `py` / `rb` / `pl` 也**不在**这一批里 —— 那是**脚本文件**（源码是可以下载的），
+ * 与"页面程序"是两回事。
+ */
+const PAGE_EXTENSIONS = new Set([
+	// 静态页面的同类写法（`html` / `htm` 由 `text/html` 那一条覆盖，见下面的函数）
+	"shtml",
+	"xhtml",
+	// 服务端页面：后缀是脚本语言 / 框架的名字
+	"action",
+	"asp",
+	"aspx",
+	"cgi",
+	"cfm",
+	"do",
+	"jsp",
+	"jspx",
+	"php",
+	"php3",
+	"php4",
+	"php5",
+	"phtml",
+]);
+
+/**
+ * 这个后缀指向的是不是一张**网页**（判据见 {@link PAGE_EXTENSIONS}）。
+ *
+ * 静态页面那一半与**下载端**拒收网页那句（`external-cache.ts::isAttachmentResponse`
+ * 里的 `text/html`）**同源**：都用 {@link CONTENT_TYPE_BY_EXTENSION} 问
+ * "这个后缀的类型是不是 `text/html`" —— 于是"哪些后缀是网页"里，
+ * 能被类型表回答的那部分全库仍然只有一处定义。
+ */
+export function isWebPageExtension(extension: unknown): boolean {
+	const ext = normalizeExtension(extension);
+	if (!ext) return false;
+	return CONTENT_TYPE_BY_EXTENSION[ext] === "text/html" || PAGE_EXTENSIONS.has(ext);
+}
 
 /**
  * MIME → 扩展名（与上面那张表**成对**维护：站外抓取时只有 MIME、没有文件名）。
@@ -262,7 +379,7 @@ const EXTENSION_BY_MIME: Record<string, string> = {
 /** 由扩展名给 Content-Type。空扩展名 / 未知扩展名 → 兜底类型。 */
 export function contentTypeForExtension(ext: unknown): string {
 	if (typeof ext !== "string") return DEFAULT_CONTENT_TYPE;
-	const key = ext.trim().toLowerCase().replace(/^\./, "");
+	const key = normalizeExtension(ext);
 	return CONTENT_TYPE_BY_EXTENSION[key] ?? DEFAULT_CONTENT_TYPE;
 }
 
@@ -306,12 +423,39 @@ export const PLAUSIBLE_EXTENSION = /^[a-z0-9]{1,8}$/;
  * 形状检查只否决"明显不是扩展名"的东西，不否决"我们没见过"的东西。
  */
 export function extensionOfName(name: unknown): string {
-	if (typeof name !== "string") return "";
-	const base = name.trim().split(/[\\/]/).pop() ?? "";
+	const base = baseNameOf(name);
 	const dot = base.lastIndexOf(".");
 	if (dot <= 0) return "";
 	const candidate = base.slice(dot + 1).toLowerCase();
 	return PLAUSIBLE_EXTENSION.test(candidate) ? candidate : "";
+}
+
+/**
+ * 取路径的**末尾那一段**（文件名部分）—— `extensionOfName` 与 {@link looksLikeFileName} 共用。
+ *
+ * ⚠️ 收在一处是刻意的：这两条判据问的是同一个"末尾那段"，
+ * 各写一遍 `split(/[\\/]/)` 迟早分叉成"一个认 `a\b`、一个不认"。
+ * 非字符串返回空串（两条判据的输入都可能来自外部数据）。
+ */
+function baseNameOf(name: unknown): string {
+	if (typeof name !== "string") return "";
+	return name.trim().split(/[\\/]/).pop() ?? "";
+}
+
+/**
+ * 路径的末尾那一段**像不像个文件名**：只要求那里有 `.`（`名字.后缀` 的形状），
+ * **不要求后缀可信**。
+ *
+ * ⚠️ 与 `extensionOfName` 的差别是**刻意的**，因为两者回答的问题不同：
+ * 后者决定**落盘的文件名与 Content-Type**，所以必须过 `PLAUSIBLE_EXTENSION`
+ *（不像扩展名就当取不到，退到 MIME）；这里只回答"**这条地址看起来是不是一个文件**"。
+ * 令牌形状的 URL（Bing CDN 那种 `OIP-C.sPb8lvTxu-zlEqgEmUgCTwAAAA?w=208`
+ * —— 点后面是一串令牌而不是类型）**后缀不可信，但它仍然是个文件**，
+ * 用 `extensionOfName` 判会把它误伤成"不是文件"，而它恰恰是有专门落盘命名判据的一类。
+ */
+export function looksLikeFileName(name: unknown): boolean {
+	const base = baseNameOf(name);
+	return base.lastIndexOf(".") > 0;
 }
 
 /** 由 MIME 推扩展名；推不出返回空串（由调用方决定兜底）。 */
@@ -333,6 +477,69 @@ export function extensionFromMime(mime: unknown): string {
  */
 export function resolveExtension(name: unknown, mime: unknown): string {
 	return extensionOfName(name) || extensionFromMime(mime);
+}
+
+/**
+ * 从 URL 的**路径部分**取扩展名（不含点，小写）。取不到返回空串。
+ *
+ * ⚠️ 它管的是**地址**（站外文件），与库内文件名那条（`extensionOfName`）共用同一个形状判据，
+ * 差别只有一处：查询串与锚点必须先切掉 —— `a.png?v=1` 的扩展名是 `png`，
+ * 不是 `png?v=1`。两个消费者（下载端的形状判据 `isAttachmentResponse`、
+ * 站外判定的"这是不是宿主的笔记文件"）因此看到的是**同一个**扩展名。
+ *
+ * 2026-10-16 从 `core/external-cache.ts` 挪来这里：`decideExternalCache` 也要用它，
+ * 而 external-cache 已经 import 了 external-decide（反向 import 会成环）。
+ * 归到这里之后，"扩展名怎么取"全库仍然只有一份（`extensionOfName` / `resolveExtension` / 本函数）。
+ */
+export function extensionFromUrl(url: unknown): string {
+	if (typeof url !== "string") return "";
+	return resolveExtension(urlPathOf(url), "");
+}
+
+/**
+ * URL → 它的**路径部分**（切掉查询串与锚点）：`a.png?v=1` 的路径是 `a.png`。
+ *
+ * ⚠️ 收在一处：{@link extensionFromUrl} 与 {@link urlLooksLikeFileName} 都要它 ——
+ * 各写一遍 `split("#")[0].split("?")[0]` 就会分叉成"一个切了、一个没切"
+ *（症状是 `…/page?v=1` 这类地址在一个判据眼里有后缀、在另一个眼里没有）。
+ */
+function urlPathOf(url: string): string {
+	return url.split("#")[0].split("?")[0];
+}
+
+/**
+ * URL 的尾巴像不像个文件名（见 {@link looksLikeFileName}）—— 先切掉查询串与锚点。
+ *
+ * 用途：站外候选的**第一道形状判据** —— 从**正文文本**里读出来的地址必须像文件，
+ * 否则它多半是个网页 / 目录 / 接口（如企业 wiki 的 `…/wiki/资料归档管理规定?cfw=…`）。
+ *
+ * ⚠️ 它只要求"尾巴里有点"，**不问那个后缀是什么**（那是 {@link urlHasFileTypeSuffix} 的事，
+ * 两道合起来才够 —— 见那里的说明）。
+ */
+export function urlLooksLikeFileName(url: unknown): boolean {
+	if (typeof url !== "string") return false;
+	return looksLikeFileName(urlPathOf(url));
+}
+
+/**
+ * 地址的**后缀像不像一个文件类型** —— 站外候选的**第二道**形状判据。
+ *
+ * ⚠️ 为什么"尾巴有点"还不够（2026-10-16 用户第五次实测报的）：
+ * `https://github.com/…/redmine_translation_terms/tree/5.1-translation_terms` ——
+ * 尾巴 `5.1-translation_terms` **有点**（过得了第一道），可是那个点后面是
+ * `1-translation_terms`（含 `-`、十七个字符），**取不出扩展名** ⇒ 它不是文件，是**分支名**。
+ * 同类：`…/tree/v1.2.3`（点后面是 `3` —— **纯数字**是版本号 / 编号的形状）、
+ * `…/releases/1.0`。真实文件类型不会只由数字组成（`.7z` / `.3gp` 都带字母）。
+ *
+ * ⚠️⚠️ 它**不是**"这个后缀我们认不认识"（那是个**白名单**，会把类型表里没有的**真实文件**
+ * —— `.exe` / `.iso` / `.bin` —— **静默**拦在清单外，用户既看不到也不报错）。
+ * 2026-10-16 差一点就按白名单去修，是用户那句「如果是外部网站的文件下载链接，
+ * 应该看做是附件才对」把方向掰回来的。⇒ 这里只问"**像不像**文件类型"，不问"认不认识"。
+ */
+export function urlHasFileTypeSuffix(url: unknown): boolean {
+	const ext = extensionFromUrl(url);
+	if (!ext) return false;
+	return !/^[0-9]+$/.test(ext);
 }
 
 /** 上传要声明的 Content-Type：优先用浏览器/宿主给的 MIME，否则按扩展名推。 */

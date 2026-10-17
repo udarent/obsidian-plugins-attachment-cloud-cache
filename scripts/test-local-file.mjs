@@ -21,6 +21,12 @@ await withLoadedTs(["src/local-file", "src/vault-files"], async (mod) => {
 			"refused outright; the extension gate only lets through what can be embedded in a note, so ticking " +
 			"a screenshot never turns into ticking an arbitrary file; non-desktop is ignored because phones " +
 			"cannot reach a local absolute path; and reading really goes to disk - size is checked before the " +
-			"bytes are pulled in, a moved file is reported as missing, a directory is not.)"
+			"bytes are pulled in, a moved file is reported as missing, a directory is not; and whether a file " +
+			"is *actually gone* is one judgement shared by the probe and the reader — only ENOENT/ENOTDIR " +
+			"count as missing, while permission / too-long / busy errors do not (calling those 'gone' is what " +
+			"makes a file that is right there look like it disappeared); and the thumbnail candidates for a " +
+			"file outside the vault put the host's own local-file prefix first and keep the original file: " +
+			"address as a fallback, de-duplicated - a bare file: URL is exactly what does *not* draw in the " +
+			"host, which is why the list showed the file while the preview stayed blank.)"
 	);
 });

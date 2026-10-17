@@ -4,25 +4,27 @@ import { runCloudCleanupSuite } from "./lib/cloud-cleanup-suite.mjs";
 /**
  * 云端空间清理（需求 R17 / F15）。
  *
- * 这一套守的是"**什么不该删**"：仍被引用的、站外缓存的、认不出形状的、列举没读全的 ——
- * 以及"删成功才摘索引""一次失败不中断整批""404 = 目标状态已达成（不是失败）"这几条
- * 不报错、但很久之后才显形的纪律。
+ * ⚠️ 2026-10-16：「清理云端未使用对象…」命令退役 ⇒ **候选公式**（`selectCleanupCandidates`）与
+ * **分页列举**（`listAllObjects`）下线，本套件不再覆盖它们。
+ * ⭐ 那条「**站外缓存整体排除**」的判据**没有消失** —— 它搬进了
+ * `maintenance/orphan-watch.ts::selectOrphanAsks`（两条路共用），断言在 `test-orphan-watch.mjs`。
  *
- * ⚠️ 这里**只覆盖执行链与候选公式**（纯函数）。"什么时候该问用户"那件事在
- * `orphan-watch`（入口在 `maintenance/orphan-watch.ts`，套件是 `test-orphan-watch.mjs`）——
- * 2026-10-11 之前它挂在"用户删掉本地文件"上，默认档下永远不会出现，已按需求改成"孤儿出现时问"。
+ * 这一套现在守的是两件不报错、但很久之后才显形的事：
+ * - 两个 key 工具：URL→key 的换算（与渲染层**同一套规则**）、站外缓存的 key 集合；
+ * - 执行链：**删成功才摘索引**、**一次失败不中断整批**、**台账变了也要落盘**，
+ *   以及"404 = 目标状态已达成（不是失败）"。
  */
 await withLoadedTs(["src/maintenance/cloud-cleanup", "src/cache/index"], async (mod) => {
 	await runCloudCleanupSuite(mod);
 });
 
 console.log(
-	"Cloud-cleanup tests passed (candidates are only the objects this device can see no reference to: " +
-		"referenced ones, off-site caches and unrecognisable shapes all stay; sizes are summed honestly; " +
-		"URL-to-key mapping uses the very same derivation the renderer uses; pagination stops at the page " +
-		"cap and says so instead of pretending the list is complete; a 404 counts as already done (not a " +
-		"failure) and still drops the index record; one failure never stops the batch, both the index record " +
-		"and the upload-ledger entry are dropped only when the object is really gone, the change is persisted " +
-		"even when the ledger was the only thing that moved - which is exactly the 'no local copy' setting - " +
-		"and a failed save is reported)."
+	"Cloud-cleanup tests passed (the two key helpers: URL-to-key mapping uses the very same derivation " +
+		"the renderer uses, and the off-site-cache set only takes entries explicitly marked external; and the " +
+		"executor: a 404 counts as already done (not a failure) and still drops the index record, one failure " +
+		"never stops the batch, both the index record and the upload-ledger entry are dropped only when the " +
+		"object is really gone, the change is persisted even when the ledger was the only thing that moved - " +
+		"which is exactly the 'no local copy' setting - and a failed save is reported. " +
+		"NOTE: the candidate formula and the bucket listing are no longer covered here: the command that used " +
+		"them was retired on 2026-10-16, and the off-site-cache exclusion moved to the orphan ask filter.)"
 );

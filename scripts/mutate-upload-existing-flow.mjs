@@ -2,7 +2,7 @@ import { runMutations } from "./lib/mutate.mjs";
 import { runLoadAcceptance } from "./lib/load-acceptance-suite.mjs";
 
 /**
- * 变异验证：**「上传已有附件」那条命令的编排**（`src/plugin/upload-existing-flow.ts`）。
+ * 变异验证：**「上传附件」那条命令的编排**（`src/plugin/upload-existing-flow.ts`）。
  *
  * ## ⚠️ 判据仍然是**端到端**那套（`load-acceptance`），只是锚点换了落脚点
  *
@@ -49,9 +49,18 @@ await runMutations({
 			// 实际一个都不处理（而且不报错）。⚠️ 2026-10-15 起**勾选**成了过滤条件，
 			// 打坏它（`to` 给空数组）就等于「用户勾了却没处理」—— 判据仍是那条端到端等待。
 			name: "★ 勾中的外链候选没交给执行层（清单承诺了却没做）",
-			from: "candidates: external.candidates.filter((candidate) => chosen.has(pickKey(candidate))),",
+			from: "candidates: externals.filter((candidate) => chosen.has(pickKey(candidate))),",
 			to: "candidates: [],",
 			expect: "外链图被下载、上传",
+		},
+		{
+			// 后果：**已经不在了的本机文件又进了清单**（`file:///…` 指着的那个东西被删了）——
+			// 用户看到一行连缩略图都没有、点了一定失败的条目。2026-10-16 用户实测报的正是这个
+			//（WPS 的 `Temp/ksohtml/wpsDD.tmp.jpg`）。
+			name: "★★ 不摘掉已经不在了的本机文件（清单里出现点了一定失败的条目）",
+			from: "\t\tdeps.localFileExists ?? localFileExists",
+			to: "\t\tasync () => true",
+			expect: "已经不在的本机文件",
 		},
 		{
 			// ⚠️ 从 mutate-load-acceptance 搬来。后果：确认框不再列出即将访问的站点 ⇒
@@ -60,6 +69,18 @@ await runMutations({
 			from: '\t\t\t\thosts: external.sites.map((site) => site.host).join(", "),',
 			to: '\t\t\t\thosts: "",',
 			expect: "确认框必须列出即将访问的站点",
+		},
+		{
+			// 后果：**摘要里把下面那张清单又贴了一遍**（前十条路径 + 「……还有 N 个」）——
+			// 这正是用户 2026-10-16 实测提的那件事：「在上部有文件列表的摘要，但其实已经做了
+			// 下面的列表了，可以精简内容」。清单越长这条越像噪音，而下面那张清单本来就
+			// 带缩略图、能勾选、还自带滚动条。
+			name: "★★ 摘要里重复贴出文件名（与下面那张清单重复）",
+			from: '\t\tctx.t("maintainBatchSummary", { count: selection.paths.length }),\n',
+			to:
+				'\t\tctx.t("maintainBatchSummary", { count: selection.paths.length }),\n' +
+				"\t\t...selection.paths.slice(0, 10),\n",
+			expect: "摘要里不该重复列出文件名",
 		},
 	],
 });

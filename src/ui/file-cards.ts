@@ -50,8 +50,13 @@ export interface FileCardInput {
 	 * 给谁用：站外图（地址就是那个 URL）与本机文件（`file:///D:/…`）——
 	 * 它们的图不在库里、也不是本存储的对象，前两条推导对它们都无从下手。
 	 * ⚠️ 仍然**只对图片类型**生效（见 §判定）：非图片给一个 URL 只会得到破图。
+	 *
+	 * ⚠️⚠️ 也可以给**一串候选**（按优先次序）：库外文件那条路必须这样给 ——
+	 * 它的地址形式不由我们定（`file:///…` 在宿主里画不出来，而"宿主认哪种形式"
+	 * 由运行时说了算，见 `local-file.ts::localThumbCandidates`）。
+	 * 渲染时逐个试、全失败才降级成类型标记。
 	 */
-	thumb?: string;
+	thumb?: string | readonly string[];
 	/**
 	 * 行里的**副标题**（第二行的小字）：路径、站点、出现在哪篇笔记里这类
 	 * "能让用户核对是哪一个"的信息。空串 = 不画第二行。
@@ -66,6 +71,37 @@ export interface FileCardDeps {
 	remoteUrl: (key: string) => string | null;
 }
 
+/**
+ * 站外 / 本机那一类行的**副标题**。⚠️ **全库只有这一处拼它。**
+ *
+ * ## 取值（只有两档，**都不含库内路径**）
+ *
+ * - 本机文件（`file:///D:/…`）**没有主机** ⇒ 给**那条绝对路径**：用户勾中它就是签了
+ *   "读这条路径"，只显示一个空主机名等于让他在看不见风险的情况下点确认。
+ * - 站外地址 ⇒ **只给主机**。
+ *
+ * ## ⚠️⚠️ 为什么**不再显示"它出自哪篇笔记"**（2026-10-16 用户**三次**报同一件事之后定）
+ *
+ * 原来这一行是 `主机 — 笔记路径`（含 `.md`）。用户每一轮都把它读成
+ * "**清单里进了一个 `.md` 文件**"：第一次我加了「笔记：」前缀、第二次去掉后缀
+ * —— 两次都被否掉（第二次他直接说「不是界面显示的问题」）。
+ * 第三次他把话说到最清楚：「**这个链接对应的文件不是附件，不应该进入上传列表**」。
+ *
+ * ⇒ 结论不是改文案，而是**这一行压根不该出现库内路径**：
+ * 它只是"来自哪个站点"的**元信息**；"会改写哪篇笔记"由**运行结果**说
+ *（`Rewrote N link(s) across M note(s)`），不需要在这里列出来。
+ * ⭐ 而且这条规则是**结构性**的：入参里**不收** `notePath` ⇒ 想写也写不出来
+ *（比"写一条规则再指望没人违反"稳）。
+ * ⚠️ 代价（认了）：全库范围下同一个地址出现在两篇笔记里时，两行看起来一样 ——
+ * 勾的是**地址**，不是笔记。
+ */
+export function externalRowMeta(input: { host?: unknown; url?: unknown } | null | undefined): string {
+	const host = typeof input?.host === "string" ? input.host.trim() : "";
+	const url = typeof input?.url === "string" ? input.url.trim() : "";
+	// 主机为空 = 本机文件那条路 ⇒ 给绝对路径（唯一的例外，也是承重的那半）
+	return host || url;
+}
+
 /** 一行清单。 */
 export interface FileCard {
 	/** 与输入的 `id` 同一份（调用方按它回查要删什么 / 要处理什么）。 */
@@ -74,8 +110,14 @@ export interface FileCard {
 	label: string;
 	/** 类型标记（大写扩展名，如 `PDF`）；拿不到扩展名时是空串。 */
 	badge: string;
-	/** 缩略图地址；`null` = 不显示图（非图片，或两个来源都拿不到地址）。 */
-	thumbUrl: string | null;
+	/**
+	 * 缩略图候选地址（按优先次序，空数组 = 不给图）：
+	 * 非图片、或两个来源都拿不到地址时是空的。
+	 *
+	 * ⚠️ 为什么是**一串**：库外文件（站外 / 本机）的地址形式不由我们定 ——
+	 * 渲染时逐个试，全失败才降级成类型标记（见 `renderThumb`）。
+	 */
+	thumbUrls: readonly string[];
 	/** 缩略图来自**本地副本**（= 不联网）。 */
 	fromLocalCopy: boolean;
 	/** 副标题（第二行小字）；空串 = 不画。 */
@@ -107,21 +149,26 @@ export function planFileCards(
 		const ext = extensionOfName(name) || extensionOfName(id);
 		const badge = ext ? ext.toUpperCase() : "";
 
-		let thumbUrl: string | null = null;
+		let thumbUrls: readonly string[] = [];
 		let fromLocalCopy = false;
 		if (embedKindFor(ext) === "image") {
-			const explicit = typeof item.thumb === "string" ? item.thumb.trim() : "";
+			// 调用方给的地址：**一个字符串就是一串只有一条的候选**（站外那条路就这样给）。
+			// ⚠️ 归一化只此一处 —— 两条入口各自把单值/数组揉一遍，迟早出现"一个认、一个不认"。
+			const explicit = (typeof item.thumb === "string" ? [item.thumb] : item.thumb ?? [])
+				.map((url) => (typeof url === "string" ? url.trim() : ""))
+				.filter((url) => url !== "");
 			const local = typeof item.localPath === "string" ? item.localPath.trim() : "";
 			const localUrl = local ? deps.resourceUrl(local) : null;
-			if (explicit) {
-				// 站外地址 / 本机 `file://…`：调用方给的这串就是图本身
-				thumbUrl = explicit;
+			if (explicit.length > 0) {
+				// 站外地址 / 本机得到的候选：这一串就是图本身（第一个能画出来的算数）
+				thumbUrls = explicit;
 			} else if (localUrl) {
-				thumbUrl = localUrl;
+				thumbUrls = [localUrl];
 				fromLocalCopy = true;
 			} else {
 				const key = typeof item.remoteKey === "string" ? item.remoteKey.trim() : "";
-				thumbUrl = key ? deps.remoteUrl(key) : null;
+				const remote = key ? deps.remoteUrl(key) : null;
+				thumbUrls = remote ? [remote] : [];
 			}
 		}
 
@@ -129,7 +176,7 @@ export function planFileCards(
 			id,
 			label,
 			badge,
-			thumbUrl,
+			thumbUrls,
 			fromLocalCopy,
 			meta: typeof item.meta === "string" ? item.meta.trim() : "",
 		});
@@ -152,7 +199,9 @@ export function planFileCards(
  */
 export function renderThumb(container: HTMLElement, card: FileCard): void {
 	const thumb = container.createSpan({ cls: "acc-file-thumb" });
-	if (card.thumbUrl) {
+	const candidates = card.thumbUrls ?? [];
+	const [first] = candidates;
+	if (first) {
 		const image = thumb.createEl("img", {
 			cls: "acc-file-thumb-img",
 			// `alt` 留空：名字就在旁边，读屏软件重复念一遍没有信息量
@@ -168,9 +217,21 @@ export function renderThumb(container: HTMLElement, card: FileCard): void {
 			// ⚠️ 性能要求（用户同日提的"文件太多会卡"）**不靠它**兜：清单是**分块画**的
 			//（一次最多 200 行，见 `task-list-modal.ts`），打开时最多只建这么多 `<img>`。
 			// 取舍写在这里：宁可首屏多几个请求，也不要"图根本不出来"这种看不见的坏掉。
-			attr: { src: card.thumbUrl, alt: "" },
+			attr: { src: first, alt: "" },
 		});
+		// ⚠️ 候选是**一串**（库外文件那条路会给多条，见 `local-file.ts::localThumbCandidates`）：
+		// 这张画不出来就试下一张，全试完才降级 —— ⭐ **把"宿主认哪个形式"交给运行时**，
+		// 而不是我们在构建清单时替它挑一个（这条链上"替宿主提前断言"已经错过两次）。
+		let index = 0;
 		image.onerror = () => {
+			index += 1;
+			const next = candidates[index];
+			if (next) {
+				// ⚠️ 必须走 `setAttribute` —— 理由与上面那个 `attr` 完全一样：
+				// 渲染钩子改写了 `HTMLImageElement.prototype.src` 的 setter。
+				image.setAttribute("src", next);
+				return;
+			}
 			image.remove();
 			thumb.addClass("acc-file-badge");
 			thumb.setText(card.badge);

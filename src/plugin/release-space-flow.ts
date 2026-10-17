@@ -112,9 +112,10 @@ export async function releaseLocalSpace(
 		// ⚠️ 不能"跳过那篇笔记继续"：漏掉的那篇可能正是引用着这些图的笔记，
 		// 于是候选会凭空变大 —— 这是这个功能唯一能"因为读不到而多删"的方向。
 		//
-		// ⚠️⚠️ 这条兜底与 `cloud-cleanup-flow.ts` 那份**成对存在**：两条流程共用
+		// ⚠️⚠️ 这条兜底与 `orphan-flow.ts`（`checkNow`）那份**成对存在**：两条流程共用
 		// `cloudReferencedKeys`，而它抛错的唯一原因就是"有东西读不到"。缺了它
 		// 异常会冒泡进没有 catch 的回调 ⇒ 变成一句 unhandled rejection（用户什么都看不到）。
+		//（2026-10-16：「清理云端未使用对象…」退役前，与这里成对的是它那一份。）
 		new Notice(describeError(error));
 		return;
 	}
@@ -163,6 +164,11 @@ export async function releaseLocalSpace(
 					count: selection.candidates.length,
 					mb: formatMegabytes(selection.bytes),
 				}),
+		// ⚠️ 这一句**必须留着** —— 与「上传附件」那边**正好相反**：
+		// 那里的列表是全量的，所以摘要里的"前十条 + 还有 N 个"被删掉了（重复）；
+		// 这里 `cards` 传的是 `RELEASE_SPACE_LIST_MAX` ⇒ **列表被截断**，
+		// 不说一句用户就不知道还有多少没显示。
+		// ⭐ 判据是**列表全不全**（`ctx.fileCards` 的 limit 传了什么），不是"哪个界面更好看"。
 		...(selection.candidates.length > RELEASE_SPACE_LIST_MAX
 			? [
 					ctx.t("maintainMoreItems", {
