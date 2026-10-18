@@ -770,6 +770,16 @@ export async function runS3ClientSuite(mod) {
 			"★ 探测必须**不带** Authorization —— 否则就是拿自己的凭据冒充「别人能打开」"
 		);
 		assert.equal(last.method, "HEAD", "用 HEAD：只要状态码，不下载图片本体");
+
+		// ★★ 必须禁缓存（2026-10-18 真机实锤）：回路"先带凭据读回核对 → 再匿名读同一条 URL"，
+		// 第二步会命中**刚才那次带凭据请求的宿主缓存**（实测：PUT 后 403 → 签名 GET 后 200 →
+		// 带 no-cache 又回到 403）。于是私有桶被报成「公开访问」，而且时有时无。
+		const cacheControl = Object.entries(last.headers ?? {}).find(([name]) => name.toLowerCase() === "cache-control");
+		assert.equal(
+			String(cacheControl?.[1] ?? "").toLowerCase(),
+			"no-cache",
+			"★ 匿名探测必须禁缓存 —— 否则测的是我们自己的缓存，不是「别人第一次打开」"
+		);
 	});
 
 	// 模拟「桶允许匿名读取」：替身本身是私有的，用 intercept 在验签前直接给出 200

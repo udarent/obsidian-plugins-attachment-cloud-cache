@@ -115,6 +115,20 @@ export function connectionStateKey(state: ConnectionState): string {
 }
 
 /**
+ * 「这一轮的结果里，还需要单独补一行连接状态吗？」
+ *
+ * ⚠️ 公开 / 私有 / 连不上时**不需要**：`testPublic_ok` / `testPublic_forbidden` /
+ * `testPublic_unreachable` 已经把同一件事说了一遍，再补一句「公开访问」就是同一句话说两遍
+ * （用户 2026-10-18 报的「提示里出现了两次公开访问」）。
+ *
+ * 而 `missing` / `webpage` / `other` 那几行说的是「判断不了」，本身不含结论 ——
+ * 这时状态行才是唯一的信息来源，必须补。
+ */
+export function stateLineNeeded(kind: PublicReachKind): boolean {
+	return kind === "missing" || kind === "webpage" || kind === "unstable" || kind === "other";
+}
+
+/**
  * 语气（也就是那盏灯的颜色）。
  *
  * | 状态 | 语气 | 为什么 |
@@ -422,6 +436,9 @@ export function publicLinkTone(kind: PublicLinkKind): "ok" | "warn" | "error" {
 		case "webpage":
 			// 地址上有个东西回了网页 —— 不是「打不开」，也不是「我们的对象打得开」。
 			// 用 warn：该去看前缀，但桶本身未必有问题。
+			return "warn";
+		case "unstable":
+			// 同一轮两次结论不一致 —— 该去看网关 / 反代，不是改桶。
 			return "warn";
 		default:
 			return "error";

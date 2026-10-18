@@ -334,6 +334,80 @@ export interface PublicLinkProbe {
 }
 
 /**
+ * 匿名探测**必须带的请求头：禁止使用缓存**。
+ *
+ * ## ⚠️ 2026-10-18 真机实锤（同一个对象、同一条 URL，连续四次）
+ *
+ * ```
+ * ① PUT 之后（还没带凭据读过）      匿名 GET → 403
+ * ② **签名 GET 之后**              匿名 GET → **200**（字节还是我们写的那 39 个）
+ * ③ 签名 GET 之后，带 no-cache     匿名 GET → 403
+ * ④ 再问一次 no-cache              匿名 GET → 403
+ * ```
+ *
+ * ② 就是宿主（Electron）的 **HTTP 缓存**：回路的设计是「先带凭据读回核对字节，再匿名读
+ * 同一条 URL」，第二次命中的是**刚才那次带凭据请求的响应**。于是一个私有桶被报成
+ * 「公开访问」，而且时有时无（缓存条目有时命中、有时回源）—— 这正是用户 2026-10-18 报的
+ * 「公开访问和私有访问交替出现」。
+ *
+ * ⇒ 匿名探测一律带 no-cache：它要回答的是「**别人第一次打开**这条链接会不会成功」，
+ * 而"我们刚才自己取回来的那份"什么也证明不了。
+ */
+export const ANONYMOUS_PROBE_HEADERS: Record<string, string> = {
+	"Cache-Control": "no-cache",
+	Pragma: "no-cache",
+};
+
+/**
+ * 匿名**按内容**验证一个地址：先 HEAD 看长度，长度对得上才 GET 取回字节。
+ *
+ * ## 为什么 HEAD 的状态码不够（2026-10-18 真机复现）
+ *
+ * 对**同一个桶、同一时刻**：对固定 key 的匿名 HEAD 偶发回 **200**，而对内容哈希 key 的
+ * 请求稳定回 403。也就是说"2xx"可能来自中间层（代理 / 缓存 / 网关兜底页），
+ * **不代表"别人能读到你那份字节"**。用户看到的「公开 / 私有交替出现」就是它。
+ *
+ * ⇒ 唯一可信的证据是**取回来的字节写进去的一致**。探针对象只有几十字节，代价可忽略。
+ *
+ * ⚠️ 先 HEAD 再 GET 是刻意的：若长度不符（缓存里是别的东西，可能是几 MB 的图），
+ * 就**不去 GET** —— 点一次"测试"不该顺带下载一个陌生对象。
+ */
+export interface PublicContentProbe {
+	status: number | null;
+	contentType: string | null;
+	/** 取回的字节；没取（非 2xx / 长度不符 / 出错）时为 `null`。 */
+	bytes: Uint8Array | null;
+	/** 2xx 但 `content-length` 与期望不一致 ⇒ 这个地址上放的不是我们的对象。 */
+	lengthMismatch?: { expected: number; got: number };
+}
+
+export async function probePublicContent(
+	url: string,
+	expectedBytes: number,
+	deps: S3ClientDeps = {}
+): Promise<PublicContentProbe> {
+	const transport = deps.transport ?? obsidianTransport;
+	try {
+		// ⚠️ 两次都必须 no-cache：HEAD 若命中缓存会给出 200 + 正确的 content-length，
+		// 于是我们连"该不该 GET"都判错（见 {@link ANONYMOUS_PROBE_HEADERS}）。
+		const head = await transport({ url, method: "HEAD", headers: ANONYMOUS_PROBE_HEADERS });
+		const contentType = head.headers?.["content-type"] ?? null;
+		if (head.status === null || head.status < 200 || head.status >= 300) {
+			return { status: head.status, contentType, bytes: null };
+		}
+		const rawLength = head.headers?.["content-length"];
+		const got = rawLength === undefined ? null : Number(rawLength);
+		if (got !== null && Number.isFinite(got) && got !== expectedBytes) {
+			return { status: head.status, contentType, bytes: null, lengthMismatch: { expected: expectedBytes, got } };
+		}
+		const get = await transport({ url, method: "GET", headers: ANONYMOUS_PROBE_HEADERS });
+		return { status: get.status, contentType, bytes: get.body ?? new Uint8Array(0) };
+	} catch {
+		return { status: null, contentType: null, bytes: null };
+	}
+}
+
+/**
  * **匿名**请求一个公开地址，只回答一个问题：「别人能不能打开这条链接？」
  *
  * ——这是本模块里唯一**不带签名**的请求，而"不带签名"正是它的全部价值：
@@ -348,7 +422,8 @@ export interface PublicLinkProbe {
 export async function probePublicLink(url: string, deps: S3ClientDeps = {}): Promise<PublicLinkProbe> {
 	const transport = deps.transport ?? obsidianTransport;
 	try {
-		const response = await transport({ url, method: "HEAD", headers: {} });
+		// ⚠️ headers 必须带 no-cache：否则会命中"我们刚才带凭据读过一次"的宿主缓存（见上）。
+		const response = await transport({ url, method: "HEAD", headers: ANONYMOUS_PROBE_HEADERS });
 		// ⚠️ 头名大小写各实现不一致 ⇒ 统一小写后再取（transport 已经小写过，这里只是兜底）
 		const contentType = response.headers?.["content-type"] ?? null;
 		return { status: response.status, contentType };

@@ -39,6 +39,7 @@ import type { ConnectionState } from "../link-access";
 import { fromControlValue, isWritableValue, readByKey, toControlValue, writeByKey } from "./settings-bindings";
 import {
 	classifyConnectionFailure,
+	stateLineNeeded,
 	classifyPublicLink,
 	connectionFailureKey,
 	ensureSecretSlot,
@@ -559,12 +560,18 @@ export class SettingsTab extends PluginSettingTab {
 			lines.push({ key: "testProbe_tempLeftBehind", params: { key: sample.key }, tone: "warn" });
 		}
 
-		// ⑤ **结论**：状态（公开 / 私有 / 无法访问），也就是上面那一项显示的同一个东西。
-		// ⚠️ 用返回值里的 `state`（这一轮的实测），不是回头读全局。
-		lines.push({
-			key: connectionStateKey(state),
-			tone: connectionStateTone(state),
-		});
+		// ⑤ **结论**：只在「匿名那一问给不出状态」时才补这一行。
+		//
+		// ⚠️ 公开 / 私有时**不补**：`testPublic_ok` 与 `testPublic_forbidden` 已经把同一件事
+		// 说了一遍（"别人也能打开" / "只有装了本插件的地方能打开"），再报一句「公开访问」
+		// 就是同一句话说两遍 —— 用户 2026-10-18 明确指出的冗余（提示里出现了两次公开访问）。
+		// 而 `missing` / `webpage` / `other` 那几行**推不出**结论，状态行是唯一的信息来源。
+		if (stateLineNeeded(kind)) {
+			lines.push({
+				key: connectionStateKey(state),
+				tone: connectionStateTone(state),
+			});
+		}
 
 		// 探测不出来（超时 / 连不上）时把话说准：这不是"桶私有"，是"我们不知道"。
 		if (probe.kind === "unreachable") {

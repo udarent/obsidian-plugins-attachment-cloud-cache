@@ -30,6 +30,7 @@ export function runSettingsUiSuite(mod) {
 		publicLinkTone,
 		connectionStateKey,
 		connectionStateTone,
+		stateLineNeeded,
 		probeStepFailureKey,
 		externalSiteModeOptions,
 		orphanAskOptions,
@@ -210,10 +211,11 @@ export function runSettingsUiSuite(mod) {
 	assert.equal(classifyPublicLink(200, "text/html"), "webpage", "网页 200 不许说成公开可读");
 	assert.equal(classifyPublicLink(200, "image/png"), "ok");
 
-	for (const kind of ["ok", "forbidden", "missing", "webpage", "unreachable", "other"]) {
+	for (const kind of ["ok", "forbidden", "missing", "webpage", "unstable", "unreachable", "other"]) {
 		assert.equal(publicLinkKey(kind), `testPublic_${kind}`, `每类都要有文案 key：${kind}`);
 	}
 	assert.equal(publicLinkTone("webpage"), "warn", "「回的是网页」该去看前缀，不是当失败也不算通过");
+	assert.equal(publicLinkTone("unstable"), "warn", "「响应不稳定」该去看网关 / 反代");
 
 	// 语气分三档：`forbidden` 只是"知道了就好"（桶私有是正当选择），
 	// 而 `missing`/`unreachable` 是**地址配错了**，该去改前缀。
@@ -722,6 +724,17 @@ export function runSettingsUiSuite(mod) {
 		assert.notEqual(connectionStateTone("private"), connectionStateTone("checking"), "私有不能与「检测中」同色（那就看不出问出来了没有）");
 		assert.equal(connectionStateTone("unreachable"), "error");
 		assert.equal(connectionStateTone("checking"), "info");
+
+		// ⚠️ 结果行里**不要重复报结论**（用户 2026-10-18：「提示中显示了两次测试结果，
+		// 提了两次公开访问，显得冗余」）：公开 / 私有 / 连不上时 `testPublic_*` 已经说清了，
+		// 只有「判断不了」那几类才需要补一行状态。
+		assert.equal(stateLineNeeded("ok"), false, "★ 已说「别人也能打开」，别再补一句「公开访问」");
+		assert.equal(stateLineNeeded("forbidden"), false, "★ 已说「只有装了本插件的地方能打开」，别再补「私有访问」");
+		assert.equal(stateLineNeeded("unreachable"), false, "连不上那行已经说清了");
+		assert.equal(stateLineNeeded("missing"), true, "「对象不在」推不出状态，要补");
+		assert.equal(stateLineNeeded("webpage"), true, "「回的是网页」推不出状态，要补");
+		assert.equal(stateLineNeeded("unstable"), true, "「响应不稳定」推不出稳定状态，要补");
+		assert.equal(stateLineNeeded("other"), true, "「无法判断」推不出状态，要补");
 
 		// ⚠️ 这里曾断言 `linkAccessOptions` 的三个下拉选项（那个设置项 2026-10-18 删了），
 		// 以及更早的 `coherentLocalCopy` 纠正逻辑（1.7.0 当天删）。都别再加回来。

@@ -38,7 +38,7 @@ function makeIo(overrides = {}) {
 }
 
 export async function runProbeSampleSuite(mod) {
-	const { TEMP_PROBE_KEY, TEMP_PROBE_BODY, runWithTempProbeObject, singleFlight } = mod;
+	const { TEMP_PROBE_KEY_PREFIX, TEMP_PROBE_BODY, runWithTempProbeObject, singleFlight, tempProbeKey } = mod;
 	// `publicUrlFor` 只用来钉住"探针 key 能拼成一条合法地址"（拼不出来这一步会直接抛配置错）
 	const { publicUrlFor } = mod;
 
@@ -152,11 +152,16 @@ export async function runProbeSampleSuite(mod) {
 	// ============================================================
 	// 5. 探针对象本身要"进得去"也"看得见"
 	// ============================================================
-	const probeUrl = publicUrlFor({ endpoint: "https://storage.example.com", bucket: "notes" }, TEMP_PROBE_KEY);
-	assert.ok(probeUrl.endsWith(`/${TEMP_PROBE_KEY}`), "探针 key 必须能拼成一条合法地址");
+	// ★ 每轮一个新 key（固定 URL 会被中间层缓存 ⇒ 偶发假 200，2026-10-18 真机复现）
+	const keyA = tempProbeKey(() => 0.123456789);
+	const keyB = tempProbeKey(() => 0.987654321);
+	assert.ok(keyA.startsWith(TEMP_PROBE_KEY_PREFIX), "探针 key 必须带统一前缀（用户/我们都能认出它）");
+	assert.notEqual(keyA, keyB, "★ 两轮必须用不同的 key —— 固定 key 会被缓存，测出来的是缓存不是权限");
+	const probeUrl = publicUrlFor({ endpoint: "https://storage.example.com", bucket: "notes" }, keyA);
+	assert.ok(probeUrl.endsWith(`/${keyA}`), "探针 key 必须能拼成一条合法地址");
 	assert.ok(TEMP_PROBE_BODY.trim().length > 0, "探针对象要有非空内容（0 字节的读回比对永远通过，等于没验）");
 	assert.ok(
-		!/^\//.test(TEMP_PROBE_KEY) && !TEMP_PROBE_KEY.includes(".."),
+		!/^\//.test(keyA) && !keyA.includes("..") && !keyA.includes("/"),
 		"探针 key 不能有前导斜杠或 `..` 段（那会被路径规范化、与签名对不上）"
 	);
 }

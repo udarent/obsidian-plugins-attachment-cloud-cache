@@ -32,8 +32,33 @@
  * 一次列举都不加、一次写都不做。那条路回答的只是"渲染该走哪条路"，不该为了它动用户的桶。
  */
 
-/** 临时探针对象的 key。**固定**一条：重复测试只覆盖同一个对象，不会在桶里越堆越多。 */
-export const TEMP_PROBE_KEY = ".acc-connection-probe";
+/**
+ * 临时探针对象的 key **前缀**。真正的 key 每次测试都不一样（见 {@link tempProbeKey}）。
+ *
+ * ⚠️ **别改回固定 key**（2026-10-18 真机复现）：固定的 URL 会被**中间层（代理 / CDN / 缓存）**
+ * 记住 —— 同一条 `.acc-connection-probe` 的匿名请求在真机上**公开 / 私有交替出现**，
+ * 其中"公开"那几次连字节都是我们写的（缓存里的旧响应），而**同一个桶里另一个 key 稳定 403**。
+ * 也就是说：探针 URL 一旦被缓存，它测的就不再是桶的权限，而是**缓存的响应**。
+ *
+ * ⇒ 每次换一个 key（`prefix + 随机`），缓存永远命中不到，读到的就是此刻的真实权限。
+ * 代价：删不掉时会留下一个**带随机后缀**的对象（`leftBehind` 会把 key 报给用户），
+ * 比"报一个假的公开"轻得多。
+ */
+export const TEMP_PROBE_KEY_PREFIX = ".acc-connection-probe-";
+
+/**
+ * 这一轮要用的探针 key（每次不同）。
+ *
+ * `random` 可注入，测试里能断言"两次不同"；不注入时用 `Math.random`。
+ */
+export function tempProbeKey(random: () => number = Math.random): string {
+	const part = random()
+		.toString(36)
+		.slice(2)
+		.padEnd(8, "0")
+		.slice(0, 8);
+	return `${TEMP_PROBE_KEY_PREFIX}${part}`;
+}
 
 /**
  * 探针对象的内容。

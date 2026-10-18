@@ -204,6 +204,35 @@ export async function runLinkAccessSuite(mod) {
 			"⚠️ XML 不算网页：S3 的错误页是 XML，但用户也可能真的传了一个 .xml 附件"
 		);
 		assert.equal(classifyPublicReach(403, "text/html"), "forbidden", "非 2xx 不参与「网页」判定");
+
+		// ★ 两次结论不一致（真机实测：5 轮里 1 轮读得到、4 轮 403）⇒ `unstable`，**不改判**。
+		// 它的含义不是「桶私有」，而是「服务端侧不稳定，去查网关 / 反代」。
+		assert.equal(
+			stateAfterRoundTrip({ anonymous: { kind: "unstable", status: 200, at: 1 }, signedReadOk: true }),
+			null,
+			"★ 响应不稳定时不许翻转状态（一次偶然不是事实）"
+		);
+		assert.equal(
+			stateAfterProbe("private", { kind: "unstable", status: 200, at: 1 }),
+			"private",
+			"自动探测拿到 unstable 也不改判"
+		);
+
+		// ★★ 最强的一条：**取回来的字节不对 ⇒ 不是公开**（2026-10-18 真机复现：
+		// 同一个桶、同一时刻，固定 key 的匿名 HEAD 回 200，而内容哈希 key 回 403）。
+		// 此时类型可能完全正常（application/xml / image/png），只有内容能说明问题。
+		assert.equal(
+			classifyPublicReach(200, "application/xml", false),
+			"webpage",
+			"★ 2xx 但字节对不上 ⇒ 这个地址上放的不是我们的对象，不许判公开"
+		);
+		assert.equal(classifyPublicReach(200, "image/png", false), "webpage", "类型正常也不行，看内容");
+		assert.equal(classifyPublicReach(200, "image/png", true), "ok", "字节一致才是真的公开");
+		assert.equal(
+			classifyPublicReach(200, "image/png", undefined),
+			"ok",
+			"自动探测没有内容证据（只发 HEAD）⇒ 保持原判据"
+		);
 	}
 
 	// ============================================================

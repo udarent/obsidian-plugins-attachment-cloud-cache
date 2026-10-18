@@ -59,13 +59,16 @@ import { connectionReadiness } from "./s3/credentials";
 import {
 	INITIAL_CONNECTION_STATE,
 	UNKNOWN_ACCESS_PROBE,
+	classifyPublicReach,
 	probeAccess,
 	probeUrlFor,
 	stateAfterProbe,
 	stateAfterRoundTrip,
 } from "./link-access";
 import type { AccessProbe, ConnectionState } from "./link-access";
-import { TEMP_PROBE_BODY, TEMP_PROBE_KEY, runWithTempProbeObject, singleFlight } from "./probe-sample";
+import { TEMP_PROBE_BODY, runWithTempProbeObject, singleFlight, tempProbeKey } from "./probe-sample";
+import { probePublicContent } from "./s3/client";
+import type { PublicContentProbe } from "./s3/client";
 import type { ProbeRoundTripMemo } from "./probe-sample";
 import { utf8Bytes } from "./s3/hash";
 import { createLocalCopyEnsurer } from "./core/download";
@@ -1199,7 +1202,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 */
 	private async connectionProbeOnce(): Promise<ConnectionProbeResult> {
 		const client = this.buildClient();
-		const key = TEMP_PROBE_KEY;
+		// ⚠️ **每轮一个新 key**：固定 URL 会被中间层缓存，测出来的就不是权限而是缓存（见 `tempProbeKey`）。
+		const key = tempProbeKey();
 		const url = probeUrlFor(this.settings.s3, key);
 		if (!client || !url) {
 			this.forgetAccessProbe();
@@ -1228,7 +1232,44 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 					memo.readError = error;
 				}
 				// ③ 匿名读一次：别人打得开吗（这一步不写任何东西）
-				return this.recordAccessProbe(url);
+				//
+				// ⚠️ **直接发，不走 `recordAccessProbe`**（2026-10-18 用户报「公开 / 私有交替出现」）：
+				// 那个方法是给**自动探测**设计的 —— 它带一道"地址变了这次结论就作废"的闸门，并且与
+				// 自动探测**共用** `lastProbe`。用在用户手点的这一下上，会拿到**另一轮**（甚至很久以前）
+				// 的结论。用户点的这一下必须**只属于这一下**。
+				//
+				// ⚠️⚠️ 而且**不能只看状态码**：真机复现过「同一个桶、同一时刻，固定 key 的匿名 HEAD
+				// 回 200，而内容哈希 key 回 403」—— 2xx 可能来自中间层。唯一可信的证据是
+				// **把字节取回来、和写进去的比**（探针对象只有几十字节）。
+				const toProbe = (anon: PublicContentProbe): AccessProbe => {
+					const sameBody =
+						anon.bytes !== null &&
+						anon.bytes.length === body.length &&
+						anon.bytes.every((byte, i) => byte === body[i]);
+					const bodyMatches = anon.bytes !== null ? sameBody : anon.lengthMismatch ? false : undefined;
+					return {
+						kind: classifyPublicReach(anon.status, anon.contentType, bodyMatches),
+						status: anon.status,
+						at: Date.now(),
+						contentType: anon.contentType,
+						...(bodyMatches === undefined ? {} : { bodyMatches }),
+					};
+				};
+
+				// ⚠️ **问两次**（串行，不是并发：并发更可能落到同一个后端上）。
+				// 真机实测过「同一个桶、同一时刻，一次读得到、一次读不到」—— 一次成功不足以
+				// 证明"别人打得开"，而把一次偶然写成「公开访问」正是用户 2026-10-18 报的那个错。
+				// 两次结论不一致 ⇒ `unstable`（不改判），界面提示去查网关 / 反代。
+				const first = toProbe(await probePublicContent(url, body.length));
+				const second = toProbe(await probePublicContent(url, body.length));
+				const probe: AccessProbe =
+					first.kind === second.kind
+						? first
+						: { kind: "unstable", status: first.status, at: Date.now(), contentType: first.contentType };
+				// 只更新诊断用的那一格，**不动 `probedUrl`**（那是自动探测的缓存键，混进来会让
+				// 自动探测误以为"地址没变"而跳过真正该发的那次请求）。
+				this.lastProbe = probe;
+				return probe;
 			},
 		});
 
@@ -1254,7 +1295,9 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			// 状态变了 ⇒ 之前"按私有处理"的结论作废（地址还是那条，缓存键照样记）
 			this.probedUrl = url;
 		}
-		return { probe, sample: memo, url, state: this.connectionState };
+		// ⚠️ 用本轮的 `next`（推不出来才回落到全局）：返回的 state 与 probe 必须**同源**，
+		// 否则界面可能把「这一轮的证据」与「另一轮的状态」拼在一起（那正是「交替」的观感）。
+		return { probe, sample: memo, url, state: next ?? this.connectionState };
 	}
 
 	/**

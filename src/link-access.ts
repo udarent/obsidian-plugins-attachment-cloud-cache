@@ -91,6 +91,16 @@ export type PublicReachKind =
 	 * 不是"别人能打开你的对象"。2026-10-18 的误判就出在这里 —— 见 `classifyPublicReach`。
 	 */
 	| "webpage"
+	/**
+	 * 同一轮里**两次匿名检查结论不一致**（一次能读到、一次读不到）。
+	 *
+	 * ⚠️ 2026-10-18 真机实测：同一个桶，连续 5 轮里有 1 轮匿名字节读得回来、其余 4 轮 403；
+	 * 而立刻用 curl / Node / 页面各测 8 次又全是 403。⇒ 这是**服务端侧的间歇**（反向代理后面
+	 * 多个后端策略不一致、或缓存/负载均衡），不是"稳定公开"。
+	 * 判成 public 等于把一次偶然当成事实；判成 private 又抹掉了那条线索 ⇒ 单独一类，**不改判**，
+	 * 并在界面上说清"响应不稳定"，让用户去查网关。
+	 */
+	| "unstable"
 	/** 网络层失败（DNS / TLS / 连不上 / 超时）。 */
 	| "unreachable"
 	/** 其余状态码。 */
@@ -105,6 +115,13 @@ export interface AccessProbe {
 	at: number;
 	/** 响应头里的 `content-type`（拿不到为 `null`）；判定"回的是不是网页"要用它。 */
 	contentType?: string | null;
+	/**
+	 * 2xx 时：**取回来的字节与写进去的一致吗**（只有「测试连接」的回路会填）。
+	 *
+	 * `false` ⇒ 这个地址上回的不是我们的对象（中间层缓存 / 网关兜底页 / 前缀指错）。
+	 * `undefined` ⇒ 没有内容级证据（自动探测只发 HEAD，不下载对象）。
+	 */
+	bodyMatches?: boolean;
 	/**
 	 * 是不是**超时**放弃的（而不是对端明确给了状态码）。
 	 *
@@ -139,9 +156,17 @@ export const INITIAL_CONNECTION_STATE: ConnectionState = "checking";
  * - `missing` ⇒ 地址通但对象不在（多半前缀写错，例如少了桶名）；
  * - `unreachable` ⇒ 地址本身不对，或网络根本到不了。
  */
-export function classifyPublicReach(status: number | null, contentType?: string | null): PublicReachKind {
+export function classifyPublicReach(
+	status: number | null,
+	contentType?: string | null,
+	bodyMatches?: boolean
+): PublicReachKind {
 	if (status === null) return "unreachable";
 	if (status >= 200 && status < 300) {
+		// ⭐ 最强的判据：**取回来的字节对不对**（2026-10-18 真机复现：同一个桶、同一时刻，
+		// 固定 key 的匿名 HEAD 偶发 200，而内容哈希 key 稳定 403 ⇒ 2xx 可能来自中间层缓存 /
+		// 网关兜底页，不代表「别人能读到你的字节」）。只有拿回同样的字节才算公开。
+		if (bodyMatches === false) return "webpage";
 		// ⭐ **2xx 不等于"打开的是你的对象"**（2026-10-18 的误判）：
 		// 网关 / WAF / 身份校验页 / 反代兜底页会在路径不存在或请求被拦时回一个 **200 的网页**。
 		// 只看状态码的话，这种回应会被读成"桶是公开的"——而笔记里那条链接照样打不开，
