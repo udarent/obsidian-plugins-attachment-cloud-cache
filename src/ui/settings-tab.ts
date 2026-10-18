@@ -590,10 +590,55 @@ export class SettingsTab extends PluginSettingTab {
 				aliases: ["paste", "drop", "粘贴", "拖拽"],
 				control: { type: "toggle", key: "autoUpload" },
 			},
+			// ⭐ 站外文件这一段放在「上传」组里（2026-10-18）：它们做的事就是**上传**
+			// （下载 → 传到云端 → 改写链接），从前挂在「离线与本地副本」组下，
+			// 而那个组名讲的是本机副本，读起来像两件不相干的事。
+			{
+				name: this.t("externalImageCache"),
+				desc: this.t("externalImageCacheDesc"),
+				// 别名要覆盖用户会搜的词：默认关，所以"找不到它"就等于"功能不存在"
+				aliases: ["external", "hotlink", "third-party", "站外", "外链", "外部文件", "图床", "自动"],
+				control: { type: "toggle", key: "externalImageCache" },
+			},
+			{
+				name: this.t("externalSiteMode"),
+				desc: this.t("externalSiteModeDesc"),
+				aliases: ["site", "allowlist", "blocklist", "filter", "站点", "名单", "白名单", "黑名单", "过滤", "自动"],
+				// ⚠️ 条件显示：功能关着时名单没有任何意义（自动那一路整个不跑）。
+				// 与「缓存目录」那条同一个纪律：**看不见的字段不会产生矛盾组合**。
+				visible: () => this.plugin.settings.externalImageCache,
+				control: {
+					type: "dropdown",
+					key: "externalSiteMode",
+					options: externalSiteModeOptions((value) => this.t(`externalSite_${value}`)),
+				},
+			},
+			{
+				name: this.t("externalSiteList"),
+				desc: this.t("externalSiteListDesc"),
+				aliases: ["site", "list", "domain", "host", "站点", "名单", "域名"],
+				// ⚠️ 两重条件：功能关着时整段站外都没意义；`off` 档下名单**不生效**
+				//（判定层根本不读它）—— 显示一个不起作用的框比不显示更糟。
+				visible: () =>
+					this.plugin.settings.externalImageCache && shouldShowSiteList(this.plugin.settings.externalSiteMode),
+				render: (setting) => this.renderSiteList(setting),
+			},
+			{
+				name: this.t("externalPickName"),
+				desc: this.t("externalPickDesc"),
+				aliases: ["pick", "choose", "select", "选择", "挑选", "手动", "上传", "缓存"],
+				// ⚠️ **刻意不挂在开关上**：它是显式动作，判定层对它走 `purpose: "manual"` ——
+				// 开关与名单都**只管自动那一路**。关掉自动处理的人照样该能到这里手动挑。
+				// （从前挂过 `visible: externalImageCache`，那依据的是"功能关着时候选会被全部判掉"
+				// 这条**已废弃**的语义；R18 之后候选照旧列得出来。少了这一行，"合并成一个开关"
+				// 会把设置页这个入口一起关掉，而命令 `pick-external-images` 还开着 —— 两个入口
+				// 行为不一致，且文案承诺的"始终可用"就成了空话。）
+				render: (setting) => this.renderExternalPicker(setting),
+			},
 		];
 	}
 
-	// ─────────────────────── 离线副本 ───────────────────────
+	// ─────────────────────── 离线与本地副本 ───────────────────────
 
 	private offlineItems(): SettingGroupItem[] {
 		const items: SettingGroupItem[] = [
@@ -647,48 +692,6 @@ export class SettingsTab extends PluginSettingTab {
 				// 所以只能按"缓存是否被关掉"判，不能复用上面那个"会不会产生副本"。
 				visible: () => shouldShowFallbackDownload(this.plugin.settings.localCopy),
 				control: { type: "toggle", key: "fallbackDownload" },
-			},
-			{
-				name: this.t("externalImageCache"),
-				desc: this.t("externalImageCacheDesc"),
-				// 别名要覆盖用户会搜的词：默认关，所以"找不到它"就等于"功能不存在"
-				aliases: ["external", "hotlink", "third-party", "站外", "外链", "外部文件", "图床", "自动"],
-				control: { type: "toggle", key: "externalImageCache" },
-			},
-			{
-				name: this.t("externalSiteMode"),
-				desc: this.t("externalSiteModeDesc"),
-				aliases: ["site", "allowlist", "blocklist", "filter", "站点", "名单", "白名单", "黑名单", "过滤", "自动"],
-				// ⚠️ 条件显示：功能关着时名单没有任何意义（自动那一路整个不跑）。
-				// 与「缓存目录」那条同一个纪律：**看不见的字段不会产生矛盾组合**。
-				visible: () => this.plugin.settings.externalImageCache,
-				control: {
-					type: "dropdown",
-					key: "externalSiteMode",
-					options: externalSiteModeOptions((value) => this.t(`externalSite_${value}`)),
-				},
-			},
-			{
-				name: this.t("externalSiteList"),
-				desc: this.t("externalSiteListDesc"),
-				aliases: ["site", "list", "domain", "host", "站点", "名单", "域名"],
-				// ⚠️ 两重条件：功能关着时整段站外都没意义；`off` 档下名单**不生效**
-				//（判定层根本不读它）—— 显示一个不起作用的框比不显示更糟。
-				visible: () =>
-					this.plugin.settings.externalImageCache && shouldShowSiteList(this.plugin.settings.externalSiteMode),
-				render: (setting) => this.renderSiteList(setting),
-			},
-			{
-				name: this.t("externalPickName"),
-				desc: this.t("externalPickDesc"),
-				aliases: ["pick", "choose", "select", "选择", "挑选", "手动", "上传", "缓存"],
-				// ⚠️ **刻意不挂在开关上**：它是显式动作，判定层对它走 `purpose: "manual"` ——
-				// 开关与名单都**只管自动那一路**。关掉自动处理的人照样该能到这里手动挑。
-				// （从前挂过 `visible: externalImageCache`，那依据的是"功能关着时候选会被全部判掉"
-				// 这条**已废弃**的语义；R18 之后候选照旧列得出来。少了这一行，"合并成一个开关"
-				// 会把设置页这个入口一起关掉，而命令 `pick-external-images` 还开着 —— 两个入口
-				// 行为不一致，且文案承诺的"始终可用"就成了空话。）
-				render: (setting) => this.renderExternalPicker(setting),
 			},
 		];
 
