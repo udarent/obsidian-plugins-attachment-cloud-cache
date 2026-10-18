@@ -139,12 +139,17 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 ## How far it is verified
 
 - **Automated:** signing, key and path derivation, settings, the index, the upload chain (byte-identical, one PUT,
-  zero GETs), paste/drop decisions and canvas rewriting — then a **mutation check** breaks each rule on purpose.
-- **Real Obsidian + real MinIO:** a format matrix (images, audio, video, PDF, archives) checked down to the uploaded bytes, both canvas node kinds,
-  offline audio/video/PDF, both cleanup entry points, and a round trip whose link opens **anonymously**.
-  Reproduce with `npm run verify:real-storage`.
-- **Real phone:** Android was verified up to 1.1.2. **Not verified:** iOS has never run on a device; non-ASCII
-  object keys are tested but not against a real provider.
+  zero GETs), paste/drop decisions, canvas rewriting and every connection state — then a **mutation check** that
+  breaks each rule on purpose and requires the suite to fail for that rule's own reason.
+- **Real Obsidian 1.14.4 (Windows) against real MinIO:** a format matrix (images, audio, video, PDF, archives)
+  checked down to the uploaded bytes; both canvas node kinds; offline audio/video/PDF; both cleanup entry points;
+  a round trip whose link opens **anonymously**; and on a **private** bucket the status light settling on *Private*,
+  five rounds of **Test connection** giving the same answer with nothing left behind in the bucket, and a signed URL
+  that returns 200 while the same address without a signature returns 403.
+- **Phones:** Android, verified up to 1.1.2.
+
+Reproduce the storage checks with `npm run verify:real-storage`, and the connection probe with
+`node scripts/verify-connection-probe.mjs`.
 
 ## Getting help
 
@@ -295,11 +300,15 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 ## 已验证到什么程度
 
 - **自动化：** 覆盖签名、key 与路径推导、设置、本地副本索引、上传链路（字节一致、恰好 1 次 PUT、0 次 GET）、
-  粘贴/拖放判定与画布改写 —— 之后还有一道**变异验证**：把每条规则故意改坏。
-- **真实 Obsidian、真实 MinIO：** 格式矩阵（图片、音频、视频、PDF、压缩包）逐项核对到上传字节；画布两类节点；离线预览；
-  云端清理两条入口；一次完整回环 —— 链接**匿名**能打开。可用 `npm run verify:real-storage` 复现。
-- **真手机：** Android 已验证到 1.1.2。**未验证：** iOS 从未在真机上跑过；含非 ASCII 字符的对象 key 有测试，
-  但没在真实服务商上跑过。
+  粘贴/拖放判定、画布改写，以及每一个连接状态 —— 之后还有一道**变异验证**：把每条规则故意改坏，
+  并要求套件因**那条规则自己的原因**失败。
+- **真实 Obsidian 1.14.4（Windows）、真实 MinIO：** 格式矩阵（图片、音频、视频、PDF、压缩包）逐项核对到上传字节；
+  画布两类节点；离线预览；云端清理两条入口；一次完整回环 —— 链接**匿名**能打开。在**私有桶**上还验了：
+  状态灯落在「私有访问」、连点五次「测试连接」结论一致且桶里不留东西、签名地址回 200 而同一地址不带签名回 403。
+- **手机：** Android，验证到 1.1.2。
+
+存储侧的检查可用 `npm run verify:real-storage` 复现，连接探测用
+`node scripts/verify-connection-probe.mjs`。
 
 ## 遇到问题
 
