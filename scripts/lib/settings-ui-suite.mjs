@@ -708,9 +708,14 @@ export function runSettingsUiSuite(mod) {
 		for (const state of ["checking", "public", "private", "unreachable"]) {
 			assert.equal(connectionStateKey(state), `connectionStatus_${state}`, `每个状态都要有文案 key：${state}`);
 		}
-		// 语气分四档：公开=好、私有=提示（那是正当用法，不是错误）、无法访问=错误、检测中=中性
+		// 语气四档各管一件事：公开=好、私有=**受限但正常**、无法访问=错误、检测中=中性。
+		//
+		// ⚠️ 私有**不许是 `warn`**（用户 2026-10-18：「黄色有警告的意思，能否换一个颜色？」）：
+		// 黄在界面里一律读作"警告/待处理"，而桶私有是**正当且稳定**的配置 —— 用户会跑去
+		// 改一个没坏的设置，改完反而把链接暴露出去。所以它有自己的 `accent`（蓝）。
 		assert.equal(connectionStateTone("public"), "ok");
-		assert.equal(connectionStateTone("private"), "warn", "私有是正当选择，不是错误");
+		assert.equal(connectionStateTone("private"), "accent", "私有不是警告也不是错误 —— 它是「受限但正常」");
+		assert.notEqual(connectionStateTone("private"), connectionStateTone("checking"), "私有不能与「检测中」同色（那就看不出问出来了没有）");
 		assert.equal(connectionStateTone("unreachable"), "error");
 		assert.equal(connectionStateTone("checking"), "info");
 

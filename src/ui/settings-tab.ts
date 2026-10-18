@@ -62,12 +62,12 @@ interface TestLine {
 	key: string;
 	params?: Record<string, unknown>;
 	/**
-	 * 呈现语气。分四档是有意的：`warn` 表示"知道了就好"（例如桶私有 —— 那是正当选择，
-	 * 只是链接对外是死的），`error` 表示"该去改点什么"，`info` 是**事实说明**
-	 *（例如"这次是用临时探针对象测的"—— 既不是好消息也不是坏消息）。
+	 * 呈现语气。分档是有意的：`ok` 通过、`error` 该去改点什么、`info` 是**事实说明**
+	 *（例如"这次是用临时探针对象测的"—— 既不是好消息也不是坏消息）、
+	 * `accent` 是"受限但正常"（连接状态 = 私有访问时用；**不用黄**，见 `connectionStateTone`）。
 	 * 都涂成红色会让用户去改没坏的东西；把 `info` 涂成绿色会被误读成"这一项也通过了"。
 	 */
-	tone: "ok" | "warn" | "error" | "info";
+	tone: "ok" | "warn" | "error" | "info" | "accent";
 }
 
 export class SettingsTab extends PluginSettingTab {

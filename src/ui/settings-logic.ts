@@ -114,13 +114,28 @@ export function connectionStateKey(state: ConnectionState): string {
 	return `connectionStatus_${state}`;
 }
 
-export function connectionStateTone(state: ConnectionState): "ok" | "warn" | "error" | "info" {
+/**
+ * 语气（也就是那盏灯的颜色）。
+ *
+ * | 状态 | 语气 | 为什么 |
+ * |---|---|---|
+ * | `public` | `ok`（绿） | 一切照常 |
+ * | `private` | **`accent`（蓝）** | 见下 |
+ * | `unreachable` | `error`（红） | 该去改点什么 |
+ * | `checking` | `info`（灰） | 还不知道 |
+ *
+ * ⚠️ **私有不用黄色**（用户 2026-10-18 提的）：黄在几乎所有界面里都读作"警告 / 待处理"，
+ * 而"桶是私有的"是一个**正当且稳定**的配置（只给自己用）—— 用户看见黄灯会跑去改一个
+ * 没坏的设置，改完反而把链接暴露出去。蓝色读作"受限，但正常"。
+ * ⭐ 顺带：绿 / 黄 / 红恰好是红绿色盲最难分的一组，少一档黄就少一处混淆。
+ */
+export function connectionStateTone(state: ConnectionState): "ok" | "warn" | "error" | "info" | "accent" {
 	switch (state) {
 		case "public":
 			return "ok";
 		case "private":
-			// 私有是**正当选择**（只给自己用），不是错误
-			return "warn";
+			// 私有是**正当选择**（只给自己用）：既不是错误，也不是警告
+			return "accent";
 		case "unreachable":
 			return "error";
 		default:
