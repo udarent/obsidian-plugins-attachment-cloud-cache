@@ -92,9 +92,9 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | Command | What it does |
 | --- | --- |
 | **Show local copy usage** | What your local copies hold, and how much of it no note refers to any more — an estimate: nothing is removed before your storage is confirmed to still have the object. |
-| **Upload attachments** | Lists what your notes link to (a thumbnail and a tick box per row), then uploads the ticked ones and rewrites those links. Your files stay where they are — that copy *is* the local copy. |
-| **Upload external files…** | Lists files that live outside your vault (thumbnails, tick boxes, per-item progress); tick individual ones — on other sites, or on this computer — and only those are fetched. Picking them is the consent. |
-| **Check for unreferenced attachments in the cloud…** | Everything this vault uploaded, minus everything still linked — a row with a thumbnail and a tick box each. The ticked ones then take your choice: keep them, delete only the local copy (to the trash), or delete the local copy and the stored object. Also how you re-run the automatic prompt if you dismissed it. |
+| **Upload files your notes link to…** | Lists what your notes link to (a thumbnail and a tick box per row), then uploads the ticked ones and rewrites those links. Your files stay where they are — that copy *is* the local copy. |
+| **Upload files from other sites or your computer…** | Lists files that live outside your vault (thumbnails, tick boxes, per-item progress); tick individual ones — on other sites, or on this computer — and only those are fetched. Picking them is the consent. |
+| **Clean up cloud attachments that no note links to…** | Everything this vault uploaded, minus everything still linked — a row with a thumbnail and a tick box each. The ticked ones then take your choice: keep them, delete only the local copy (to the trash), or delete the local copy and the stored object. Also how you re-run the automatic prompt if you dismissed it. |
 
 ## Good to know
 
@@ -252,9 +252,9 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | 命令 | 做什么 |
 | --- | --- |
 | **查看本地副本占用** | 本地副本占了多少、其中多少已经没有笔记引用了 —— 这是**估算**：真正删除前会先确认你的存储里仍然有这个对象。 |
-| **上传附件** | 列出笔记里引用着的附件（**每条带缩略图与勾选框**），只上传你勾中的那些并改写链接。文件**留在原地** —— 那份就是本地副本。 |
-| **上传外部文件…** | 列出**库外**的文件（缩略图 + 勾选框 + 逐项进度）：别处服务器上的、或你这台电脑上的，勾中的才会被取回 —— 勾选本身就是同意。 |
-| **检查未被引用的云端附件…** | 候选 = 本库上传过的、减去仍被笔记或画布引用的 —— 每条带缩略图与勾选框。勾中的按你选的那一档处理：保留 / 只删本地副本（进回收站）/ 连本地带云端一起删。那次自动询问被误关之后，也从这里重新要一次。 |
+| **上传笔记引用的文件…** | 列出笔记里引用着的附件（**每条带缩略图与勾选框**），只上传你勾中的那些并改写链接。文件**留在原地** —— 那份就是本地副本。 |
+| **上传站外或本机文件…** | 列出**库外**的文件（缩略图 + 勾选框 + 逐项进度）：别处服务器上的、或你这台电脑上的，勾中的才会被取回 —— 勾选本身就是同意。 |
+| **清理没有笔记引用的云端附件…** | 候选 = 本库上传过的、减去仍被笔记或画布引用的 —— 每条带缩略图与勾选框。勾中的按你选的那一档处理：保留 / 只删本地副本（进回收站）/ 连本地带云端一起删。那次自动询问被误关之后，也从这里重新要一次。 |
 
 ## 需要注意的
 

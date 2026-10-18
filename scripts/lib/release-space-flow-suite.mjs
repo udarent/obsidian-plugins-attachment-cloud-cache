@@ -400,8 +400,10 @@ export async function runReleaseSpaceFlowSuite(mod) {
 			["attachments/linked-bbbbbbbb.png"],
 			"★★ 上限档只动'笔记里仍引用着'的那批 —— 没人引用的那份要留给'连云端一起清'那条流程"
 		);
+		// ⚠️ 断言的是**接线**（这条提示把用户指到那条清理命令），不是某个具体名字 ——
+		// 命令改名时两边一起走，不会因为文案调整而假红；而 `{command}` 一旦没传进来就会红。
 		assertNotice(
-			["Check for unreferenced attachments in the cloud"],
+			[translate("en", "cmdCheckOrphans")],
 			"★★ 剩下那部分（没人引用的）必须指路：否则'我设了上限、也清了，怎么还占着'会变成一个说不清的谜"
 		);
 	}

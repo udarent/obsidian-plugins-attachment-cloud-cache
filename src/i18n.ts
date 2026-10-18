@@ -151,7 +151,7 @@ export const I18N: Record<string, Locale> = {
 
 		// ── 维护命令 ──
 		// ── 云端空间清理（F15）──
-		cmdCheckOrphans: "Check for unreferenced attachments in the cloud…",
+		cmdCheckOrphans: "Clean up cloud attachments that no note links to…",
 		cloudCleanupDeviceBlindSpot:
 			"Only this device's references can be seen. Other devices (or another vault sharing this storage) may still be using some of these files — deleting cannot be undone.",
 		cloudCleanupPersistFailed: "Could not save the local-copy index: {error}",
@@ -205,7 +205,7 @@ export const I18N: Record<string, Locale> = {
 			"This batch of local copies is already within your {limit} limit — nothing to clean up.",
 		releaseSpaceUnlinkedLeft:
 			"Also about {mb} MB of local copies are linked from no note — those are not part of this cleanup: they may need removing from your storage as well, so run “{command}” for them.",
-		orphanTitle: "Clean up these unused attachments?",
+		orphanTitle: "Clean up these attachments no note links to?",
 		orphanBody:
 			"{count} attachment(s) you uploaded are no longer linked from any note or canvas.",
 		orphanMore: "…and {count} more.",
@@ -218,7 +218,7 @@ export const I18N: Record<string, Locale> = {
 		orphanDeletedBoth:
 			"Removed {removed} local copy(ies). Storage: {deleted} deleted, {alreadyGone} already gone, {failed} failed.",
 		orphanNotice:
-			"{count} uploaded attachment(s) are no longer linked from any note or canvas. Run “{command}” to review and clean up.",
+			"{count} uploaded attachment(s) are no longer linked from any note or canvas. Run “{command}” to review them.",
 		orphanDismissed:
 			"Nothing was deleted. To ask again, run “{command}”.",
 		orphanNoneToCheck:
@@ -227,7 +227,7 @@ export const I18N: Record<string, Locale> = {
 		cmdAuditCache: "Show local copy usage",
 		// ⭐ 与设置页那颗「Delete local copies…」是**同一条链**（`releaseLocalSpace`），
 		// 命令面板侧多一个限定词：这里说的是**清理哪些**（没有任何笔记引用的那些）。
-		cmdUploadAttachments: "Upload attachments",
+		cmdUploadAttachments: "Upload files your notes link to…",
 		// ⭐ 命令**失败**时必须有人说话（2026-10-16 用户实测："点击命令没有反应"）。
 		// 以前异步命令抛错只留一条控制台记录，界面上什么都不发生 —— 那是最坏的失败形态。
 		// ⚠️ 不写命令名：用户刚点过它，而 `{error}` 才是他要看的东西（命令 id 进控制台日志）。
@@ -265,7 +265,7 @@ export const I18N: Record<string, Locale> = {
 		maintainSkipNotIndexed: "Obsidian cannot see this file yet — skipped instead of deleting it directly",
 		maintainNotConfigured: "The storage connection is not set up yet, so nothing was uploaded.",
 		maintainBatchNothing: "No attachments to upload (everything is already handled).",
-		maintainBatchTitle: "Upload attachments",
+		maintainBatchTitle: "Upload files your notes link to",
 		maintainBatchSummary:
 			"Upload {count} file(s) — anything already in your storage is reused — and rewrite note links to point at your storage.",
 		// ⚠️ 1.2.0（D-17）起，"上传后把原文件搬走"这件事**不存在了** —— 那份文件留在原地、
@@ -329,7 +329,7 @@ export const I18N: Record<string, Locale> = {
 		externalPickNothing: "No files were uploaded.",
 		externalPickDone:
 			"Uploaded {cached} file(s); {partial} were uploaded but their link could not be rewritten; {failed} failed.",
-		cmdPickExternal: "Upload external files…",
+		cmdPickExternal: "Upload files from other sites or your computer…",
 		externalCached: "Uploaded the file from {host} and rewrote the link.",
 		// ── 本机文件（file:///D:/…）：与站外同一套链，只有"字节从哪来"不同 ──
 		localCached: "Uploaded the local file {name} and rewrote the link.",
@@ -462,7 +462,7 @@ export const I18N: Record<string, Locale> = {
 		ingestIndexPersistFailed: "文件已上传，但本地副本索引保存失败：{error}",
 
 		// ── 云端空间清理（F15）──
-		cmdCheckOrphans: "检查未被引用的云端附件…",
+		cmdCheckOrphans: "清理没有笔记引用的云端附件…",
 		cloudCleanupDeviceBlindSpot:
 			"只能看到本设备的引用情况。其他设备（或共用这个存储的另一个库）可能还在用其中一些文件 —— 删除后无法恢复。",
 		cloudCleanupPersistFailed: "本地副本索引保存失败：{error}",
@@ -510,7 +510,7 @@ export const I18N: Record<string, Locale> = {
 			"这批本地副本已经在你设的 {limit} 上限以内，没什么可清理的。",
 		releaseSpaceUnlinkedLeft:
 			"另有约 {mb} MB 是「没有任何笔记引用」的本地副本 —— 那不属于这次清理：它们可能需要连云端对象一起处理，请用「{command}」。",
-		orphanTitle: "要清掉这些没人用的附件吗？",
+		orphanTitle: "要清理这些没有笔记引用的附件吗？",
 		orphanBody: "你上传过的 {count} 个附件已经不再被任何笔记或画布引用了。",
 		orphanMore: "……还有 {count} 个。",
 		orphanLocalNote:
@@ -521,17 +521,15 @@ export const I18N: Record<string, Locale> = {
 		orphanLocalDeleted: "已删掉 {removed} 个本地副本；云端对象未动。",
 		orphanDeletedBoth:
 			"已删掉 {removed} 个本地副本；云端：删除 {deleted} 个、本来就不存在 {alreadyGone} 个、失败 {failed} 个。",
-		orphanNotice:
-			"有 {count} 个已上传的附件不再被任何笔记或画布引用。运行「{command}」可以查看并清理。",
+		orphanNotice: "有 {count} 个已上传的附件不再被任何笔记或画布引用。运行「{command}」查看并处理。",
 		orphanDismissed:
 			"什么都没删。想再问一次：运行「{command}」。",
-		orphanNoneToCheck:
-			"没有需要处理的 —— 已上传的附件要么还有笔记或画布在引用它，要么是站外缓存来的（那一类不在这里处理）。",
+		orphanNoneToCheck: "没有需要处理的 —— 已上传的附件要么还有笔记或画布在引用，要么是从站外上传来的（那一类不在这里处理）。",
 		cloudDeleteFailed: "删除对象失败：{error}",
 		cmdAuditCache: "查看本地副本占用",
 		// ⭐ 与设置页那颗「清理本地副本…」是**同一条链**（`releaseLocalSpace`），
 		// 命令面板侧多一个限定词：这里说的是**清理哪些**（没有任何笔记引用的那些）。
-		cmdUploadAttachments: "上传附件",
+		cmdUploadAttachments: "上传笔记引用的文件…",
 		// ⭐ 命令**失败**时必须有人说话（2026-10-16 用户实测："点击命令没有反应"）。
 		// 以前异步命令抛错只留一条控制台记录，界面上什么都不发生 —— 那是最坏的失败形态。
 		// ⚠️ 不写命令名：用户刚点过它，而 `{error}` 才是他要看的东西（命令 id 进控制台日志）。
@@ -567,7 +565,7 @@ export const I18N: Record<string, Locale> = {
 		maintainSkipNotIndexed: "Obsidian 还看不到这个文件 —— 已跳过，而不是直接删除",
 		maintainNotConfigured: "存储连接尚未配置，没有上传任何内容。",
 		maintainBatchNothing: "没有需要上传的附件（都已经处理过了）。",
-		maintainBatchTitle: "上传附件",
+		maintainBatchTitle: "上传笔记引用的文件",
 		maintainBatchSummary:
 			"将上传 {count} 个文件（已经传过的会直接复用），并把笔记里的链接改成指向你的存储。",
 		// ⚠️ 别在文案里写 markdown（`**加粗**`）：确认弹窗是 `createDiv({ text })`、
@@ -623,7 +621,7 @@ export const I18N: Record<string, Locale> = {
 		externalPickCancel: "取消",
 		externalPickNothing: "没有上传任何文件。",
 		externalPickDone: "已上传 {cached} 个；{partial} 个已上传但没能改写链接；{failed} 个失败。",
-		cmdPickExternal: "上传外部文件…",
+		cmdPickExternal: "上传站外或本机文件…",
 		externalCached: "已上传来自 {host} 的文件并改写链接。",
 		// ── 本机文件（file:///D:/…）：与站外同一套链，只有"字节从哪来"不同 ──
 		localCached: "已把本机文件 {name} 上传上去并改写链接。",
