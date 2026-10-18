@@ -129,6 +129,7 @@ export class SettingsTab extends PluginSettingTab {
 			},
 			{
 				name: this.t("s3Bucket"),
+				desc: this.t("s3BucketDesc"),
 				control: { type: "text", key: "s3.bucket" },
 			},
 			{
@@ -166,6 +167,18 @@ export class SettingsTab extends PluginSettingTab {
 				render: (setting) => this.renderSecretInput(setting),
 			},
 
+			// ⭐ **紧跟凭据之后**（2026-10-18 从组末移上来）：它填的就是上面这四栏
+			//（服务地址 / 桶 / 访问密钥 / 秘密密钥）—— 放在「测试连接」后面，用户得先
+			// 滚过一堆已经填好的字段，才看到那个本来能省掉全部手填的入口。
+			// ⚠️ 顺序也由 `test-settings-ui.mjs` 的静态守卫钉着：访问密钥 ID 与秘密访问密钥
+			// 必须是**相邻的前两项**（成对编辑的前提）—— 这次移动不影响它（导入在第三项之后）。
+			{
+				name: this.t("s3Import"),
+				desc: this.t("s3ImportDesc"),
+				aliases: ["minio", "credentials", "json", "import", "凭据", "导入"],
+				render: (setting) => this.renderCredentialImport(setting),
+			},
+
 			{
 				name: this.t("s3PublicUrlBase"),
 				desc: this.t("s3PublicUrlBaseDesc"),
@@ -192,16 +205,6 @@ export class SettingsTab extends PluginSettingTab {
 				// 别名覆盖用户会搜的词：他们要的是"能不能给别人看"，不一定知道"ACL / 匿名读"
 				aliases: ["status", "test", "link", "share", "public", "private", "acl", "permission", "公开", "私有", "权限", "外链", "分享", "别人", "状态"],
 				render: (setting) => this.renderConnectionTest(setting),
-			},
-
-			// ⚠️ 放在这两栏**之后**：导入是"一次性的省事入口"，而上面那几项才是
-			// 用户真要核对/修改的地方。顺序也由 `test-settings-ui.mjs` 的静态守卫钉着 ——
-			// 访问密钥 ID 与秘密访问密钥必须是**相邻的前两项**（成对编辑的前提）。
-			{
-				name: this.t("s3Import"),
-				desc: this.t("s3ImportDesc"),
-				aliases: ["minio", "credentials", "json", "import", "凭据", "导入"],
-				render: (setting) => this.renderCredentialImport(setting),
 			},
 		];
 	}

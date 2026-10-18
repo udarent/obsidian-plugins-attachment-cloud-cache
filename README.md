@@ -16,6 +16,8 @@ local copy — the file itself — stays in your vault to do the rendering. **Ze
 
 [Install](#installation) · [Releases](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases) · [Report a problem](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues) · Requires Obsidian **1.13.0+** ([why](#requirements))
 
+**Contents** · [Why](#why-use-it) · [Features](#features) · [Requirements](#requirements) · [Installation](#installation) · [Settings](#settings) · [Commands](#commands) · [Good to know](#good-to-know) · [Privacy](#privacy--security) · [Verification](#how-far-it-is-verified) · [Help](#getting-help) · [License](#license)
+
 ![Paste an image, a PDF and an audio clip into a note: each one uploads to your own storage, a copy of each stays in your vault, and all three still render after the storage goes offline](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
 
 *Paste an image, a PDF and an audio clip → each uploads → the note keeps a link, each file stays as its own local copy. Then the storage is stopped, and all three still work.*
@@ -38,6 +40,8 @@ This does both — the file goes to your bucket, the copy that renders stays beh
   extension-less files.
   What Obsidian can preview becomes an embed; everything else, a clickable link.
 - **Any way in** — pasted, dropped, from your phone's gallery or camera, shared into Obsidian, or copied into the vault.
+- **It tells you what your bucket actually allows** — public, private or unreachable, as a status light next to
+  **Test connection**; re-checked on demand, and not a single link is rewritten for it.
 - **The same file twice is one object.** The key is the file name plus its full content hash, so even `photo 1.png`
   beside `photo.png` is one image: one address, the original name in the link text, the extra copy cleaned up.
 - **Offline and multi-device** — rendering always uses the local copy, and a new device back-fills copies on demand.
@@ -52,8 +56,8 @@ This does both — the file goes to your bucket, the copy that renders stays beh
 - **An S3-compatible bucket you control**, plus an access key pair.
 - **The bucket does not have to be public.** If you want links pasted elsewhere to open, allow anonymous reads (or
   set a public URL prefix). If it is just for you, keep the bucket private: the plugin fetches objects with your keys
-  and shows local copies — those links then only open where the plugin and your keys are. **Test connection** reports
-  which of the two you have, and which path the plugin takes.
+  and shows local copies — those links then only open where the plugin and your keys are. **Test connection** says
+  which case you are in; the plugin picks the safe path from there.
 
 ## Installation
 
@@ -69,19 +73,19 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 
 | Setting | What it does |
 | --- | --- |
-| **Endpoint · Bucket · Region** | Where your storage lives (`us-east-1` is the usual filler for self-hosted). |
+| **Endpoint · Bucket · Region** | Where your storage lives. The bucket name must match exactly (it is case-sensitive); `us-east-1` is the usual filler for self-hosted. |
 | **Access key ID · Secret access key** | The secret goes into the OS keychain, never `data.json`. **Import from a credentials file** fills these in from MinIO's JSON and keeps no copy. |
-| **Public URL prefix** | Optional. Empty means links use `endpoint/bucket/key`; those only work for other people if the bucket allows anonymous reads — the status light on the **Test connection** row tells you which case you are in. |
-| **Test connection** | Shows a **status light** for your bucket — a **fact, not a setting**, so there is nothing to choose: **checking** (grey, just started), **public** (green — anyone with a link can open it), **private** (blue — only this plugin with your keys can), **unreachable** (red — neither worked). It is re-detected on every start and never persisted, and it **never rewrites a link** in your notes: the URL stays byte-identical and nothing is moved or deleted in your bucket. The button next to that light writes **one tiny probe object** into your bucket, reads it back to compare the bytes, asks the same address the way a stranger would (**no credentials**), then deletes it. That covers all three things the plugin really does — uploading, fetching and deleting — plus whether other people can open your links, and it works on a brand-new vault with an empty bucket. Nothing is kept; if the object cannot be deleted the result says so and names it. |
-| **Upload new attachments automatically** | On by default; off leaves new files local only. |
-| **Where the local copy goes** | **Keep the file where it is (offline works)** (default) or **Delete the local file after uploading (offline unavailable)**. With the second, uploads and link rewriting still happen, but nothing is fetched back, so **nothing works offline**. If your bucket is not publicly readable, that mode still shows **images, audio and video**: the renderer gets a **short-lived signed URL** instead (plain image-host behaviour — nothing on disk, nothing cached offline). PDFs still need a local copy, since the built-in viewer only opens vault files. |
-| **Free up local space** | Clears local copies of attachments still linked from a note — deleted **for good, not trashed**, so the space comes back at once. With a limit set it trims down **to that limit** only; copies no note links to are left to the unreferenced-attachment cleanup (they may need removing from your storage too). |
-| **Revert links to local paths** | Points note links back at the files in your vault instead of your storage. **Nothing is deleted** — cloud objects and local files stay as they are; only the links change. Uploaded files that no longer have a local copy are left pointing at your storage (rewriting them would only make broken links). Use it when you stop using the plugin.
-| **Local copy limit (MB) · Download missing copies** | `0` = no limit. Least-recently-used copies are trimmed first, and only after confirming the object is still in your storage. Auto-download stays off while "delete" is selected. |
-| **Handle files from other sites like ordinary files** | Off by default. On, an off-site file is downloaded, uploaded and its link rewritten exactly like a local paste — the copy setting included. **Which sites to handle** (`All` / `All except the ones listed` / `Only the ones listed`) filters the **automatic** path only; picking files by hand is never restricted. `example.com` also matches `img.example.com`. |
-| **Pick specific files** | Tick individual off-site files; only those are fetched. Works whether or not the switch above is on. **Files outside your vault** (`file:///D:/…`, e.g. a chat-app screenshot) are listed here too, and go through the same chain — desktop only, and only the kinds that can be embedded in a note (image/audio/video/PDF). |
-| **When an attachment is no longer linked** | Once an uploaded file loses its last link from any note or canvas: ask (default) / just show a notice / do nothing. Cleanup always needs your explicit confirmation — this only decides whether you are told, and how. |
-| **Compatibility mode** | Advanced. Addresses objects as `endpoint/bucket/key`: keep it on for Cloudflare R2, MinIO and most self-hosted services. |
+| **Public URL prefix** | Optional. Empty means links use `endpoint/bucket/key`; those open for other people only if the bucket allows anonymous reads — the light on **Test connection** says which case you are in. |
+| **Test connection** | A **status light** plus a button. The light is *checking* / *public* / *private* / *unreachable* — a fact about your bucket, not a setting: re-detected on every start, never persisted. The button writes **one tiny probe object**, reads it back to compare the bytes, asks the same address the way a stranger would (**no credentials**), then deletes it — uploading, fetching, deleting and external reach in one go, on an empty bucket too. Nothing is kept, and it **never rewrites a link**. |
+| **Upload new attachments automatically** | On by default. Off leaves new files local only. |
+| **Where the local copy goes** | **Keep the file where it is** (default, offline works) or **delete it after uploading**: uploads and links still happen, but nothing renders offline — images, audio and video are then served through short-lived signed URLs; PDFs still need a copy. |
+| **Local copy limit (MB) · Download missing copies** | `0` = no limit. Least-recently-used copies go first, and only after the object is confirmed to still be in your storage; they come back when next viewed. Auto-download is off in delete mode — except it always runs when the bucket is private, or nothing could be shown. |
+| **Free up local space** | Deletes local copies of files your notes still link — **permanently, not to the trash**, so the space comes back at once. With a limit it trims only down to that limit. |
+| **Revert links to local paths** | Points note links back at the files in your vault. **Nothing is deleted**; files with no local copy keep pointing at your storage. |
+| **Handle files from other sites like ordinary files** | Off by default. The site list filters the **automatic** path only; picking files by hand is never restricted. |
+| **Pick specific files** | Tick individual off-site or outside-the-vault files (`file:///D:/…`); desktop only, and only the kinds a note can embed. |
+| **When an attachment is no longer linked** | Ask (default) / notify / do nothing. Cleanup always needs your confirmation. |
+| **Compatibility mode** | Advanced. Addresses objects as `endpoint/bucket/key`; keep it on for Cloudflare R2, MinIO and most self-hosted services. |
 
 ## Commands
 
@@ -116,6 +120,7 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | Links open for you but not for others | Expected when the connection status is *private* (the bucket refuses anonymous reads). **Test connection** says which it is. |
 | Broken on a second device | No local copy there, and it could not download one. |
 | An off-site file refused as "a web page or plain text" | That address serves HTML, so it is refused on purpose. |
+| *Test connection* says the storage refused to write | The keys can read but not write — uploads will fail the same way. Give them write permission on the bucket. |
 
 ## Privacy & security
 
@@ -144,7 +149,13 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 
 Open an issue: <https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues> — say what you saw, your
 Obsidian version and which storage provider you use; the errors name the step that failed.
-Working on the plugin? `npm install`, then `npm run dev` (watch build) or `npm test` (build + all suites). MIT licensed.
+Working on the plugin? `npm install`, then `npm run dev` (watch build) or `npm test` (build + all suites).
+Issues and pull requests are welcome.
+
+## License
+
+MIT — see [LICENSE](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/blob/main/LICENSE).
+Use it, modify it, redistribute it (commercially too); keep the copyright notice.
 
 ---
 
@@ -165,6 +176,8 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 **始终零远端请求。**
 
 [安装](#安装) · [版本发布](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/releases) · [反馈问题](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues) · 需要 Obsidian **1.13.0+**（[为什么](#环境要求)）
+
+**目录** · [为什么用它](#为什么用它) · [功能](#功能) · [环境要求](#环境要求) · [安装](#安装) · [设置](#设置) · [命令](#命令) · [需要注意的](#需要注意的) · [隐私与安全](#隐私与安全) · [已验证到什么程度](#已验证到什么程度) · [遇到问题](#遇到问题) · [许可](#许可)
 
 ![演示：往笔记里粘贴一张图片、一个 PDF 和一段音频 —— 它们各自上传到你的存储，文件留在库中作为本地副本；随后把存储整个停掉，三者仍然正常显示与播放](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
 
@@ -187,6 +200,8 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 - **任何 S3 兼容存储，任何类型的附件** —— 图片、音频、视频、PDF、压缩包、文档、没有扩展名的文件。Obsidian 能
   预览的插入为嵌入，其余插入为可点开的普通链接。
 - **附件怎么进来都行** —— 粘贴、拖入、手机相册或相机、分享到 Obsidian、从别处拷进库。
+- **它会告诉你桶到底允许什么** —— 公开、私有还是连不上，「测试连接」旁边那盏灯一眼可见；可随时重测，
+  而且不会为这件事改写任何一条链接。
 - **同一个文件传两次只存一份。** 对象 key 里带文件名 + 完整内容哈希，所以哪怕 Obsidian 只能把新来的另存成
   `照片 1.png`，两份也认得出是同一张：一个地址、链接文字用原名、多出来的本地副本会被清掉。
 - **离线、多设备** —— 渲染始终走本地副本，换新设备时副本按需补回。**副本就是你已经有的那份文件**。
@@ -201,7 +216,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 - **一个你自己控制的 S3 兼容存储桶**，以及一对访问密钥。
 - **存储桶不必是公开的。** 想让笔记里的链接粘到别的平台也能打开，就把桶设为允许匿名读取（或填一个公开访问
   前缀）。只想自己看也没问题：插件会用你的密钥取回对象、靠本地副本显示 —— 那种情况下链接只在装了本插件的地方
-  能看，**测试连接** 会如实报出这两者的差别。
+  能看；**测试连接** 会告诉你属于哪种情形，显示路径由它决定。
 
 ## 安装
 
@@ -217,19 +232,19 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 
 | 设置项 | 说明 |
 | --- | --- |
-| **服务地址 · 存储桶 · 区域** | 你的存储在哪（自建服务填 `us-east-1` 之类的占位值即可）。 |
-| **访问密钥 ID · 秘密访问密钥** | 秘密密钥进系统钥匙串，绝不写进 `data.json`。**从凭据文件导入**会用 MinIO 的 JSON 填好这些，且不留副本。 |
-| **公开访问前缀** | 可留空。留空就用 `服务地址/存储桶/键`；这种链接要给别人打开，桶得允许匿名读取（「测试连接」旁边那盏状态灯会告诉你属于哪种情形）。 |
-| **测试连接** | 旁边一盏**状态指示灯** —— 这是测出来的**事实，不是设置项**，所以没有可选项：**检测中**（灰色呼吸）、**公开访问**（绿色，拿到链接的人都能打开）、**私有访问**（蓝色，只有装了本插件、有密钥的人能打开）、**无法访问**（红色，两种方式都不通）。每次启动重新测、从不落盘，也**绝不改写**笔记里的任何链接 —— 地址一字不变，桶里不会搬迁或删除任何东西。旁边的按钮会往桶里写**一个几十字节的探测对象** → 读回来核对字节 → **不带凭据**问一次「别人打得开这条地址吗」→ 删掉。于是插件真正要做的三件事（上传、取回、删除）连同「链接对外能不能打开」一次测全，全新库、空桶一样能测。什么都不留；万一没删掉，结果里会带上对象名说清。 |
-| **新增附件自动上传** | 默认开启；关闭后新文件只存在本地。 |
-| **本地副本的处理** | 留在附件目录（默认，**离线可用**），或**不留本地副本（等于关闭缓存，离线不可用）** —— 后者就是上传后把那份文件删掉：照常上传、照常改写链接，但不取回副本，所以**离线什么都看不到**。⚠️ 若存储不可公开读取，这一档仍然能看**图片、音频与视频**：改给一条**短时签名地址**（就是图床的用法 —— 磁盘不留文件、离线仍看不到）。PDF 仍需本地副本（内置查看器只打开库内文件）。 |
-| **释放本地空间** | 清掉笔记里仍引用着的附件本地副本 —— **永久删除、不进回收站**，空间立刻释放。设了上限时只清**到上限为止**（不会全清）；没有任何笔记引用的副本留给「没人引用的附件」那条清理 —— 那些可能要连云端对象一起处理。 |
-| **把链接改回本地路径** | 把笔记里的链接改回指向库里那份文件（不再指向你的存储）。**什么都不删** —— 云端对象与本地文件都原样留着，只有链接会变。本地副本已经不在的那些会继续指向你的存储（改回去只会变成坏链）。准备停用这个插件时用它。
-| **本地副本上限（MB） · 缺本地副本时自动下载** | `0` 表示不限制。超限时按最近最少使用清理，且只有确认你的存储里仍有那个对象之后才会删。选「删除」时自动下载不生效。 |
-| **站外文件按普通附件处理** | 默认关闭。打开后，站外文件会被下载、上传并改写链接 —— 与粘贴一张本地附件完全一样（副本那一档也一样适用）。**处理哪些站点**（`所有站点` / `除名单外` / `仅名单内`）只筛**自动**那一路；手动挑选不受限制。写 `example.com` 也会命中 `img.example.com`。 |
-| **挑选要缓存的文件** | 勾选具体的站外文件，只有勾中的会被取。开关关着也能用。**库外的本机文件**（`file:///D:/…`，比如聊天软件的截图）也在这里出现，走同一条链 —— 仅桌面端，且只收能嵌进笔记的那几类（图 / 音 / 视频 / PDF）。 |
-| **附件没人引用时** | 某个已上传的附件失去笔记或画布里的最后一条引用之后：弹窗问我（默认）/ 只给一条通知 / 什么都不做。清理永远需要你明确确认 —— 这一项只决定要不要告诉你、用哪种方式。 |
-| **兼容模式** | 高级。按「地址/桶/键」寻址：Cloudflare R2、MinIO 与多数自建服务都要开着。 |
+| **服务地址 · 存储桶 · 区域** | 你的存储在哪。存储桶名称必须完全一致（区分大小写）；自建服务一般填 `us-east-1` 之类的占位值。 |
+| **访问密钥 ID · 秘密访问密钥** | 秘密密钥进系统钥匙串，绝不写进 `data.json`。**从凭据文件导入**会用 MinIO 的 JSON 填好这几栏，且不留副本。 |
+| **公开访问前缀** | 可留空。留空就用 `服务地址/存储桶/键`；这种链接要给别人打开，桶得允许匿名读取 —— 「测试连接」旁边那盏灯会告诉你属于哪种情形。 |
+| **测试连接** | 一盏**状态灯** ＋ 一个按钮。灯是**检测中 / 公开访问 / 私有访问 / 无法访问** —— 这是测出来的**事实，不是设置项**：每次启动重新测、从不落盘。按钮会写**一个几十字节的探测对象** → 读回来核对字节 → **不带凭据**问一次「别人打得开这条地址吗」→ 删掉：上传、取回、删除与「链接对外」一次测全，空桶也能测。什么都不留，也**绝不改写**笔记里的任何链接。 |
+| **新增附件自动上传** | 默认开启。关闭后新文件只存在本地。 |
+| **本地副本的处理** | **留在附件目录**（默认，离线可用），或**上传后删掉**：照常上传、照常改写链接，但离线什么都看不到 —— 图片、音频、视频改用短时签名地址；PDF 仍需副本。 |
+| **本地副本上限（MB） · 缺本地副本时自动下载** | `0` 表示不限制。超限时按最久没用过的顺序清理，且确认存储里还有那个对象才删；下次看图会自动补回。选「不留副本」时自动下载不生效 —— 但桶不公开时始终会取回，否则什么都显示不出来。 |
+| **释放本地空间** | 清掉笔记仍引用着的附件的本地副本 —— **永久删除、不进回收站**，空间立刻释放。设了上限时只清到上限为止。 |
+| **把链接改回本地路径** | 把笔记里的链接改回指向库里那份文件。**什么都不删**；没有本地副本的那些继续指向你的存储。 |
+| **站外文件按普通附件处理** | 默认关闭。站点名单只筛**自动**那一路；手动挑选不受限制。 |
+| **挑选要缓存的文件** | 勾选具体的站外文件或库外本机文件（`file:///D:/…`）；仅桌面端，且只收能嵌进笔记的那几类。 |
+| **附件没人引用时** | 弹窗问我（默认）/ 只给一条通知 / 什么都不做。清理永远需要你明确确认。 |
+| **兼容模式** | 高级。按「地址/桶/键」寻址；Cloudflare R2、MinIO 与多数自建服务都要开着。 |
 
 ## 命令
 
@@ -259,6 +274,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | 链接自己打得开、别人打不开 | 连接状态是**私有访问**时的正常表现（桶拒绝匿名读，或者没填公开前缀）。想让链接在别处也能打开，就去存储那边开匿名读或配公开前缀；**测试连接** 会明确报出这一条。 |
 | 换台设备就裂 | 那台设备没有本地副本，也补不下来。 |
 | 站外文件被以「返回的是网页或纯文本」拒收 | 那个地址回的是 HTML，所以刻意拒收。 |
+| **测试连接** 说存储拒绝了写入 | 这把密钥能读不能写 —— 上传也会同样失败。给它桶的写权限。 |
 
 ## 隐私与安全
 
@@ -283,4 +299,9 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 
 到 <https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/issues> 提 issue —— 请说清你看到的、你的
 Obsidian 版本和用的哪家存储；插件的报错都写明了失败在哪一步。
-想改插件本身？`npm install`，然后 `npm run dev`（监听构建）或 `npm test`（构建 + 全部套件）。MIT 许可。
+想改插件本身？`npm install`，然后 `npm run dev`（监听构建）或 `npm test`（构建 + 全部套件）。欢迎提 issue 与 PR。
+
+## 许可
+
+MIT —— 见 [LICENSE](https://github.com/udarent/obsidian-plugins-attachment-cloud-cache/blob/main/LICENSE)。
+可以用、可以改、可以再分发（商用也行）；保留版权声明即可。

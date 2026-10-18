@@ -28,6 +28,7 @@ export const I18N: Record<string, Locale> = {
 		s3Endpoint: "Endpoint",
 		s3EndpointDesc: "The S3-compatible service address, for example https://<account>.r2.cloudflarestorage.com.",
 		s3Bucket: "Bucket",
+		s3BucketDesc: "Must match the bucket name exactly — it is case-sensitive.",
 		s3Region: "Region",
 		s3RegionDesc: "Use auto for Cloudflare R2.",
 		s3AccessKey: "Access key ID",
@@ -95,7 +96,7 @@ export const I18N: Record<string, Locale> = {
 		// ── 上传 ──
 		autoUpload: "Upload new attachments automatically",
 		autoUploadDesc:
-			"Covers every way a file ends up in your vault: pasting, dropping, adding one from your phone's gallery or camera, sharing into Obsidian, or copying files in. Uploaded files are linked from your note as remote URLs. Turn it off and all of that goes back to Obsidian, leaving files local only.",
+			"Covers every way a file ends up in your vault: pasting, dropping, from your phone's gallery or camera, sharing into Obsidian, or copying files in. Uploaded files are linked from your note as remote URLs and stay in the vault as local copies. Off, all of that goes back to Obsidian.",
 		attachAutoUploaded: "Uploaded {count} attachment(s) that had just been added to your vault.",
 		// ⚠️ 与上一条**必须分开说**：这一条的动作是"链接换成已有对象的地址"，**没有上传**。
 		// 合成一句"已上传 N 个"会让用户以为自己的流量/仓库又花了一份（他 2026-10-14 就是这么报的）。
@@ -106,12 +107,12 @@ export const I18N: Record<string, Locale> = {
 		// ── 离线副本 ──
 		localCopy: "Where the local copy goes",
 		localCopyDesc:
-			"Where the local copy of an uploaded file is kept. The uploaded file itself is the copy — nothing is moved into a separate folder. Without a local copy, files cannot be shown offline. Choosing \"do not keep\" turns caching off: the plugin uploads and rewrites links, and never fetches a copy back — if your storage is not publicly readable, images are then shown through a short-lived signed URL instead (still nothing on disk).",
+			"Where the local copy of an uploaded file is kept. The uploaded file itself is the copy — nothing is moved into a separate folder. Choosing \"do not keep\" turns caching off: uploads and link rewriting still happen, but no copy is fetched back, so nothing shows offline (images, audio and video are then served through short-lived signed URLs; PDFs still need a copy).",
 		localCopy_keep: "Keep the file where it is (offline works)",
 		localCopy_trash: "Delete the local file after uploading (offline unavailable)",
 		fallbackDownload: "Download missing copies",
 		fallbackDownloadDesc:
-			"For files from this storage that have no local copy, such as ones synced from another device. Only objects in your own storage are handled. Not used when no local copy is kept, since caching is off then. When your storage is not publicly readable, these downloads happen regardless — without them those images could not be shown at all.",
+			"For files from this storage that have no local copy, such as ones synced from another device. Only objects in your own storage are handled. Not used when no copy is kept, since caching is off then — except when your storage is not publicly readable: then they are always fetched, because without them nothing could be shown.",
 
 		// ── 高级 ──
 		forcePathStyle: "Compatibility mode",
@@ -155,7 +156,7 @@ export const I18N: Record<string, Locale> = {
 		// F18：清理本地占用（并入「不留副本」档，见设计 §20.10）
 		releaseSpaceName: "Free up local space",
 		releaseSpaceDesc:
-			"Delete already-uploaded local copies — for good, not to the trash, so the space comes back at once; your storage and your notes are untouched, and a copy you delete is downloaded again when a note next shows it. With \"delete the local file\" this clears the copies a note still links to; with a local-copy limit it trims that same batch down to the limit (least recent first, and copies used in the last 10 minutes are left alone). Copies no note links to are never touched here — those may need removing from your storage as well, and that is a separate step.",
+			"Delete local copies of files your notes still link to — for good, not to the trash, so the space comes back at once. Your storage and your notes are untouched, and a deleted copy is fetched again the next time a note shows it. With a limit set it trims only down to that limit (least recent first). Copies no note links to are never touched here — removing those may also mean deleting them from your storage, which is a separate step.",
 		releaseSpaceButton: "Delete local copies…",
 		releaseSpaceTitle: "Delete these local copies for good?",
 		releaseSpaceSummary: "{count} local copy(ies), about {mb} MB:",
@@ -342,7 +343,7 @@ export const I18N: Record<string, Locale> = {
 		// ── 缓存上限与自动轮换 ──
 		cacheLimit: "Local copy limit (MB)",
 		cacheLimitDesc:
-			"Once your local copies grow past this, the least recently used ones are deleted in the background and the disk space is freed right away — they are downloaded again the next time you view them. A copy is only ever deleted after confirming it still exists in your storage. Only copies the index knows about are counted: attachments you never uploaded are left alone. 0 means no limit.",
+			"Past this size, the least recently used copies are deleted in the background and the space is freed at once — they come back the next time you view them. A copy is only deleted after confirming the object is still in your storage. Only copies this device knows about are counted. 0 means no limit.",
 		cacheLimitPlaceholder: "0 = no limit",
 		cacheLimitNone: "unlimited",
 		cacheLimitValue: "{mb} MB",
@@ -370,6 +371,7 @@ export const I18N: Record<string, Locale> = {
 		s3Endpoint: "服务地址",
 		s3EndpointDesc: "S3 兼容服务的地址，例如 https://<account>.r2.cloudflarestorage.com。",
 		s3Bucket: "存储桶",
+		s3BucketDesc: "必须与存储桶名称完全一致（区分大小写）。",
 		s3Region: "区域",
 		s3RegionDesc: "Cloudflare R2 填 auto。",
 		s3AccessKey: "访问密钥 ID",
@@ -430,7 +432,7 @@ export const I18N: Record<string, Locale> = {
 
 		autoUpload: "新增附件自动上传",
 		autoUploadDesc:
-			"覆盖附件进入库的所有方式：粘贴、拖入、手机相册或相机、分享到 Obsidian、从别处拷进库。上传后笔记里的链接会换成远端地址。关闭后这些全部交回 Obsidian 处理，文件只存在本地。已经缓存的附件仍然离线可见。",
+			"覆盖附件进入库的所有方式：粘贴、拖入、手机相册或相机、分享到 Obsidian、从别处拷进库。上传后笔记里的链接换成远端地址，文件仍留在库中当副本。关闭后这些全部交回 Obsidian，文件只存在本地。",
 		attachAutoUploaded: "已自动上传刚加入库的 {count} 个附件。",
 		// ⚠️ 与上一条**必须分开说**：这一条的动作是"链接换成已有对象的地址"，**没有上传**。
 		// 用户 2026-10-14 在 Android 上报的就是这个：重复插同一张图，提示却说"上传成功"。
@@ -439,12 +441,12 @@ export const I18N: Record<string, Locale> = {
 
 		localCopy: "本地副本的处理",
 		localCopyDesc:
-			"上传后，本地副本放在哪里。上传的那份文件**本身就是**本地副本（不会搬去别的目录）。选「不留」等于关闭缓存：插件只负责上传与改写链接，不会把副本补回来 —— 若存储不可公开读取，图片会改用一条短时签名地址显示（磁盘上同样不落文件）。",
+			"上传后本地副本放在哪。上传的那份文件本身就是副本（不会搬去别的目录）。选「不留」等于关闭缓存：照常上传、照常改写链接，但不取回副本，所以离线看不到（图片、音频、视频改用短时签名地址；PDF 仍需副本）。",
 		localCopy_keep: "留在附件目录（离线可用）",
 		localCopy_trash: "不留本地副本（等于关闭缓存，离线不可用）",
 		fallbackDownload: "缺本地副本时自动下载",
 		fallbackDownloadDesc:
-			"属于本存储、却没有本地副本的附件（例如从另一台设备同步来的）会自动下载。只处理你自己存储里的对象。选「不留副本」时不生效（那一档已关闭缓存）。存储不可公开读取时这一项不生效 —— 那时不取回就完全显示不出图。",
+			"属于本存储、本地却没有副本的附件（例如从另一台设备同步来的）自动下载。只处理你自己存储里的对象。选「不留副本」时不生效（那一档已关闭缓存）—— 但存储不可公开读取时始终会取回，否则什么都显示不出来。",
 
 		forcePathStyle: "兼容模式",
 		forcePathStyleDesc:
@@ -475,7 +477,7 @@ export const I18N: Record<string, Locale> = {
 		// F18：清理本地占用（并入「不留副本」档，见设计 §20.10）
 		releaseSpaceName: "释放本地空间",
 		releaseSpaceDesc:
-			"清掉已上传附件的本地副本 —— 永久删除、不进回收站，所以空间立刻释放；云端对象与笔记里的链接都不动，删掉的那份下次看图时会自动重新下载。选「不留本地副本」时：清掉笔记里仍引用着云端地址的那批；设了「本地副本上限」时：把同一批清到上限以内（最久没用过的先走，10 分钟内用过的这轮不动）。没有任何笔记引用的副本一概不碰 —— 那类可能还要连云端对象一起删，是另一步。",
+			"清掉笔记仍引用着的附件的本地副本 —— 永久删除、不进回收站，空间立刻释放；云端对象与笔记里的链接都不动，下次看图会自动补回。设了上限时只清到上限为止（最久没用过的先走）。没有任何笔记引用的副本一概不碰 —— 那类可能还要连云端对象一起删，是另一步。",
 		releaseSpaceButton: "清理本地副本…",
 		releaseSpaceTitle: "永久删除这些本地副本？",
 		releaseSpaceSummary: "{count} 个本地副本，约 {mb} MB：",
@@ -652,7 +654,7 @@ export const I18N: Record<string, Locale> = {
 		// ── 缓存上限与自动轮换 ──
 		cacheLimit: "本地副本上限（MB）",
 		cacheLimitDesc:
-			"本地副本总量超过这个大小后，后台会把最久没用过的副本删掉，磁盘空间立刻释放 —— 下次看到它们时会自动重新下载。只有在确认你的存储里仍然有这个对象之后才会删。只统计**索引里记过的**副本：没有经手过的附件不计入。填 0 表示不限制。",
+			"超过这个大小后，后台按最久没用过的顺序删副本，空间立刻腾出 —— 下次看图会自动补回。只有确认存储里还有那个对象才删。只统计本机索引里记过的副本。填 0 表示不限制。",
 		cacheLimitPlaceholder: "0 = 不限制",
 		cacheLimitNone: "不限",
 		cacheLimitValue: "{mb} MB",
