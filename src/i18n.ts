@@ -26,32 +26,34 @@ export const I18N: Record<string, Locale> = {
 
 		// ── 存储连接 ──
 		s3Endpoint: "Endpoint",
-		s3EndpointDesc: "The S3-compatible service address, for example https://<account>.r2.cloudflarestorage.com.",
+		s3EndpointDesc:
+			"The address of your S3-compatible service, for example https://<account>.r2.cloudflarestorage.com.",
 		s3Bucket: "Bucket",
 		s3BucketDesc: "Must match the bucket name exactly — it is case-sensitive.",
 		s3Region: "Region",
 		s3RegionDesc: "Use auto for Cloudflare R2.",
 		s3AccessKey: "Access key ID",
 		s3AccessKeyDesc:
-			"Your storage's Access Key (MinIO's “Access Key”, AWS's “Access Key ID”). It is an identifier, not a secret, so it is typed here and may contain capital letters.",
+			"The identification half of your key pair — MinIO calls it Access Key, AWS Access Key ID. It is not a secret.",
 		s3SecretKey: "Secret access key",
 		s3SecretKeyDesc:
-			"The other half of the pair — change it here, next to the Access Key above. It is kept in your OS keychain, never in the plugin's data.",
+			"The secret half of the pair; edit both here, side by side. Stored in your system keychain, never in the plugin's settings.",
 		s3SecretKeyPlaceholder: "Stored in your keychain",
 		s3SecretStoreFailed: "Could not save the secret to your keychain: {error}",
-		s3PublicUrlBase: "Public URL prefix",
+		s3PublicUrlBase: "Public link address (optional)",
 		s3PublicUrlBaseDesc:
-			"Image links are built from this prefix plus the object path. You can leave it empty: links then use the object address (endpoint + bucket), which needs the bucket to allow anonymous reads. On a CDN or a custom domain, fill this in.",
+			"A link is this address plus the file path. Leave it empty to use your endpoint and bucket; links then open for other people only if the bucket lets anyone read it. Fill it in for a CDN or your own domain.",
 		connectionStatus_checking: "Checking…",
-		connectionStatus_public: "Public access — anyone with a link can open it.",
-		connectionStatus_private: "Private access — links open here only, with your keys.",
-		connectionStatus_unreachable: "Unreachable — neither anonymous nor signed access worked. Check the address, the bucket and the keys.",
+		connectionStatus_public: "Public access — anyone with the link can open it.",
+		connectionStatus_private: "Private access — links open only in this plugin, with your keys.",
+		connectionStatus_unreachable:
+			"Unreachable — it could not be reached with or without your keys. Check the address, the bucket and the keys.",
 		testConnection: "Test connection",
 		testConnectionDesc:
-			"Writes one tiny probe object to your bucket, reads it back to compare, then deletes it — so uploading, fetching and deleting are all checked in one go. Nothing is kept. The light below shows the result: it is a fact about your bucket, not a setting, so there is nothing to choose — press the button to check again.",
+			"Uploads a tiny test file, reads it back, deletes it, and checks whether other people can open your links. Nothing is kept and no note is changed. The light below shows the result — press the button to refresh it.",
 		s3Import: "Import from a credentials file",
 		s3ImportDesc:
-			"Read the JSON your storage provider gives you (MinIO's “Download credentials” produces one) and fill in the fields below. Only the service address, the access key and the addressing mode are written to the plugin's data; the secret key goes straight into your OS keychain, and no copy of the file is kept.",
+			"Fills the fields above from the JSON your provider gives you (MinIO's “Download credentials” produces one). The secret goes straight into your system keychain.",
 		s3ImportButton: "Choose file…",
 		s3ImportDone: "Imported from the credentials file",
 		s3ImportIgnored: "Ignored, as this plugin does not use it: {fields}",
@@ -71,15 +73,15 @@ export const I18N: Record<string, Locale> = {
 		// ── 第二步：那个地址**别人**打得开吗（匿名探测）──
 		testPublic_ok: "The public link works — anyone can open it: {url}",
 		testPublic_forbidden:
-			"Reached that address, but it refuses anonymous access — other people cannot open your links. That is fine if the bucket is meant to stay private; if links should work elsewhere, make it publicly readable or set a Public URL base (a CDN or custom domain).",
+			"Reached that address, but it refuses anonymous access — other people cannot open your links. That is fine if the bucket is meant to stay private; if links should work elsewhere, make it publicly readable or set a public link address (a CDN or your own domain).",
 		testPublic_missing:
-			"Reached that address, but the object is not there — the URL base is probably wrong. Checked: {url}",
-		testPublic_unreachable: "Could not reach that address at all — the URL base is probably wrong. Checked: {url}",
+			"Reached that address, but the object is not there — the public link address is probably wrong. Checked: {url}",
+		testPublic_unreachable: "Could not reach that address at all — the public link address is probably wrong. Checked: {url}",
 		testPublic_other: "Could not tell whether the link works — your storage answered in a way we do not recognise. Checked: {url}",
 		testPublic_unstable:
 			"That address answered inconsistently — it was readable one moment and refused the next. A proxy or load balancer in front of your storage is probably serving different policies; nothing in your notes changed. Checked: {url}",
 		testPublic_webpage:
-			"That address did not return your file — a proxy, a cache or a catch-all page may be answering, or the public URL prefix points somewhere else. Checked: {url}",
+			"That address did not return your file — a proxy, a cache or a catch-all page may be answering, or the public link address points somewhere else. Checked: {url}",
 		testPublic_noSample: "This time there was no object to check a link against, so whether it opens elsewhere could not be judged.",
 		// 探针回路（写 → 读 → 删）：每一段都要自己说明自己，否则用户会看到一个陌生的对象名
 		testProbe_tempLeftBehind:
@@ -97,7 +99,7 @@ export const I18N: Record<string, Locale> = {
 		// ── 上传 ──
 		autoUpload: "Upload new attachments automatically",
 		autoUploadDesc:
-			"Covers every way a file ends up in your vault: pasting, dropping, from your phone's gallery or camera, sharing into Obsidian, or copying files in. Uploaded files are linked from your note as remote URLs and stay in the vault as local copies. Off, all of that goes back to Obsidian.",
+			"However a file enters your vault — pasted, dropped, from your phone's gallery or camera, shared into Obsidian, or copied in — it is uploaded automatically and the note links to your storage. Off, everything goes back to Obsidian.",
 		attachAutoUploaded: "Uploaded {count} attachment(s) that had just been added to your vault.",
 		// ⚠️ 与上一条**必须分开说**：这一条的动作是"链接换成已有对象的地址"，**没有上传**。
 		// 合成一句"已上传 N 个"会让用户以为自己的流量/仓库又花了一份（他 2026-10-14 就是这么报的）。
@@ -106,19 +108,19 @@ export const I18N: Record<string, Locale> = {
 		attachAutoFailed: "{count} newly added attachment(s) could not be uploaded — the files are still in your vault.",
 
 		// ── 离线副本 ──
-		localCopy: "Where the local copy goes",
+		localCopy: "What happens to the local copy",
 		localCopyDesc:
-			"Where the local copy of an uploaded file is kept. The uploaded file itself is the copy — nothing is moved into a separate folder. Choosing \"do not keep\" turns caching off: uploads and link rewriting still happen, but no copy is fetched back, so nothing shows offline (images, audio and video are then served through short-lived signed URLs; PDFs still need a copy).",
-		localCopy_keep: "Keep the file where it is (offline works)",
-		localCopy_trash: "Delete the local file after uploading (offline unavailable)",
-		fallbackDownload: "Download missing copies",
+			"Keep the file in your vault after uploading, or delete it to save space. Keeping it is what makes offline viewing work. Without it, images, audio and video still show online, but PDFs cannot be shown.",
+		localCopy_keep: "Keep it (works offline)",
+		localCopy_trash: "Delete it (saves space, no offline)",
+		fallbackDownload: "Download missing local copies automatically",
 		fallbackDownloadDesc:
-			"For files from this storage that have no local copy, such as ones synced from another device. Only objects in your own storage are handled. Not used when no copy is kept, since caching is off then — except when your storage is not publicly readable: then they are always fetched, because without them nothing could be shown.",
+			"Fetches files from your storage that this device does not have yet, for example after syncing notes from another device. Turn it off to avoid the downloads — files from a private bucket are still fetched, because otherwise they could not be shown.",
 
 		// ── 高级 ──
 		forcePathStyle: "Compatibility mode",
 		forcePathStyleDesc:
-			"Addresses objects as endpoint/bucket/key. Keep this on for Cloudflare R2, MinIO and most self-hosted services; turn it off only if your provider requires bucket subdomains.",
+			"Addresses files as endpoint/bucket/key. Keep it on for Cloudflare R2, MinIO and most self-hosted services; turn it off only if your provider requires bucket subdomains.",
 
 		// ── 出错 ──
 		hookUploadFailedKeptLocal: "Upload failed, so the file was kept locally instead: {error}",
@@ -157,7 +159,7 @@ export const I18N: Record<string, Locale> = {
 		// F18：清理本地占用（并入「不留副本」档，见设计 §20.10）
 		releaseSpaceName: "Free up local space",
 		releaseSpaceDesc:
-			"Delete local copies of files your notes still link to — for good, not to the trash, so the space comes back at once. Your storage and your notes are untouched, and a deleted copy is fetched again the next time a note shows it. With a limit set it trims only down to that limit (least recent first). Copies no note links to are never touched here — removing those may also mean deleting them from your storage, which is a separate step.",
+			"Deletes local copies of files your notes still use — permanently, not to the trash, so the space frees up at once. Cloud files and the links in your notes are untouched, and a copy comes back the next time a note shows it. With a limit set, it stops at the limit.",
 		releaseSpaceButton: "Delete local copies…",
 		releaseSpaceTitle: "Delete these local copies for good?",
 		releaseSpaceSummary: "{count} local copy(ies), about {mb} MB:",
@@ -168,7 +170,7 @@ export const I18N: Record<string, Locale> = {
 		releaseSpaceCta: "Delete permanently",
 		revertName: "Revert links to local paths",
 		revertDesc:
-			"Point note links back at the files in your vault instead of your storage. Nothing is deleted: the cloud objects and the local files stay exactly as they are. Use this when you stop using the plugin.",
+			"Points the links in your notes back at the files in your vault. Nothing is deleted — cloud files and local files stay as they are. Use it when you stop using this plugin.",
 		revertButton: "Revert links",
 		revertTitle: "Revert links to local paths",
 		revertSummary: "Rewrite {links} link(s) in {notes} note(s) back to the files in your vault.",
@@ -242,7 +244,7 @@ export const I18N: Record<string, Locale> = {
 		legacyKeyTemplateUpgraded:
 			"The object-key template setting is gone: new uploads are always named “original-name-content-hash.ext”, so files stay findable by name in your storage (the name therefore also reaches your storage provider). Existing links keep working; content you uploaded under the old naming is stored once more if you paste it again.",
 		legacyExternalDefaultMerged:
-			"Setting change: “When a note links to a file on another site” is gone — the switch above it (“Handle files from other sites like ordinary files”) is now the only control. Your earlier choice was carried over: {state}.",
+			"Setting change: “When a note links to a file on another site” is gone — the switch above it (“Upload files from other sites”) is now the only control. Your earlier choice was carried over: {state}.",
 		legacyExternalKeptOn: "automatic handling stays on",
 		legacyExternalKeptOff:
 			"automatic handling stays off, because you had it set to do nothing automatically — you can still pick files one by one",
@@ -297,38 +299,38 @@ export const I18N: Record<string, Locale> = {
 			"Uploaded {uploaded}, already there {reused}, failed {failed}. Rewrote {links} link(s) across {notes} note(s).",
 
 		// ── Files from other sites ──
-		externalImageCache: "Handle files from other sites like ordinary files",
+		externalImageCache: "Upload files from other sites",
 		externalImageCacheDesc:
-			"On: a note that links to a file on another site gets it downloaded, uploaded to your storage and the link rewritten — exactly like pasting a local file. Off by default; while it is off those files are left completely alone. Picking individual files is always available, with or without this switch.",
-		externalSiteMode: "Which sites to handle",
+			"A file linked from another site is downloaded, uploaded to your storage and the link rewritten — just like pasting a local file. Off by default, so those files are left alone. Picking files by hand always works.",
+		externalSiteMode: "Which sites to handle automatically",
 		externalSiteModeDesc:
-			"Only affects the automatic handling above. \"All sites\" applies no filter; the other two use the list below — to skip those sites, or to handle only those. This filter never restricts picking individual files.",
+			"Only affects the automatic handling. “All sites” applies no filter; the other two use the list below to skip sites, or to handle only those.",
 		externalSite_off: "All sites",
 		externalSite_blocklist: "All except the ones listed",
 		externalSite_allowlist: "Only the ones listed",
 		externalSiteList: "Site list",
 		externalSiteListDesc:
-			"One domain per line. example.com also matches img.example.com; write example.com:8080 to match that exact host. Under \"Only the ones listed\", an empty list means nothing is handled automatically.",
+			"One domain per line. example.com also matches img.example.com; write example.com:8080 to match that host exactly. With “Only the ones listed”, an empty list means nothing is handled automatically.",
 		externalSiteListPlaceholder: "example.com\ncdn.example.com",
-		externalPickName: "Pick specific files",
+		externalPickName: "Pick files to upload",
 		externalPickDesc:
-			"Choose files from the current note or from the whole vault, and only those are cached. Picking one is the same as agreeing to it — it works whether or not the switch above is on.",
-		externalPickButton: "Choose files…",
-		externalPickTitle: "Choose files to cache",
+			"Choose files from the current note or the whole vault — only those are handled. Choosing is the same as agreeing, with or without the switch above.",
+		externalPickButton: "Pick files…",
+		externalPickTitle: "Pick files to upload",
 		externalPickScope: "Where to look",
 		externalPickScopeNote: "Current note",
 		externalPickScopeVault: "Whole vault",
 		externalPickEmpty:
-			"No files to cache here (they may already be in your own storage, or the storage connection is not set up).",
+			"No files to upload here (they may already be in your storage, or the storage connection is not set up).",
 		externalPickAll: "Select all",
 		externalPickNone: "Select none",
-		externalPickCta: "Cache the {count} selected",
+		externalPickCta: "Upload the {count} selected",
 		externalPickCancel: "Cancel",
-		externalPickNothing: "No files were cached.",
+		externalPickNothing: "No files were uploaded.",
 		externalPickDone:
-			"Cached {cached} file(s); {partial} were uploaded but their link could not be rewritten; {failed} failed.",
-		cmdPickExternal: "Cache external files…",
-		externalCached: "Cached the file from {host} and rewrote the link.",
+			"Uploaded {cached} file(s); {partial} were uploaded but their link could not be rewritten; {failed} failed.",
+		cmdPickExternal: "Upload external files…",
+		externalCached: "Uploaded the file from {host} and rewrote the link.",
 		// ── 本机文件（file:///D:/…）：与站外同一套链，只有"字节从哪来"不同 ──
 		localCached: "Uploaded the local file {name} and rewrote the link.",
 		localFileMissing: "That file is no longer on this computer, so nothing was changed: {path}",
@@ -344,7 +346,7 @@ export const I18N: Record<string, Locale> = {
 		// ── 缓存上限与自动轮换 ──
 		cacheLimit: "Local copy limit (MB)",
 		cacheLimitDesc:
-			"Past this size, the least recently used copies are deleted in the background and the space is freed at once — they come back the next time you view them. A copy is only deleted after confirming the object is still in your storage. Only copies this device knows about are counted. 0 means no limit.",
+			"Caps the space local copies may take. The least recently used ones are deleted first and come back when you view them again. 0 means no limit.",
 		cacheLimitPlaceholder: "0 = no limit",
 		cacheLimitNone: "unlimited",
 		cacheLimitValue: "{mb} MB",
@@ -357,8 +359,8 @@ export const I18N: Record<string, Locale> = {
 		// ── 无人引用的附件：怎么告诉你 ──
 		orphanAsk: "When an attachment is no longer linked",
 		orphanAskDesc:
-			"Once an uploaded file loses its last link from any note or canvas, this is what the plugin does. Cleaning up always needs your explicit confirmation — this only decides whether you are told about it, and how.",
-		orphanAsk_always: "Ask me (keep / drop the local copy / drop both)",
+			"What happens after an uploaded file loses its last link from any note or canvas. Cleaning up always asks for confirmation; this only decides whether and how you are told.",
+		orphanAsk_always: "Ask me",
 		orphanAsk_notice: "Just show a notice",
 		orphanAsk_never: "Do nothing",
 	},
@@ -370,32 +372,27 @@ export const I18N: Record<string, Locale> = {
 		sectionAdvanced: "高级",
 
 		s3Endpoint: "服务地址",
-		s3EndpointDesc: "S3 兼容服务的地址，例如 https://<account>.r2.cloudflarestorage.com。",
+		s3EndpointDesc: "你的 S3 兼容服务地址，例如 https://<account>.r2.cloudflarestorage.com。",
 		s3Bucket: "存储桶",
-		s3BucketDesc: "必须与存储桶名称完全一致（区分大小写）。",
+		s3BucketDesc: "必须与桶名完全一致（区分大小写）。",
 		s3Region: "区域",
 		s3RegionDesc: "Cloudflare R2 填 auto。",
 		s3AccessKey: "访问密钥 ID",
-		s3AccessKeyDesc:
-			"填存储服务上的 Access Key（MinIO 的「Access Key」、AWS 的「Access Key ID」）。它是标识符、不是密钥，所以直接填在这里，可以含大写字母。",
+		s3AccessKeyDesc: "密钥对里的「身份」部分 —— MinIO 叫 Access Key，AWS 叫 Access Key ID。它本身不是秘密。",
 		s3SecretKey: "秘密访问密钥",
-		s3SecretKeyDesc:
-			"与上面那一项成对使用 —— 换密钥时在同一处改完即可。它存在系统钥匙串里，不会写进插件的数据。",
+		s3SecretKeyDesc: "密钥对里的「秘密」部分；轮换时就在这里和上一项一起改。存在系统钥匙串里，不写进插件设置。",
 		s3SecretKeyPlaceholder: "已存入系统钥匙串",
 		s3SecretStoreFailed: "无法把该密钥写入系统钥匙串：{error}",
-		s3PublicUrlBase: "公开访问前缀",
-		s3PublicUrlBaseDesc:
-			"笔记里的图片链接 = 这个前缀 + 对象路径。可以留空 —— 留空就用对象地址（服务地址 + 存储桶），那要求存储桶允许匿名读取；走 CDN 或自定义域名时必须填。",
+		s3PublicUrlBase: "公开链接地址（可选）",
+		s3PublicUrlBaseDesc: "链接 = 这个地址 + 文件路径。留空就用服务地址和存储桶；这条链接要给别人打开，桶得允许任何人读取。用 CDN 或自己的域名时填这里。",
 		connectionStatus_checking: "正在检测…",
-		connectionStatus_public: "公开访问 —— 任何拿到链接的人都能打开。",
-		connectionStatus_private: "私有访问 —— 链接只在装了本插件、有密钥的地方能打开。",
-		connectionStatus_unreachable: "无法访问 —— 匿名与签名都取不到。请检查服务地址、桶名与密钥。",
+		connectionStatus_public: "公开访问 —— 拿到链接的人都能打开。",
+		connectionStatus_private: "私有访问 —— 链接只能在本插件里打开（需要有密钥）。",
+		connectionStatus_unreachable: "无法访问 —— 不带密钥和带密钥都取不到。请检查服务地址、桶名与密钥。",
 		testConnection: "测试连接",
-		testConnectionDesc:
-			"会往桶里写一个很小的探测对象、读回来核对，再删掉 —— 上传、取回、删除一次测全，什么都不留。下面那盏灯是当前状态：它是测出来的事实、不是设置项，所以没有可选项 —— 想重新确认就点这个按钮。",
+		testConnectionDesc: "上传一个很小的测试文件、读回来、再删掉，同时检查别人能不能打开你的链接。什么都不留，也不改任何笔记。下面的灯就是结果，点按钮可重新检查。",
 		s3Import: "从凭据文件导入",
-		s3ImportDesc:
-			"读取存储服务商给你的那份 JSON（MinIO 控制台的「下载凭据」就是这种），自动填好下面几栏。只有服务地址、访问密钥和寻址方式会写进插件的数据；秘密访问密钥直接进系统钥匙串，插件不留副本。",
+		s3ImportDesc: "用服务商给你的 JSON 一次填好上面几栏（MinIO 的「下载凭据」就是这种）。秘密密钥直接进系统钥匙串。",
 		s3ImportButton: "选择文件…",
 		s3ImportDone: "已从凭据文件导入",
 		s3ImportIgnored: "已忽略（本插件用不到）：{fields}",
@@ -414,15 +411,13 @@ export const I18N: Record<string, Locale> = {
 		testFail_other: "测试失败 —— 请检查地址、桶名与凭据。",
 		// ── 第二步：那个地址**别人**打得开吗（匿名探测）──
 		testPublic_ok: "公开链接可用 —— 别人也能打开：{url}",
-		testPublic_forbidden:
-			"那个地址能连上，但拒绝匿名访问 —— 别人打不开你的链接。桶本来就不打算对外，这样是对的；若希望链接在别处也能打开，把存储桶设为公开读，或填一个公开访问前缀（CDN / 自定义域名）。",
-		testPublic_missing: "那个地址能连上，但对象不在 —— 多半是前缀写错了。检查的是：{url}",
-		testPublic_unreachable: "连不上那个地址 —— 前缀可能写错了。检查的是：{url}",
+		testPublic_forbidden: "那个地址能连上，但拒绝匿名访问 —— 别人打不开你的链接。桶本来就不打算对外，这样是对的；若希望链接在别处也能打开，把桶设为公开读，或填一个公开链接地址（CDN / 自己的域名）。",
+		testPublic_missing: "那个地址能连上，但文件不在 —— 公开链接地址多半写错了。检查的是：{url}",
+		testPublic_unreachable: "连不上那个地址 —— 公开链接地址可能写错了。检查的是：{url}",
 		testPublic_other: "无法判断链接是否可用 —— 存储回了一个我们没预料到的结果。检查的是：{url}",
 		testPublic_unstable:
 			"那个地址的响应不稳定 —— 同一轮里一次读得到、一次读不到。多半是存储前面的反向代理 / 负载均衡后面的策略不一致；你笔记里的链接本身没变。检查的是：{url}",
-		testPublic_webpage:
-			"那个地址回的不是你的文件 —— 可能被代理 / 缓存 / 兜底页接走了，或公开前缀指到了别处。检查的是：{url}",
+		testPublic_webpage: "那个地址回的不是你的文件 —— 可能被代理 / 缓存 / 兜底页接走了，或公开链接地址指到了别处。检查的是：{url}",
 		testPublic_noSample: "这次没有可用的探测对象，因此判断不了链接在别处能不能打开。",
 		// 探针回路（写 → 读 → 删）：每一段都要自己说明自己，否则用户会看到一个陌生的对象名
 		testProbe_tempLeftBehind: "探测对象（{key}）没能删掉 —— 请到桶里手动删除。",
@@ -432,27 +427,23 @@ export const I18N: Record<string, Locale> = {
 
 		// ── 链接可访问性：访问方式与两种模式的差别（1.7.0）── "笔记里的链接谁打得开",, "自动（探测后决定）", "公开读取（链接在任何地方都能打开）", "仅内部访问（链接只在装了本插件的地方能看）", "这些链接别人也能打开：{reason}", "这些链接只有本插件能取到：{reason}", "你选的是公开读取。", "你选的是仅内部访问。", "匿名访问那条地址成功了。", "那条地址拒绝匿名访问，说明桶是私有的。", "地址能连上但对象不在，这证明不了桶是公开的。", "探测没有完成，这证明不了桶是公开的。", "还没探测过。",
 
-		autoUpload: "新增附件自动上传",
-		autoUploadDesc:
-			"覆盖附件进入库的所有方式：粘贴、拖入、手机相册或相机、分享到 Obsidian、从别处拷进库。上传后笔记里的链接换成远端地址，文件仍留在库中当副本。关闭后这些全部交回 Obsidian，文件只存在本地。",
+		autoUpload: "新附件自动上传",
+		autoUploadDesc: "不管附件怎么进库 —— 粘贴、拖入、手机相册或相机、分享到 Obsidian、从别处拷进来 —— 都会自动上传，笔记里的链接换成云端地址。关闭后全部交回 Obsidian，文件只存在本地。",
 		attachAutoUploaded: "已自动上传刚加入库的 {count} 个附件。",
 		// ⚠️ 与上一条**必须分开说**：这一条的动作是"链接换成已有对象的地址"，**没有上传**。
 		// 用户 2026-10-14 在 Android 上报的就是这个：重复插同一张图，提示却说"上传成功"。
 		attachAutoReused: "刚加入库的 {count} 个附件此前已经上传过 —— 只更新了链接，没有重复上传。",
 		attachAutoFailed: "刚加入库的 {count} 个附件上传失败 —— 文件仍然留在你的库里。",
 
-		localCopy: "本地副本的处理",
-		localCopyDesc:
-			"上传后本地副本放在哪。上传的那份文件本身就是副本（不会搬去别的目录）。选「不留」等于关闭缓存：照常上传、照常改写链接，但不取回副本，所以离线看不到（图片、音频、视频改用短时签名地址；PDF 仍需副本）。",
-		localCopy_keep: "留在附件目录（离线可用）",
-		localCopy_trash: "不留本地副本（等于关闭缓存，离线不可用）",
-		fallbackDownload: "缺本地副本时自动下载",
-		fallbackDownloadDesc:
-			"属于本存储、本地却没有副本的附件（例如从另一台设备同步来的）自动下载。只处理你自己存储里的对象。选「不留副本」时不生效（那一档已关闭缓存）—— 但存储不可公开读取时始终会取回，否则什么都显示不出来。",
+		localCopy: "上传后如何处理本地副本",
+		localCopyDesc: "上传后把文件留在库里，或者删掉它省空间。留着才能离线查看；删掉后图片、音频、视频仍能在线显示，但 PDF 显示不出来。",
+		localCopy_keep: "保留（可离线查看）",
+		localCopy_trash: "不保留（省空间，不能离线查看）",
+		fallbackDownload: "自动下载缺失的本地副本",
+		fallbackDownloadDesc: "这台设备上还没有的云端文件（例如从别的设备同步来的笔记里引用的）会自动取回。关掉可以省流量；桶不公开时仍会取回，否则图显示不出来。",
 
 		forcePathStyle: "兼容模式",
-		forcePathStyleDesc:
-			"以「地址/桶/键」的方式寻址。Cloudflare R2、MinIO 与多数自建服务都需要开着；只有服务商要求用桶名做子域时才关掉。",
+		forcePathStyleDesc: "按「服务地址/桶/文件名」寻址。Cloudflare R2、MinIO 和多数自建服务都要开着；只有服务商要求用桶名做子域时才关掉。",
 
 		hookUploadFailedKeptLocal: "上传失败，已改为保留本地文件：{error}",
 		hookLocalFallbackFailed: "本地文件也没能保存：{error}",
@@ -478,9 +469,8 @@ export const I18N: Record<string, Locale> = {
 		cloudCleanupUnreadableNote: "读不到 {path}，因此取消了这次清理。",
 		// F18：清理本地占用（并入「不留副本」档，见设计 §20.10）
 		releaseSpaceName: "释放本地空间",
-		releaseSpaceDesc:
-			"清掉笔记仍引用着的附件的本地副本 —— 永久删除、不进回收站，空间立刻释放；云端对象与笔记里的链接都不动，下次看图会自动补回。设了上限时只清到上限为止（最久没用过的先走）。没有任何笔记引用的副本一概不碰 —— 那类可能还要连云端对象一起删，是另一步。",
-		releaseSpaceButton: "清理本地副本…",
+		releaseSpaceDesc: "删掉笔记仍在用的附件的本地副本 —— 永久删除、不进回收站，空间立刻腾出。云端文件和笔记里的链接都不动，下次看图会自动补回。设了上限时只清到上限为止。",
+		releaseSpaceButton: "删除本地副本…",
 		releaseSpaceTitle: "永久删除这些本地副本？",
 		releaseSpaceSummary: "{count} 个本地副本，约 {mb} MB：",
 		releaseSpaceCannotUndo:
@@ -489,8 +479,7 @@ export const I18N: Record<string, Locale> = {
 			"云端对象与你的笔记都不会被改动；每一份都是在确认云端仍然有它之后才会删。",
 		releaseSpaceCta: "永久删除",
 		revertName: "把链接改回本地路径",
-		revertDesc:
-			"把笔记里的链接改回指向库里那份附件（不再指向你的存储）。什么都不删：云端对象与本地文件都原样留着。准备停用这个插件时用它。",
+		revertDesc: "把笔记里的链接改回指向库里的文件。什么都不删 —— 云端文件和本地文件都原样留着。准备停用插件时用它。",
 		revertButton: "改回本地路径",
 		revertTitle: "把链接改回本地路径",
 		revertSummary: "把 {notes} 篇笔记里的 {links} 处链接改回指向库里的文件。",
@@ -557,10 +546,10 @@ export const I18N: Record<string, Locale> = {
 		legacyKeyTemplateUpgraded:
 			"「对象 key 模板」设置已取消：之后上传的对象固定命名为「原文件名-内容哈希.扩展名」，存储里可以按名字找到文件（文件名因此也会出现在你的存储服务商那边）。已有链接不受影响；按旧命名传过的内容若再贴一次，会在云端多存一份。",
 		legacyExternalDefaultMerged:
-			"设置改版：「遇到站外文件链接时」那一档已并入上面的开关「站外文件按普通附件处理」，你原来的选择已折算进去 —— {state}。",
+			"设置改版：「遇到站外文件链接时」那一档已并入上面的开关「站外文件也上传到云端」，你原来的选择已折算进去 —— {state}。",
 		legacyExternalKeptOn: "自动处理保持开启",
 		legacyExternalKeptOff:
-			"自动处理保持关闭（你原本选的是「什么都不做」）；「挑选要缓存的文件」仍然随时可用",
+			"自动处理保持关闭（你原本选的是「什么都不做」）；「手动选择要上传的文件」仍然随时可用",
 		maintainMoreItems: "……还有 {count} 个",
 		maintainCancelled: "已取消，没有改动任何内容。",
 		// ── 清单类弹窗（缩略图 + 勾选 + 进度）：上传附件 / 检查未被引用的云端附件 / 挑选要缓存的文件共用 ──
@@ -610,37 +599,32 @@ export const I18N: Record<string, Locale> = {
 			"上传 {uploaded} 个、已存在 {reused} 个、失败 {failed} 个。在 {notes} 篇笔记里改写了 {links} 处链接。",
 
 		// ── 站外文件 ──
-		externalImageCache: "站外文件按普通附件处理",
-		externalImageCacheDesc:
-			"打开后，笔记里指向别处的文件会被下载、上传到你的存储，并改写笔记里的链接 —— 与粘贴一张本地附件完全一样。默认关闭；关着时这类文件一步都不会被碰。「挑选要缓存的文件」始终可用，不受这个开关限制。",
-		externalSiteMode: "处理哪些站点",
-		externalSiteModeDesc:
-			"只影响上面的自动处理。「所有站点」不做过滤；后两档由下面的名单决定 —— 跳过名单里的站点，或只处理名单里的站点。这份名单不会限制手动挑选。",
+		externalImageCache: "站外文件也上传到云端",
+		externalImageCacheDesc: "笔记里出现站外文件时，会自动下载、上传到云端并改写链接 —— 和粘贴一张本地附件一样。默认关闭，关着时这类文件一步都不碰。手动选择始终可用。",
+		externalSiteMode: "自动处理哪些站点",
+		externalSiteModeDesc: "只影响上面的自动处理。「所有站点」不过滤；后两档用下面的名单跳过某些站点，或只处理名单里的站点。",
 		externalSite_off: "所有站点",
 		externalSite_blocklist: "除名单外的站点",
 		externalSite_allowlist: "仅名单内的站点",
 		externalSiteList: "站点名单",
-		externalSiteListDesc:
-			"一行一个域名。写 example.com 也会命中 img.example.com；写 example.com:8080 则只匹配含那个端口的地址。选「仅名单内的站点」时，留空表示什么都不自动处理。",
+		externalSiteListDesc: "一行一个域名。写 example.com 也会命中 img.example.com；写 example.com:8080 只匹配那个地址。选「仅名单内的站点」时，留空表示什么都不自动处理。",
 		externalSiteListPlaceholder: "example.com\ncdn.example.com",
-		externalPickName: "挑选要缓存的文件",
-		externalPickDesc:
-			"在「当前笔记」或「全库」里勾选文件，只处理你勾中的那些。勾选本身就是同意，与上面的开关无关。",
-		externalPickButton: "选择文件…",
-		externalPickTitle: "选择要缓存的文件",
+		externalPickName: "手动选择要上传的文件",
+		externalPickDesc: "在「当前笔记」或「全库」里勾选文件，只处理勾中的那些。勾选就是同意，上面的开关关着也照样可用。",
+		externalPickButton: "挑选文件…",
+		externalPickTitle: "选择要上传的文件",
 		externalPickScope: "范围",
 		externalPickScopeNote: "当前笔记",
 		externalPickScopeVault: "全库",
-		externalPickEmpty:
-			"这个范围里没有可缓存的文件（可能已经在你自己的存储里，或者存储连接还没配好）。",
+		externalPickEmpty: "这个范围里没有可上传的文件（可能已经在你自己的存储里，或者存储连接还没配好）。",
 		externalPickAll: "全选",
 		externalPickNone: "全不选",
-		externalPickCta: "缓存选中的 {count} 个",
+		externalPickCta: "上传选中的 {count} 个",
 		externalPickCancel: "取消",
-		externalPickNothing: "没有缓存任何文件。",
-		externalPickDone: "已缓存 {cached} 张；{partial} 张已上传但没能改写链接；{failed} 张失败。",
-		cmdPickExternal: "缓存外部文件（可挑选）…",
-		externalCached: "已缓存来自 {host} 的文件并改写链接。",
+		externalPickNothing: "没有上传任何文件。",
+		externalPickDone: "已上传 {cached} 个；{partial} 个已上传但没能改写链接；{failed} 个失败。",
+		cmdPickExternal: "上传外部文件…",
+		externalCached: "已上传来自 {host} 的文件并改写链接。",
 		// ── 本机文件（file:///D:/…）：与站外同一套链，只有"字节从哪来"不同 ──
 		localCached: "已把本机文件 {name} 上传上去并改写链接。",
 		localFileMissing: "那个文件在这台电脑上已经不在了，没有改动任何内容：{path}",
@@ -655,8 +639,7 @@ export const I18N: Record<string, Locale> = {
 
 		// ── 缓存上限与自动轮换 ──
 		cacheLimit: "本地副本上限（MB）",
-		cacheLimitDesc:
-			"超过这个大小后，后台按最久没用过的顺序删副本，空间立刻腾出 —— 下次看图会自动补回。只有确认存储里还有那个对象才删。只统计本机索引里记过的副本。填 0 表示不限制。",
+		cacheLimitDesc: "限制本地副本占用的空间。超出时先删最久没用过的，下次看到会重新下载。填 0 表示不限制。",
 		cacheLimitPlaceholder: "0 = 不限制",
 		cacheLimitNone: "不限",
 		cacheLimitValue: "{mb} MB",
@@ -666,10 +649,9 @@ export const I18N: Record<string, Locale> = {
 		cacheEvictedPartial: "超出本地副本上限：已删除 {count} 份（{mb} MB），仍超出上限 {overMb} MB。",
 
 		// ── 无人引用的附件：怎么告诉你 ──
-		orphanAsk: "附件没人引用时",
-		orphanAskDesc:
-			"某个已上传的附件失去了笔记或画布里的最后一条引用之后，插件怎么做。清理永远需要你明确确认 —— 这一项只决定要不要告诉你、以及用哪种方式告诉你。",
-		orphanAsk_always: "弹窗问我（保留 / 只删本地副本 / 一起删）",
+		orphanAsk: "附件不再被引用时",
+		orphanAskDesc: "已上传的附件失去最后一条引用（笔记或画布）之后，插件怎么做。清理永远需要你确认；这一项只决定要不要通知你、怎么通知。",
+		orphanAsk_always: "弹窗让我选",
 		orphanAsk_notice: "只给一条通知",
 		orphanAsk_never: "什么都不做",
 	},

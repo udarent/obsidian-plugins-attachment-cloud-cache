@@ -55,7 +55,7 @@ This does both — the file goes to your bucket, the copy that renders stays beh
 - **Obsidian 1.13.0 or newer**, desktop and mobile.
 - **An S3-compatible bucket you control**, plus an access key pair.
 - **The bucket does not have to be public.** If you want links pasted elsewhere to open, allow anonymous reads (or
-  set a public URL prefix). If it is just for you, keep the bucket private: the plugin fetches objects with your keys
+  set a public link address). If it is just for you, keep the bucket private: the plugin fetches objects with your keys
   and shows local copies — those links then only open where the plugin and your keys are. **Test connection** says
   which case you are in; the plugin picks the safe path from there.
 
@@ -75,15 +75,15 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | --- | --- |
 | **Endpoint · Bucket · Region** | Where your storage lives. The bucket name must match exactly (it is case-sensitive); `us-east-1` is the usual filler for self-hosted. |
 | **Access key ID · Secret access key** | The secret goes into the OS keychain, never `data.json`. **Import from a credentials file** fills these in from MinIO's JSON and keeps no copy. |
-| **Public URL prefix** | Optional. Empty means links use `endpoint/bucket/key`; those open for other people only if the bucket allows anonymous reads — the light on **Test connection** says which case you are in. |
-| **Test connection** | A **status light** plus a button. The light is *checking* / *public* / *private* / *unreachable* — a fact about your bucket, not a setting: re-detected on every start, never persisted. The button writes **one tiny probe object**, reads it back to compare the bytes, asks the same address the way a stranger would (**no credentials**), then deletes it — uploading, fetching, deleting and external reach in one go, on an empty bucket too. A `200` that turns out to be a web page does not count as public. Nothing is kept, and it **never rewrites a link**. |
-| **Upload new attachments automatically** | On by default. Off leaves new files local only. |
-| **Where the local copy goes** | **Keep the file where it is** (default, offline works) or **delete it after uploading**: uploads and links still happen, but nothing renders offline — images, audio and video are then served through short-lived signed URLs; PDFs still need a copy. |
-| **Local copy limit (MB) · Download missing copies** | `0` = no limit. Least-recently-used copies go first, and only after the object is confirmed to still be in your storage; they come back when next viewed. Auto-download is off in delete mode — except it always runs when the bucket is private, or nothing could be shown. |
+| **Public link address (optional)** | Empty means a link is `endpoint/bucket/key`; that opens for other people only if the bucket lets anyone read it — the light on **Test connection** says which case you are in. Fill it in for a CDN or your own domain. |
+| **Test connection** | A **status light** plus a button. The light shows *checking* / *public* / *private* / *unreachable* — a fact about your bucket, re-detected on every start and never persisted. The button re-checks it end to end (upload, read back, delete, and whether others can open your links) without keeping anything or rewriting a single link. |
+| **Upload new attachments automatically** | On by default; off leaves new files local only. |
+| **What happens to the local copy** | **Keep it** (default, offline works) or **delete it after uploading** (saves space): uploads and links still happen, but nothing renders offline — images, audio and video still show online, while PDFs need a copy. |
+| **Local copy limit (MB) · Download missing local copies automatically** | `0` = no limit. Least-recently-used copies go first, and only after the object is confirmed to still be in your storage; they come back when next viewed. Auto-download is off in delete mode — except it always runs when the bucket is private, or nothing could be shown. |
 | **Free up local space** | Deletes local copies of files your notes still link — **permanently, not to the trash**, so the space comes back at once. With a limit it trims only down to that limit. |
 | **Revert links to local paths** | Points note links back at the files in your vault. **Nothing is deleted**; files with no local copy keep pointing at your storage. |
-| **Handle files from other sites like ordinary files** | Off by default. The site list filters the **automatic** path only; picking files by hand is never restricted. |
-| **Pick specific files** | Tick individual off-site or outside-the-vault files (`file:///D:/…`); desktop only, and only the kinds a note can embed. |
+| **Upload files linked from other sites** | Off by default. The site list filters the **automatic** path only; picking files by hand is never restricted. |
+| **Pick files to upload** | Tick individual files from other sites or from outside the vault (`file:///D:/…`); desktop only, and only the kinds a note can embed. |
 | **When an attachment is no longer linked** | Ask (default) / notify / do nothing. Cleanup always needs your confirmation. |
 | **Compatibility mode** | Advanced. Addresses objects as `endpoint/bucket/key`; keep it on for Cloudflare R2, MinIO and most self-hosted services. |
 
@@ -93,7 +93,7 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | --- | --- |
 | **Show local copy usage** | What your local copies hold, and how much of it no note refers to any more — an estimate: nothing is removed before your storage is confirmed to still have the object. |
 | **Upload attachments** | Lists what your notes link to (a thumbnail and a tick box per row), then uploads the ticked ones and rewrites those links. Your files stay where they are — that copy *is* the local copy. |
-| **Cache external files…** | Lists files that live outside your vault (thumbnails, tick boxes, per-item progress); tick individual ones — on other sites, or on this computer — and only those are fetched. Picking them is the consent. |
+| **Upload external files…** | Lists files that live outside your vault (thumbnails, tick boxes, per-item progress); tick individual ones — on other sites, or on this computer — and only those are fetched. Picking them is the consent. |
 | **Check for unreferenced attachments in the cloud…** | Everything this vault uploaded, minus everything still linked — a row with a thumbnail and a tick box each. The ticked ones then take your choice: keep them, delete only the local copy (to the trash), or delete the local copy and the stored object. Also how you re-run the automatic prompt if you dismissed it. |
 
 ## Good to know
@@ -121,7 +121,7 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | Broken on a second device | No local copy there, and it could not download one. |
 | An off-site file refused as "a web page or plain text" | That address serves HTML, so it is refused on purpose. |
 | *Test connection* says the storage refused to write | The keys can read but not write — uploads will fail the same way. Give them write permission on the bucket. |
-| *Test connection* says the address "answered with a web page" | A proxy, a WAF or a catch-all page answered `200` for a path that is not your file. That is **not** public access — fix the public URL prefix (it probably points somewhere else). |
+| *Test connection* says the address "answered with a web page" | A proxy, a WAF or a catch-all page answered `200` for a path that is not your file. That is **not** public access — fix the public link address (it probably points somewhere else). |
 
 ## Privacy & security
 
@@ -235,16 +235,16 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | --- | --- |
 | **服务地址 · 存储桶 · 区域** | 你的存储在哪。存储桶名称必须完全一致（区分大小写）；自建服务一般填 `us-east-1` 之类的占位值。 |
 | **访问密钥 ID · 秘密访问密钥** | 秘密密钥进系统钥匙串，绝不写进 `data.json`。**从凭据文件导入**会用 MinIO 的 JSON 填好这几栏，且不留副本。 |
-| **公开访问前缀** | 可留空。留空就用 `服务地址/存储桶/键`；这种链接要给别人打开，桶得允许匿名读取 —— 「测试连接」旁边那盏灯会告诉你属于哪种情形。 |
-| **测试连接** | 一盏**状态灯** ＋ 一个按钮。灯是**检测中 / 公开访问 / 私有访问 / 无法访问** —— 这是测出来的**事实，不是设置项**：每次启动重新测、从不落盘。按钮会写**一个几十字节的探测对象** → 读回来核对字节 → **不带凭据**问一次「别人打得开这条地址吗」→ 删掉：上传、取回、删除与「链接对外」一次测全，空桶也能测。⚠️ 回 `200` 但内容是网页的**不算**公开（那是代理或登录页）。什么都不留，也**绝不改写**笔记里的任何链接。 |
-| **新增附件自动上传** | 默认开启。关闭后新文件只存在本地。 |
-| **本地副本的处理** | **留在附件目录**（默认，离线可用），或**上传后删掉**：照常上传、照常改写链接，但离线什么都看不到 —— 图片、音频、视频改用短时签名地址；PDF 仍需副本。 |
-| **本地副本上限（MB） · 缺本地副本时自动下载** | `0` 表示不限制。超限时按最久没用过的顺序清理，且确认存储里还有那个对象才删；下次看图会自动补回。选「不留副本」时自动下载不生效 —— 但桶不公开时始终会取回，否则什么都显示不出来。 |
+| **公开链接地址（可选）** | 留空就用 `服务地址/存储桶/键`；这种链接要给别人打开，桶得允许任何人读取 —— 「测试连接」旁边那盏灯会告诉你属于哪种情形。用 CDN 或自己的域名时填这里。 |
+| **测试连接** | 一盏**状态灯** ＋ 一个按钮。灯是**检测中 / 公开访问 / 私有访问 / 无法访问** —— 这是测出来的**事实，不是设置项**：每次启动重新测、从不落盘。按钮会把这件事端到端重测一遍（上传、读回、删除，以及别人能不能打开你的链接），什么都不留，也**绝不改写**任何一条链接。 |
+| **新附件自动上传** | 默认开启；关闭后新文件只存在本地。 |
+| **上传后如何处理本地副本** | **保留**（默认，可离线查看），或**上传后删掉**（省空间）：照常上传、照常改写链接，但离线什么都看不到 —— 图片、音频、视频仍能在线显示，PDF 仍需副本。 |
+| **本地副本上限（MB） · 自动下载缺失的本地副本** | `0` 表示不限制。超限时按最久没用过的顺序清理，且确认存储里还有那个对象才删；下次看图会自动补回。选「不留副本」时自动下载不生效 —— 但桶不公开时始终会取回，否则什么都显示不出来。 |
 | **释放本地空间** | 清掉笔记仍引用着的附件的本地副本 —— **永久删除、不进回收站**，空间立刻释放。设了上限时只清到上限为止。 |
 | **把链接改回本地路径** | 把笔记里的链接改回指向库里那份文件。**什么都不删**；没有本地副本的那些继续指向你的存储。 |
-| **站外文件按普通附件处理** | 默认关闭。站点名单只筛**自动**那一路；手动挑选不受限制。 |
-| **挑选要缓存的文件** | 勾选具体的站外文件或库外本机文件（`file:///D:/…`）；仅桌面端，且只收能嵌进笔记的那几类。 |
-| **附件没人引用时** | 弹窗问我（默认）/ 只给一条通知 / 什么都不做。清理永远需要你明确确认。 |
+| **站外文件也上传到云端** | 默认关闭。站点名单只筛**自动**那一路；手动挑选不受限制。 |
+| **手动选择要上传的文件** | 勾选具体的站外文件或库外本机文件（`file:///D:/…`）；仅桌面端，且只收能嵌进笔记的那几类。 |
+| **附件不再被引用时** | 弹窗让我选（默认）/ 只给一条通知 / 什么都不做。清理永远需要你明确确认。 |
 | **兼容模式** | 高级。按「地址/桶/键」寻址；Cloudflare R2、MinIO 与多数自建服务都要开着。 |
 
 ## 命令
@@ -253,7 +253,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | --- | --- |
 | **查看本地副本占用** | 本地副本占了多少、其中多少已经没有笔记引用了 —— 这是**估算**：真正删除前会先确认你的存储里仍然有这个对象。 |
 | **上传附件** | 列出笔记里引用着的附件（**每条带缩略图与勾选框**），只上传你勾中的那些并改写链接。文件**留在原地** —— 那份就是本地副本。 |
-| **缓存外部文件（可挑选）…** | 列出**库外**的文件（缩略图 + 勾选框 + 逐项进度）：别处服务器上的、或你这台电脑上的，勾中的才会被取回 —— 勾选本身就是同意。 |
+| **上传外部文件…** | 列出**库外**的文件（缩略图 + 勾选框 + 逐项进度）：别处服务器上的、或你这台电脑上的，勾中的才会被取回 —— 勾选本身就是同意。 |
 | **检查未被引用的云端附件…** | 候选 = 本库上传过的、减去仍被笔记或画布引用的 —— 每条带缩略图与勾选框。勾中的按你选的那一档处理：保留 / 只删本地副本（进回收站）/ 连本地带云端一起删。那次自动询问被误关之后，也从这里重新要一次。 |
 
 ## 需要注意的
@@ -276,7 +276,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | 换台设备就裂 | 那台设备没有本地副本，也补不下来。 |
 | 站外文件被以「返回的是网页或纯文本」拒收 | 那个地址回的是 HTML，所以刻意拒收。 |
 | **测试连接** 说存储拒绝了写入 | 这把密钥能读不能写 —— 上传也会同样失败。给它桶的写权限。 |
-| **测试连接** 说那个地址「回的是一个网页」 | 代理、WAF 或兜底页对你的对象路径回了 `200`。这**不是**公开访问 —— 去改公开访问前缀（多半指到别处了）。 |
+| **测试连接** 说那个地址「回的是一个网页」 | 代理、WAF 或兜底页对你的对象路径回了 `200`。这**不是**公开访问 —— 去改公开链接地址（多半指到别处了）。 |
 
 ## 隐私与安全
 

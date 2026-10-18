@@ -280,14 +280,14 @@ export function hasLegacyExternalImageDefault(loaded: unknown): boolean {
  *
  * 那样会让一批 `externalImageCache: true` + `externalImageDefault: "skip"` 的用户
  * **被动地**开始自动下载别人的图、并改写自己的笔记 —— 而他们当年那个组合的含义
- * 恰恰是"开着功能，但什么都别自动做"（多半是为了用「挑选要缓存的文件」）。
+ * 恰恰是"开着功能，但什么都别自动做"（多半是为了用「手动选择要上传的文件」）。
  *
  * ⚠️ 判据不是"怕踩某条红线"，而是**不擅自改变用户已经表达过的配置**：
  * 他选过"别自动做"，迁移就不能把它变成"自动做"。这与"站外图一律不许自动下载"
  * 无关 —— 那句话在 1.2.0 之后**不再是规则**：要不要自动处理，现在由用户在设置里
  * **事前显式**决定（默认关）。
  *
- * 这类用户升级后开关是**关**的，但「挑选要缓存的文件」已经**独立于开关**
+ * 这类用户升级后开关是**关**的，但「手动选择要上传的文件」已经**独立于开关**
  *（见 `render/external-decide.ts` 的 `purpose`），所以他们照样能手动挑 —— 一件都没少。
  */
 export function legacyAutoCacheEnabled(loaded: unknown): boolean {

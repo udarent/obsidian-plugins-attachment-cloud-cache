@@ -250,7 +250,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 *
 	 * ⚠️ 必须是**稳定的一份**：待处理的那批挂在上面的闭包里。
 	 * 而且不能省 —— 后处理器**在实时预览下不跑**（真机实测 0 次），
-	 * 少了这条，编辑态里「缓存外部文件（可挑选）…」那条命令就完全没有反应。
+	 * 少了这条，编辑态里「上传外部文件…」那条命令就完全没有反应。
 	 */
 	private externalLive: ExternalLiveQueue | null = null;
 
@@ -744,7 +744,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 					request
 				);
 			},
-			// ⚠️ 复用「缓存外部文件（可挑选）…」那条链，而不是另写一套下载+上传：
+			// ⚠️ 复用「上传外部文件…」那条链，而不是另写一套下载+上传：
 			// 于是同意复核、失败分类、"URL 在笔记里总是字面出现"那几条纪律只有一份实现。
 			cacheExternal: (url, notePath) => this.cacheExternalImage(url, notePath),
 			// ⭐ 淘汰本地副本前的**云端复核**（HEAD）：确认对象此刻真的还在。
@@ -1721,7 +1721,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		}
 
 		// ⭐ 另一次一次性兼容升级（1.2.0）：旧的两档「遇到站外文件链接时」已并进
-		// 「站外文件按普通附件处理」这一个开关（折算规则见 `legacyAutoCacheEnabled`）。
+		// 「站外文件也上传到云端」这一个开关（折算规则见 `legacyAutoCacheEnabled`）。
 		// ⚠️ 这一次**会改设置值**（不只是清遗留键）：旧语义是两个控件，新语义是一个，
 		// 折算必须显式 —— 否则"开着功能但什么都不做"的用户会被静默改成自动搬。
 		if (hasLegacyExternalImageDefault(stored)) {

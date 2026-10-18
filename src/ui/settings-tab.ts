@@ -184,7 +184,7 @@ export class SettingsTab extends PluginSettingTab {
 			{
 				name: this.t("s3PublicUrlBase"),
 				desc: this.t("s3PublicUrlBaseDesc"),
-				aliases: ["CDN", "domain", "公开地址"],
+				aliases: ["CDN", "domain", "public url", "公开地址", "公开链接", "前缀", "域名"],
 				// ⭐ placeholder 是**推导出来的**（改端点或桶它就跟着变），直接告诉用户
 				// "留空会用哪个地址" —— 比在说明文字里解释一遍有效得多。
 				//
@@ -600,7 +600,7 @@ export class SettingsTab extends PluginSettingTab {
 			{
 				name: this.t("localCopy"),
 				desc: this.t("localCopyDesc"),
-				aliases: ["offline", "cache", "离线", "缓存", "delete"],
+				aliases: ["offline", "cache", "离线", "缓存", "delete", "保留", "本地副本"],
 				control: {
 					type: "dropdown",
 					key: "localCopy",
@@ -640,7 +640,7 @@ export class SettingsTab extends PluginSettingTab {
 			{
 				name: this.t("fallbackDownload"),
 				desc: this.t("fallbackDownloadDesc"),
-				aliases: ["download", "sync", "下载", "同步"],
+				aliases: ["download", "sync", "下载", "同步", "缺失", "副本"],
 				// ⚠️ 选「不留副本」时那一档等于关闭缓存，这一项永远不会动手 ——
 				// 显示一个不起作用的开关比不显示更糟。
 				// ⚠️ 但「留在附件目录」时它**仍然有用**（副本在附件目录，换设备要它补回来），
@@ -652,13 +652,13 @@ export class SettingsTab extends PluginSettingTab {
 				name: this.t("externalImageCache"),
 				desc: this.t("externalImageCacheDesc"),
 				// 别名要覆盖用户会搜的词：默认关，所以"找不到它"就等于"功能不存在"
-				aliases: ["external", "hotlink", "third-party", "站外", "外链", "图床", "自动"],
+				aliases: ["external", "hotlink", "third-party", "站外", "外链", "外部文件", "图床", "自动"],
 				control: { type: "toggle", key: "externalImageCache" },
 			},
 			{
 				name: this.t("externalSiteMode"),
 				desc: this.t("externalSiteModeDesc"),
-				aliases: ["site", "allowlist", "blocklist", "filter", "站点", "名单", "白名单", "黑名单", "过滤"],
+				aliases: ["site", "allowlist", "blocklist", "filter", "站点", "名单", "白名单", "黑名单", "过滤", "自动"],
 				// ⚠️ 条件显示：功能关着时名单没有任何意义（自动那一路整个不跑）。
 				// 与「缓存目录」那条同一个纪律：**看不见的字段不会产生矛盾组合**。
 				visible: () => this.plugin.settings.externalImageCache,
@@ -681,7 +681,7 @@ export class SettingsTab extends PluginSettingTab {
 			{
 				name: this.t("externalPickName"),
 				desc: this.t("externalPickDesc"),
-				aliases: ["pick", "choose", "select", "选择", "挑选", "缓存"],
+				aliases: ["pick", "choose", "select", "选择", "挑选", "手动", "上传", "缓存"],
 				// ⚠️ **刻意不挂在开关上**：它是显式动作，判定层对它走 `purpose: "manual"` ——
 				// 开关与名单都**只管自动那一路**。关掉自动处理的人照样该能到这里手动挑。
 				// （从前挂过 `visible: externalImageCache`，那依据的是"功能关着时候选会被全部判掉"
@@ -759,7 +759,7 @@ export class SettingsTab extends PluginSettingTab {
 	}
 
 	/**
-	 * 「挑选要缓存的文件」那颗按钮。
+	 * 「手动选择要上传的文件」那颗按钮。
 	 *
 	 * 用 `render` 而不是 `control`：这是一个**动作**，不是一个要存下来的值
 	 *（官方给 `render` 的场景之一就是这类"不是普通输入控件"的东西）。

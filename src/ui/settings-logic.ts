@@ -182,7 +182,7 @@ export function connectionStateTone(state: ConnectionState): "ok" | "warn" | "er
  */
 
 /**
- * 「缺本地副本时自动下载」这一项要不要显示。
+ * 「自动下载缺失的本地副本」这一项要不要显示。
  *
  * ⚠️ 选「不留副本」时那一档**等于关闭缓存**（判定在 `types.ts` 的 `isCacheDisabled`），
  * 这一项永远不会动手 —— 显示一个永远不起作用的开关比不显示更糟。
@@ -397,7 +397,7 @@ export function connectionFailureKey(kind: ConnectionFailureKind): string {
  * 合并了就会出现最坏的那种表现 —— 自己这边一切正常，而发给别人的链接全是死的。
  *
  * 每一类的**修法不同**，所以也不能都归成"打不开"：
- * - `forbidden`：地址对、桶私有 ⇒ 开公开读，或配一个公开访问前缀（CDN / 自定义域名）
+ * - `forbidden`：地址对、桶私有 ⇒ 开公开读，或配一个公开链接地址（CDN / 自定义域名）
  * - `missing`：地址通、对象不在 ⇒ 多半前缀写错（例如少了桶名）
  * - `unreachable`：地址本身不对 ⇒ 前缀写错了
  *

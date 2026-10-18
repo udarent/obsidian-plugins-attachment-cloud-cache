@@ -124,7 +124,7 @@ export function isCacheDisabled(action: unknown): boolean {
  *
  * ## ⚠️ 名单只管"自动搬"那一路，**不是安全边界**
  *
- * 它决定**自动**遇到站外文件时访不访问那个站点。「挑选要缓存的文件」是一次显式勾选，
+ * 它决定**自动**遇到站外文件时访不访问那个站点。「手动选择要上传的文件」是一次显式勾选，
  * **不受它约束**（判据见 `render/external-decide.ts` 的 `purpose`）。
  * 真正拦得住的东西只有 `isBlockedHost`（回环 / 链路本地 / 云元数据），
  * 那条是**无条件**的 —— 白名单越不过它。
@@ -183,7 +183,7 @@ export interface S3Config {
 	region: string;
 	/** 桶名。 */
 	bucket: string;
-	/** 公开访问前缀，如 `https://img.example.com`。图片链接由它拼出来。 */
+	/** 公开链接地址，如 `https://img.example.com`。图片链接由它拼出来。 */
 	publicUrlBase: string;
 	/**
 	 * 访问密钥 ID（MinIO 的「Access Key」、AWS 的「Access Key ID」）。
@@ -259,7 +259,7 @@ export interface PluginSettings {
 	 * 与粘贴一张本地图走的是同一条链（连 {@link localCopy} 那一档也一样适用）。
 	 * 关着 = 站外文件**一步都不碰**，行为与没装这个插件的这一块一致。
 	 *
-	 * ⚠️ 它只管**自动**那一路。想逐张控制，用「挑选要缓存的文件」——
+	 * ⚠️ 它只管**自动**那一路。想逐张控制，用「手动选择要上传的文件」——
 	 * 那条命令与按钮**不要求**打开这个开关（勾选本身就是同意）。
 	 *
 	 * ⚠️ 1.2.0 之前这里还配套一个「遇到站外文件链接时：什么都不做 / 直接缓存」。
