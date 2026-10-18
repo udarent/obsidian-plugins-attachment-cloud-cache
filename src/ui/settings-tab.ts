@@ -35,7 +35,7 @@ import type { App, Setting, SettingDefinitionItem, SettingGroupItem } from "obsi
 import type AttachmentCloudCachePlugin from "../main";
 import { createS3Client, objectBaseFor } from "../s3/client";
 import { connectionReadiness } from "../s3/credentials";
-import { resolveAccess } from "../link-access";
+import type { ConnectionState } from "../link-access";
 import { fromControlValue, isWritableValue, readByKey, toControlValue, writeByKey } from "./settings-bindings";
 import {
 	classifyConnectionFailure,
@@ -43,7 +43,8 @@ import {
 	connectionFailureKey,
 	ensureSecretSlot,
 	externalSiteModeOptions,
-	linkAccessOptions,
+	connectionStateKey,
+	connectionStateTone,
 	localCopyOptions,
 	orphanAskOptions,
 	probeStepFailureKey,
@@ -71,6 +72,8 @@ interface TestLine {
 
 export class SettingsTab extends PluginSettingTab {
 	private readonly plugin: AttachmentCloudCachePlugin;
+	/** 状态那一行的 DOM 句柄（测试结束后要就地刷新它）。 */
+	private statusEl: HTMLElement | null = null;
 
 	constructor(app: App, plugin: AttachmentCloudCachePlugin) {
 		super(app, plugin);
@@ -181,16 +184,13 @@ export class SettingsTab extends PluginSettingTab {
 			},
 
 			{
-				name: this.t("linkAccessName"),
-				desc: this.t("linkAccessDesc"),
+				name: this.t("connectionStatusName"),
+				desc: this.t("connectionStatusDesc"),
 				// 别名覆盖用户会搜的词：他们要的是"能不能给别人看"，不一定知道"ACL / 匿名读"
-				aliases: ["link", "share", "public", "private", "acl", "permission", "公开", "私有", "权限", "外链", "分享", "别人"],
-				control: {
-					type: "dropdown",
-					key: "linkAccess",
-					// 选项由类型清单生成：界面上能选的 = 类型允许的（只有一处定义）
-					options: linkAccessOptions((value) => this.t(`linkAccess_${value}`)),
-				},
+				aliases: ["status", "link", "share", "public", "private", "acl", "permission", "公开", "私有", "权限", "外链", "分享", "别人", "状态"],
+				// ⭐ 这一项**不是**用户能选的（2026-10-18 起）：桶公开不公开是一个**事实**，
+				// 由下面那个按钮测出来。这里只负责把事实显示出来 —— 所以是 `render` 而不是下拉。
+				render: (setting) => this.renderConnectionStatus(setting),
 			},
 
 			{
@@ -391,6 +391,32 @@ export class SettingsTab extends PluginSettingTab {
 	}
 
 	/**
+	 * 「连接状态」—— 这一项**只显示**，不可选：桶公开不公开是一个**事实**，不是偏好。
+	 *
+	 * 状态由两处刷新：启动 / 保存设置时的自动探测，以及下面那个「测试连接」按钮。
+	 * ⚠️ 按钮那条路把**这一轮**交回的 `state` 直接写进来（不读全局）：并发时全局那一格
+	 * 可能已经是另一轮的结论。
+	 */
+	private renderConnectionStatus(setting: Setting): void {
+		const line = setting.descEl.createDiv({ cls: "acc-connection-status" });
+		this.statusEl = line;
+		this.paintStatus(line, this.plugin.currentConnectionState());
+	}
+
+	/** 测试那一轮结束后把状态写回这一行（`state` 来自返回值，不是全局）。 */
+	private refreshStatusLine(state: ConnectionState): void {
+		if (this.statusEl) this.paintStatus(this.statusEl, state);
+	}
+
+	private paintStatus(el: HTMLElement, state: ConnectionState): void {
+		el.empty();
+		el.createDiv({
+			cls: `acc-test-line acc-test-${connectionStateTone(state)}`,
+			text: this.t(connectionStateKey(state)),
+		});
+	}
+
+	/**
 	 * 「测试连接」按钮。
 	 *
 	 * 它做**两步**，回答两个不同的问题：
@@ -477,7 +503,8 @@ export class SettingsTab extends PluginSettingTab {
 	private async runAccessCheck(): Promise<TestLine[]> {
 		// ⭐ 用**返回值**而不是回头读全局字段：连点 / 与自动探测并发时，全局那一格可能已被
 		// 另一轮覆盖（对象名、字节数、删除状态都会错位，而界面上看不出来）。
-		const { probe, sample, url } = await this.plugin.runConnectionProbe();
+		const { probe, sample, url, state } = await this.plugin.runConnectionProbe();
+		this.refreshStatusLine(state);
 		const lines: TestLine[] = [];
 
 		// ① 写不进去 ⇒ 回路没跑起来（探测没发生）。这时说"没有链接可检查"是错的：
@@ -485,6 +512,7 @@ export class SettingsTab extends PluginSettingTab {
 		if (sample?.writeError) {
 			return [{ key: probeStepFailureKey("write", sample.writeError), tone: "error" }];
 		}
+		// ⚠️ 走到这里说明回路跑起来了；状态已由插件写入（下面那两项显示的就是它）
 
 		// ② 读回：三段结果各自一句话（只有在"写成功了"之后才谈得上）
 		if (sample?.readError) {
@@ -509,7 +537,6 @@ export class SettingsTab extends PluginSettingTab {
 		}
 
 		const kind = classifyPublicLink(probe.status);
-		const resolution = resolveAccess(this.plugin.settings.linkAccess, probe);
 		lines.push({
 			key: publicLinkKey(kind),
 			// 地址取**这一轮真正探测过的那一条**（返回值里的 `url`），不在这里重推一遍：
@@ -523,16 +550,14 @@ export class SettingsTab extends PluginSettingTab {
 			lines.push({ key: "testProbe_tempLeftBehind", params: { key: sample.key }, tone: "warn" });
 		}
 
+		// ⑤ **结论**：状态（公开 / 私有 / 无法访问），也就是上面那一项显示的同一个东西。
+		// ⚠️ 用返回值里的 `state`（这一轮的实测），不是回头读全局。
 		lines.push({
-			key: `testAccess_${resolution.access}`,
-			// 把"为什么"带上：`auto` 档下用户看不到自己选的东西，只有这个理由能让他判断
-			// "该不该去存储那边改权限"。
-			params: { reason: this.t(`testAccessReason_${resolution.reason}`) },
-			tone: resolution.access === "public" ? "ok" : "warn",
+			key: connectionStateKey(state),
+			tone: connectionStateTone(state),
 		});
 
 		// 探测不出来（超时 / 连不上）时把话说准：这不是"桶私有"，是"我们不知道"。
-		// 判定方向仍然是内部路径（安全方向），但用户得知道该去查哪一边。
 		if (probe.kind === "unreachable") {
 			lines.push({ key: probe.timedOut ? "testAccess_timedOut" : "testAccess_unreachable", tone: "warn" });
 		}

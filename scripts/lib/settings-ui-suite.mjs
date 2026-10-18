@@ -28,10 +28,11 @@ export function runSettingsUiSuite(mod) {
 		classifyPublicLink,
 		publicLinkKey,
 		publicLinkTone,
+		connectionStateKey,
+		connectionStateTone,
 		probeStepFailureKey,
 		externalSiteModeOptions,
 		orphanAskOptions,
-		linkAccessOptions,
 		ensureSecretSlot,
 		SECRET_SLOT_PREFIX,
 		// settings-bindings
@@ -699,23 +700,21 @@ export function runSettingsUiSuite(mod) {
 	);
 
 	// ============================================================
-	// 11. 链接可访问性（1.7.0）：下拉选项 + 矛盾组合的纠正
+	// 11. 连接状态（2026-10-18）：四个状态都要能说成人话，语气要分开
 	// ============================================================
 	{
-		// 选项由类型清单生成：界面上能选的 = 类型允许的。
-		// ⚠️ 这里把三个取值写死是**有意的**：加一档时这条断言会红，逼着人确认
-		// "新档位的文案、判定、以及它跟「本地副本」的关系都想清楚了没有"。
-		const options = linkAccessOptions((value) => `label:${value}`);
-		assert.deepEqual(
-			Object.keys(options),
-			["auto", "public", "private"],
-			"★ 选项集合必须与 LINK_ACCESS_MODES 完全一致（界面上不许出现假选项）"
-		);
-		assert.equal(options.private, "label:private", "选项文案由调用方给（这一层不认识语言）");
+		// ⚠️ 四个状态**缺一不可**：`checking` 是刚启动那一下，少了它界面会在
+		// "公开/私有"之间凭空挑一个显示。把取值写死是**有意的** —— 加状态时这条会红。
+		for (const state of ["checking", "public", "private", "unreachable"]) {
+			assert.equal(connectionStateKey(state), `connectionStatus_${state}`, `每个状态都要有文案 key：${state}`);
+		}
+		// 语气分四档：公开=好、私有=提示（那是正当用法，不是错误）、无法访问=错误、检测中=中性
+		assert.equal(connectionStateTone("public"), "ok");
+		assert.equal(connectionStateTone("private"), "warn", "私有是正当选择，不是错误");
+		assert.equal(connectionStateTone("unreachable"), "error");
+		assert.equal(connectionStateTone("checking"), "info");
 
-		// ⚠️ 这里曾断言 `coherentLocalCopy("private","trash")` 会把副本档纠正成 `keep`。
-		// 那个函数在 1.7.0 当天**下架**：用户问「仅内部就必须下载吗？不能像图床那样只存在 S3？」
-		// ⇒ 「私有 + 不留副本」不再是矛盾，而是第四种正常用法（预签名地址）。
-		// 现在这条组合的判据在 `link-access.ts::displayPathFor`，断言也在那边的套件里。
+		// ⚠️ 这里曾断言 `linkAccessOptions` 的三个下拉选项（那个设置项 2026-10-18 删了），
+		// 以及更早的 `coherentLocalCopy` 纠正逻辑（1.7.0 当天删）。都别再加回来。
 	}
 }

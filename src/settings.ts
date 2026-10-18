@@ -34,14 +34,14 @@
  *   而且遗留值该从文件里清掉 ⇒ 见 `hasLegacyObjectKeyTemplate` 与 `main.ts` 的载入流程。
  */
 
-import { EXTERNAL_SITE_MODES, LINK_ACCESS_MODES, LOCAL_COPY_ACTIONS, ORPHAN_ASK_MODES, isExternalSiteMode, isLinkAccessMode, isLocalCopyAction, isOrphanAskMode } from "./types";
-import type { ExternalSiteMode, LinkAccessMode, LocalCopyAction, OrphanAskMode, PluginSettings, S3Config } from "./types";
+import { EXTERNAL_SITE_MODES, LOCAL_COPY_ACTIONS, ORPHAN_ASK_MODES, isExternalSiteMode, isLocalCopyAction, isOrphanAskMode } from "./types";
+import type { ExternalSiteMode, LocalCopyAction, OrphanAskMode, PluginSettings, S3Config } from "./types";
 import { CACHE_LIMIT_MB_MAX } from "./types";
 import { isPlainRecord } from "./records";
 
 // 枚举类型守卫定义在 types.ts（与枚举本身同处一地，避免两个模块各存一份）。
 // 这里转出去，让"读设置的模块"同时就是"拿守卫的模块"。
-export { isExternalSiteMode, isLinkAccessMode, isLocalCopyAction, isOrphanAskMode };
+export { isExternalSiteMode, isLocalCopyAction, isOrphanAskMode };
 
 // ─────────────────────────── 字段表 ───────────────────────────
 //
@@ -157,10 +157,6 @@ const FACTORY_SETTINGS = {
 	// ⚠️ 1.2.0 之前这里写的是 `"cache"`；老用户存着的值由 `localCopyValue` 折成同一个结果。
 	localCopy: "keep" as LocalCopyAction,
 	fallbackDownload: true,
-	// ⚠️ 默认 `auto`：**不再**默认要求用户把桶开成公开读（1.7.0）。
-	// 它会匿名探测一次并按结果选路径（见 `link-access.ts`），而"探测不出来"
-	// 一律按**私有**处理 —— 安全方向：多下一次，而不是留下没有兜底的坏图。
-	linkAccess: "auto" as LinkAccessMode,
 	// ⚠️ 默认**关**。打开它意味着渲染时遇到站外文件就会对外发 GET + PUT
 	// 并**改写用户的笔记** —— 这类动作必须由用户**事前、显式**决定；
 	// 出厂就开着等于替他做了决定（他多半还不知道这个功能存在）。
@@ -192,7 +188,6 @@ const SETTINGS_SPEC: {
 	autoUpload: boolValue(),
 	localCopy: localCopyValue(),
 	fallbackDownload: boolValue(),
-	linkAccess: oneOfValue(LINK_ACCESS_MODES),
 	externalImageCache: boolValue(),
 	externalSiteMode: oneOfValue(EXTERNAL_SITE_MODES),
 	externalSiteList: stringListValue(),

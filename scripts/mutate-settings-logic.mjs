@@ -100,13 +100,20 @@ await runMutations({
 		},
 		// ── 链接可访问性（1.7.0）──
 		{
-			// 后果：下拉里多出一个**从不生效**的访问方式（假选项）：用户选它以为
-			// "链接可以给外人看了"，实际判定层根本不认这个值 —— 而他很可能就是在
-			// 准备把链接发出去的时候选它的。
-			name: "★ 访问方式那一档多出一个假选项（用户以为选了「公开」）",
-			from: "\tfor (const value of LINK_ACCESS_MODES) options[value] = labelOf(value);",
-			to: '\tfor (const value of [...LINK_ACCESS_MODES, "shared"]) options[value] = labelOf(value);',
-			expect: "选项集合必须与 LINK_ACCESS_MODES 完全一致",
+			// 后果：刚启动那一下（`checking`）被显示成"私有"或"公开" ⇒ 界面在**还不知道**
+			// 的时候报了一个具体结论。状态那一项是用户唯一能看到的事实来源，不许猜。
+			name: "★ 每个状态都套同一句文案（刚启动就报出假结论）",
+			from: "\treturn `connectionStatus_${state}`;",
+			to: '\treturn "connectionStatus_private";',
+			expect: "每个状态都要有文案 key：checking",
+		},
+		{
+			// 后果：私有被涂成红色 ⇒ 用户以为连接坏了，跑去改一个**正当**配置
+			//（只给自己用是合理用法，只是链接对外是死的）。
+			name: "★ 私有被涂成错误（把正当配置显示成故障）",
+			from: '\t\tcase "private":\n\t\t\t// 私有是**正当选择**（只给自己用），不是错误\n\t\t\treturn "warn";',
+			to: '\t\tcase "private":\n\t\t\t// 私有是**正当选择**（只给自己用），不是错误\n\t\t\treturn "error";',
+			expect: "私有是正当选择，不是错误",
 		},
 		// ⚠️ 这里原有两条锚在 `coherentLocalCopy` 上的变异（"私有+不留副本被放行"、
 		// "坏副本策略被读成 trash"）。那个函数 1.7.0 当天**下架**：用户问「仅内部就必须下载吗？

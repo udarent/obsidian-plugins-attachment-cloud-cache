@@ -125,7 +125,7 @@ function makeDeps(overrides = {}) {
 		...(overrides.ensureLocalCopy ? { ensureLocalCopy: overrides.ensureLocalCopy } : {}),
 		...(overrides.onError ? { onError: overrides.onError } : {}),
 		// 1.7.0：私有 + 不留副本那条路（预签名地址 + 自建媒体节点）
-		...(overrides.accessProbe ? { accessProbe: overrides.accessProbe } : {}),
+		...(overrides.connectionState ? { connectionState: overrides.connectionState } : {}),
 		...(overrides.signedUrlFor ? { signedUrlFor: overrides.signedUrlFor } : {}),
 		...(overrides.createMediaNode ? { createMediaNode: overrides.createMediaNode } : {}),
 	};
@@ -411,7 +411,7 @@ export async function runEmbedRebuildSuite(mod) {
 		const replaced = [];
 		el.parentNode = makeParent(replaced);
 		const h = makeDeps({
-			accessProbe: () => ({ kind: "unknown", status: null, at: 0 }),
+			connectionState: () => "checking",
 			signedUrlFor: async (key) => {
 				signedCalls.push(key);
 				return signedUrl;
@@ -444,7 +444,7 @@ export async function runEmbedRebuildSuite(mod) {
 		// ② PDF：同一档下**跳过**（救不了，如实留原样）
 		const pdf = makeElement({ src: "https://img.example.com/doc.pdf" });
 		pdf.parentNode = makeParent([]);
-		const h2 = makeDeps({ accessProbe: () => ({ kind: "forbidden", status: 403, at: 1 }) });
+		const h2 = makeDeps({ connectionState: () => "private" });
 		const deps2 = {
 			...h2.deps,
 			settings: () => privateTrash,
@@ -461,7 +461,7 @@ export async function runEmbedRebuildSuite(mod) {
 		const replaced3 = [];
 		el3.parentNode = makeParent(replaced3);
 		const h3 = makeDeps({
-			accessProbe: () => ({ kind: "forbidden", status: 403, at: 1 }),
+			connectionState: () => "private",
 			signedUrlFor: async () => null,
 			createMediaNode: () => ({ tag: "video" }),
 		});
@@ -483,7 +483,7 @@ export async function runEmbedRebuildSuite(mod) {
 			let signedCalls = 0;
 			const made4 = [];
 			const h4 = makeDeps({
-				accessProbe: () => ({ kind: "ok", status: 200, at: 1 }),
+				connectionState: () => "public",
 				signedUrlFor: async () => {
 					signedCalls += 1;
 					return "https://x/y.mp4?sig=1";
@@ -521,7 +521,7 @@ export async function runEmbedRebuildSuite(mod) {
 		// ⑤ 同一档下的**图片**不接管：远端 `src` 本来就能显示，换节点是多此一举。
 		{
 			const el5 = makeElement({ src: "https://img.example.com/pic.png" });
-			const h5 = makeDeps({ accessProbe: () => ({ kind: "ok", status: 200, at: 1 }) });
+			const h5 = makeDeps({ connectionState: () => "public" });
 			const deps5 = { ...h5.deps, settings: () => ({ ...SETTINGS, linkAccess: "public", localCopy: "trash" }) };
 			const queue5 = createEmbedRebuildQueue(deps5);
 			assert.equal(
@@ -534,7 +534,7 @@ export async function runEmbedRebuildSuite(mod) {
 		// ⑥ PDF 在公开档同样救不了（它要 pdf.js + 库内路径，与签名无关）。
 		{
 			const el6 = makeElement({ src: "https://img.example.com/doc.pdf" });
-			const h6 = makeDeps({ accessProbe: () => ({ kind: "ok", status: 200, at: 1 }) });
+			const h6 = makeDeps({ connectionState: () => "public" });
 			const deps6 = { ...h6.deps, settings: () => ({ ...SETTINGS, linkAccess: "public", localCopy: "trash" }) };
 			const queue6 = createEmbedRebuildQueue(deps6);
 			assert.equal(

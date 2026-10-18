@@ -41,7 +41,7 @@ import type { CacheIndex } from "../cache/index";
 import type { PluginSettings } from "../types";
 import { embedKindFor, extensionOfName } from "../vault-files";
 import type { EmbedKind } from "../vault-files";
-import type { AccessProbe } from "../link-access";
+import type { ConnectionState } from "../link-access";
 import { usesSignedUrls } from "../link-access";
 import { decideRenderTarget } from "./render-target";
 import type { RenderTarget } from "./render-target";
@@ -113,7 +113,7 @@ export interface EmbedRebuildDeps {
 	 * 当前的**匿名可达性探测结果** —— 只用来判"缺副本的这一格要不要改走预签名"。
 	 * 判据在 `link-access.ts`，这里只消费。
 	 */
-	accessProbe?: () => AccessProbe;
+	connectionState?: () => ConnectionState;
 	/**
 	 * 私有存储 + 不留副本时，一条**预签名地址**（失败返回 `null`）。
 	 *
@@ -395,7 +395,7 @@ export function processEmbeds(
 			settings,
 			index: deps.index(),
 			// 判据只在 `link-access.ts` 一处（与图片那条路共用同一个函数）
-			useSignedUrls: usesSignedUrls(settings, deps.accessProbe?.()),
+			useSignedUrls: usesSignedUrls(settings, deps.connectionState?.()),
 		});
 		if (decision.action === "ignore") continue;
 

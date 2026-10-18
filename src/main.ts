@@ -56,8 +56,15 @@ import { planFileCards } from "./ui/file-cards";
 import type { FileCard, FileCardInput } from "./ui/file-cards";
 import type { S3Client } from "./s3/client";
 import { connectionReadiness } from "./s3/credentials";
-import { UNKNOWN_ACCESS_PROBE, probeAccess, probeUrlFor } from "./link-access";
-import type { AccessProbe } from "./link-access";
+import {
+	INITIAL_CONNECTION_STATE,
+	UNKNOWN_ACCESS_PROBE,
+	probeAccess,
+	probeUrlFor,
+	stateAfterProbe,
+	stateAfterRoundTrip,
+} from "./link-access";
+import type { AccessProbe, ConnectionState } from "./link-access";
 import { TEMP_PROBE_BODY, TEMP_PROBE_KEY, runWithTempProbeObject, singleFlight } from "./probe-sample";
 import type { ProbeRoundTripMemo } from "./probe-sample";
 import { utf8Bytes } from "./s3/hash";
@@ -131,6 +138,12 @@ const SIGNED_URL_CACHE_MS = 20 * 60 * 1000;
  */
 export interface ConnectionProbeResult {
 	probe: AccessProbe;
+	/**
+	 * 这一轮之后**连接状态**（公开 / 私有 / 无法访问 / 检测中）。
+	 *
+	 * ⚠️ 与 `probe` 分开：状态是**结论**（还考虑了签名读），`probe` 只是匿名那一问的原始结果。
+	 */
+	state: ConnectionState;
 	/** 这一轮的善后状态；`null` = 配置不全 / 回路没跑起来（没有探测对象）。 */
 	sample: ProbeRoundTripMemo | null;
 	/** 这一轮**真正**探测过的那条地址（`null` = 没跑起来）。 */
@@ -145,17 +158,19 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	locale = "en";
 
 	/**
-	 * 「别人能不能打开笔记里那条链接」的**当前认知**（1.7.0）。
+	 * **连接状态**（2026-10-18：取代了原来的「笔记里的链接谁打得开」三档设置）。
 	 *
-	 * 只有一份，三类读者共用：① 渲染/下载判定（要不要**强制**取回本地副本）；
-	 * ② 设置页（把探测结果原样告诉用户）；③ "测试连接"（刷新它并显示）。
-	 * 判据本身在 `link-access.ts`，这里只持有结果。
+	 * 三类读者共用：① 渲染/下载判定（缺副本的图走哪条路）；② 设置页（把状态显示出来）；
+	 * ③ "测试连接"（刷新它）。判据本身在 `link-access.ts`，这里只持有结果。
 	 *
-	 * ⚠️ 初值是 `UNKNOWN`（= 还没探测过），**不是**"假定公开"。`auto` 档下
-	 * `UNKNOWN` 会走内部路径（按私有处理）—— 安全方向，见那个模块的文件头。
-	 * 启动时探测一次，之后每次保存设置安排一次（带防抖），用户点"测试连接"时立刻刷新。
+	 * ⚠️ 初值是 `checking`（= 还没问出来），于是缺副本的图**先按私有处理** —— 安全方向：
+	 * 多下一次，而不是在"其实私有"时留下一屏没有兜底的坏图。
+	 * ⚠️ **从不持久化**：每次加载都重新问（桶的权限可能在那边被改过）。
 	 */
-	private accessProbe: AccessProbe = UNKNOWN_ACCESS_PROBE;
+	private connectionState: ConnectionState = INITIAL_CONNECTION_STATE;
+
+	/** 最近一次匿名探测的原始结果（诊断用；状态由它推出来）。 */
+	private lastProbe: AccessProbe = UNKNOWN_ACCESS_PROBE;
 
 	/** 上一次探测用的地址 —— 用来避免"敲一个字就发一次 HEAD"。 */
 	private probedUrl: string | null = null;
@@ -423,7 +438,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			index: () => this.currentIndex(),
 			persistIndex: () => this.hostContext().persistIndex(),
 			// ⭐ 1.7.0：私有存储下"缺副本必须取回"这条判据要读探测结果（见 `link-access.ts`）
-			accessProbe: () => this.accessProbe,
+			connectionState: () => this.connectionState,
 			notify: (message) => new Notice(message),
 			t: (key, params) => this.t(key, params),
 		});
@@ -1092,7 +1107,12 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 设置页用它把探测结论原样显示出来（含"还没探测过"），渲染/下载判定用同一份。
 	 */
 	currentAccessProbe(): AccessProbe {
-		return this.accessProbe;
+		return this.lastProbe;
+	}
+
+	/** 当前的**连接状态**（公开 / 私有 / 无法访问 / 检测中）—— 设置页与判定层读它。 */
+	currentConnectionState(): ConnectionState {
+		return this.connectionState;
 	}
 
 	/**
@@ -1127,8 +1147,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		// 地址没变、且已经有一个结论 ⇒ 不重复发请求（保存设置可能是每个字符一次）。
 		// ⚠️ 只有自动探测会走到这里；按钮那条路每次都真写一次，不需要「强制刷新」这种开关 ——
 		// 一个此后再没人用的参数只会让下一个人以为它还有用。
-		if (url === this.probedUrl && this.accessProbe.kind !== "unknown") {
-			return this.accessProbe;
+		if (url === this.probedUrl && this.lastProbe.kind !== "unknown") {
+			return this.lastProbe;
 		}
 		return this.recordAccessProbe(url);
 	}
@@ -1183,7 +1203,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		const url = probeUrlFor(this.settings.s3, key);
 		if (!client || !url) {
 			this.forgetAccessProbe();
-			return { probe: this.accessProbe, sample: null, url: null };
+			return { probe: this.lastProbe, sample: null, url: null, state: this.connectionState };
 		}
 
 		const body = utf8Bytes(TEMP_PROBE_BODY);
@@ -1216,14 +1236,25 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			// ① 写不进去 ⇒ **回路没跑起来**。原始错误交回界面归类 —— 它才知道怎么说人话
 			//（"连接正常但写不进去"与"网络不通"是两句不同的话，修法也不同）。
 			this.probedUrl = null;
-			this.accessProbe = UNKNOWN_ACCESS_PROBE;
+			this.lastProbe = UNKNOWN_ACCESS_PROBE;
+			// 写不进去 ⇒ 插件做不了它该做的事（上传）：状态按"无法访问"说，别让界面绿着。
+			this.connectionState = "unreachable";
 			const failed: ProbeRoundTripMemo = { ...memo, writeError: outcome.putError };
-			return { probe: this.accessProbe, sample: failed, url };
+			return { probe: this.lastProbe, sample: failed, url, state: this.connectionState };
 		}
 
 		// ④ 删掉（在 `finally` 里做的），结果回填到**同一条记录**上
 		memo.leftBehind = outcome.leftBehind;
-		return { probe: outcome.value ?? this.accessProbe, sample: memo, url };
+		const probe = outcome.value ?? this.lastProbe;
+		// ⑤ 用**这一轮**的实测更新状态：匿名能读 ⇒ 公开；否则签名能读 ⇒ 私有；都不行 ⇒ 无法访问
+		//（`missing` = 公开前缀可能写错了 ⇒ 不改判，界面会单独提示）
+		const next = stateAfterRoundTrip({ anonymous: probe, signedReadOk: memo.readError === undefined });
+		if (next) {
+			this.connectionState = next;
+			// 状态变了 ⇒ 之前"按私有处理"的结论作废（地址还是那条，缓存键照样记）
+			this.probedUrl = url;
+		}
+		return { probe, sample: memo, url, state: this.connectionState };
 	}
 
 	/**
@@ -1240,16 +1271,20 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		this.probedUrl = url;
 		const probe = await probeAccess(url);
 		// 探测期间配置变了 ⇒ 这次结论不属于当前配置
-		if (this.probedUrl !== url) return this.accessProbe;
-		this.accessProbe = probe;
+		if (this.probedUrl !== url) return this.lastProbe;
+		this.lastProbe = probe;
+		// ⭐ 自动探测只问"匿名能不能读"：ok ⇒ 公开，403 ⇒ 私有，连不上 ⇒ 无法访问
+		this.connectionState = stateAfterProbe(this.connectionState, probe);
 		return probe;
 	}
 
 	/** 忘掉上一次探测的结论（没有对象可试 / 配置不完整）：降级方向是"按私有处理"。 */
 	private forgetAccessProbe(): AccessProbe {
 		this.probedUrl = null;
-		this.accessProbe = UNKNOWN_ACCESS_PROBE;
-		return this.accessProbe;
+		this.lastProbe = UNKNOWN_ACCESS_PROBE;
+		// 没有对象可试 ⇒ 退回"还没问出来"（按私有处理），**不**沿用上一次的公开结论
+		this.connectionState = INITIAL_CONNECTION_STATE;
+		return this.lastProbe;
 	}
 
 	/**
@@ -1389,7 +1424,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			resourceUrlFor: (path) => resourceUrlFor(this.app, path),
 			// ⭐ 1.7.0：私有存储 + 不留副本时，音频/视频改走**预签名地址**（自建节点）。
 			// 与图片那条路共用同一份探测结果与同一份签名缓存（`signedUrlFor`）。
-			accessProbe: () => this.accessProbe,
+			connectionState: () => this.connectionState,
 			signedUrlFor: (key) => this.signedUrlFor(key),
 			createMediaNode: (kind, url) => this.createMediaNode(kind, url),
 			ensureLocalCopy: async (key, remoteUrl) => {
@@ -1441,7 +1476,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			resourceUrlFor: (path) => resourceUrlFor(this.app, path),
 			// ⭐ 1.7.0：私有存储 + 不留副本时改给预签名地址（图床式，不落盘）。
 			// 两个回调都只是转发，判据在 `link-access.ts` / `S3Client` 里。
-			accessProbe: () => this.accessProbe,
+			connectionState: () => this.connectionState,
 			signedUrlFor: (key) => this.signedUrlFor(key),
 			// 渲染钩子只关心"补上了没有、在哪"，所以在这里把结果收敛成路径 ——
 			// 让渲染层不必知道下载层那套状态机（downloaded/reused/refused…）。

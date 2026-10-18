@@ -191,7 +191,7 @@ async function harnessRoot() {
 			t: (key) => key,
 			now: () => NOW,
 			// 1.7.0：访问方式判定要读探测结果（默认"还没探测过"）
-			accessProbe: options.accessProbe,
+			connectionState: options.connectionState,
 			onStaged: (path) => {
 				staged.push(path);
 				// ⭐ 顺序判据：登记这一刻文件还**不该**存在（写之前登记）——
@@ -376,7 +376,11 @@ async function harnessRoot() {
 	// 5. 关闭回退下载 → 不下载（这是用户的选择，不是失败）
 	// ============================================================
 	{
-		const h = await makeHarness({ settings: { fallbackDownload: false } });
+		const h = await makeHarness({
+			settings: { fallbackDownload: false },
+			// ⚠️ 只在**公开**状态下「关掉开关 ⇒ 不下载」才成立；非公开时取字节是唯一显示来路
+			connectionState: () => "public",
+		});
 		try {
 			const key = "disabled.png";
 			h.putObject(key, HOSTILE_BYTES, "image/png");
@@ -416,14 +420,14 @@ async function harnessRoot() {
 	// 三种来路都要能强制取回：显式声明私有、探测到 403、以及**探测不出来**（降级方向）。
 	// ============================================================
 	{
-		for (const [label, settings, accessProbe] of [
-			["显式「仅内部访问」", { linkAccess: "private" }, undefined],
-			["自动 + 探测到 403", { linkAccess: "auto" }, () => ({ kind: "forbidden", status: 403, at: 1 })],
-			["自动 + 还没探测过（降级）", { linkAccess: "auto" }, undefined],
+		for (const [label, state] of [
+			["状态 = 私有", "private"],
+			["状态 = 还没问出来（降级方向）", "checking"],
+			["状态 = 无法访问", "unreachable"],
 		]) {
 			const h = await makeHarness({
-				settings: { fallbackDownload: false, ...settings },
-				...(accessProbe ? { accessProbe } : {}),
+				settings: { fallbackDownload: false },
+				...(state ? { connectionState: () => state } : {}),
 			});
 			try {
 				const key = `private-${sha256Hex(HOSTILE_BYTES)}.png`;
@@ -438,8 +442,8 @@ async function harnessRoot() {
 
 		// 反方向：公开读取时那个开关照旧算数（不然就成了"这个设置项没用"）
 		const h = await makeHarness({
-			settings: { fallbackDownload: false, linkAccess: "public" },
-			accessProbe: () => ({ kind: "ok", status: 200, at: 1 }),
+			settings: { fallbackDownload: false },
+			connectionState: () => "public",
 		});
 		try {
 			const key = `public-${sha256Hex(HOSTILE_BYTES)}.png`;

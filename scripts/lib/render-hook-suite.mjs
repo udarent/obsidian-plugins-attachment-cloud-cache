@@ -290,7 +290,7 @@ export async function runRenderHookSuite(mod) {
 			depsWith({
 				settings: () => privateSettings,
 				// 探测还没回来 ⇒ 按私有处理（安全方向）
-				accessProbe: () => ({ kind: "unknown", status: null, at: 0 }),
+				connectionState: () => "checking",
 				signedUrlFor: async (key) => {
 					signedCalls.push(key);
 					return signedBase;
@@ -315,7 +315,7 @@ export async function runRenderHookSuite(mod) {
 			fakeContainer([imgNoSign]),
 			depsWith({
 				settings: () => privateSettings,
-				accessProbe: () => ({ kind: "forbidden", status: 403, at: 1 }),
+				connectionState: () => "private",
 				signedUrlFor: async () => null,
 			})
 		);
@@ -331,7 +331,7 @@ export async function runRenderHookSuite(mod) {
 				fakeContainer([imgVideo]),
 				depsWith({
 					settings: () => privateSettings,
-					accessProbe: () => ({ kind: "forbidden", status: 403, at: 1 }),
+					connectionState: () => "private",
 					onNonImageEmbed: (element, target) => calls.push({ element, target }),
 					signedUrlFor: async () => "https://signed/clip.mp4?sig=1",
 				})
@@ -350,7 +350,7 @@ export async function runRenderHookSuite(mod) {
 				fakeContainer([imgPdf]),
 				depsWith({
 					settings: () => privateSettings,
-					accessProbe: () => ({ kind: "forbidden", status: 403, at: 1 }),
+					connectionState: () => "private",
 					onNonImageEmbed: (element, target) => callsPdf.push(target),
 					signedUrlFor: async () => "https://signed/doc.pdf?sig=1",
 				})
@@ -365,7 +365,7 @@ export async function runRenderHookSuite(mod) {
 			fakeContainer([imgPublic]),
 			depsWith({
 				settings: () => ({ ...settings, linkAccess: "public", localCopy: "trash" }),
-				accessProbe: () => ({ kind: "ok", status: 200, at: 1 }),
+				connectionState: () => "public",
 				signedUrlFor: async () => {
 					signedInPublic += 1;
 					return signedBase;
@@ -385,7 +385,7 @@ export async function runRenderHookSuite(mod) {
 				fakeContainer([imgVideoPublic]),
 				depsWith({
 					settings: () => ({ ...settings, linkAccess: "public", localCopy: "trash" }),
-					accessProbe: () => ({ kind: "ok", status: 200, at: 1 }),
+					connectionState: () => "public",
 					onNonImageEmbed: (element, target) => directCalls.push(target),
 					signedUrlFor: async () => {
 						signedInPublic += 1;
@@ -498,7 +498,7 @@ export async function runRenderHookSuite(mod) {
 				settings: () => ({ ...settings, linkAccess: "private", localCopy: "trash" }),
 				index: () => index,
 				resourceUrlFor: (path) => `app://local/${path}`,
-				accessProbe: () => ({ kind: "forbidden", status: 403, at: 1 }),
+				connectionState: () => "private",
 				onNonImageEmbed: (element, target) => mediaCalls.push(target),
 				signedUrlFor: async () => "https://signed/clip.mp4?sig=1",
 			},

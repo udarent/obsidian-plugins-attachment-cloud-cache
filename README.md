@@ -72,7 +72,7 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | **Endpoint · Bucket · Region** | Where your storage lives (`us-east-1` is the usual filler for self-hosted). |
 | **Access key ID · Secret access key** | The secret goes into the OS keychain, never `data.json`. **Import from a credentials file** fills these in from MinIO's JSON and keeps no copy. |
 | **Public URL prefix** | Optional. Empty means links use `endpoint/bucket/key`; those only work for other people if the bucket allows anonymous reads (see the row below). |
-| **Who can open the links in your notes** | **Automatic (detect)** by default — the plugin probes your storage once and picks a path; **Public read** if you want links to keep working after you paste them elsewhere, **Internal access only** to keep the bucket private (links then open only with this plugin and your keys). Detection that fails or times out is treated as *internal*, so images are still fetched instead of turning into broken images. Switching this **never rewrites a link in your notes** — the URL stays byte-identical, and nothing is moved or deleted in your bucket. |
+| **Connection status** | What the plugin has worked out about your bucket — a **fact, not a setting**, so there is nothing to choose: **checking** (just started), **public** (anyone with a link can open it), **private** (only this plugin with your keys can), **unreachable** (neither worked). It is re-detected on every start and refreshed by **Test connection**, and it **never rewrites a link** in your notes: the URL stays byte-identical and nothing is moved or deleted in your bucket. |
 | **Test connection** | Writes **one tiny probe object** into your bucket, reads it back to compare the bytes, asks the same address the way a stranger would (**no credentials**), then deletes it. That covers all three things the plugin really does — uploading, fetching and deleting — plus whether other people can open your links, and it works on a brand-new vault with an empty bucket. Nothing is kept; if the object cannot be deleted the result says so and names it. |
 | **Upload new attachments automatically** | On by default; off leaves new files local only. |
 | **Where the local copy goes** | **Keep the file where it is (offline works)** (default) or **Delete the local file after uploading (offline unavailable)**. With the second, uploads and link rewriting still happen, but nothing is fetched back, so **nothing works offline**. If your bucket is not publicly readable, that mode still shows **images, audio and video**: the renderer gets a **short-lived signed URL** instead (plain image-host behaviour — nothing on disk, nothing cached offline). PDFs still need a local copy, since the built-in viewer only opens vault files. |
@@ -114,7 +114,7 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | Symptom | What it means |
 | --- | --- |
 | *No appropriate version found.* | Your Obsidian is older than 1.13.0 — the installer refusing, not a broken plugin. |
-| Links open for you but not for others | Expected if you chose *Internal access only* (or the bucket refuses anonymous reads). **Test connection** says which it is. |
+| Links open for you but not for others | Expected when the connection status is *private* (the bucket refuses anonymous reads). **Test connection** says which it is. |
 | Broken on a second device | No local copy there, and it could not download one. |
 | An off-site file refused as "a web page or plain text" | That address serves HTML, so it is refused on purpose. |
 
@@ -221,7 +221,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | **服务地址 · 存储桶 · 区域** | 你的存储在哪（自建服务填 `us-east-1` 之类的占位值即可）。 |
 | **访问密钥 ID · 秘密访问密钥** | 秘密密钥进系统钥匙串，绝不写进 `data.json`。**从凭据文件导入**会用 MinIO 的 JSON 填好这些，且不留副本。 |
 | **公开访问前缀** | 可留空。留空就用 `服务地址/存储桶/键`；这种链接要给别人打开，桶得允许匿名读取（见下一行）。 |
-| **笔记里的链接谁打得开** | 默认**自动（探测后决定）**：插件匿名探一次你的存储，据此选路。**公开读取** = 链接粘到别的平台仍能打开；**仅内部访问** = 桶保持私有，链接只在装了本插件、有密钥的地方能看。探测失败或超时按内部访问处理，所以图照样会被取回、不会变成坏图。切换这一项**不会改写笔记里的任何链接** —— 地址一字不变，桶里也不会搬迁或删除任何东西。 |
+| **连接状态** | 插件测出来的**事实，不是设置项** —— 所以没有可选项：**检测中**（刚启动）、**公开访问**（拿到链接的人都能打开）、**私有访问**（只有装了本插件、配了密钥的人能打开）、**无法访问**（两种方式都不通）。每次启动重新测，点「测试连接」可随时刷新；它**绝不改写**笔记里的任何链接 —— 地址一字不变，桶里也不会搬迁或删除任何东西。 |
 | **测试连接** | 往桶里写**一个几十字节的探测对象** → 读回来核对字节 → **不带凭据**问一次「别人打得开这条地址吗」→ 删掉。于是插件真正要做的三件事（上传、取回、删除）连同「链接对外能不能打开」一次测全，全新库、空桶一样能测。什么都不留；万一没删掉，结果里会带上对象名说清。 |
 | **新增附件自动上传** | 默认开启；关闭后新文件只存在本地。 |
 | **本地副本的处理** | 留在附件目录（默认，**离线可用**），或**不留本地副本（等于关闭缓存，离线不可用）** —— 后者就是上传后把那份文件删掉：照常上传、照常改写链接，但不取回副本，所以**离线什么都看不到**。⚠️ 若存储不可公开读取，这一档仍然能看**图片、音频与视频**：改给一条**短时签名地址**（就是图床的用法 —— 磁盘不留文件、离线仍看不到）。PDF 仍需本地副本（内置查看器只打开库内文件）。 |
@@ -258,7 +258,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | 现象 | 含义 |
 | --- | --- |
 | 社区目录说 *No appropriate version found.* | 你的 Obsidian 低于 1.13.0 —— 安装机制在拒绝，不是插件坏了。 |
-| 链接自己打得开、别人打不开 | 桶不是公开的（或者没填公开前缀）。这是「仅内部访问」的正常表现；想让链接在别处也能打开，见「笔记里的链接谁打得开」。**测试连接** 会明确报出这一条。 |
+| 链接自己打得开、别人打不开 | 连接状态是**私有访问**时的正常表现（桶拒绝匿名读，或者没填公开前缀）。想让链接在别处也能打开，就去存储那边开匿名读或配公开前缀；**测试连接** 会明确报出这一条。 |
 | 换台设备就裂 | 那台设备没有本地副本，也补不下来。 |
 | 站外文件被以「返回的是网页或纯文本」拒收 | 那个地址回的是 HTML，所以刻意拒收。 |
 

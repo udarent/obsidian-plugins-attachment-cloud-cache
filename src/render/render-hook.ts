@@ -53,7 +53,7 @@
 
 import type { PluginSettings } from "../types";
 import type { CacheIndex } from "../cache/index";
-import type { AccessProbe } from "../link-access";
+import type { ConnectionState } from "../link-access";
 import { usesSignedUrls } from "../link-access";
 import { decideRenderTarget } from "./render-target";
 import { rebuildKindFor, signedMediaKindFor } from "./embed-rebuild";
@@ -105,7 +105,7 @@ export interface RenderHookDeps {
 	 * ⚠️ 是取值函数而不是快照：探测是异步刷新的，抓快照会让"启动那一次探测"
 	 * 永远不影响渲染（表现是"第一次打开是坏图，重开才好"）。
 	 */
-	accessProbe?: () => AccessProbe;
+	connectionState?: () => ConnectionState;
 	/** 发现索引指向的本地副本其实不存在 —— 交给调用方自愈。 */
 	onLocalCopyMissing?: (key: string) => void;
 	/**
@@ -196,7 +196,7 @@ export function processImages(
 			settings,
 			index: deps.index(),
 			// 判据只在 `link-access.ts` 一处（这里与下载闸门共用同一个函数）
-			useSignedUrls: usesSignedUrls(settings, deps.accessProbe?.()),
+			useSignedUrls: usesSignedUrls(settings, deps.connectionState?.()),
 		});
 
 		if (decision.action === "ignore") continue;
@@ -453,7 +453,7 @@ export function installImageSrcPatch(deps: RenderHookDeps, env: SrcPatchEnvironm
 						src: value,
 						settings,
 						index: deps.index(),
-						useSignedUrls: usesSignedUrls(settings, deps.accessProbe?.()),
+						useSignedUrls: usesSignedUrls(settings, deps.connectionState?.()),
 					});
 
 					if (decision.action === "local" && rebuildKindFor(decision.localPath)) {

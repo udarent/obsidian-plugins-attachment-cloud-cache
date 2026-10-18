@@ -6,17 +6,10 @@
  * 拆成纯函数才能穷举，也才能在不用真实 Obsidian 的情况下验证。
  */
 
-import type { ExternalSiteMode, LinkAccessMode, LocalCopyAction, OrphanAskMode } from "../types";
-import {
-	CACHE_LIMIT_MB_MAX,
-	EXTERNAL_SITE_MODES,
-	LINK_ACCESS_MODES,
-	LOCAL_COPY_ACTIONS,
-	ORPHAN_ASK_MODES,
-	isCacheDisabled,
-} from "../types";
+import type { ExternalSiteMode, LocalCopyAction, OrphanAskMode } from "../types";
+import { CACHE_LIMIT_MB_MAX, EXTERNAL_SITE_MODES, LOCAL_COPY_ACTIONS, ORPHAN_ASK_MODES, isCacheDisabled } from "../types";
 import { classifyPublicReach } from "../link-access";
-import type { PublicReachKind } from "../link-access";
+import type { ConnectionState, PublicReachKind } from "../link-access";
 
 /**
  * ⚠️ 公开可达性的归类**不在这里实现**了（1.7.0）：它同时也是一条**判定**（决定走公开读取
@@ -110,11 +103,29 @@ export function orphanAskOptions(labelOf: (value: OrphanAskMode) => string): Rec
 	return options;
 }
 
-/** 同上，给「链接可访问性」那一档用。 */
-export function linkAccessOptions(labelOf: (value: LinkAccessMode) => string): Record<string, string> {
-	const options: Record<string, string> = {};
-	for (const value of LINK_ACCESS_MODES) options[value] = labelOf(value);
-	return options;
+/**
+ * 「连接状态」→ 一句人话 + 语气。
+ *
+ * ⚠️ 状态是**探测出来的事实**，不是用户能选的东西（2026-10-18 起取消了那个三档设置）。
+ * 所以这里只做两件事：选文案 key、选颜色。四个状态缺一不可 ——
+ * `checking` 必须能显示（刚启动那一下），否则界面会在"公开/私有"之间凭空挑一个。
+ */
+export function connectionStateKey(state: ConnectionState): string {
+	return `connectionStatus_${state}`;
+}
+
+export function connectionStateTone(state: ConnectionState): "ok" | "warn" | "error" | "info" {
+	switch (state) {
+		case "public":
+			return "ok";
+		case "private":
+			// 私有是**正当选择**（只给自己用），不是错误
+			return "warn";
+		case "unreachable":
+			return "error";
+		default:
+			return "info";
+	}
 }
 
 // ⚠️ 1.7.0 当天下架：这里曾有一个 `coherentLocalCopy`，用来把「仅内部访问 + 不留副本」

@@ -2,15 +2,17 @@ import { runMutations } from "./lib/mutate.mjs";
 import { runLinkAccessSuite } from "./lib/link-access-suite.mjs";
 
 /**
- * 变异验证：访问方式判定（`src/link-access.ts`）。
+ * 变异验证：连接状态判定（`src/link-access.ts`）。
+ *
+ * 2026-10-18 起这里守的是**探测出来的事实**（不再是用户选的档）：
+ * 状态 ⇒ 显示路径、自动探测 ⇒ 状态、回路实测 ⇒ 状态，以及"地址与状态无关"。
  *
  * 这一层判错的两种后果**都不报错**、也都在用户看不见的地方：
- * - 该走内部却走了公开 ⇒ 私有桶的用户**一屏坏图**（`<img>` 的 403 不弹提示）；
- * - 该走公开却走了内部 ⇒ 每张图白下载一遍（移动端流量），而用户不知道可以省掉。
+ * - 该按私有却按公开 ⇒ 私有桶的用户**一屏坏图**（`<img>` 的 403 不弹提示）；
+ * - 该按公开却按私有 ⇒ 每张图白下载一遍（移动端流量），而用户不知道可以省掉。
  *
- * 所以每条规则（每个探测结果 → 一条路径、两条闸门、探测的失败收敛）都要能被单独打坏。
- * ⚠️ 套件把"探测结果 → 路径"那张表排在**最前**：这样绝大部分变异都以
- * "那张表里的某一行"失败，而不是先炸在别的断言上、报出一个与变异点无关的原因。
+ * ⚠️ 套件把"状态 × 本地副本 ⇒ 显示路径"那张表排在**最前**，所以显示路径类的变异
+ * 会撞在那张表上；后面几组各自撞在自己的断言上。
  */
 await runMutations({
 	source: "src/link-access.ts",
@@ -20,41 +22,56 @@ await runMutations({
 		{
 			// 后果：明明匿名就能读到，却按私有处理 ⇒ 每张图都要先下载一遍才显示。
 			// 不报错、图也看得见，只是白花流量 —— 最容易被当成"这插件本来就慢"。
-			name: "★ 探测到匿名可读也按私有处理（每张图白下载一遍）",
-			from: '\t\tcase "ok":\n\t\t\treturn { access: "public", reason: "probePublic" };',
-			to: '\t\tcase "ok":\n\t\t\treturn { access: "private", reason: "probePublic" };',
-			expect: "auto 档下探测结果 ok 应走 public",
+			name: "★ 公开状态也走内部手段（每张图白下载一遍）",
+			from: '\tif (state === "public") return "remote-url";',
+			to: '\tif (state === "checking") return "remote-url";',
+			expect: "状态 public + 本地副本 keep ⇒ remote-url",
 		},
 		{
-			// 后果：桶明明是私有的，却按公开处理 ⇒ 缺副本的图不再被取回，
-			// 用户看到一屏坏图，而控制台里只有一条 403。这正是这一版要修的病。
-			name: "★ 探测到拒绝匿名仍按公开处理（私有桶一屏坏图）",
-			from: '\t\tcase "forbidden":\n\t\t\treturn { access: "private", reason: "probeForbidden" };',
-			to: '\t\tcase "forbidden":\n\t\t\treturn { access: "public", reason: "probeForbidden" };',
-			expect: "auto 档下探测结果 forbidden 应走 private",
+			// 后果：初值变成"假定公开" ⇒ 私有桶在首轮探测回来之前就是一屏坏图
+			//（1.6.0 的病）。这是**降级方向**的错，代价与"多下一次"完全不对称。
+			name: "★★ 初值假定公开（私有桶启动时一屏坏图）",
+			from: 'export const INITIAL_CONNECTION_STATE: ConnectionState = "checking";',
+			to: 'export const INITIAL_CONNECTION_STATE: ConnectionState = "public";',
+			expect: "★ 加载初值必须是 checking",
 		},
 		{
-			// 后果：探测不出来时落到**假定公开** ⇒ 私有桶 + 离线 / 超时时回到坏图，
-			// 而"探测失败"恰恰是最常见的一种状态（没有对象可试时也是它）。
-			name: "★★ 探测不出来时假定公开（降级方向反了：私有桶回到坏图）",
-			from: '\t\t\treturn { access: "private", reason: probe?.kind === "unknown" ? "probeUnknown" : "probeUnreachable" };',
-			to: '\t\t\treturn { access: "public", reason: probe?.kind === "unknown" ? "probeUnknown" : "probeUnreachable" };',
-			expect: "auto 档下探测结果 unreachable 应走 private",
+			// 后果：匿名明明能读，状态却记成私有 ⇒ 后面每张缺副本的图都白下载。
+			name: "★ 自动探测：匿名可读却记成私有（白下载）",
+			from: '\tswitch (probe?.kind) {\n\t\tcase "ok":\n\t\t\treturn "public";',
+			to: '\tswitch (probe?.kind) {\n\t\tcase "ok":\n\t\t\treturn "private";',
+			expect: "匿名读得到 ⇒ 公开",
 		},
 		{
-			// 后果：用户显式选了「仅内部访问」，探测说可匿名读就改按公开 ⇒ **替用户决定
-			// "这些图可以给外人看"**。这是隐私方向的错，比多下一次严重得多。
-			name: "★★ 探测结果压过用户的显式选择（替用户把图改成对外可见）",
-			from: '\tif (safeMode === "public") return { access: "public", reason: "explicitPublic" };\n\tif (safeMode === "private") return { access: "private", reason: "explicitPrivate" };',
-			to: '\tif (safeMode === "public") return { access: "public", reason: "explicitPublic" };\n\tif (safeMode === "private" && probe?.kind === "ok") return { access: "public", reason: "explicitPrivate" };\n\tif (safeMode === "private") return { access: "private", reason: "explicitPrivate" };',
-			expect: "★ 用户选内部时，探测说可匿名读也按内部",
+			// 后果：拒绝匿名却记成公开 ⇒ 私有桶的用户看到一屏坏图，而控制台只有一条 403。
+			name: "★ 自动探测：拒绝匿名却记成公开（私有桶一屏坏图）",
+			from: '\t\tcase "forbidden":\n\t\t\treturn "private";',
+			to: '\t\tcase "forbidden":\n\t\t\treturn "public";',
+			expect: "拒绝匿名 ⇒ 私有",
 		},
 		{
-			// 后果：手改过 / 写坏的档位值被当成公开 ⇒ 又一次"替用户把图对外"。
-			name: "★ 坏档位值被读成公开（手改 data.json 就静默对外）",
-			from: '\tconst safeMode: LinkAccessMode = isLinkAccessMode(mode) ? mode : "auto";',
-			to: '\tconst safeMode: LinkAccessMode = isLinkAccessMode(mode) ? mode : "public";',
-			expect: "认不出来的档位按 auto 处理",
+			// 后果：404（公开前缀可能写错）被当成"私有"的证据 ⇒ 状态在"公开/私有"之间乱翻，
+			// 用户看到的是"时好时坏"，而真正该改的是前缀。
+			name: "★ 404 被当成结论（状态在公开/私有之间乱翻）",
+			from: "\t\tdefault:\n\t\t\treturn previous;",
+			to: '\t\tdefault:\n\t\t\treturn "private";',
+			expect: "404 不改判（沿用上一次）",
+		},
+		{
+			// 后果：签名读明明失败了，却因为"匿名说私有"就记成私有 ⇒ 界面绿着，
+			// 而那张图根本取不回来（私有桶不取回本地副本就什么都看不到）。
+			name: "★★ 回路：签名读失败仍记成私有（图取不回来而界面说正常）",
+			from: '\t\t\treturn input.signedReadOk ? "private" : "unreachable";',
+			to: '\t\t\treturn "private";',
+			expect: "★ 匿名与签名都取不到 ⇒ 无法访问",
+		},
+		{
+			// 后果：匿名读得到也被判成私有 ⇒ 与第一条同病，但发生在**用户点按钮**那条路上：
+			// 界面上会显示"私有访问"，而链接其实是公开的。
+			name: "★ 回路：匿名读得到却判成私有（界面说私有，链接其实公开）",
+			from: '\tswitch (input.anonymous.kind) {\n\t\tcase "ok":\n\t\t\treturn "public";',
+			to: '\tswitch (input.anonymous.kind) {\n\t\tcase "ok":\n\t\t\treturn "private";',
+			expect: "★ 匿名读得到 ⇒ 公开",
 		},
 		{
 			// 后果：私有 + 不留副本 又被当成"取回本地" ⇒ 为了显示一张图，往用户库里
@@ -62,49 +79,18 @@ await runMutations({
 			name: "★★ 私有 + 不留副本 又变回「下载」（往用户库里写他说过不要的文件）",
 			from: '\treturn isCacheDisabled(settings.localCopy) ? "signed-url" : "local-copy";',
 			to: '\treturn isCacheDisabled(settings.localCopy) ? "local-copy" : "local-copy";',
-			expect: "私有 + 不留副本 ⇒ 预签名地址",
+			expect: "状态 private + 本地副本 trash ⇒ signed-url",
 		},
 		{
-			// 后果：公开读取也被当成"只能靠内部手段"⇒ 每张图都要下载或签名，
-			// 而桶本来就允许匿名读（白花流量 + 多一层过期窗口）。
-			name: "★ 公开读取也走内部手段（每张图白下载/白签名一遍）",
-			from: '\tif (resolveAccess(settings.linkAccess, probe).access === "public") return "remote-url";',
-			to: "\t// 变异：不认公开读取",
-			expect: "公开读取下就是远端地址",
-		},
-		{
-			// 后果：该不该签的判据反了 ⇒ 私有+不留副本时**不签**（图床式失效，回到坏图），
-			// 而私有+保留副本时反倒去签（弃用更能离线可用的本地副本）。
-			name: "★ 「该不该签」的判据反了（图床式失效，且弃用本地副本）",
-			from: '\treturn displayPathFor(settings, probe) === "signed-url";',
-			to: '\treturn displayPathFor(settings, probe) === "local-copy";',
-			expect: "私有 + 不留副本 ⇒ 该签",
-		},
-		{
-			// 后果：私有存储下不再强制取回 ⇒ 用户关掉「自动下载」时**什么都看不到**，
-			// 而界面上没有任何解释（那个开关的本意是省流量）。
-			name: "★ 私有存储不再强制取回（关掉自动下载时图全都不显示）",
-			from: '\treturn displayPathFor(settings, probe) === "local-copy";',
-			to: "\treturn false;",
-			expect: "私有访问下必须取回",
-		},
-		// ⚠️ 原第二条（"「不留副本」被下载需求推翻"）的锚点随 `requiresLocalCopy` 重构消失了：
-		// 那个"压过一切"的判断现在**就在** `displayPathFor` 里（`isCacheDisabled` 决定走预签名）。
-		// 它守的语义没有丢 —— 上面的"私有 + 不留副本 又变回「下载」"就是它的新形态。
-		{
-			// 后果：401 被归到"其它"⇒ 设置页那句提示从"桶拒绝匿名访问"退化成含糊的
-			// "无法判断"，用户不知道下一步该开公开读还是改前缀。
-			// ⚠️ 这条锚点 1.7.0 从 `mutate-settings-logic.mjs` 搬来（归类跟着判定一起搬了家）。
-			name: "401 不再归为「拒绝匿名访问」（提示退化成含糊的「无法判断」）",
-			from: '\tif (status === 401 || status === 403) return "forbidden";',
-			to: '\tif (status === 403) return "forbidden";',
-			expect: "401 同理",
+			// 后果：公开状态也要签名 ⇒ 多一次签名开销，且地址带上了有效期（不该出现在公开桶上）。
+			name: "★ 「该不该签」的判据不看状态（公开桶也去签名）",
+			from: '\treturn displayPathFor(settings, state) === "signed-url";',
+			to: '\treturn displayPathFor(settings, "private") === "signed-url";',
+			expect: "公开 ⇒ 用远端地址，不签名",
 		},
 		{
 			// 后果：403（桶私有）被归到"其它"⇒ 提示从"桶拒绝匿名访问"退化成含糊的
 			// "无法判断"，而真正该做的是"开公开读或配公开前缀"。指向了错的下一步。
-			// ⚠️ 与上一条锚在同一行、方向相反 —— 归类的两侧都要能抓住（实测过只测一侧
-			// 会让"顺手把 403 摘出去"漏过）。这条 1.7.0 从 `mutate-settings-logic.mjs` 搬来。
 			name: "★ 403 不再归为「拒绝匿名访问」（提示退化成含糊的「无法判断」）",
 			from: '\tif (status === 401 || status === 403) return "forbidden";',
 			to: '\tif (status === 401) return "forbidden";',

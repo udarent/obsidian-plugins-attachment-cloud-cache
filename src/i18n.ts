@@ -41,9 +41,16 @@ export const I18N: Record<string, Locale> = {
 		s3PublicUrlBase: "Public URL prefix",
 		s3PublicUrlBaseDesc:
 			"Image links are built from this prefix plus the object path. You can leave it empty: links then use the object address (endpoint + bucket), which needs the bucket to allow anonymous reads. On a CDN or a custom domain, fill this in.",
+		connectionStatusName: "Connection status",
+		connectionStatusDesc:
+			"What this plugin has worked out about your storage's permissions. It is a fact about your bucket, not a setting — press Test connection below to check again. Public: anyone holding a link can open it. Private: only this plugin with your keys can. Unreachable: neither worked.",
+		connectionStatus_checking: "Checking…",
+		connectionStatus_public: "Public access — anyone with a link can open it.",
+		connectionStatus_private: "Private access — links open here only, with your keys.",
+		connectionStatus_unreachable: "Unreachable — neither anonymous nor signed access worked. Check the address, the bucket and the keys.",
 		testConnection: "Test connection",
 		testConnectionDesc:
-			"Writes one tiny probe object to your bucket, reads it back to compare, then deletes it — so uploading, fetching and deleting are all checked in one go. Nothing is kept. One of those checks (asking the address without credentials) is exactly the evidence behind the setting above.",
+			"Writes one tiny probe object to your bucket, reads it back to compare, then deletes it — so uploading, fetching and deleting are all checked in one go. Nothing is kept. One of those checks (asking the address without credentials) is exactly what the status above shows.",
 		s3Import: "Import from a credentials file",
 		s3ImportDesc:
 			"Read the JSON your storage provider gives you (MinIO's “Download credentials” produces one) and fill in the fields below. Only the service address, the access key and the addressing mode are written to the plugin's data; the secret key goes straight into your OS keychain, and no copy of the file is kept.",
@@ -83,23 +90,8 @@ export const I18N: Record<string, Locale> = {
 		testFail_probeMismatch:
 			"Read back {read} bytes, but {written} were written — the storage or a proxy in between is altering the data.",
 
-		// ── 链接可访问性：访问方式与两种模式的差别（1.7.0）──
-		linkAccessName: "Who can open the links in your notes",
-		linkAccessDesc:
-			"Your notes hold ordinary URLs, so whether other people can open them depends on your bucket's permissions, not on this plugin. Public read: the bucket allows anonymous access, so a link keeps working after you paste it into another app or send it to someone — this is what you want for sharing, and it means anyone holding the URL can view the file. Internal access only: the bucket stays private, nothing is exposed, and links pasted elsewhere will not open; images are shown here by either keeping a local copy (offline works) or, if you chose not to keep one, by a short-lived signed URL (nothing lands on disk, but offline shows nothing — that is plain image-host behaviour). Automatic detects which one your storage allows and picks the path accordingly; when it cannot tell (offline, timeout, or nothing uploaded yet) it uses internal access. Switching this does not rewrite a single link in your notes — existing links stay exactly the same, and nothing is moved or deleted in your bucket; only who can open them, and how this device gets the bytes, changes. To see what your storage actually does right now, press “Test connection” below: one of its checks is this very question, and the Automatic option follows that answer.",
-		linkAccess_auto: "Automatic (detect)",
-		linkAccess_public: "Public read (links work anywhere)",
-		linkAccess_private: "Internal access only (links work here only)",
-		// 判定理由（`auto` 档下必须说清"我们凭什么"）
-		testAccess_public: "Links can be opened by anyone: {reason}",
-		testAccess_private: "Links are for this plugin only: {reason}",
-		testAccessReason_explicitPublic: "you chose public read.",
-		testAccessReason_explicitPrivate: "you chose internal access only.",
-		testAccessReason_probePublic: "anonymous access to that URL succeeded.",
-		testAccessReason_probeForbidden: "that URL refuses anonymous access, so the bucket is private.",
-		testAccessReason_probeMissing: "the URL answered but the object is gone, which does not prove the bucket is public.",
-		testAccessReason_probeUnreachable: "the probe did not complete, which does not prove the bucket is public.",
-		testAccessReason_probeUnknown: "nothing has been probed yet.",
+		// ── 链接可访问性：访问方式与两种模式的差别（1.7.0）── "Who can open the links in your notes",, "Automatic (detect)", "Public read (links work anywhere)", "Internal access only (links work here only)",
+		// 判定理由（`auto` 档下必须说清"我们凭什么"） "Links can be opened by anyone: {reason}", "Links are for this plugin only: {reason}", "you chose public read.", "you chose internal access only.", "anonymous access to that URL succeeded.", "that URL refuses anonymous access, so the bucket is private.", "the URL answered but the object is gone, which does not prove the bucket is public.", "the probe did not complete, which does not prove the bucket is public.", "nothing has been probed yet.",
 		testAccess_timedOut: "The probe timed out, so it is treated as private for now. Reopen this page or test again when the network settles.",
 		testAccess_unreachable: "The probe could not reach the address, so it is treated as private for now. If links should work elsewhere, check the endpoint and the Public URL prefix.",
 
@@ -394,9 +386,16 @@ export const I18N: Record<string, Locale> = {
 		s3PublicUrlBase: "公开访问前缀",
 		s3PublicUrlBaseDesc:
 			"笔记里的图片链接 = 这个前缀 + 对象路径。可以留空 —— 留空就用对象地址（服务地址 + 存储桶），那要求存储桶允许匿名读取；走 CDN 或自定义域名时必须填。",
+		connectionStatusName: "连接状态",
+		connectionStatusDesc:
+			"这是插件测出来的**事实**，不是你选的设置 —— 桶允许谁打开，只能问出来；想重新确认就点下面的「测试连接」。公开访问：任何拿到链接的人都能打开。私有访问：只有装了本插件、配了密钥的人能打开。无法访问：两种方式都不通。",
+		connectionStatus_checking: "正在检测…",
+		connectionStatus_public: "公开访问 —— 任何拿到链接的人都能打开。",
+		connectionStatus_private: "私有访问 —— 链接只在装了本插件、有密钥的地方能打开。",
+		connectionStatus_unreachable: "无法访问 —— 匿名与签名都取不到。请检查服务地址、桶名与密钥。",
 		testConnection: "测试连接",
 		testConnectionDesc:
-			"会往桶里写一个很小的探测对象、读回来核对，再删掉 —— 上传、取回、删除一次测全，什么都不留。其中「不带凭据问一次那条地址」就是上面那一项的依据。",
+			"会往桶里写一个很小的探测对象、读回来核对，再删掉 —— 上传、取回、删除一次测全，什么都不留。其中「不带凭据问一次那条地址」就是上面那个连接状态的来源。",
 		s3Import: "从凭据文件导入",
 		s3ImportDesc:
 			"读取存储服务商给你的那份 JSON（MinIO 控制台的「下载凭据」就是这种），自动填好下面几栏。只有服务地址、访问密钥和寻址方式会写进插件的数据；秘密访问密钥直接进系统钥匙串，插件不留副本。",
@@ -431,22 +430,7 @@ export const I18N: Record<string, Locale> = {
 		testFail_probeRead: "写入成功了，但读不回来 —— 请检查这把密钥是否有读取权限（取回本地副本要用它）。",
 		testFail_probeMismatch: "读回来 {read} 字节，写进去的是 {written} 字节 —— 存储或中间的代理改了数据。",
 
-		// ── 链接可访问性：访问方式与两种模式的差别（1.7.0）──
-		linkAccessName: "笔记里的链接谁打得开",
-		linkAccessDesc:
-			"笔记里存的是普通地址，所以别人能不能打开，取决于你存储桶的权限，而不是这个插件。公开读取：桶允许匿名访问，链接粘到别的应用里、发给别人之后照样打得开 —— 需要对外分享就选它；代价是任何拿到地址的人都能看。仅内部访问：桶保持私有、什么都不对外暴露，粘到别处的链接会打不开；本机怎么显示图，取决于「本地副本」那一项 —— 保留副本就用副本显示（离线也能看），不留副本就改用一条短时签名地址（像图床一样：磁盘上不落文件，但离线看不到）。自动：先探测你的存储允许哪一种，再据此选路；探测不出来时（离线、超时、或还没上传过东西）按内部访问处理。切换这一项不会改写笔记里的任何一条链接 —— 已有链接一字不变，桶里的对象也不会被搬迁或删除；变的只是「谁能打开」与「本机怎么取到字节」。想确认你存储现在的实际状况？点下面的「测试连接」—— 它其中一项就是这个问题，而「自动」档跟的就是那个结论。",
-		linkAccess_auto: "自动（探测后决定）",
-		linkAccess_public: "公开读取（链接在任何地方都能打开）",
-		linkAccess_private: "仅内部访问（链接只在装了本插件的地方能看）",
-		testAccess_public: "这些链接别人也能打开：{reason}",
-		testAccess_private: "这些链接只有本插件能取到：{reason}",
-		testAccessReason_explicitPublic: "你选的是公开读取。",
-		testAccessReason_explicitPrivate: "你选的是仅内部访问。",
-		testAccessReason_probePublic: "匿名访问那条地址成功了。",
-		testAccessReason_probeForbidden: "那条地址拒绝匿名访问，说明桶是私有的。",
-		testAccessReason_probeMissing: "地址能连上但对象不在，这证明不了桶是公开的。",
-		testAccessReason_probeUnreachable: "探测没有完成，这证明不了桶是公开的。",
-		testAccessReason_probeUnknown: "还没探测过。",
+		// ── 链接可访问性：访问方式与两种模式的差别（1.7.0）── "笔记里的链接谁打得开",, "自动（探测后决定）", "公开读取（链接在任何地方都能打开）", "仅内部访问（链接只在装了本插件的地方能看）", "这些链接别人也能打开：{reason}", "这些链接只有本插件能取到：{reason}", "你选的是公开读取。", "你选的是仅内部访问。", "匿名访问那条地址成功了。", "那条地址拒绝匿名访问，说明桶是私有的。", "地址能连上但对象不在，这证明不了桶是公开的。", "探测没有完成，这证明不了桶是公开的。", "还没探测过。",
 		testAccess_timedOut: "探测超时了，暂时按私有处理。网络恢复正常后重新打开本页或再点一次测试。",
 		testAccess_unreachable: "探测没能连上那个地址，暂时按私有处理。如果希望链接在别处也能打开，请检查服务地址与公开访问前缀。",
 

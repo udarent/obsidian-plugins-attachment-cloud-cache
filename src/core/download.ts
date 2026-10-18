@@ -17,8 +17,8 @@
  * 于是不为任何图取回副本 —— 判定见 `types.ts` 的 `isCacheDisabled`。
  * 已经存在的副本不受影响（那由渲染判定使用，与"要不要写"是两件事）。
  *
- * ⭐ 1.7.0：**"缓存开着"不等于"回退下载开着"**。存储是私有的时候（`linkAccess` 判为
- * `private`，见 `link-access.ts`），这条链是图片**唯一**的显示来路 —— 远端地址会 403，
+ * ⭐ 1.7.0：**"缓存开着"不等于"回退下载开着"**。连接状态非公开时（私有 / 检测中 / 无法访问，
+ * 见 `link-access.ts`），这条链是图片**唯一**的显示来路 —— 远端地址会 403，
  * 浏览器那边没有任何兜底。所以那一档下取字节不是可选项，用户关掉「缺本地副本时自动下载」
  * 也照样要取（那个开关的本意是省流量，不是宁可不看图）。
  *
@@ -57,8 +57,8 @@ import type { App } from "obsidian";
 
 import type { PluginSettings } from "../types";
 import { isCacheDisabled } from "../types";
-import type { AccessProbe } from "../link-access";
-import { UNKNOWN_ACCESS_PROBE, requiresLocalCopy } from "../link-access";
+import type { ConnectionState } from "../link-access";
+import { requiresLocalCopy } from "../link-access";
 import type { CacheIndex, CacheEntry } from "../cache/index";
 import { hostAttachmentFolder, parentFolderOf } from "../vault-files";
 import { planDownloadTarget } from "../download-target";
@@ -111,7 +111,7 @@ export interface LocalCopyDeps extends NotifySink {
 	index: () => CacheIndex;
 	persistIndex: () => Promise<void>;
 	/**
-	 * 当前的**匿名可达性探测结果**（"别人能不能打开笔记里那条链接"）。
+	 * 当前的**连接状态**（"别人能不能打开笔记里那条链接"，以及我们该不该取回字节）。
 	 *
 	 * 用途只有一处：判"这条路上缺副本的图**必须**取回本地"（见 `link-access.ts`）。
 	 * 不提供时按"还没探测过"处理 —— 那会落到 `auto` 档的保守分支（按私有处理），
@@ -120,7 +120,7 @@ export interface LocalCopyDeps extends NotifySink {
 	 * ⚠️ 是**取值函数**而不是快照：探测结果是异步刷新的，抓快照会让"启动时那一次探测"
 	 * 永远不生效（表现为"第一次打开笔记全是坏的，重开才好"）。
 	 */
-	accessProbe?: () => AccessProbe;
+	connectionState?: () => ConnectionState;
 	now?: () => Date;
 	/**
 	 * ⭐ 刚刚往 vault 里写下了一份副本（落盘**之前**调用）。
@@ -254,7 +254,7 @@ export function createLocalCopyEnsurer(deps: LocalCopyDeps) {
 		// 也照样要取。那个开关的意思是"省事"，不是"宁可不看图"。
 		// ⚠️ 判据只在 `link-access.ts::requiresLocalCopy` 一处（渲染判定用的是同一个函数）：
 		// 两处各自判一次，就会出现"判定说要、这里说不要"的分叉，而分叉不报错。
-		const forcedByAccess = requiresLocalCopy(settings, (deps.accessProbe ?? (() => UNKNOWN_ACCESS_PROBE))());
+		const forcedByAccess = requiresLocalCopy(settings, (deps.connectionState ?? (() => "checking"))());
 		if (!settings.fallbackDownload && !forcedByAccess) {
 			return { status: "disabled", key, localPath: "" };
 		}
