@@ -105,3 +105,23 @@ export function insertPointFrom(editor: CursorLike | null | undefined): InsertPo
 		return undefined;
 	}
 }
+
+/**
+ * 「同一件事只出声一次」的闸门（**每个会话一个**）。
+ *
+ * 为什么在判定层：它是一条**要不要说话**的策略，与 `decideInterception` 同层；
+ * 写在接线层会让"粘贴"与"新增附件"两条路各写一遍（而它们都要用同一个闸门，
+ * 否则同一件事在两条路上各提醒一次）。
+ *
+ * 典型用户：装了插件但还没配存储的人 —— 他**每一次**粘贴都会触发"未上传"的提醒。
+ * 图其实好好存着，反复提醒只是噪音（"别打扰"这条纪律在孤儿询问上已经用过）。
+ * ⚠️ 闸门是**会话内**的：插件重载 = 新会话 = 再提醒一次，这是刻意的。
+ */
+export function createAnnounceGate(): () => boolean {
+	let announced = false;
+	return () => {
+		if (announced) return false;
+		announced = true;
+		return true;
+	};
+}

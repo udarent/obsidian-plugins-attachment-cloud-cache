@@ -110,7 +110,6 @@ export class SettingsTab extends PluginSettingTab {
 			{ type: "group", heading: this.t("sectionUpload"), items: this.uploadItems() },
 			{ type: "group", heading: this.t("sectionOffline"), items: this.offlineItems() },
 			{ type: "group", heading: this.t("sectionCleanup"), items: this.cleanupItems() },
-			{ type: "group", heading: this.t("sectionAdvanced"), items: this.advancedItems() },
 		];
 	}
 
@@ -196,6 +195,17 @@ export class SettingsTab extends PluginSettingTab {
 					key: "s3.publicUrlBase",
 					placeholder: objectBaseFor(this.plugin.settings.s3) || undefined,
 				},
+			},
+
+			{
+				// ⭐ 2026-10-18 从「高级」组移上来：它填的是**连接方式**（地址怎么拼），
+				// 而连接失败时用户正在这一组里找原因 —— 把一个可能要改的开关放在别的组，
+				// 等于让他先猜"这是连接问题还是高级选项问题"。
+				// R2 / MinIO 与多数自建服务要**开**；只有服务商要求桶名做子域时才关。
+				name: this.t("forcePathStyle"),
+				desc: this.t("forcePathStyleDesc"),
+				aliases: ["path-style", "virtual-host", "兼容", "寻址"],
+				control: { type: "toggle", key: "s3.forcePathStyle" },
 			},
 
 			{
@@ -710,7 +720,9 @@ export class SettingsTab extends PluginSettingTab {
 		return [
 			{
 				name: this.t("orphanAsk"),
-				desc: this.t("orphanAskDesc"),
+				// ⭐ 命令名**从 i18n 取**（不抄字面量）：命令改名的门禁只管 README 与 `addCommand`，
+				// 抄在说明里的那份不会被它发现 —— 而"指路指到一条不存在的命令"比不指路更糟。
+				desc: `${this.t("orphanAskDesc")} ${this.t("cleanupCommandHint", { command: this.t("cmdCheckOrphans") })}`,
 				aliases: ["orphan", "unused", "cleanup", "delete", "孤儿", "无人引用", "清理", "删除"],
 				control: {
 					type: "dropdown",
@@ -722,18 +734,8 @@ export class SettingsTab extends PluginSettingTab {
 		];
 	}
 
-	// ─────────────────────── 高级 ───────────────────────
-
-	private advancedItems(): SettingGroupItem[] {
-		return [
-			{
-				name: this.t("forcePathStyle"),
-				desc: this.t("forcePathStyleDesc"),
-				aliases: ["path-style", "virtual-host", "兼容", "寻址"],
-				control: { type: "toggle", key: "s3.forcePathStyle" },
-			},
-		];
-	}
+	// ⚠️ 「高级」组已于 2026-10-18 取消：它当时只有「兼容模式」一项，而那一项属于**连接方式**
+	// （已移进「存储连接」）。空组会渲染出一个孤零零的标题，比不分组更糟。
 
 	/**
 	 * 站点名单的输入框（多行，一行一条）。

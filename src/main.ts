@@ -34,6 +34,7 @@ import { CacheIndex } from "./cache/index";
 import { createIndexStore, makeSerializer } from "./host/runtime";
 import type { HostContext } from "./host/runtime";
 import { createEditorHandlers } from "./host/editor-bridge";
+import { createAnnounceGate } from "./host/intercept";
 import { inspectLocalCopies, runBatchUpload, runEviction, scanReferences } from "./maintenance/run";
 import type { MaintenanceDeps } from "./maintenance/run";
 import { createCacheRotator } from "./maintenance/rotation";
@@ -133,6 +134,14 @@ export type { ImportCredentialsOutcome } from "./plugin/credentials-flow";
 const SIGNED_URL_CACHE_MS = 20 * 60 * 1000;
 
 /**
+ * 上传指示的**延迟显示**（毫秒）。
+ *
+ * 几百毫秒内就传完的不要闪一下 —— 一闪而过的提示比没有更烦；
+ * 而超过这个时间的等待，用户确实需要知道"它在干活"。
+ */
+const UPLOAD_INDICATOR_DELAY_MS = 300;
+
+/**
  * 「测试连接」一轮回路的**本次**结果。
  *
  * ⚠️ 必须是**返回值**而不是让界面回头读全局字段：连点 / 与自动探测并发时，全局那一格
@@ -180,6 +189,20 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 
 	/** 防抖句柄（`window.setTimeout` 的返回值是数字，见 {@link scheduleAccessProbe}）。 */
 	private accessProbeTimer: number | null = null;
+
+	/** 上传期间的状态栏指示（见 {@link beginUpload}）；元素由 `addStatusBarItem` 给。 */
+	private uploadStatus: HTMLElement | null = null;
+
+	/** 延迟显示的句柄 —— 几百毫秒内就传完的不要闪一下。 */
+	private uploadStatusTimer: number | null = null;
+
+	/**
+	 * 「未配置」的提醒闸门（**每个会话一个**，粘贴与手机那条入口共用）。
+	 *
+	 * 由 `host/intercept.ts::createAnnounceGate` 实现：没配存储的人每粘一张图都会被念一次，
+	 * 而图其实好好存着 —— 反复提醒只是噪音。插件重载 = 新会话 = 再提醒一次（刻意）。
+	 */
+	private readonly unconfiguredAnnounce = createAnnounceGate();
 
 	/**
 	 * 这份 `data.json` 里带着**已被取消的 key 模板**（1.2.0），且我们已经清理过它。
@@ -358,6 +381,21 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		});
 		this.scheduleAccessProbe(0);
 
+		// ── 上传时的状态栏指示 ──
+		//
+		// ⭐ 粘贴后要等**全部**文件传完才插入链接（这样只占一步撤销），
+		// 这期间编辑器里什么都没有 —— 大文件或慢网时用户以为没反应、会再粘一次。
+		// 反馈放在编辑器之外：不打断输入、不占撤销、不给笔记留痕。
+		this.uploadStatus = this.addStatusBarItem();
+		this.uploadStatus.addClass("acc-upload-status");
+		this.uploadStatus.hide();
+		this.register(() => {
+			if (this.uploadStatusTimer !== null) window.clearTimeout(this.uploadStatusTimer);
+			this.uploadStatusTimer = null;
+			this.uploadStatus?.remove();
+			this.uploadStatus = null;
+		});
+
 		// 粘贴与拖拽注册在这两个事件上（`@since 1.1.0`），而不是 document 上的 DOM 事件：
 		// 宿主会把 `Editor` 直接递过来，不必自己判断"哪个编辑器有焦点"，
 		// 也不用猜移动端的事件路径是否一致。
@@ -408,12 +446,16 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				// 不拦用户、不假装成功，也绝不留下半个动作（文件原地不动、笔记一个字不改）。
 				const readiness = connectionReadiness(this.app.secretStorage, this.settings);
 				if (!readiness.ready) {
-					new Notice(
-						this.t("hookNotConfigured", {
-							problem: readiness.problem,
-							where: this.t(readiness.fixIn === "credentials" ? "hookFixCredentials" : "hookFixConnection"),
-						})
-					);
+					// 与粘贴那条路共用一个「每会话只提醒一次」的闸门（见 `createAnnounceGate`）：
+					// 手机上加图是批量动作，逐个提醒会把通知栏刷满。
+					if (this.unconfiguredAnnounce()) {
+						new Notice(
+							this.t("hookNotConfigured", {
+								problem: readiness.problem,
+								where: this.t(readiness.fixIn === "credentials" ? "hookFixCredentials" : "hookFixConnection"),
+							})
+						);
+					}
 					return { uploaded: 0, reused: 0, failed: 0, linksRewritten: 0, redundantRemoved: 0 };
 				}
 				// 复用批量那一趟（`referencedPaths` 只放这一个文件 ⇒ 候选也只有它）：
@@ -571,7 +613,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		// 为什么不是"用户删掉那个文件时问"（上一版的落地方式）：用户在 Obsidian 里表达
 		// "我不要这张图了"几乎总是**删掉笔记里的引用**（或删掉整篇笔记）—— 两者都不删文件；
 		// 而他**几乎不会去删那个文件**（默认档下它就留在附件目录里、是他自己的文件）
-		// ⇒ 挂在"删文件"上的询问，默认配置下**一次都不会出现**（详细设计 §13.1）。
+		// ⇒ 挂在"删文件"上的询问，默认配置下**一次都不会出现**（设计 §6.2.1）。
 		this.orphanFlow = createOrphanFlow(this.flowContext());
 
 		// ⚠️ `modify` 与 `create` 走**同一条**路（`createOrphanFlow` 里就是同一个函数）：
@@ -1808,6 +1850,30 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	}
 
 	/**
+	 * 上传开始：**延迟**显示状态栏指示（见 `UPLOAD_INDICATOR_DELAY_MS`）。
+	 *
+	 * 只说"在传几个"，不报百分比 —— 串行上传没有可靠的分母（还会让用户以为卡住了）。
+	 */
+	private beginUpload(count: number): void {
+		if (!this.uploadStatus || count <= 0) return;
+		if (this.uploadStatusTimer !== null) window.clearTimeout(this.uploadStatusTimer);
+		this.uploadStatusTimer = window.setTimeout(() => {
+			this.uploadStatusTimer = null;
+			this.uploadStatus?.setText(this.t("statusUploading", { count }));
+			this.uploadStatus?.show();
+		}, UPLOAD_INDICATOR_DELAY_MS);
+	}
+
+	/** 上传结束（**成功与失败都调**，见 `editor-bridge` 的 `finally`）：取消延迟、收起指示。 */
+	private endUpload(): void {
+		if (this.uploadStatusTimer !== null) {
+			window.clearTimeout(this.uploadStatusTimer);
+			this.uploadStatusTimer = null;
+		}
+		this.uploadStatus?.hide();
+	}
+
+	/**
 	 * 交给接线层的宿主上下文。
 	 *
 	 * `settings` / `index` 都是**取值函数**而不是快照：设置页改完立即生效，
@@ -1835,6 +1901,9 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			// 所以这条线当下用不到 —— 但留着它，将来任何在这条线上新增"落盘"的调用方
 			// 都不会踩同一个坑（自写的中转文件被当成用户的新附件）。
 			onStaged: (path) => this.stagedPaths.note(path),
+			beginUpload: (count) => this.beginUpload(count),
+			endUpload: () => this.endUpload(),
+			claimUnconfiguredNotice: () => this.unconfiguredAnnounce(),
 		};
 	}
 }

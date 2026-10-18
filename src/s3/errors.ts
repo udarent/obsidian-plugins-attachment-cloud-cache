@@ -172,7 +172,28 @@ export function classify(status: number, code: string): S3ErrorKind {
 	return "unknown";
 }
 
-function hintKeyFor(kind: S3ErrorKind, code: string): string {
+/**
+ * 所有可能返回的「建议键」。
+ *
+ * ⭐ 单一来源：`hintKeyFor` 只从这里取，UI 只翻这里列出的键。
+ * 跨层断言在 `test-s3-errors` 里 —— **每一个键都必须在 i18n 的两张表里有文案**，
+ * 否则用户会看到裸键名（或退回原始 XML，而那正是这条链路要消灭的东西）。
+ */
+export const HINT_KEYS = [
+	"s3HintSignature",
+	"s3HintAccessDenied",
+	"s3HintNoSuchBucket",
+	"s3HintAuth",
+	"s3HintNotFound",
+	"s3HintThrottled",
+	"s3HintNetwork",
+	"s3HintServer",
+	"s3HintGeneric",
+] as const;
+
+export type HintKey = (typeof HINT_KEYS)[number];
+
+function hintKeyFor(kind: S3ErrorKind, code: string): HintKey {
 	// 先看更具体的错误码，再看性质 —— 前者能给更有针对性的建议
 	if (code === "NoSuchBucket") return "s3HintNoSuchBucket";
 	if (code === "SignatureDoesNotMatch") return "s3HintSignature";

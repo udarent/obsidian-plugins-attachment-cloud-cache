@@ -31,6 +31,13 @@ await runMutations({
 	suite: runTransferSuite,
 	mutations: [
 		{
+			// 后果：失败提示退回原始 S3 文本（XML / StringToSign）—— 用户看不懂，也不知道改哪儿。
+			name: "失败提示不再给建议（用户看到的是原始 S3 响应体）",
+			from: "\t\t\t\tconst hint = hintTextFor(result.error, deps.t) ?? describeError(result.error ?? \"unknown\");",
+			to: "\t\t\t\tconst hint = describeError(result.error ?? \"unknown\");",
+			expect: "s3HintAccessDenied",
+		},
+		{
 			name: "降级时不插入任何内容（⭐ 图保住了，但笔记里什么都没有）",
 			from: "\t\t\tif (result.localPath) {\n\t\t\t\t// 降级链接：形态交回宿主（按用户的「新链接格式」设置），`!` 由我们按类型表加。\n\t\t\t\tconst generated = deps.generatedLocalLink ? deps.generatedLocalLink(result.localPath) : null;\n\t\t\t\tpushPart(buildLocalLink(generated, result.localPath, result.ext), file);",
 			to: "\t\t\tif (false) {\n\t\t\t\tconst generated = deps.generatedLocalLink ? deps.generatedLocalLink(result.localPath) : null;\n\t\t\t\tpushPart(buildLocalLink(generated, result.localPath, result.ext), file);",

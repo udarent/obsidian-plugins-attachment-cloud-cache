@@ -168,6 +168,7 @@ export function fakeDomElement(tag = "div") {
 			element.classes.push(cls);
 			return element;
 		},
+		hidden: false,
 		setText: (text) => {
 			element.textContent = text;
 			return element;
@@ -182,6 +183,13 @@ export function fakeDomElement(tag = "div") {
 		},
 		addEventListener: () => {},
 		remove: () => {},
+		/** Obsidian 给 `HTMLElement` 补的两个方法（`show/hide` 各返回 void）。 */
+		show: () => {
+			element.hidden = false;
+		},
+		hide: () => {
+			element.hidden = true;
+		},
 		empty: () => {
 			element.children.length = 0;
 		},
@@ -287,6 +295,8 @@ export class Plugin extends Component {
 		this.commands = [];
 		this.ribbonIcons = [];
 		this.postProcessors = [];
+		/** 状态栏项（上传指示用）。测试可以读它断言"显示/收起"。 */
+		this.statusBarItems = [];
 		/** 内存里的 data.json 内容；测试可覆写成固定值。 */
 		this._data = {};
 	}
@@ -329,6 +339,22 @@ export class Plugin extends Component {
 		const el = { addClass: () => {}, setAttribute: () => {}, addEventListener: () => {} };
 		this.ribbonIcons.push({ icon, title, el });
 		record(this, "ribbon", title);
+		return el;
+	}
+
+	/**
+	 * 状态栏项：返回一个**可显示/收起**的假元素。
+	 *
+	 * ⚠️ 必须记账且形状要像真的：`main.ts` 用它做"上传中"的指示，
+	 * 用到的正是 `addClass / setText / show / hide / remove` 这几个方法。
+	 * 缺一个会在套件里抛 `is not a function`，而它在真机上完全正常
+	 * —— 那种失败读起来像产品缺陷，实际只是替身不够像（本项目的老教训）。
+	 */
+	addStatusBarItem() {
+		const el = fakeDomElement("div");
+		el.hidden = true;
+		this.statusBarItems.push(el);
+		record(this, "statusBar", "(状态栏项)");
 		return el;
 	}
 

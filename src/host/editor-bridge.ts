@@ -93,12 +93,17 @@ export function createEditorHandlers(options: EditorBridgeOptions) {
 		if (decision.action === "warn") {
 			// ⚠️ **不** preventDefault：图交给宿主照常存进 vault。
 			// 一个还没配好的插件没有资格让用户的图消失。
-			host.notify(
-				host.t("hookNotConfigured", {
-					problem: decision.problem,
-					where: host.t(decision.fixIn === "credentials" ? "hookFixCredentials" : "hookFixConnection"),
-				})
-			);
+			//
+			// ⭐ 每个会话只提醒一次：没配存储的人**每粘一张图**都会被念一次，而图其实好好存着。
+			// 闸门由 `main.ts` 提供（与手机那条入口共用）；省略时退回"每次都提醒"（旧行为）。
+			if (host.claimUnconfiguredNotice?.() ?? true) {
+				host.notify(
+					host.t("hookNotConfigured", {
+						problem: decision.problem,
+						where: host.t(decision.fixIn === "credentials" ? "hookFixCredentials" : "hookFixConnection"),
+					})
+				);
+			}
 			return;
 		}
 
@@ -109,6 +114,11 @@ export function createEditorHandlers(options: EditorBridgeOptions) {
 		const insertPoint = insertPointFrom(editor);
 		const client = createS3Client(decision.config);
 		const sourcePath = info?.file?.path;
+
+		// ⭐ 编辑器外的反馈：上传期间状态栏短暂显示"正在上传 N 个附件"
+		// （粘贴后要等全部传完才插链接，这段时间编辑器里**什么都没有**）。
+		// 不占撤销、不给笔记留痕；`endUpload` 在 `finally` 里。
+		host.beginUpload?.(decision.files.length);
 
 		void runTransfer(host, {
 			client,
@@ -129,7 +139,10 @@ export function createEditorHandlers(options: EditorBridgeOptions) {
 				// 记录下来而不是让宿主吞掉 —— 否则用户只会看到"什么都没发生"。
 				options.onError?.(error);
 				host.notify(host.t("hookUnexpectedFailure", { error: describeError(error) }));
-			});
+			})
+			// ⭐ 指示必须在**成功与失败**两条路上都收起（写在 `finally` 里，而不是 `then` 里）：
+			// 漏了这条，状态栏会一直停在"正在上传"，而用户没有任何办法把它清掉。
+			.finally(() => host.endUpload?.());
 	};
 
 	return {

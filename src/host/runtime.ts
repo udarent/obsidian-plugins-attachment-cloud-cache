@@ -215,6 +215,20 @@ export interface HostContext {
 	 * 与"我们自己刚写下去的"。
 	 */
 	onStaged?: (path: string) => void;
+	/**
+	 * 上传开始 / 结束（用于状态栏的短暂指示；可选 —— 套件替身不必实现）。
+	 *
+	 * 为什么需要它：粘贴后要等全部文件传完才插入链接（为了"一步撤销"），
+	 * 这期间编辑器里**什么都没有** ⇒ 大文件或慢网时用户以为没反应、会再粘一次。
+	 * 反馈放在**编辑器之外**，不占撤销、不给笔记留痕。
+	 */
+	beginUpload?: (count: number) => void;
+	endUpload?: () => void;
+	/**
+	 * 「未配置」的提醒要不要出声（每个会话只提醒一次；省略 = 每次都提醒）。
+	 * 由 `host/intercept.ts::createAnnounceGate` 实现，两条入口共用同一个闸门。
+	 */
+	claimUnconfiguredNotice?: () => boolean;
 }
 
 export interface TransferRequest {

@@ -31,7 +31,7 @@ import {
 } from "../editor/editor-hooks";
 import type { IngestRequest, IngestResult } from "./ingest";
 import type { PluginSettings } from "../types";
-import { describeError } from "../error-text";
+import { describeError, hintTextFor } from "../error-text";
 
 /** 编辑器的**最小**接口。只要这几个方法，便于用假对象穷举。 */
 export interface EditorLike {
@@ -160,9 +160,14 @@ export async function processTransfer(
 				const generated = deps.generatedLocalLink ? deps.generatedLocalLink(result.localPath) : null;
 				pushPart(buildLocalLink(generated, result.localPath, result.ext), file);
 				outcome.fallback += 1;
-				deps.notify(
-					deps.t("hookUploadFailedKeptLocal", { error: describeError(result.error ?? "unknown") })
-				);
+				// ⭐ 说给用户听的是**一句人话 + 改哪儿**（`s3Hint*`），不是 S3 的原始响应体
+				// （XML / StringToSign）。原始明细进控制台，供排查与诊断包使用 ——
+				// "显示什么"与"记录什么"分开，与 `S3Error.body` 同一条纪律。
+				const hint = hintTextFor(result.error, deps.t) ?? describeError(result.error ?? "unknown");
+				if (result.error !== undefined) {
+					console.error("[attachment-cloud-cache] 上传失败：", result.error);
+				}
+				deps.notify(deps.t("hookUploadFailedKeptLocal", { error: hint }));
 			} else {
 				outcome.lost += 1;
 				deps.notify(

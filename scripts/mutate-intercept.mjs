@@ -14,6 +14,13 @@ await runMutations({
 	suite: runInterceptSuite,
 	mutations: [
 		{
+			// 后果：没配存储的人**每粘一张图**都被提醒一次 —— 图其实好好存着，纯粹是噪音。
+			name: "「只提醒一次」的闸门失效（每次粘贴都被念一遍）",
+			from: "\t\tif (announced) return false;",
+			to: "\t\tif (false) return false;",
+			expect: "第二次必须闭麦",
+		},
+		{
 			// 后果：别的插件已经处理过的事件，我们再插一段链接 —— 笔记里出现两份内容，
 			// 而用户只粘了一次。
 			name: "★ 不再检查 defaultPrevented（两个插件各插一份链接）",

@@ -19,7 +19,7 @@
 import assert from "node:assert/strict";
 
 export function runInterceptSuite(mod) {
-	const { decideInterception, insertPointFrom } = mod;
+	const { decideInterception, insertPointFrom, createAnnounceGate } = mod;
 
 	// 设置基准：自己拼一份最小设置 —— 这一层只读 `autoUpload`，
 	// 其余字段由类型保证存在即可（判定逻辑不碰它们）。
@@ -263,5 +263,16 @@ export function runInterceptSuite(mod) {
 		{ from: { line: 0, ch: 0 } },
 		"只拿得到 from 时应返回只带 from 的插入位置"
 	);
+
+	// ============================================================
+	// createAnnounceGate：同一件事每个会话只出声一次
+	// ============================================================
+	// 没配存储的人**每粘一张图**都会被提醒一次"未上传"，而图其实好好存着 ——
+	// 反复提醒是噪音（与孤儿询问的会话内冷却同一条纪律）。
+	const gate = createAnnounceGate();
+	assert.equal(gate(), true, "第一次应出声");
+	assert.equal(gate(), false, "第二次必须闭麦（否则每次粘贴都被念一遍）");
+	assert.equal(gate(), false, "之后一直闭麦");
+	assert.equal(createAnnounceGate()(), true, "新会话（插件重载 = 新闸门）应重新出声");
 
 }

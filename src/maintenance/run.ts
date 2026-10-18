@@ -186,7 +186,7 @@ export async function inspectLocalCopies(
  * 一条**要删掉的本地副本**。
  *
  * ⚠️ 上限淘汰（`eviction.ts`）与存量清理（`release-space.ts`）共用这个形状 ——
- * 它们是**同一条执行路径**（F18 与 §20.3④ 的差别只在"候选怎么挑"，不在"怎么删"）。
+ * 它们是**同一条执行路径**（F18 与 §4.4.3 的差别只在"候选怎么挑"，不在"怎么删"）。
  * 少一种形状就少一处可能被改歪的删除代码。
  */
 export interface RemovalVictim {
@@ -247,7 +247,7 @@ export interface EvictionRunResult extends EvictionOutcome {
  * 而"为什么不走回收站"：这两条路径的用途都是"别让副本把磁盘吃光"，
  * 回收站**不解**这个问题 —— 文件离开了 vault、物理空间却还占着，
  * 于是表现成"清了下限/清了缓存，磁盘还是满的"。用户确认的整理（R17）走回收站，
- * 那是**另一条路**：它不需要立刻腾空间（见设计 §20.16 #7）。
+ * 那是**另一条路**：它不需要立刻腾空间（见设计 §6.4）。
  */
 export async function deleteVerifiedCopies(
 	deps: MaintenanceDeps,
@@ -324,7 +324,7 @@ export async function runEviction(deps: MaintenanceDeps, plan: EvictionPlan): Pr
 }
 
 /**
- * 执行**存量清理**（F18，设计 §20.10）：把用户在「不留副本」档下确认的那批副本删掉。
+ * 执行**存量清理**（F18，设计 §4.4.3）：把用户在「不留副本」档下确认的那批副本删掉。
  *
  * ⚠️ 走的是**与自动淘汰同一份删除循环**（`deleteVerifiedCopies`）——
  * 两道复核（索引此刻仍认它 / 云端现在确实还有它）一个字都不改。

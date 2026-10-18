@@ -17,21 +17,21 @@ export interface Locale {
 export const I18N: Record<string, Locale> = {
 	en: {
 		// ── 设置界面：分组标题 ──
-		// 按用户的使用顺序排列：先能连上，再谈上传，然后是离线，最后是少数人才动的高级项。
+		// 按用户的使用顺序排列：先能连上，再谈上传，然后是离线与清理。
 		sectionStorage: "Storage connection",
 		sectionUpload: "Upload",
 		sectionOffline: "Offline and local copies",
 		sectionCleanup: "Cloud cleanup",
-		sectionAdvanced: "Advanced",
 
 		// ── 存储连接 ──
 		s3Endpoint: "Endpoint",
 		s3EndpointDesc:
-			"The address of your S3-compatible service, for example https://<account>.r2.cloudflarestorage.com.",
+			"The address of your S3-compatible service, for example https://<account>.r2.cloudflarestorage.com. Fill in the fields below, press Test connection, then paste an image in a note to confirm the link points to your storage.",
 		s3Bucket: "Bucket",
 		s3BucketDesc: "Must match the bucket name exactly — it is case-sensitive.",
 		s3Region: "Region",
-		s3RegionDesc: "Use auto for Cloudflare R2.",
+		s3RegionDesc:
+			"Use auto for Cloudflare R2; MinIO usually accepts us-east-1. A wrong value shows up as a signature mismatch.",
 		s3AccessKey: "Access key ID",
 		s3AccessKeyDesc:
 			"The identification half of your key pair — MinIO calls it Access Key, AWS Access Key ID. It is not a secret.",
@@ -124,6 +124,18 @@ export const I18N: Record<string, Locale> = {
 		// ── 出错 ──
 		hookUploadFailedKeptLocal: "Upload failed, so the file was kept locally instead: {error}",
 		hookLocalFallbackFailed: "Could not save the file locally either: {error}",
+		// ⭐ 失败时给**一句人话 + 下一步**，不把 S3 的原始响应体（XML / StringToSign）摊给用户。
+		// 键名来自 `s3/errors.ts::hintKeyFor`；两表都必须有文案（`test-s3-errors` 有跨层断言）。
+		s3HintSignature: "Signature mismatch. Check that Region and Compatibility mode match this provider.",
+		s3HintAccessDenied: "The storage refused this operation. Check the key's permissions, and whether the bucket allows writes.",
+		s3HintNoSuchBucket: "Bucket not found. Check the bucket name and region.",
+		s3HintAuth: "Authentication failed. Check the access key and secret key.",
+		s3HintNotFound: "Object not found. It may have been deleted, or the public URL prefix is wrong.",
+		s3HintThrottled: "The storage is rate-limiting requests. Try again in a moment.",
+		s3HintNetwork: "Cannot reach the storage. Check your network and the endpoint.",
+		s3HintServer: "The storage service returned an error. Try again in a moment.",
+		s3HintGeneric: "Request failed. Check the storage settings.",
+		statusUploading: "Uploading {count} attachment(s)…",
 		// 未配置就粘贴：**没有接管**，图由 Obsidian 照常保存。
 		// 文案要说清这两件事 —— 否则用户会以为图丢了，而其实它好好地躺在附件目录里。
 		hookNotConfigured: "Not uploaded ({problem}). The file was saved to your vault as usual. — {where}",
@@ -155,7 +167,7 @@ export const I18N: Record<string, Locale> = {
 			"Only this device's references can be seen. Other devices (or another vault sharing this storage) may still be using some of these files — deleting cannot be undone.",
 		cloudCleanupPersistFailed: "Could not save the local-copy index: {error}",
 		cloudCleanupUnreadableNote: "Could not read {path}, so the cleanup was cancelled.",
-		// F18：清理本地占用（并入「不留副本」档，见设计 §20.10）
+		// F18：清理本地占用（并入「不留副本」档，见设计 §4.4.3 与 §6.4 来路 ③）
 		releaseSpaceName: "Free up local space",
 		releaseSpaceDesc:
 			"Deletes local copies of files your notes still use — permanently, not to the trash, so the space frees up at once. Cloud files and the links in your notes are untouched, and a copy comes back the next time a note shows it. With a limit set, it stops at the limit.",
@@ -362,20 +374,20 @@ export const I18N: Record<string, Locale> = {
 		orphanAsk_always: "Ask me",
 		orphanAsk_notice: "Just show a notice",
 		orphanAsk_never: "Do nothing",
+		cleanupCommandHint: "To clean up the ones that already exist, run “{command}”.",
 	},
 	zh: {
 		sectionStorage: "存储连接",
 		sectionUpload: "上传",
 		sectionOffline: "离线与本地副本",
 		sectionCleanup: "云端清理",
-		sectionAdvanced: "高级",
 
 		s3Endpoint: "服务地址",
-		s3EndpointDesc: "你的 S3 兼容服务地址，例如 https://<account>.r2.cloudflarestorage.com。",
+		s3EndpointDesc: "你的 S3 兼容服务地址，例如 https://<account>.r2.cloudflarestorage.com。填好下面几栏后点「测试连接」，再在笔记里粘一张图确认链接已指向你的存储。",
 		s3Bucket: "存储桶",
 		s3BucketDesc: "必须与桶名完全一致（区分大小写）。",
 		s3Region: "区域",
-		s3RegionDesc: "Cloudflare R2 填 auto。",
+		s3RegionDesc: "Cloudflare R2 填 auto；MinIO 常用 us-east-1。填错时表现为「签名不匹配」。",
 		s3AccessKey: "访问密钥 ID",
 		s3AccessKeyDesc: "密钥对里的「身份」部分 —— MinIO 叫 Access Key，AWS 叫 Access Key ID。它本身不是秘密。",
 		s3SecretKey: "秘密访问密钥",
@@ -446,6 +458,17 @@ export const I18N: Record<string, Locale> = {
 
 		hookUploadFailedKeptLocal: "上传失败，已改为保留本地文件：{error}",
 		hookLocalFallbackFailed: "本地文件也没能保存：{error}",
+		// ⭐ 失败时给**一句人话 + 下一步**，不把 S3 的原始响应体（XML / StringToSign）摊给用户。
+		s3HintSignature: "签名不匹配。检查区域（Region）与兼容模式是否与服务商一致。",
+		s3HintAccessDenied: "存储拒绝了这次操作。检查密钥权限，以及桶是否允许写入。",
+		s3HintNoSuchBucket: "找不到这个桶。检查桶名与区域。",
+		s3HintAuth: "认证失败。检查访问密钥与秘密密钥。",
+		s3HintNotFound: "对象不存在。可能已被删除，或公开地址前缀写错了。",
+		s3HintThrottled: "存储正在限流，稍后再试。",
+		s3HintNetwork: "连不上存储。检查网络与服务地址。",
+		s3HintServer: "存储服务端出错，稍后再试。",
+		s3HintGeneric: "请求失败。检查存储设置。",
+		statusUploading: "正在上传 {count} 个附件…",
 		hookNotConfigured: "未上传（{problem}）。文件已按 Obsidian 的原有方式保存，不会丢。— {where}",
 		hookFixConnection: "请到「存储连接」里补全设置。",
 		hookFixCredentials: "请到「存储连接」里选择访问密钥。",
@@ -466,7 +489,7 @@ export const I18N: Record<string, Locale> = {
 			"只能看到本设备的引用情况。其他设备（或共用这个存储的另一个库）可能还在用其中一些文件 —— 删除后无法恢复。",
 		cloudCleanupPersistFailed: "本地副本索引保存失败：{error}",
 		cloudCleanupUnreadableNote: "读不到 {path}，因此取消了这次清理。",
-		// F18：清理本地占用（并入「不留副本」档，见设计 §20.10）
+		// F18：清理本地占用（并入「不留副本」档，见设计 §4.4.3 与 §6.4 来路 ③）
 		releaseSpaceName: "释放本地空间",
 		releaseSpaceDesc: "删掉笔记仍在用的附件的本地副本 —— 永久删除、不进回收站，空间立刻腾出。云端文件和笔记里的链接都不动，下次看图会自动补回。设了上限时只清到上限为止。",
 		releaseSpaceButton: "删除本地副本…",
@@ -651,6 +674,7 @@ export const I18N: Record<string, Locale> = {
 		orphanAsk_always: "弹窗让我选",
 		orphanAsk_notice: "只给一条通知",
 		orphanAsk_never: "什么都不做",
+		cleanupCommandHint: "要处理已有的孤儿，运行命令「{command}」。",
 	},
 };
 

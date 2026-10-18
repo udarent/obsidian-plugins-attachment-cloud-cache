@@ -36,3 +36,28 @@ export function describeError(error: unknown): string {
 	if (error instanceof Error) return error.message;
 	return String(error);
 }
+
+/**
+ * 取 S3 错误自带的「建议键」（`s3/errors.ts::hintKeyFor` 产出）。
+ *
+ * 为什么只取键、不在这里翻译：核心层拿不到 `t`（省略时会退回键名），
+ * 所以翻译交给调用方注入的 `t` —— 与 `notifyUser` 同一条纪律：
+ * **键在核心层选，文字由接线层给**。
+ */
+export function hintKeyOf(error: unknown): string | null {
+	if (typeof error !== "object" || error === null) return null;
+	const key = (error as { hintKey?: unknown }).hintKey;
+	return typeof key === "string" && key !== "" ? key : null;
+}
+
+/**
+ * 取**能说给人听**的那句建议；没有建议（或没有 `t`）时返回 `null`。
+ *
+ * ⚠️ 不要在这里判断"译文是否等于键名"：套件里的 `t` 就返回键名（那是刻意的，
+ * 让断言与语言无关）。"键有没有文案"由 `test-s3-errors` 的跨层断言守着。
+ */
+export function hintTextFor(error: unknown, t?: (key: string) => string): string | null {
+	const key = hintKeyOf(error);
+	if (!key || !t) return null;
+	return t(key);
+}

@@ -781,6 +781,12 @@ export async function runTransferSuite(mod) {
 			h.notices.some((message) => message.includes("hookUploadFailedKeptLocal")),
 			`应提示上传失败并说明已保留本地，实际提示：${JSON.stringify(h.notices)}`
 		);
+		// ⭐ 用户看到的必须是**一句人话 + 改哪儿**（`s3Hint*`），不是 S3 的原始响应体
+		// （XML / StringToSign）。这里服务端返回 403 AccessDenied ⇒ 应给专属建议。
+		assert.ok(
+			h.notices.some((message) => message.includes("s3HintAccessDenied")),
+			`失败提示应给出可行动的建议（s3HintAccessDenied），实际提示：${JSON.stringify(h.notices)}`
+		);
 		// 计数放最后
 		assert.equal(outcome.lost, 0, "⭐ 降级不等于丢图 —— lost 必须是 0");
 		assert.equal(outcome.fallback, 1, "应走降级");
