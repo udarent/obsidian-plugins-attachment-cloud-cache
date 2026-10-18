@@ -290,3 +290,17 @@
 .acc-signed-media {
 	max-width: 100%;
 }
+
+/*
+ * 删除留痕的只读展示。内容是一行一条 JSON（JSON Lines），可能很长：
+ * - 限制高度并滚动，别把弹窗撑到屏幕外；
+ * - `pre-wrap` + `anywhere`：key 是长哈希，不折行会出现横向滚动条；
+ * - `user-select: text`：这份内容的用途就是"选中、复制给未来的自己/客服"。
+ */
+.acc-delete-log {
+	max-height: 60vh;
+	overflow: auto;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	user-select: text;
+}

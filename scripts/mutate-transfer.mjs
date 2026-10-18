@@ -31,7 +31,13 @@ await runMutations({
 	suite: runTransferSuite,
 	mutations: [
 		{
-			// 后果：失败提示退回原始 S3 文本（XML / StringToSign）—— 用户看不懂，也不知道改哪儿。
+			// 后果：一次粘贴多张图、凭据错 ⇒ 连弹 N 条几乎一样的通知（与自动接管那条路不一致）。
+			name: "多文件失败逐条提醒（不合并成一条）",
+			from: "\tif (keepLocalFailures.length === 1) {",
+			to: "\tif (keepLocalFailures.length >= 1) {",
+			expect: "多文件失败应走合并文案",
+		},
+		{
 			name: "失败提示不再给建议（用户看到的是原始 S3 响应体）",
 			from: "\t\t\t\tconst hint = hintTextFor(result.error, deps.t) ?? describeError(result.error ?? \"unknown\");",
 			to: "\t\t\t\tconst hint = describeError(result.error ?? \"unknown\");",

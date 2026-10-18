@@ -29,12 +29,13 @@
  * 而绑定错了的症状是设置**静默存不进**。理由详见那个模块的头注释。
  */
 
-import { ButtonComponent, Notice, PluginSettingTab } from "obsidian";
+import { ButtonComponent, Modal, Notice, PluginSettingTab } from "obsidian";
 import type { App, Setting, SettingDefinitionItem, SettingGroupItem } from "obsidian";
 
 import type AttachmentCloudCachePlugin from "../main";
 import { createS3Client, objectBaseFor } from "../s3/client";
 import { connectionReadiness } from "../s3/credentials";
+import { deleteLogTargetPath } from "../maintenance/delete-log";
 import type { ConnectionState } from "../link-access";
 import { fromControlValue, isWritableValue, readByKey, toControlValue, writeByKey } from "./settings-bindings";
 import {
@@ -731,7 +732,45 @@ export class SettingsTab extends PluginSettingTab {
 					options: orphanAskOptions((value) => this.t(`orphanAsk_${value}`)),
 				},
 			},
+			{
+				// ⭐ 留痕的价值全在"事后能查"，而它是插件目录里**点开头**的文件 ——
+				// 宿主的文件索引不含它，用户没有别的入口（U8，2026-10-18）。
+				name: this.t("deleteLogName"),
+				desc: this.t("deleteLogDesc"),
+				aliases: ["log", "history", "deleted", "记录", "删除记录", "留痕"],
+				render: (setting) => {
+					setting.addButton((button) => {
+						button.setButtonText(this.t("deleteLogButton")).onClick(() => void this.showDeleteLog());
+					});
+				},
+			},
 		];
+	}
+
+	/**
+	 * 打开删除留痕。
+	 *
+	 * ⚠️ **不能** `openLinkText`：日志以点开头，不进宿主的文件索引（与缓存索引同一约定），
+	 * 所以直接走 adapter 读内容、用只读弹窗展示 —— 移动端也能用，且不依赖它被索引。
+	 */
+	private async showDeleteLog(): Promise<void> {
+		const path = deleteLogTargetPath(this.plugin.manifest.dir);
+		if (!path) {
+			new Notice(this.t("deleteLogUnavailable"));
+			return;
+		}
+		let text = "";
+		try {
+			text = await this.app.vault.adapter.read(path);
+		} catch {
+			// 文件不存在 = 从来没删过东西（不是错误）；清空后走下面那条"还没有记录"。
+			text = "";
+		}
+		if (!text.trim()) {
+			new Notice(this.t("deleteLogEmpty"));
+			return;
+		}
+		new DeleteLogModal(this.app, this.t("deleteLogTitle"), text).open();
 	}
 
 	// ⚠️ 「高级」组已于 2026-10-18 取消：它当时只有「兼容模式」一项，而那一项属于**连接方式**
@@ -817,5 +856,34 @@ export class SettingsTab extends PluginSettingTab {
 					void this.plugin.freeUpLocalSpace();
 				})
 		);
+	}
+}
+
+/**
+ * 只读展示一份文本（当前只用于删除留痕）。
+ *
+ * 为什么不用 `openLinkText`：那条路要求文件在**宿主的索引**里，而留痕以点开头
+ * （与缓存索引同一约定，不进索引）⇒ 只能自己读、自己显示。
+ * ⚠️ 内容按原文展示（JSON Lines）：选择/复制都留给用户，不在这里做解析与美化 ——
+ * 解析错了会让"唯一的记录"变成"看起来像记录的东西"。
+ */
+class DeleteLogModal extends Modal {
+	constructor(
+		app: App,
+		private readonly heading: string,
+		private readonly text: string
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		this.titleEl.setText(this.heading);
+		const pre = this.contentEl.createEl("pre");
+		pre.addClass("acc-delete-log");
+		pre.setText(this.text);
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
 	}
 }

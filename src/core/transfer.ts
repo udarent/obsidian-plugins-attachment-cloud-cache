@@ -120,6 +120,14 @@ export async function processTransfer(
 	 * 删掉即可；"少插一张"用户会以为图丢了。
 	 */
 	const inserted = new Set<string>();
+	/**
+	 * 上传失败但**保住了本地**的那些提示，攒到最后发一条。
+	 *
+	 * 一次粘贴 5 张图、凭据又错时，逐条提醒会连弹 5 条几乎一样的通知 ——
+	 * 与"自动接管"那条路的按结局合并是同一口径（那边早就是一条了，这边漏了）。
+	 * 只合并这一类：**连本地都没保住**（`lost`）仍然逐条说清，那是更严重、也更少见的事。
+	 */
+	const keepLocalFailures: string[] = [];
 	const pushPart = (text: string, file: TransferFileLike): void => {
 		const id = fileIdentity(file) ?? text;
 		if (inserted.has(id)) return;
@@ -167,7 +175,7 @@ export async function processTransfer(
 				if (result.error !== undefined) {
 					console.error("[attachment-cloud-cache] 上传失败：", result.error);
 				}
-				deps.notify(deps.t("hookUploadFailedKeptLocal", { error: hint }));
+				keepLocalFailures.push(hint);
 			} else {
 				outcome.lost += 1;
 				deps.notify(
@@ -184,6 +192,17 @@ export async function processTransfer(
 		pushPart(buildRemoteLink(result.remoteUrl, result.displayName || displayName || result.name, result.ext), file);
 		if (result.status === "reused") outcome.reused += 1;
 		else outcome.uploaded += 1;
+	}
+
+	// ⭐ 失败提示**攒到最后发一条**（见 `keepLocalFailures` 的说明）：
+	// 一条时说一个文件，多条时报个数 —— 原因取第一条（同一次粘贴的失败几乎总是同一个原因，
+	// 完整明细都在控制台里）。
+	if (keepLocalFailures.length === 1) {
+		deps.notify(deps.t("hookUploadFailedKeptLocal", { error: keepLocalFailures[0] }));
+	} else if (keepLocalFailures.length > 1) {
+		deps.notify(
+			deps.t("hookUploadFailedMany", { count: keepLocalFailures.length, error: keepLocalFailures[0] })
+		);
 	}
 
 	// 一次插入全部链接：这样在编辑器里只占**一步撤销**，用户按一次 Cmd+Z 能整体回退。

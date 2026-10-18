@@ -123,6 +123,7 @@ export const I18N: Record<string, Locale> = {
 
 		// ── 出错 ──
 		hookUploadFailedKeptLocal: "Upload failed, so the file was kept locally instead: {error}",
+		hookUploadFailedMany: "{count} files were not uploaded and were kept locally instead: {error}",
 		hookLocalFallbackFailed: "Could not save the file locally either: {error}",
 		// ⭐ 失败时给**一句人话 + 下一步**，不把 S3 的原始响应体（XML / StringToSign）摊给用户。
 		// 键名来自 `s3/errors.ts::hintKeyFor`；两表都必须有文案（`test-s3-errors` 有跨层断言）。
@@ -375,6 +376,12 @@ export const I18N: Record<string, Locale> = {
 		orphanAsk_notice: "Just show a notice",
 		orphanAsk_never: "Do nothing",
 		cleanupCommandHint: "To clean up the ones that already exist, run “{command}”.",
+		deleteLogName: "Deletion log",
+		deleteLogDesc: "Every cloud deletion is written here. After a permanent delete this is the only record.",
+		deleteLogButton: "Open",
+		deleteLogTitle: "Cloud deletions",
+		deleteLogEmpty: "No cloud deletions have been recorded yet.",
+		deleteLogUnavailable: "The deletion log cannot be located in this environment.",
 	},
 	zh: {
 		sectionStorage: "存储连接",
@@ -457,6 +464,7 @@ export const I18N: Record<string, Locale> = {
 		forcePathStyleDesc: "按「服务地址/桶/文件名」寻址。Cloudflare R2、MinIO 和多数自建服务都要开着；只有服务商要求用桶名做子域时才关掉。",
 
 		hookUploadFailedKeptLocal: "上传失败，已改为保留本地文件：{error}",
+		hookUploadFailedMany: "{count} 个文件上传失败，已改为保留本地文件：{error}",
 		hookLocalFallbackFailed: "本地文件也没能保存：{error}",
 		// ⭐ 失败时给**一句人话 + 下一步**，不把 S3 的原始响应体（XML / StringToSign）摊给用户。
 		s3HintSignature: "签名不匹配。检查区域（Region）与兼容模式是否与服务商一致。",
@@ -675,6 +683,12 @@ export const I18N: Record<string, Locale> = {
 		orphanAsk_notice: "只给一条通知",
 		orphanAsk_never: "什么都不做",
 		cleanupCommandHint: "要处理已有的孤儿，运行命令「{command}」。",
+		deleteLogName: "删除记录",
+		deleteLogDesc: "每次删除云端对象都会记在这里。永久删除之后，这是唯一的记录。",
+		deleteLogButton: "查看",
+		deleteLogTitle: "云端删除记录",
+		deleteLogEmpty: "还没有删除记录。",
+		deleteLogUnavailable: "这个环境里找不到删除记录（插件目录未知）。",
 	},
 };
 

@@ -792,6 +792,37 @@ export async function runTransferSuite(mod) {
 		assert.equal(outcome.fallback, 1, "应走降级");
 	});
 
+	// 7c-2. ⭐ 多文件失败 ⇒ **一条**合并通知（不是每个文件一条）
+	//
+	// 一次粘贴 5 张图、凭据又错时，逐条提醒会连弹 5 条几乎一样的通知；
+	// 自动接管那条路早就按"结局合并"了，粘贴这条路必须同一口径。
+	await withHarness(mod, { s3: { intercept: () => ({ status: 403, code: "AccessDenied" }) } }, async (h) => {
+		const { editor } = makeEditor();
+		const files = [
+			makeFile("a.png", "image/png"),
+			makeFile("b.png", "image/png"),
+			makeFile("c.png", "image/png"),
+		];
+		const outcome = await processTransfer(h.deps, editor, files);
+
+		const failureNotices = h.notices.filter((message) => message.includes("hookUploadFailed"));
+		assert.equal(
+			failureNotices.length,
+			1,
+			`3 个文件失败只该弹一条通知，实际：${JSON.stringify(h.notices)}`
+		);
+		assert.ok(
+			failureNotices[0].includes("hookUploadFailedMany"),
+			`多文件失败应走合并文案，实际：${failureNotices[0]}`
+		);
+		assert.ok(
+			failureNotices[0].includes("3"),
+			`合并文案必须带上个数，实际：${failureNotices[0]}`
+		);
+		assert.equal(outcome.fallback, 3, "三个都应走降级");
+		assert.equal(outcome.lost, 0, "降级不等于丢图");
+	});
+
 	// 7d. 连字节都读不出来 → 明确报错，且不插入任何东西
 	await withHarness(mod, {}, async (h) => {
 		const { editor, calls } = makeEditor();

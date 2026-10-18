@@ -55,6 +55,17 @@ function read(relativePath) {
 
 const tab = read("src/ui/settings-tab.ts");
 
+// ============================================================
+// 静态守卫：删除留痕必须有**用户可见的入口**（U8）
+// ============================================================
+//
+// 留痕的价值全在"事后能查"，而文件在插件目录、**以点开头**（不进宿主索引）——
+// 用户没有别的办法打开它。这条没有行为断言能守（要驱动设置页点击 + 真磁盘），
+// 所以钉住三件事：入口在、路径从同一处算、读的是 adapter 而不是 openLinkText。
+assert.match(tab, /this\.t\("deleteLogName"\)/, "「云端清理」组必须有「删除记录」入口");
+assert.match(tab, /deleteLogTargetPath\(/, "留痕路径必须由 deleteLogTargetPath 算（不要自己拼）");
+assert.match(tab, /adapter\.read\(/, "留痕是点开头文件（不进索引）⇒ 必须直接读，不能靠 openLinkText");
+
 // ⚠️ 只匹配**真的构造**（`new SecretComponent(`），不匹配裸标识符 ——
 // 否则注释里"为什么不用 SecretComponent"这种说明会被当成违规。
 // （同一个坑在 `test-remove.mjs` 的 `adapter.remove` 守卫上已经踩过一次：
