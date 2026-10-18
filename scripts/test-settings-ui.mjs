@@ -104,9 +104,19 @@ assert.ok(
 // 由插件的 `refreshAccessProbe` 统一发起 —— 界面上显示的那一份必须与渲染判定用的
 // 是**同一份**结果，否则会出现"测试说公开、图却按私有取"）。所以守卫跟着通路走：
 // 「界面 → 那唯一一条探测路径」与「探测地址由 publicUrlFor 推导」。
+//
+// ⚠️ D-53：按钮那条路现在走 `runConnectionProbe()`（回路 = 写 → 读 → 删 + 匿名问），
+// 它把**这一轮**的 `{probe, sample, url}` 交回来。界面必须用返回值，**不许**回头读
+// 全局字段（`currentAccessProbe*`）：连点 / 与自动探测并发时，全局那一格可能已被另一轮
+// 覆盖，界面就会把另一轮的对象名、字节数、删除状态当成自己的结果显示（而数字都在
+// 合理范围内，看不出来）。这两条都守。
 assert.ok(
-	tab.includes("this.plugin.refreshAccessProbe("),
+	tab.includes("this.plugin.runConnectionProbe("),
 	"★ 「测试连接」必须真的探一次（走插件那唯一一条探测路径）—— 否则「别人能不能打开我的链接」没有任何检查"
+);
+assert.ok(
+	!/currentAccessProbe(?:Sample|Url)\(/.test(tab),
+	"★ 界面必须用**这一轮**的返回值，不许回头读全局探测结论（并发时会显示另一轮的结果）"
 );
 {
 	const linkAccess = read("src/link-access.ts");

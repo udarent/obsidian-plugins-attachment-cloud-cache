@@ -38,7 +38,7 @@ function makeIo(overrides = {}) {
 }
 
 export async function runProbeSampleSuite(mod) {
-	const { TEMP_PROBE_KEY, TEMP_PROBE_BODY, runWithTempProbeObject } = mod;
+	const { TEMP_PROBE_KEY, TEMP_PROBE_BODY, runWithTempProbeObject, singleFlight } = mod;
 	// `publicUrlFor` 只用来钉住"探针 key 能拼成一条合法地址"（拼不出来这一步会直接抛配置错）
 	const { publicUrlFor } = mod;
 
@@ -119,6 +119,35 @@ export async function runProbeSampleSuite(mod) {
 	assert.equal(putFailed.putError?.message, "拒绝写入", "放不上去的原始错误要带回给界面归类");
 	assert.equal(measuredAfterPutFailure, false, "放不上去就**不该**再去测");
 	assert.equal(removedAfterPutFailure, false, "放不上去时不该去删（没有东西可删）");
+
+	// ============================================================
+	// 5. 单飞：连点两次**不许**开两轮（两轮会互删同一个探测对象）
+	// ============================================================
+	//
+	// 症状（用户 2026-10-18 报的「快速连点有时弹出错误的测试结果」）：两轮回路抢同一个
+	// 固定 key —— 后一轮的 DELETE 落在前一轮匿名 HEAD 之前，前一轮就拿到 404，
+	// 而 404 在这里的意思偏偏是「对象不在 —— 多半前缀写错了」：一条**假的**结论。
+	let runs = 0;
+	const once = singleFlight(async () => {
+		runs += 1;
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		return runs;
+	});
+	const [first, second] = await Promise.all([once(), once()]);
+	assert.equal(runs, 1, "★ 并发的第二次调用**不许**再启动一次（两轮会互删同一个探测对象）");
+	assert.equal(first, second, "并发调用必须拿到**同一个**结果");
+	assert.equal(first, 1, "结果必须来自那一轮，不是另算一份");
+	assert.equal(await once(), 2, "★ 跑完之后**下一次**必须重新跑（否则第二下点击拿的是旧结果）");
+
+	// 失败也必须清句柄 —— 否则一次失败会让按钮**永远**返回同一个失败
+	let failures = 0;
+	const alwaysFails = singleFlight(async () => {
+		failures += 1;
+		throw new Error("这次不行");
+	});
+	await assert.rejects(alwaysFails(), /这次不行/);
+	await assert.rejects(alwaysFails(), /这次不行/);
+	assert.equal(failures, 2, "失败之后的下一次点击必须重新跑");
 
 	// ============================================================
 	// 5. 探针对象本身要"进得去"也"看得见"

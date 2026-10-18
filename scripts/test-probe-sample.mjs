@@ -17,7 +17,9 @@ await withLoadedTs(["src/probe-sample", "src/s3/client"], async (mod) => {
 		"Probe-sample tests passed (the round trip is write then measure then delete, in that order; a " +
 			"measurement that throws still deletes the object; a delete that fails is reported instead of " +
 			"hidden, while a missing object counts as clean; a failed write means the probe never runs and " +
-			"nothing is deleted; the probe key builds a legal address and the body is non-empty, so 'read back " +
+			"nothing is deleted; concurrent clicks share one run (two runs would delete each other's probe " +
+			"object and report a false 404) while the handle is cleared afterwards so the next click really " +
+			"runs again; the probe key builds a legal address and the body is non-empty, so 'read back " +
 			"identical' actually compares something)."
 	);
 });

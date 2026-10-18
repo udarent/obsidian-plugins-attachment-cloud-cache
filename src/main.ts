@@ -58,8 +58,8 @@ import type { S3Client } from "./s3/client";
 import { connectionReadiness } from "./s3/credentials";
 import { UNKNOWN_ACCESS_PROBE, probeAccess, probeUrlFor } from "./link-access";
 import type { AccessProbe } from "./link-access";
-import { TEMP_PROBE_BODY, TEMP_PROBE_KEY, runWithTempProbeObject } from "./probe-sample";
-import type { ProbeSampleMemo } from "./probe-sample";
+import { TEMP_PROBE_BODY, TEMP_PROBE_KEY, runWithTempProbeObject, singleFlight } from "./probe-sample";
+import type { ProbeRoundTripMemo } from "./probe-sample";
 import { utf8Bytes } from "./s3/hash";
 import { createLocalCopyEnsurer } from "./core/download";
 import {
@@ -122,6 +122,21 @@ export type { ImportCredentialsOutcome } from "./plugin/credentials-flow";
  */
 const SIGNED_URL_CACHE_MS = 20 * 60 * 1000;
 
+/**
+ * 「测试连接」一轮回路的**本次**结果。
+ *
+ * ⚠️ 必须是**返回值**而不是让界面回头读全局字段：连点 / 与自动探测并发时，全局那一格
+ * 可能已经被另一轮覆盖，界面就会把"另一轮的对象名、字节数、删除状态"当成自己的结果显示 ——
+ * 那种错配**看不出来**（数字都在合理范围内）。
+ */
+export interface ConnectionProbeResult {
+	probe: AccessProbe;
+	/** 这一轮的善后状态；`null` = 配置不全 / 回路没跑起来（没有探测对象）。 */
+	sample: ProbeRoundTripMemo | null;
+	/** 这一轮**真正**探测过的那条地址（`null` = 没跑起来）。 */
+	url: string | null;
+}
+
 /** 缓存条数上限（防御用；超了整体清空，不做 LRU —— 这张表的体积本来就很小）。 */
 const SIGNED_URL_CACHE_LIMIT = 512;
 
@@ -144,14 +159,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 
 	/** 上一次探测用的地址 —— 用来避免"敲一个字就发一次 HEAD"。 */
 	private probedUrl: string | null = null;
-
-	/**
-	 * 上一次探测**试的是哪条对象**（索引里的 / 桶里的 / 临时放的探针）。
-	 *
-	 * 设置页用它解释"这次是怎么测的"：临时探针必须在界面上说一句，
-	 * 否则用户会看到一个自己没上传过的对象名。
-	 */
-	private probeSample: ProbeSampleMemo | null = null;
 
 	/** 防抖句柄（`window.setTimeout` 的返回值是数字，见 {@link scheduleAccessProbe}）。 */
 	private accessProbeTimer: number | null = null;
@@ -1071,23 +1078,12 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	/**
 	 * 索引里任意一条对象的 key —— 供设置页验证「笔记里那条公开链接，**别人**打得开吗」。
 	 *
-	 * 没有则返回 `null`（还没上传过任何东西）。⚠️ 它只认**索引**：索引不是事实，
-	 * 桶才是 —— "索引空、桶里有对象"（换设备 / 索引丢了）由
-	 * {@link refreshAccessProbe} 的 `allowTempProbe` 那条路处理（列举 → 临时探针）。
+	 * 没有则返回 `null`（还没上传过任何东西）。⚠️ 它只认**索引**：索引不是事实 —— 所以
+	 * 这条**只供自动探测**用（一次匿名 HEAD、零写入）。按钮那条路（{@link runConnectionProbe}）
+	 * 自带探针对象，与库里有没有东西无关。
 	 */
 	sampleObjectKey(): string | null {
 		return this.currentIndex().keys()[0] ?? null;
-	}
-
-	/**
-	 * 上一次探测**试的是哪条对象**（`null` = 还没探测过 / 刚被清空）。
-	 *
-	 * 设置页据此区分三种情形：索引里的真实对象（不必多说什么）、桶里的真实对象、
-	 * **临时探针对象**（必须说一句"临时放的、测完删了"）。也用于把
-	 * 「临时探针都放不上去」如实报出来，而不是含糊地说"测不了"。
-	 */
-	currentAccessProbeSample(): ProbeSampleMemo | null {
-		return this.probeSample;
 	}
 
 	/**
@@ -1100,22 +1096,12 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	}
 
 	/**
-	 * 上一次探测**真正用过**的那条地址（没探测过为 `null`）。
-	 *
-	 * 设置页把它原样显示在结果里 —— 用户要能对照"我笔记里那条链接"与"它到底试了哪一条"。
-	 * 让界面自己再推一遍是不行的：推导与探测不同源时，用户看到的地址就不是真正被打的那个。
-	 */
-	currentAccessProbeUrl(): string | null {
-		return this.probedUrl;
-	}
-
-	/**
 	 * 匿名探测一次并**更新**认知。两个调用方，两条**不同**的路：
 	 *
 	 * | 谁 | 怎么做 | 写桶吗 |
 	 * |---|---|---|
 	 * | 自动探测（启动 / 保存设置） | 借**索引里已有**的对象发一次匿名 HEAD | ❌ 一次都不写 |
-	 * | 「测试连接」（`allowTempProbe`） | **探针回路**：写一个几十字节的对象 → 读回核对 → 匿名读 → 删掉 | ✅ 只在按钮里 |
+	 * | 「测试连接」（{@link runConnectionProbe}） | **探针回路**：写一个几十字节的对象 → 读回核对 → 匿名读 → 删掉 | ✅ 只在按钮里 |
 	 *
 	 * ## 四条刻意的边界
 	 *
@@ -1128,13 +1114,10 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 4. ⭐ **自动探测绝不写桶、也不列举**：它可能每敲一个字符跑一次，回答的只是
 	 *    "渲染该走哪条路"。需要更全的结论（写/读/删三段）时，用户点那个按钮。
 	 *
-	 * @param options.allowTempProbe 走**探针回路**（写/读/删；**仅限用户点按钮**）
+	 * ⚠️ 这里只做**自动探测**（借索引、零写入）。用户点按钮走 `runConnectionProbe()` ——
+	 * 那是另一条路（回路 + 把这一次的结果交回界面），不是这个函数的一个开关。
 	 */
-	async refreshAccessProbe(options: { allowTempProbe?: boolean } = {}): Promise<AccessProbe> {
-		// 用户点了「测试连接」⇒ 回路：写一次 → 读一次 → 删掉。与索引里有没有对象无关
-		//（有旧对象也只证明了"读"那一段，而上传/删除同样可能不通）。
-		if (options.allowTempProbe === true) return this.refreshAccessProbeByRoundTrip();
-
+	async refreshAccessProbe(): Promise<AccessProbe> {
 		// 自动探测：只认索引里已有的对象。索引空 ⇒ 不知道（按私有处理），
 		// ⚠️ **不**为了它去列举或写桶。
 		const indexedKey = this.sampleObjectKey();
@@ -1147,8 +1130,28 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		if (url === this.probedUrl && this.accessProbe.kind !== "unknown") {
 			return this.accessProbe;
 		}
-		return this.recordAccessProbe(url, { source: "index", key: indexedKey, leftBehind: false });
+		return this.recordAccessProbe(url);
 	}
+
+	/**
+	 * 「测试连接」的入口：跑**一轮**探针回路，把**这一次**的结果交回调用方。
+	 *
+	 * ## 三件事一起保证（这就是"快速连点偶尔弹出错误结果"那个缺陷的修法）
+	 *
+	 * 1. **单飞**：同一时刻只允许一轮回路。两轮会抢同一个固定 key —— 后一轮的 DELETE 可能
+	 *    落在前一轮的匿名 HEAD 之前，让前一轮看到 404（"对象不在，多半前缀写错了"），
+	 *    一条**假的**结论。连点、或设置页被重渲染后按钮又能点，都会撞上。
+	 * 2. **结果属于这一次**：`{ probe, sample, url }` 都是本次运行的局部值。界面若去读全局字段
+	 *    （`currentAccessProbe*`），并发时可能读到**另一轮**的 memo —— 对象名 / 字节数对不上，
+	 *    而界面上看不出来。
+	 * 3. **全局那一格照样写**：渲染判定要它（`recordAccessProbe` 里那一处）。
+	 */
+	async runConnectionProbe(): Promise<ConnectionProbeResult> {
+		return this.runSingleConnectionProbe();
+	}
+
+	/** 单飞包装：并发调用共用同一轮（`probe-sample.ts::singleFlight`，锚点在那里）。 */
+	private readonly runSingleConnectionProbe = singleFlight(() => this.connectionProbeOnce());
 
 	/**
 	 * 「测试连接」第二步：**临时放一个几十字节的对象，写一次、读一次、删掉**。
@@ -1174,14 +1177,17 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 私有桶渲染 / 离线副本要用的权限。⚠️ 读不回来**不影响**下一段：匿名那一问
 	 * 与凭据无关，照样要问（两个结论都属于这次测试）。
 	 */
-	private async refreshAccessProbeByRoundTrip(): Promise<AccessProbe> {
+	private async connectionProbeOnce(): Promise<ConnectionProbeResult> {
 		const client = this.buildClient();
 		const key = TEMP_PROBE_KEY;
 		const url = probeUrlFor(this.settings.s3, key);
-		if (!client || !url) return this.forgetAccessProbe();
+		if (!client || !url) {
+			this.forgetAccessProbe();
+			return { probe: this.accessProbe, sample: null, url: null };
+		}
 
 		const body = utf8Bytes(TEMP_PROBE_BODY);
-		const memo: ProbeSampleMemo = { source: "temp", key, leftBehind: false };
+		const memo: ProbeRoundTripMemo = { key, leftBehind: false };
 
 		const outcome = await runWithTempProbeObject({
 			key,
@@ -1202,7 +1208,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 					memo.readError = error;
 				}
 				// ③ 匿名读一次：别人打得开吗（这一步不写任何东西）
-				return this.recordAccessProbe(url, memo);
+				return this.recordAccessProbe(url);
 			},
 		});
 
@@ -1211,36 +1217,37 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			//（"连接正常但写不进去"与"网络不通"是两句不同的话，修法也不同）。
 			this.probedUrl = null;
 			this.accessProbe = UNKNOWN_ACCESS_PROBE;
-			this.probeSample = { ...memo, writeError: outcome.putError };
-			return this.accessProbe;
+			const failed: ProbeRoundTripMemo = { ...memo, writeError: outcome.putError };
+			return { probe: this.accessProbe, sample: failed, url };
 		}
 
 		// ④ 删掉（在 `finally` 里做的），结果回填到**同一条记录**上
 		memo.leftBehind = outcome.leftBehind;
-		return outcome.value ?? this.accessProbe;
+		return { probe: outcome.value ?? this.accessProbe, sample: memo, url };
 	}
 
 	/**
-	 * 发一次匿名探测、过一遍"配置没变"的闸门，并把结果与"试的是哪条对象"一起记下。
+	 * 发一次匿名探测、过一遍"配置没变"的闸门，并把结论写进**唯一那一格**。
 	 *
 	 * 两件事必须在**同一处**做：`probedUrl` 既是"地址没变就别重复发"的缓存键，
 	 * 也是"这次结论还属于当前配置吗"的凭据。分成两处写，就会出现
 	 * "结论属于旧地址、却被当成新地址的结论"—— 那类错误只表现为"图时好时坏"。
+	 *
+	 * ⚠️ 界面**不读**这里写下的东西（它拿 `runConnectionProbe()` 的返回值）：
+	 * 并发时全局那一格可能已经被另一轮覆盖。
 	 */
-	private async recordAccessProbe(url: string, sample: ProbeSampleMemo): Promise<AccessProbe> {
+	private async recordAccessProbe(url: string): Promise<AccessProbe> {
 		this.probedUrl = url;
 		const probe = await probeAccess(url);
 		// 探测期间配置变了 ⇒ 这次结论不属于当前配置
 		if (this.probedUrl !== url) return this.accessProbe;
 		this.accessProbe = probe;
-		this.probeSample = sample;
 		return probe;
 	}
 
 	/** 忘掉上一次探测的结论（没有对象可试 / 配置不完整）：降级方向是"按私有处理"。 */
 	private forgetAccessProbe(): AccessProbe {
 		this.probedUrl = null;
-		this.probeSample = null;
 		this.accessProbe = UNKNOWN_ACCESS_PROBE;
 		return this.accessProbe;
 	}

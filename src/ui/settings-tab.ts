@@ -466,17 +466,18 @@ export class SettingsTab extends PluginSettingTab {
 	 * 自己另拼一个地址来测，测的就不是用户笔记里那条链接了 —— 而本项目刚因为
 	 * "推导与写入不同源"吃过一次亏（公开前缀根本没传到客户端）。
 	 *
-	 * ⚠️ 走 `plugin.refreshAccessProbe({ allowTempProbe: true })` 而不是这里
-	 * 自己发请求：这样"界面上显示的结论"与"渲染判定用的结论"**是同一份**。分成两份的话，
-	 * 用户会看到"测试说公开、图却按私有取"这种自相矛盾的表现。
+	 * ⚠️ 走 `plugin.runConnectionProbe()` 而不是这里自己发请求：这样"界面上显示的结论"与
+	 * "渲染判定用的结论"来自**同一次**探测。分成两份的话，用户会看到"测试说公开、图却按私有取"
+	 * 这种自相矛盾的表现。
 	 *
-	 * ⭐ 回路本身（写/读/删）在 `main.ts::refreshAccessProbeByRoundTrip`，判据与善后只有那一处；
+	 * ⭐ 回路本身（写/读/删）在 `main.ts::connectionProbeOnce`，判据与善后只有那一处；
 	 * 这一层只负责把**每一段的实测结果**说成人话。为什么每次都要写：
 	 * 借一条旧对象只能证明"读"，而只有读权限的密钥会在这里全绿通过、第一次上传才炸。
 	 */
 	private async runAccessCheck(): Promise<TestLine[]> {
-		const probe = await this.plugin.refreshAccessProbe({ allowTempProbe: true });
-		const sample = this.plugin.currentAccessProbeSample();
+		// ⭐ 用**返回值**而不是回头读全局字段：连点 / 与自动探测并发时，全局那一格可能已被
+		// 另一轮覆盖（对象名、字节数、删除状态都会错位，而界面上看不出来）。
+		const { probe, sample, url } = await this.plugin.runConnectionProbe();
 		const lines: TestLine[] = [];
 
 		// ① 写不进去 ⇒ 回路没跑起来（探测没发生）。这时说"没有链接可检查"是错的：
@@ -511,9 +512,9 @@ export class SettingsTab extends PluginSettingTab {
 		const resolution = resolveAccess(this.plugin.settings.linkAccess, probe);
 		lines.push({
 			key: publicLinkKey(kind),
-			// 地址取**真正探测过的那一条**（`currentAccessProbeUrl`），不在这里重推一遍：
+			// 地址取**这一轮真正探测过的那一条**（返回值里的 `url`），不在这里重推一遍：
 			// 重推就可能与探测用的地址不同源，而那种差异只会在用户对照时暴露。
-			params: { status: probe.status ?? "-", url: this.plugin.currentAccessProbeUrl() ?? "-" },
+			params: { status: probe.status ?? "-", url: url ?? "-" },
 			tone: publicLinkTone(kind),
 		});
 

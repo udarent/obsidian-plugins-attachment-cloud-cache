@@ -100,16 +100,45 @@ export async function runWithTempProbeObject<T>(deps: {
 }
 
 /**
- * 这一次探测**试的是哪条对象**、以及回路各段的实测结果。
+ * **单飞**：同一时刻只跑一轮，并发调用共用同一个 promise。
  *
- * 设置页据此把「写 → 读 → 删」逐段说清（哪一段坏、坏在哪），也据此解释
- * 「这次用的是临时对象」（否则用户看到一个自己没上传过的对象名会以为见了鬼）。
+ * ## 为什么探针回路必须有它
+ *
+ * 回路用的是**固定的**探测 key（重复测试只覆盖同一个对象）。两轮叠在一起时，后一轮的
+ * DELETE 可能落在前一轮的匿名 HEAD **之前** —— 前一轮于是看到 404，而 404 在这里的意思是
+ * 「地址通、对象不在 ⇒ 多半前缀写错了」，一条**假的**结论。
+ * （用户 2026-10-18 报的「快速连点有时弹出错误的测试结果」就是它。）
+ *
+ * ## 两条都别省
+ *
+ * 1. 在飞时直接返回**同一个** promise：第二次点击拿到的是这一轮的结果，不是另起一轮；
+ * 2. 跑完（**无论成功还是失败**）必须把句柄清掉：否则第二次点击拿到的是上一次的旧结果 ——
+ *    那正好是「测试按钮不刷新」的另一种假象。
  */
-export interface ProbeSampleMemo {
-	/** `index` = 自动探测借索引里已有的对象；`temp` = 按钮用的临时探针。 */
-	source: "index" | "temp";
+export function singleFlight<T>(start: () => Promise<T>): () => Promise<T> {
+	let inFlight: Promise<T> | null = null;
+	return () => {
+		if (inFlight) return inFlight;
+		const run = (async () => start())();
+		// ⚠️ `finally` 而不是 `then`：失败也必须清句柄，否则一次失败会让按钮**永远**返回同一个失败。
+		inFlight = run.finally(() => {
+			inFlight = null;
+		});
+		return inFlight;
+	};
+}
+
+/**
+ * 一轮探针回路的**实测状态**（写 / 读 / 删三段各自成不成立）。
+ *
+ * ⚠️ 它只描述**这一轮**发生过什么，不参与渲染判定 —— 判定只看 `AccessProbe` 那一格
+ * （`link-access.ts`）。界面拿的是 `main.ts::runConnectionProbe()` 的返回值，
+ * 不去读全局字段（并发时那会读到另一轮的东西）。
+ */
+export interface ProbeRoundTripMemo {
+	/** 这一轮用的探测对象 key（固定值，出错时用户要照着它去桶里删）。 */
 	key: string;
-	/** 临时探针**写不进去**时的原始错误（此时回路没跑起来，后面的段都没有）。 */
+	/** **写不进去**时的原始错误（此时回路没跑起来，后面的段都没有）。 */
 	writeError?: unknown;
 	/** 写进去了，但**读不回来**时的原始错误。 */
 	readError?: unknown;
@@ -117,6 +146,6 @@ export interface ProbeSampleMemo {
 	readBytes?: number;
 	/** 读回来的字节数与写进去的不一致。 */
 	sizeMismatch?: { written: number; read: number };
-	/** 临时探针没删掉 —— 会留在桶里。 */
+	/** 探测对象没删掉 —— 会留在桶里。 */
 	leftBehind: boolean;
 }
