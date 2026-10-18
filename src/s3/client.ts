@@ -320,6 +320,17 @@ export function objectBaseFor(address: ObjectAddress): string {
 export interface PublicLinkProbe {
 	/** HTTP 状态码；网络层失败（DNS 错、连不上、超时）为 `null`。 */
 	status: number | null;
+	/**
+	 * 响应头里的 `content-type`（拿不到为 `null`）。
+	 *
+	 * ⭐ 为什么连类型一起带回来：**2xx 不等于"打开的是你的对象"**。
+	 * 网关 / WAF / 身份校验页 / 反向代理会在路径不存在或请求被拦时回一个 **200 的网页**，
+	 * 于是"匿名请求成功了"被读成"桶是公开的" —— 而用户笔记里那条链接照样打不开。
+	 * 判定层用这一格把「回的是网页」从「取到了对象」里分开（见 `link-access.ts::classifyPublicReach`）。
+	 *
+	 * ⚠️ 只读头，不读 body：点一次"测试"不该把一张大图拉一遍。
+	 */
+	contentType?: string | null;
 }
 
 /**
@@ -338,9 +349,11 @@ export async function probePublicLink(url: string, deps: S3ClientDeps = {}): Pro
 	const transport = deps.transport ?? obsidianTransport;
 	try {
 		const response = await transport({ url, method: "HEAD", headers: {} });
-		return { status: response.status };
+		// ⚠️ 头名大小写各实现不一致 ⇒ 统一小写后再取（transport 已经小写过，这里只是兜底）
+		const contentType = response.headers?.["content-type"] ?? null;
+		return { status: response.status, contentType };
 	} catch {
-		return { status: null };
+		return { status: null, contentType: null };
 	}
 }
 

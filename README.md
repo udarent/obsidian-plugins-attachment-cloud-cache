@@ -76,7 +76,7 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | **Endpoint · Bucket · Region** | Where your storage lives. The bucket name must match exactly (it is case-sensitive); `us-east-1` is the usual filler for self-hosted. |
 | **Access key ID · Secret access key** | The secret goes into the OS keychain, never `data.json`. **Import from a credentials file** fills these in from MinIO's JSON and keeps no copy. |
 | **Public URL prefix** | Optional. Empty means links use `endpoint/bucket/key`; those open for other people only if the bucket allows anonymous reads — the light on **Test connection** says which case you are in. |
-| **Test connection** | A **status light** plus a button. The light is *checking* / *public* / *private* / *unreachable* — a fact about your bucket, not a setting: re-detected on every start, never persisted. The button writes **one tiny probe object**, reads it back to compare the bytes, asks the same address the way a stranger would (**no credentials**), then deletes it — uploading, fetching, deleting and external reach in one go, on an empty bucket too. Nothing is kept, and it **never rewrites a link**. |
+| **Test connection** | A **status light** plus a button. The light is *checking* / *public* / *private* / *unreachable* — a fact about your bucket, not a setting: re-detected on every start, never persisted. The button writes **one tiny probe object**, reads it back to compare the bytes, asks the same address the way a stranger would (**no credentials**), then deletes it — uploading, fetching, deleting and external reach in one go, on an empty bucket too. A `200` that turns out to be a web page does not count as public. Nothing is kept, and it **never rewrites a link**. |
 | **Upload new attachments automatically** | On by default. Off leaves new files local only. |
 | **Where the local copy goes** | **Keep the file where it is** (default, offline works) or **delete it after uploading**: uploads and links still happen, but nothing renders offline — images, audio and video are then served through short-lived signed URLs; PDFs still need a copy. |
 | **Local copy limit (MB) · Download missing copies** | `0` = no limit. Least-recently-used copies go first, and only after the object is confirmed to still be in your storage; they come back when next viewed. Auto-download is off in delete mode — except it always runs when the bucket is private, or nothing could be shown. |
@@ -121,6 +121,7 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | Broken on a second device | No local copy there, and it could not download one. |
 | An off-site file refused as "a web page or plain text" | That address serves HTML, so it is refused on purpose. |
 | *Test connection* says the storage refused to write | The keys can read but not write — uploads will fail the same way. Give them write permission on the bucket. |
+| *Test connection* says the address "answered with a web page" | A proxy, a WAF or a catch-all page answered `200` for a path that is not your file. That is **not** public access — fix the public URL prefix (it probably points somewhere else). |
 
 ## Privacy & security
 
@@ -235,7 +236,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | **服务地址 · 存储桶 · 区域** | 你的存储在哪。存储桶名称必须完全一致（区分大小写）；自建服务一般填 `us-east-1` 之类的占位值。 |
 | **访问密钥 ID · 秘密访问密钥** | 秘密密钥进系统钥匙串，绝不写进 `data.json`。**从凭据文件导入**会用 MinIO 的 JSON 填好这几栏，且不留副本。 |
 | **公开访问前缀** | 可留空。留空就用 `服务地址/存储桶/键`；这种链接要给别人打开，桶得允许匿名读取 —— 「测试连接」旁边那盏灯会告诉你属于哪种情形。 |
-| **测试连接** | 一盏**状态灯** ＋ 一个按钮。灯是**检测中 / 公开访问 / 私有访问 / 无法访问** —— 这是测出来的**事实，不是设置项**：每次启动重新测、从不落盘。按钮会写**一个几十字节的探测对象** → 读回来核对字节 → **不带凭据**问一次「别人打得开这条地址吗」→ 删掉：上传、取回、删除与「链接对外」一次测全，空桶也能测。什么都不留，也**绝不改写**笔记里的任何链接。 |
+| **测试连接** | 一盏**状态灯** ＋ 一个按钮。灯是**检测中 / 公开访问 / 私有访问 / 无法访问** —— 这是测出来的**事实，不是设置项**：每次启动重新测、从不落盘。按钮会写**一个几十字节的探测对象** → 读回来核对字节 → **不带凭据**问一次「别人打得开这条地址吗」→ 删掉：上传、取回、删除与「链接对外」一次测全，空桶也能测。⚠️ 回 `200` 但内容是网页的**不算**公开（那是代理或登录页）。什么都不留，也**绝不改写**笔记里的任何链接。 |
 | **新增附件自动上传** | 默认开启。关闭后新文件只存在本地。 |
 | **本地副本的处理** | **留在附件目录**（默认，离线可用），或**上传后删掉**：照常上传、照常改写链接，但离线什么都看不到 —— 图片、音频、视频改用短时签名地址；PDF 仍需副本。 |
 | **本地副本上限（MB） · 缺本地副本时自动下载** | `0` 表示不限制。超限时按最久没用过的顺序清理，且确认存储里还有那个对象才删；下次看图会自动补回。选「不留副本」时自动下载不生效 —— 但桶不公开时始终会取回，否则什么都显示不出来。 |
@@ -275,6 +276,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | 换台设备就裂 | 那台设备没有本地副本，也补不下来。 |
 | 站外文件被以「返回的是网页或纯文本」拒收 | 那个地址回的是 HTML，所以刻意拒收。 |
 | **测试连接** 说存储拒绝了写入 | 这把密钥能读不能写 —— 上传也会同样失败。给它桶的写权限。 |
+| **测试连接** 说那个地址「回的是一个网页」 | 代理、WAF 或兜底页对你的对象路径回了 `200`。这**不是**公开访问 —— 去改公开访问前缀（多半指到别处了）。 |
 
 ## 隐私与安全
 

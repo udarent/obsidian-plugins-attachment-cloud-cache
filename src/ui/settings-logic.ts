@@ -419,6 +419,10 @@ export function publicLinkTone(kind: PublicLinkKind): "ok" | "warn" | "error" {
 			return "ok";
 		case "forbidden":
 			return "warn";
+		case "webpage":
+			// 地址上有个东西回了网页 —— 不是「打不开」，也不是「我们的对象打得开」。
+			// 用 warn：该去看前缀，但桶本身未必有问题。
+			return "warn";
 		default:
 			return "error";
 	}

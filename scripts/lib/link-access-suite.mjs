@@ -183,6 +183,27 @@ export async function runLinkAccessSuite(mod) {
 		assert.equal(classifyPublicReach(404), "missing", "404 = 对象不在");
 		assert.equal(classifyPublicReach(null), "unreachable", "网络层失败");
 		assert.equal(classifyPublicReach(500), "other", "服务端错误不属于上面任何一类");
+
+		// ★ 2026-10-18 的误判：**2xx 不等于「打开的是你的对象」**。
+		// 网关 / WAF / 登录页 / 反代兜底页会回一个 200 的网页 —— 只看状态码就会报「公开访问」，
+		// 而笔记里那条链接照样打不开（用户还会因此把私有桶当成可以对外分享）。
+		assert.equal(
+			classifyPublicReach(200, "text/html; charset=utf-8"),
+			"webpage",
+			"★ 200 但是网页 ⇒ 不是「公开可读」，是「这个地址上有个东西」"
+		);
+		assert.equal(classifyPublicReach(200, "application/xhtml+xml"), "webpage", "XHTML 也算网页");
+		assert.equal(
+			classifyPublicReach(200, "image/png"),
+			"ok",
+			"真对象（image/png）仍然是公开可读 —— 这一条别改坏"
+		);
+		assert.equal(
+			classifyPublicReach(200, "application/xml"),
+			"ok",
+			"⚠️ XML 不算网页：S3 的错误页是 XML，但用户也可能真的传了一个 .xml 附件"
+		);
+		assert.equal(classifyPublicReach(403, "text/html"), "forbidden", "非 2xx 不参与「网页」判定");
 	}
 
 	// ============================================================
@@ -191,10 +212,14 @@ export async function runLinkAccessSuite(mod) {
 	{
 		// ① 正常
 		const okProbe = await probeAccess("https://img.example.com/a.png", {
-			probe: async () => ({ status: 200 }),
+			probe: async () => ({ status: 200, contentType: "image/png" }),
 			now: () => 42,
 		});
-		assert.deepEqual(okProbe, { kind: "ok", status: 200, at: 42 }, "探测结果要原样带上状态码与时刻");
+		assert.deepEqual(
+			okProbe,
+			{ kind: "ok", status: 200, at: 42, contentType: "image/png" },
+			"探测结果要原样带上状态码、时刻与 content-type"
+		);
 
 		// ② 探测实现自己抛错（传输层炸了）→ unreachable，而不是让异常冒到界面上
 		//

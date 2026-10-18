@@ -84,6 +84,13 @@ export type PublicReachKind =
 	| "forbidden"
 	/** 地址通、对象不在（404）。 */
 	| "missing"
+	/**
+	 * 2xx，但回的是**网页**而不是对象（网关 / WAF / 身份校验页 / 反向代理的兜底页）。
+	 *
+	 * ⚠️ 这一类**不能**算"公开"：它证明的是"这个地址上有个东西会回 200"，
+	 * 不是"别人能打开你的对象"。2026-10-18 的误判就出在这里 —— 见 `classifyPublicReach`。
+	 */
+	| "webpage"
 	/** 网络层失败（DNS / TLS / 连不上 / 超时）。 */
 	| "unreachable"
 	/** 其余状态码。 */
@@ -96,6 +103,8 @@ export interface AccessProbe {
 	status: number | null;
 	/** 探测时刻（毫秒时间戳）；`0` = 从没探测过。 */
 	at: number;
+	/** 响应头里的 `content-type`（拿不到为 `null`）；判定"回的是不是网页"要用它。 */
+	contentType?: string | null;
 	/**
 	 * 是不是**超时**放弃的（而不是对端明确给了状态码）。
 	 *
@@ -130,12 +139,34 @@ export const INITIAL_CONNECTION_STATE: ConnectionState = "checking";
  * - `missing` ⇒ 地址通但对象不在（多半前缀写错，例如少了桶名）；
  * - `unreachable` ⇒ 地址本身不对，或网络根本到不了。
  */
-export function classifyPublicReach(status: number | null): PublicReachKind {
+export function classifyPublicReach(status: number | null, contentType?: string | null): PublicReachKind {
 	if (status === null) return "unreachable";
-	if (status >= 200 && status < 300) return "ok";
+	if (status >= 200 && status < 300) {
+		// ⭐ **2xx 不等于"打开的是你的对象"**（2026-10-18 的误判）：
+		// 网关 / WAF / 身份校验页 / 反代兜底页会在路径不存在或请求被拦时回一个 **200 的网页**。
+		// 只看状态码的话，这种回应会被读成"桶是公开的"——而笔记里那条链接照样打不开，
+		// 用户还会因为"测试说公开"而把私有桶当成可以对外分享。
+		// ⇒ 2xx 还要求**回的不是网页**。
+		return isWebPageType(contentType) ? "webpage" : "ok";
+	}
 	if (status === 401 || status === 403) return "forbidden";
 	if (status === 404) return "missing";
 	return "other";
+}
+
+/**
+ * 这个 `content-type` 是不是"网页"。
+ *
+ * ⚠️ 只认 HTML（含 XHTML），**不认 `application/xml`**：S3 的错误页确实是 XML，
+ * 但用户也可能真的传了一个 `.xml` 附件 —— 把 XML 一律算"网页"会误伤那种对象。
+ * 而 HTML 基本不可能是一个附件（本项目也从不接受网页，见 README 的隐私一节）。
+ */
+function isWebPageType(contentType: string | null | undefined): boolean {
+	const type = String(contentType ?? "")
+		.split(";")[0]
+		.trim()
+		.toLowerCase();
+	return type === "text/html" || type === "application/xhtml+xml";
 }
 
 /**
@@ -272,7 +303,7 @@ export interface AccessProbeDeps {
 	 * ⚠️ 注入点在这里而不是在客户端上：探测**不能用带凭据的客户端**做 ——
 	 * 拿"我自己能打开"冒充"别人能打开"，这条检查会永远绿、什么都证明不了。
 	 */
-	probe?: (url: string) => Promise<{ status: number | null }>;
+	probe?: (url: string) => Promise<{ status: number | null; contentType?: string | null }>;
 }
 
 /** 等待 `promise`，超过 `ms` 就放弃（**不取消**那个请求，只是不再等它）。 */
@@ -312,7 +343,8 @@ export async function probeAccess(url: string, deps: AccessProbeDeps = {}): Prom
 			return { kind: "unreachable", status: null, at: now(), timedOut: true };
 		}
 		const status = raced.value?.status ?? null;
-		return { kind: classifyPublicReach(status), status, at: now() };
+		const contentType = raced.value?.contentType ?? null;
+		return { kind: classifyPublicReach(status, contentType), status, at: now(), contentType };
 	} catch {
 		// 探测实现自己抛错（传输层、解析、权限……）：一律当"到不了"。
 		return { kind: "unreachable", status: null, at: now() };

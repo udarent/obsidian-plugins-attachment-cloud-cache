@@ -13,9 +13,10 @@ import { runLinkAccessSuite } from "./lib/link-access-suite.mjs";
 await withLoadedTs(["src/link-access", "src/s3/client"], async (mod) => {
 	await runLinkAccessSuite(mod);
 	console.log(
-		"Link-access decisions passed (auto follows the probe — 2xx public, 401/403/404/network/unknown " +
-			"all fall back to internal; explicit modes win over the probe; missing copies must be fetched " +
-			"when access is internal unless no local copy is kept; the note URL is byte-identical across " +
-			"modes and the probe uses that very URL; probing never throws and a timeout is marked)."
+		"Link-access decisions passed (the probe decides the state — 2xx with a real object is public, " +
+			"2xx that turns out to be a web page is not, 401/403 is private, 404/network/unknown leave it " +
+			"unchanged; missing copies must be fetched when access is internal unless no local copy is " +
+			"kept; the note URL is byte-identical across states and the probe uses that very URL; probing " +
+			"never throws and a timeout is marked)."
 	);
 });

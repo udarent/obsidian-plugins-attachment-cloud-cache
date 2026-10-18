@@ -76,6 +76,8 @@ export const I18N: Record<string, Locale> = {
 			"Reached that address, but the object is not there — the URL base is probably wrong. Checked: {url}",
 		testPublic_unreachable: "Could not reach that address at all — the URL base is probably wrong. Checked: {url}",
 		testPublic_other: "Could not tell whether the link works — your storage answered in a way we do not recognise. Checked: {url}",
+		testPublic_webpage:
+			"That address answered with a web page, not with your file — the public URL prefix probably points somewhere else (a proxy, a login page or a catch-all page). Checked: {url}",
 		testPublic_noSample: "This time there was no object to check a link against, so whether it opens elsewhere could not be judged.",
 		// 探针回路（写 → 读 → 删）：每一段都要自己说明自己，否则用户会看到一个陌生的对象名
 		testProbe_roundTrip: "Probe object ({key}): written, read back identical ({bytes} bytes), deleted.",
@@ -418,6 +420,8 @@ export const I18N: Record<string, Locale> = {
 		testPublic_missing: "那个地址能连上，但对象不在 —— 多半是前缀写错了。检查的是：{url}",
 		testPublic_unreachable: "连不上那个地址 —— 前缀可能写错了。检查的是：{url}",
 		testPublic_other: "无法判断链接是否可用 —— 存储回了一个我们没预料到的结果。检查的是：{url}",
+		testPublic_webpage:
+			"那个地址回的是一个网页，不是你的文件 —— 公开访问前缀多半指到别处了（代理、登录页或兜底页）。检查的是：{url}",
 		testPublic_noSample: "这次没有可用的探测对象，因此判断不了链接在别处能不能打开。",
 		// 探针回路（写 → 读 → 删）：每一段都要自己说明自己，否则用户会看到一个陌生的对象名
 		testProbe_roundTrip: "探测对象（{key}）：写入 → 读回一致（{bytes} 字节）→ 已删除。",

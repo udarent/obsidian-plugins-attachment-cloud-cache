@@ -544,7 +544,8 @@ export class SettingsTab extends PluginSettingTab {
 			return lines;
 		}
 
-		const kind = classifyPublicLink(probe.status);
+		// ⚠️ 类型一起传：2xx + 网页 = 网关 / 校验页的兜底页，不是「对象打得开」（见 `classifyPublicReach`）
+		const kind = classifyPublicLink(probe.status, probe.contentType);
 		lines.push({
 			key: publicLinkKey(kind),
 			// 地址取**这一轮真正探测过的那一条**（返回值里的 `url`），不在这里重推一遍：

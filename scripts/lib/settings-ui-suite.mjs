@@ -206,10 +206,14 @@ export function runSettingsUiSuite(mod) {
 	assert.equal(classifyPublicLink(404), "missing", "404 是「地址通、对象不在」");
 	assert.equal(classifyPublicLink(500), "other");
 	assert.equal(classifyPublicLink(null), "unreachable", "★ 网络层失败（null）归为「连不上」");
+	// ★ 2xx + 网页 = 网关 / 登录页的兜底页，不是「对象打得开」（2026-10-18 的误判）
+	assert.equal(classifyPublicLink(200, "text/html"), "webpage", "网页 200 不许说成公开可读");
+	assert.equal(classifyPublicLink(200, "image/png"), "ok");
 
-	for (const kind of ["ok", "forbidden", "missing", "unreachable", "other"]) {
+	for (const kind of ["ok", "forbidden", "missing", "webpage", "unreachable", "other"]) {
 		assert.equal(publicLinkKey(kind), `testPublic_${kind}`, `每类都要有文案 key：${kind}`);
 	}
+	assert.equal(publicLinkTone("webpage"), "warn", "「回的是网页」该去看前缀，不是当失败也不算通过");
 
 	// 语气分三档：`forbidden` 只是"知道了就好"（桶私有是正当选择），
 	// 而 `missing`/`unreachable` 是**地址配错了**，该去改前缀。
