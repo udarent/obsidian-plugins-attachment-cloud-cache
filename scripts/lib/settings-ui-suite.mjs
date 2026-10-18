@@ -28,7 +28,7 @@ export function runSettingsUiSuite(mod) {
 		classifyPublicLink,
 		publicLinkKey,
 		publicLinkTone,
-		probeWriteFailureKey,
+		probeStepFailureKey,
 		externalSiteModeOptions,
 		orphanAskOptions,
 		linkAccessOptions,
@@ -220,21 +220,32 @@ export function runSettingsUiSuite(mod) {
 	assert.equal(publicLinkTone("other"), "error");
 
 	// ============================================================
-	// 4c. 「临时探针放不上去」怎么说（1.7.1 起空库也能测完第二步）
+	// 4c. 探针回路某一段失败怎么说（1.7.0 起「测试连接」做 写 → 读 → 删）
 	// ============================================================
 	//
-	// 这一步是**写**：连接与桶都验过了（第一步），坏在写权限上，而**上传也会这样失败**。
+	// 两段的失败**含义与修法都不同**：写不进去 ⇒ 上传会失败（查写权限）；
+	// 读不回来 ⇒ 私有桶取副本 / 离线渲染会坏（查读权限）。
 	// 所以不能拿"服务拒绝了凭据"糊过去（用户会去重填密钥，而密钥是对的），
-	// 也不能说"没有可检查的对象"（那是另一回事）。网络 / 限流除外 —— 那两种**确实**
-	// 就是原来那两句，换新话只会让人以为存储配置有毛病。
+	// 也不能把两段说成同一句（用户不知道去改哪一边）。网络 / 限流与段无关，沿用原句。
 	assert.equal(
-		probeWriteFailureKey({ kind: "auth" }),
+		probeStepFailureKey("write", { kind: "auth" }),
 		"testFail_probeWrite",
 		"★ 写被拒要说成「写入被拒」，而不是「凭据错了」"
 	);
-	assert.equal(probeWriteFailureKey({ kind: "unknown" }), "testFail_probeWrite", "归类不明的写失败也按写入被拒说");
-	assert.equal(probeWriteFailureKey({ kind: "network" }), "testFail_network", "网络不通仍然说网络（与写权限无关）");
-	assert.equal(probeWriteFailureKey({ kind: "throttled" }), "testFail_throttled", "限流仍然说稍后再试");
+	assert.equal(
+		probeStepFailureKey("read", { kind: "auth" }),
+		"testFail_probeRead",
+		"★ 读不回来要说成「读取权限」，而不是写成被拒"
+	);
+	assert.equal(probeStepFailureKey("write", { kind: "unknown" }), "testFail_probeWrite", "归类不明的写失败也按写入被拒说");
+	assert.equal(
+		probeStepFailureKey("write", { kind: "network" }),
+		"testFail_network",
+		"网络不通仍然说网络（与写权限无关）"
+	);
+	assert.equal(probeStepFailureKey("read", { kind: "network" }), "testFail_network", "读的那一段网络不通同样说网络");
+	assert.equal(probeStepFailureKey("write", { kind: "throttled" }), "testFail_throttled", "限流仍然说稍后再试");
+	assert.equal(probeStepFailureKey("read", { kind: "throttled" }), "testFail_throttled");
 
 	// ============================================================
 	// 5. 键的解析

@@ -180,11 +180,19 @@ await runMutations({
 		},
 		{
 			// 后果：网络不通被说成"写入被拒" ⇒ 用户去查密钥的写权限，而真正坏的是网络。
-			// 两件事的修法完全不同，而这句话是"临时探针放不上去"时唯一的信息来源。
+			// 两件事的修法完全不同，而这句话是"探针回路跑不起来"时唯一的信息来源。
 			name: "★ 网络失败被说成「存储拒绝写入」（把人引去查权限）",
 			from: '\tif (kind === "network") return "testFail_network";',
 			to: '\tif (kind === "network") return "testFail_probeWrite";',
 			expect: "网络不通仍然说网络",
+		},
+		{
+			// 后果：读不回来被说成"写入被拒" ⇒ 用户去查写权限，而上传是好的、坏的是**读**
+			// （私有桶取副本 / 离线渲染全用它）。两段的修法不同，结论也必须是两句话。
+			name: "★★ 读不回来被说成「写入被拒」（把人引去查错的那一边）",
+			from: '\treturn step === "write" ? "testFail_probeWrite" : "testFail_probeRead";',
+			to: '\treturn "testFail_probeWrite";',
+			expect: "读不回来要说成「读取权限」",
 		},
 	],
 });

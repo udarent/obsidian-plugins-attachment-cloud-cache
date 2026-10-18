@@ -358,21 +358,26 @@ export function publicLinkKey(kind: PublicLinkKind): string {
 }
 
 /**
- * 「临时探针对象没放上去」→ 一句该怎么说。
+ * 「探针回路的某一段没成功」→ 一句该怎么说。
  *
- * 这一步是**写**，所以它的失败原因和"连不上"不是同一件事：
- * 连接与桶都验过了（第一步），坏在写权限上 —— 而**上传也会这样失败**。
- * 所以不能拿 `testFail_*` 里那句"服务拒绝了凭据"糊过去（用户会去重填密钥，
- * 而密钥是对的、缺的是桶的写权限）；也不能说成"没有链接可检查"（那是另一回事）。
+ * 回路是**写 → 读 → 删**三段，每一段的失败原因与修法都不同：
  *
- * ⚠️ 网络类与限流类仍然沿用原来那两句：那两种失败**确实**是"没连上 / 稍后再试"，
- * 换一句新话只会让用户以为存储配置有毛病。
+ * | 段 | 失败的含义 | 该查什么 |
+ * |---|---|---|
+ * | `write` | 连接与桶都通，但**写不进去** ⇒ 上传也会这样失败 | 这把密钥的写权限 |
+ * | `read` | 写进去了但**读不回来** ⇒ 私有桶取副本 / 离线渲染会坏 | 这把密钥的读权限 |
+ *
+ * ⚠️ 所以不能拿 `testFail_*` 里那句"服务拒绝了凭据"糊过去（用户会去重填密钥，
+ * 而密钥是对的、缺的是某一段的权限），也不能说成"没有可检查的对象"（那是另一回事）。
+ * 网络 / 限流两类的**含义与段无关**，仍然沿用原来那两句 —— 换新话只会让用户以为
+ * 存储配置有毛病。
  */
-export function probeWriteFailureKey(error: unknown): string {
+export function probeStepFailureKey(step: "write" | "read", error: unknown): string {
 	const kind = classifyConnectionFailure(error);
 	if (kind === "network") return "testFail_network";
 	if (kind === "throttled") return "testFail_throttled";
-	return "testFail_probeWrite";
+	// 两段共用一个函数（同一套归类规则），但**结论必须是两句话**
+	return step === "write" ? "testFail_probeWrite" : "testFail_probeRead";
 }
 
 /**

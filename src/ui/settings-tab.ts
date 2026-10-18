@@ -46,7 +46,7 @@ import {
 	linkAccessOptions,
 	localCopyOptions,
 	orphanAskOptions,
-	probeWriteFailureKey,
+	probeStepFailureKey,
 	publicLinkKey,
 	publicLinkTone,
 	randomSlotPart,
@@ -454,59 +454,72 @@ export class SettingsTab extends PluginSettingTab {
 	}
 
 	/**
-	 * 第二步：**匿名**试着打开「当前配置会写进笔记的那个地址」，回答两个问题：
+	 * 第二步：**探针回路 + 匿名可达性**。回答四件事（逐行显示）：
 	 *
-	 * 1. **别人打得开吗**（`testPublic_*`）—— 桶允许匿名读吗、前缀写对了吗；
-	 * 2. **我们据此走哪条路**（`testAccess_*`）—— 公开读取，还是内部访问（取回本地副本）。
+	 * 1. **写得进去吗**（`testFail_probeWrite`）—— 上传靠它；
+	 * 2. **取得回来吗**（`testProbe_roundTrip` / `testFail_probeRead` / `testFail_probeMismatch`）——
+	 *    私有桶取副本、离线渲染靠它；
+	 * 3. **删得掉吗**（`testProbe_tempLeftBehind`）—— 云端清理靠它，也关系到"有没有留下垃圾"；
+	 * 4. **别人打得开吗**（`testPublic_*`）与**我们据此走哪条路**（`testAccess_*`）。
 	 *
-	 * ⚠️ 必须试**真的要写的那个地址**：`probeUrlFor` 与写链接同一套推导（`publicUrlFor`）。
+	 * ⚠️ 第 4 问必须试**真的要写的那个地址**：`probeUrlFor` 与写链接同一套推导（`publicUrlFor`）。
 	 * 自己另拼一个地址来测，测的就不是用户笔记里那条链接了 —— 而本项目刚因为
 	 * "推导与写入不同源"吃过一次亏（公开前缀根本没传到客户端）。
 	 *
-	 * ⚠️ 走 `plugin.refreshAccessProbe({ force: true, allowTempProbe: true })` 而不是这里
-	 * 自己发一次请求：这样"界面上显示的结论"与"渲染判定用的结论"**是同一份**。分成两份的话，
+	 * ⚠️ 走 `plugin.refreshAccessProbe({ allowTempProbe: true })` 而不是这里
+	 * 自己发请求：这样"界面上显示的结论"与"渲染判定用的结论"**是同一份**。分成两份的话，
 	 * 用户会看到"测试说公开、图却按私有取"这种自相矛盾的表现。
 	 *
-	 * ⭐ **空库也能测完这一步**（2026-10-18 补，随 1.7.0）：桶里一条对象都没有时临时放一个探针对象
-	 *（`allowTempProbe`）—— 判据是"真实对象才回答得了关于真实对象的问题"。用户点这一下
-	 * 就该得到答案，而不是被告知"先上传一个文件再来"。代价（一写一删）在说明里写明，
-	 * 结果里也有一条"这次是临时放的、已删掉"，用户不必去猜那个陌生的对象名。
+	 * ⭐ 回路本身（写/读/删）在 `main.ts::refreshAccessProbeByRoundTrip`，判据与善后只有那一处；
+	 * 这一层只负责把**每一段的实测结果**说成人话。为什么每次都要写：
+	 * 借一条旧对象只能证明"读"，而只有读权限的密钥会在这里全绿通过、第一次上传才炸。
 	 */
 	private async runAccessCheck(): Promise<TestLine[]> {
-		const probe = await this.plugin.refreshAccessProbe({ force: true, allowTempProbe: true });
+		const probe = await this.plugin.refreshAccessProbe({ allowTempProbe: true });
 		const sample = this.plugin.currentAccessProbeSample();
+		const lines: TestLine[] = [];
 
-		// 临时探针放不上去 ⇒ 探测**没发生**。这时说"没有链接可检查"是错的：
+		// ① 写不进去 ⇒ 回路没跑起来（探测没发生）。这时说"没有链接可检查"是错的：
 		// 连接是通的、桶也在，坏的是**写**（上传同样会失败）—— 该去查那把密钥的写权限。
 		if (sample?.writeError) {
-			return [{ key: probeWriteFailureKey(sample.writeError), tone: "error" }];
+			return [{ key: probeStepFailureKey("write", sample.writeError), tone: "error" }];
 		}
 
+		// ② 读回：三段结果各自一句话（只有在"写成功了"之后才谈得上）
+		if (sample?.readError) {
+			lines.push({ key: probeStepFailureKey("read", sample.readError), tone: "error" });
+		} else if (sample?.sizeMismatch) {
+			lines.push({ key: "testFail_probeMismatch", params: { ...sample.sizeMismatch }, tone: "error" });
+		} else if (typeof sample?.readBytes === "number") {
+			// 一条就够：这个对象是谁、写了多少字节读回多少字节、已经删掉了。
+			// 用户不该去猜那个陌生的对象名（它不是他上传的）。
+			lines.push({
+				key: "testProbe_roundTrip",
+				params: { key: sample.key, bytes: sample.readBytes },
+				tone: "info",
+			});
+		}
+
+		// ③ 匿名可达性（别人的视角）
 		if (probe.kind === "unknown") {
-			// 没有对象可试，且连临时探针都没放上：**如实说无从验证**，而不是报一个假的通过
-			return [{ key: "testPublic_noSample", tone: "warn" }];
+			// 没有可用的探测对象：**如实说无从验证**，而不是报一个假的通过
+			lines.push({ key: "testPublic_noSample", tone: "warn" });
+			return lines;
 		}
 
 		const kind = classifyPublicLink(probe.status);
 		const resolution = resolveAccess(this.plugin.settings.linkAccess, probe);
-		const lines: TestLine[] = [
-			{
-				key: publicLinkKey(kind),
-				// 地址取**真正探测过的那一条**（`currentAccessProbeUrl`），不在这里重推一遍：
-				// 重推就可能与探测用的地址不同源，而那种差异只会在用户对照时暴露。
-				params: { status: probe.status ?? "-", url: this.plugin.currentAccessProbeUrl() ?? "-" },
-				tone: publicLinkTone(kind),
-			},
-		];
+		lines.push({
+			key: publicLinkKey(kind),
+			// 地址取**真正探测过的那一条**（`currentAccessProbeUrl`），不在这里重推一遍：
+			// 重推就可能与探测用的地址不同源，而那种差异只会在用户对照时暴露。
+			params: { status: probe.status ?? "-", url: this.plugin.currentAccessProbeUrl() ?? "-" },
+			tone: publicLinkTone(kind),
+		});
 
-		// 临时探针必须**自己说明自己**：否则用户会看到一条自己没上传过的对象名，
-		// 以为插件往他桶里塞了东西（事实上是塞了，但只塞了几十个字节、而且已经删了）。
-		if (sample?.source === "temp") {
-			lines.push(
-				sample.leftBehind
-					? { key: "testProbe_tempLeftBehind", params: { key: sample.key }, tone: "warn" }
-					: { key: "testProbe_temp", params: { key: sample.key }, tone: "info" }
-			);
+		// ④ 删不掉**必须**单独说：对象还在用户的桶里，而他自己不会想到去查（带 key 他才删得掉）
+		if (sample?.leftBehind) {
+			lines.push({ key: "testProbe_tempLeftBehind", params: { key: sample.key }, tone: "warn" });
 		}
 
 		lines.push({

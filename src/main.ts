@@ -58,7 +58,7 @@ import type { S3Client } from "./s3/client";
 import { connectionReadiness } from "./s3/credentials";
 import { UNKNOWN_ACCESS_PROBE, probeAccess, probeUrlFor } from "./link-access";
 import type { AccessProbe } from "./link-access";
-import { TEMP_PROBE_BODY, planProbeSample, runWithTempProbeObject } from "./probe-sample";
+import { TEMP_PROBE_BODY, TEMP_PROBE_KEY, runWithTempProbeObject } from "./probe-sample";
 import type { ProbeSampleMemo } from "./probe-sample";
 import { utf8Bytes } from "./s3/hash";
 import { createLocalCopyEnsurer } from "./core/download";
@@ -1110,102 +1110,114 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	}
 
 	/**
-	 * 匿名探测一次并**更新**认知。设置页的「测试连接」直接调它
-	 *（`force: true` + `allowTempProbe: true`，两个都要）。
+	 * 匿名探测一次并**更新**认知。两个调用方，两条**不同**的路：
+	 *
+	 * | 谁 | 怎么做 | 写桶吗 |
+	 * |---|---|---|
+	 * | 自动探测（启动 / 保存设置） | 借**索引里已有**的对象发一次匿名 HEAD | ❌ 一次都不写 |
+	 * | 「测试连接」（`allowTempProbe`） | **探针回路**：写一个几十字节的对象 → 读回核对 → 匿名读 → 删掉 | ✅ 只在按钮里 |
 	 *
 	 * ## 四条刻意的边界
 	 *
-	 * 1. **不需要凭据**：探测是匿名 HEAD，所以"还没配密钥"时它照样能给出结论 ——
-	 *    而"桶是不是公开的"恰恰是配置阶段就该知道的事。
-	 *    （⚠️ 只有"桶里一条对象都没有、要临时放探针"那一步需要凭据 —— 而那时
-	 *    设置页的第一步 `headBucket` 已经证明凭据可用了。）
+	 * 1. **匿名探测本身不需要凭据**（"桶是不是公开的"在配置阶段就该知道）。只有探针回路那三步
+	 *    要凭据 —— 而那时设置页的第一步 `headBucket` 已经证明凭据可用了。
 	 * 2. **没有对象可试** ⇒ 认知退回 `UNKNOWN`（而不是沿用上一次的结论）：这可能是
 	 *    用户刚换了桶 / 清空了库，用旧结论去决定新地址的路径是错的。
 	 * 3. **探测期间配置又变了** ⇒ 丢弃这次结果（`probedUrl` 对不上）。否则会拿
 	 *    旧地址的结论决定新地址走哪条路，而那种错误只表现为"图时好时坏"。
-	 * 4. ⭐ **只有 `allowTempProbe` 会写桶**：临时探针对象只为用户亲手点的按钮而放。
-	 *    自动探测（启动 / 保存设置）**不列举、不写** —— 它回答的只是"渲染该走哪条路"，
-	 *    为此往用户的桶里写字（还可能是每敲一个字符一次）是不可接受的。
+	 * 4. ⭐ **自动探测绝不写桶、也不列举**：它可能每敲一个字符跑一次，回答的只是
+	 *    "渲染该走哪条路"。需要更全的结论（写/读/删三段）时，用户点那个按钮。
 	 *
-	 * 三级候选见 `probe-sample.ts`：索引 → 桶里第一个对象（只读）→ 临时探针。
-	 * 前两级都是**现成的真实对象**，零写入；第三级只发生在"桶也是空的"。
-	 *
-	 * @param options.force 无视"地址没变"的短路（用户手点按钮时要真发一次）
-	 * @param options.allowTempProbe 允许临时放一个探针对象（**仅限用户点按钮**）
+	 * @param options.allowTempProbe 走**探针回路**（写/读/删；**仅限用户点按钮**）
 	 */
-	async refreshAccessProbe(options: { force?: boolean; allowTempProbe?: boolean } = {}): Promise<AccessProbe> {
+	async refreshAccessProbe(options: { allowTempProbe?: boolean } = {}): Promise<AccessProbe> {
+		// 用户点了「测试连接」⇒ 回路：写一次 → 读一次 → 删掉。与索引里有没有对象无关
+		//（有旧对象也只证明了"读"那一段，而上传/删除同样可能不通）。
+		if (options.allowTempProbe === true) return this.refreshAccessProbeByRoundTrip();
+
+		// 自动探测：只认索引里已有的对象。索引空 ⇒ 不知道（按私有处理），
+		// ⚠️ **不**为了它去列举或写桶。
 		const indexedKey = this.sampleObjectKey();
-		const allowTemp = options.allowTempProbe === true;
+		const url = probeUrlFor(this.settings.s3, indexedKey);
+		if (!indexedKey || !url) return this.forgetAccessProbe();
 
-		// 自动探测：索引里有对象才试；索引空就直接退回"不知道"（不为此发请求）
-		if (!indexedKey && !allowTemp) return this.forgetAccessProbe();
-
-		// 没有索引可依时，列桶和放探针都得有客户端
-		const client = indexedKey ? null : this.buildClient();
-		if (!indexedKey && !client) return this.forgetAccessProbe();
-
-		const plan = await planProbeSample({
-			indexedKeys: indexedKey ? [indexedKey] : [],
-			listFirstKey: client ? () => this.listFirstObjectKey(client) : null,
-			allowTempObject: client !== null,
-		});
-		const key = plan.key;
-		const url = probeUrlFor(this.settings.s3, key);
-		if (plan.source === "none" || !key || !url) return this.forgetAccessProbe();
-
-		// 地址没变、且已经有一个结论 ⇒ 不重复发请求（保存设置会走到这里，可能是每个字符一次）
-		if (!options.force && url === this.probedUrl && this.accessProbe.kind !== "unknown") {
+		// 地址没变、且已经有一个结论 ⇒ 不重复发请求（保存设置可能是每个字符一次）。
+		// ⚠️ 只有自动探测会走到这里；按钮那条路每次都真写一次，不需要「强制刷新」这种开关 ——
+		// 一个此后再没人用的参数只会让下一个人以为它还有用。
+		if (url === this.probedUrl && this.accessProbe.kind !== "unknown") {
 			return this.accessProbe;
 		}
-
-		if (plan.source !== "temp") {
-			return this.recordAccessProbe(url, { source: plan.source, key, leftBehind: false });
-		}
-
-		if (!client) return this.forgetAccessProbe();
-
-		// 临时探针：放上去 → 匿名测 → 删掉（清理在 `finally` 里，测失败也删）
-		const memo: ProbeSampleMemo = { source: "temp", key, leftBehind: false };
-		const outcome = await runWithTempProbeObject({
-			key,
-			put: async (probeKey) => {
-				await client.putObject(probeKey, utf8Bytes(TEMP_PROBE_BODY), "text/plain");
-			},
-			remove: (probeKey) => client.deleteObject(probeKey),
-			measure: () => this.recordAccessProbe(url, memo),
-		});
-
-		if (!outcome.placed) {
-			// 放不上去 ⇒ **探测没发生**。原始错误交回界面归类 —— 它才知道怎么说人话
-			//（"连接正常但写不进去"与"网络不通"是两句不同的话，修法也不同）。
-			this.probedUrl = null;
-			this.accessProbe = UNKNOWN_ACCESS_PROBE;
-			this.probeSample = { source: "temp", key, leftBehind: false, writeError: outcome.putError };
-			return this.accessProbe;
-		}
-
-		// ⚠️ 清理结果回填到**同一条记录**上（`recordAccessProbe` 存进 `probeSample` 的就是它）
-		memo.leftBehind = outcome.leftBehind;
-		return outcome.value ?? this.accessProbe;
+		return this.recordAccessProbe(url, { source: "index", key: indexedKey, leftBehind: false });
 	}
 
 	/**
-	 * 桶里第一个对象的 key —— **只读**列举一次。
+	 * 「测试连接」第二步：**临时放一个几十字节的对象，写一次、读一次、删掉**。
 	 *
-	 * 只在"索引里没有对象、而用户亲手点了测试连接"时用：索引不是事实，桶才是
-	 *（换设备 / 索引被删之后，桶里那些对象就是真对象）。
+	 * ## 为什么要走完整回路
 	 *
-	 * ⚠️ 失败一律当"没找到"：没有列举权限是最常见的一种，不该因此中断测试 ——
-	 * 下一级（临时探针）照样能给出结论。真正的失败会在**写**那一步如实暴露。
+	 * 三步各自对应插件的一件真实能力，任何一件不通它都是坏的：
+	 *
+	 * | 段 | 对应能力 | 坏了的症状 |
+	 * |---|---|---|
+	 * | PUT 探针对象 | 上传附件 | 粘贴/上传全失败 |
+	 * | 签名 GET 读回 | 取回本地副本 / 离线渲染 | 「上传成功但图显示不出来」 |
+	 * | 匿名 HEAD | **别人**打得开链接吗 | 发给别人的链接全是死链 |
+	 * | DELETE 探针对象 | 云端清理 / 腾空间 | 桶里越积越多 |
+	 *
+	 * 借一条**已有的**对象只能测到第 3 段 —— 只有读权限的密钥会全绿通过，然后第一次上传就失败。
+	 * 所以这里每次都真做一遍（用户点的这一下，多几次往返换一个"确凿"）。
+	 *
+	 * ## 读回为什么比"PUT 返回 200"更有价值
+	 *
+	 * `putObject` 自带的传后校验只问服务端"你记了多少字节"（HEAD），本方法问的是
+	 * "**我把字节取回来**还对得上吗" —— 它顺带证明了 `GetObject` 权限，而那正是
+	 * 私有桶渲染 / 离线副本要用的权限。⚠️ 读不回来**不影响**下一段：匿名那一问
+	 * 与凭据无关，照样要问（两个结论都属于这次测试）。
 	 */
-	private async listFirstObjectKey(client: S3Client): Promise<string | null> {
-		try {
-			const listed = await client.listObjects({ maxKeys: 1 });
-			return listed.objects[0]?.key ?? null;
-		} catch (error) {
-			console.warn("[attachment-cloud-cache] 列举存储桶失败，改用临时探针对象", error);
-			return null;
+	private async refreshAccessProbeByRoundTrip(): Promise<AccessProbe> {
+		const client = this.buildClient();
+		const key = TEMP_PROBE_KEY;
+		const url = probeUrlFor(this.settings.s3, key);
+		if (!client || !url) return this.forgetAccessProbe();
+
+		const body = utf8Bytes(TEMP_PROBE_BODY);
+		const memo: ProbeSampleMemo = { source: "temp", key, leftBehind: false };
+
+		const outcome = await runWithTempProbeObject({
+			key,
+			put: async (probeKey) => {
+				await client.putObject(probeKey, body, "text/plain");
+			},
+			remove: (probeKey) => client.deleteObject(probeKey),
+			measure: async () => {
+				// ② 读一次（**带签名**）：字节对得上才算"写成功了"，顺带证明 GetObject 权限
+				try {
+					const back = await client.getObject(key);
+					memo.readBytes = back.data.length;
+					if (back.data.length !== body.length) {
+						memo.sizeMismatch = { written: body.length, read: back.data.length };
+					}
+				} catch (error) {
+					// 读不回来**不中断**：匿名那一问与凭据无关，照样要问
+					memo.readError = error;
+				}
+				// ③ 匿名读一次：别人打得开吗（这一步不写任何东西）
+				return this.recordAccessProbe(url, memo);
+			},
+		});
+
+		if (!outcome.placed) {
+			// ① 写不进去 ⇒ **回路没跑起来**。原始错误交回界面归类 —— 它才知道怎么说人话
+			//（"连接正常但写不进去"与"网络不通"是两句不同的话，修法也不同）。
+			this.probedUrl = null;
+			this.accessProbe = UNKNOWN_ACCESS_PROBE;
+			this.probeSample = { ...memo, writeError: outcome.putError };
+			return this.accessProbe;
 		}
+
+		// ④ 删掉（在 `finally` 里做的），结果回填到**同一条记录**上
+		memo.leftBehind = outcome.leftBehind;
+		return outcome.value ?? this.accessProbe;
 	}
 
 	/**
