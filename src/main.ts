@@ -1278,6 +1278,24 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		return probe;
 	}
 
+	/**
+	 * 记录一次「**这次真的没连上**」—— 设置页第一步 `headBucket` 就失败（桶不存在 /
+	 * 网络 / 凭据被拒）时由它调用。
+	 *
+	 * 为什么不让界面自己把状态写死：状态只有一份、判据只有一处（`link-access.ts`），
+	 * 界面自己写会立刻造出两份结论，而症状正是\"测试说连不上、图却照旧走远端地址\"。
+	 *
+	 * ⚠️ 只用于**实测失败**：配置还没填完（`testFail_notReady`）不算 —— 那种情形下
+	 * 凭据一次都没发出去，说\"无法访问\"是我们没验过的结论。
+	 */
+	noteConnectionUnreachable(): ConnectionState {
+		// 这次没有任何测量 ⇒ 旧的探测结论与缓存键都作废（下次自动探测要真的再问一次）。
+		this.probedUrl = null;
+		this.lastProbe = UNKNOWN_ACCESS_PROBE;
+		this.connectionState = "unreachable";
+		return this.connectionState;
+	}
+
 	/** 忘掉上一次探测的结论（没有对象可试 / 配置不完整）：降级方向是"按私有处理"。 */
 	private forgetAccessProbe(): AccessProbe {
 		this.probedUrl = null;

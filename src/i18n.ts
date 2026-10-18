@@ -41,16 +41,13 @@ export const I18N: Record<string, Locale> = {
 		s3PublicUrlBase: "Public URL prefix",
 		s3PublicUrlBaseDesc:
 			"Image links are built from this prefix plus the object path. You can leave it empty: links then use the object address (endpoint + bucket), which needs the bucket to allow anonymous reads. On a CDN or a custom domain, fill this in.",
-		connectionStatusName: "Connection status",
-		connectionStatusDesc:
-			"What this plugin has worked out about your storage's permissions. It is a fact about your bucket, not a setting — press Test connection below to check again. Public: anyone holding a link can open it. Private: only this plugin with your keys can. Unreachable: neither worked.",
 		connectionStatus_checking: "Checking…",
 		connectionStatus_public: "Public access — anyone with a link can open it.",
 		connectionStatus_private: "Private access — links open here only, with your keys.",
 		connectionStatus_unreachable: "Unreachable — neither anonymous nor signed access worked. Check the address, the bucket and the keys.",
 		testConnection: "Test connection",
 		testConnectionDesc:
-			"Writes one tiny probe object to your bucket, reads it back to compare, then deletes it — so uploading, fetching and deleting are all checked in one go. Nothing is kept. One of those checks (asking the address without credentials) is exactly what the status above shows.",
+			"Writes one tiny probe object to your bucket, reads it back to compare, then deletes it — so uploading, fetching and deleting are all checked in one go. Nothing is kept. The light below shows the result: it is a fact about your bucket, not a setting, so there is nothing to choose — press the button to check again.",
 		s3Import: "Import from a credentials file",
 		s3ImportDesc:
 			"Read the JSON your storage provider gives you (MinIO's “Download credentials” produces one) and fill in the fields below. Only the service address, the access key and the addressing mode are written to the plugin's data; the secret key goes straight into your OS keychain, and no copy of the file is kept.",
@@ -386,16 +383,13 @@ export const I18N: Record<string, Locale> = {
 		s3PublicUrlBase: "公开访问前缀",
 		s3PublicUrlBaseDesc:
 			"笔记里的图片链接 = 这个前缀 + 对象路径。可以留空 —— 留空就用对象地址（服务地址 + 存储桶），那要求存储桶允许匿名读取；走 CDN 或自定义域名时必须填。",
-		connectionStatusName: "连接状态",
-		connectionStatusDesc:
-			"这是插件测出来的**事实**，不是你选的设置 —— 桶允许谁打开，只能问出来；想重新确认就点下面的「测试连接」。公开访问：任何拿到链接的人都能打开。私有访问：只有装了本插件、配了密钥的人能打开。无法访问：两种方式都不通。",
 		connectionStatus_checking: "正在检测…",
 		connectionStatus_public: "公开访问 —— 任何拿到链接的人都能打开。",
 		connectionStatus_private: "私有访问 —— 链接只在装了本插件、有密钥的地方能打开。",
 		connectionStatus_unreachable: "无法访问 —— 匿名与签名都取不到。请检查服务地址、桶名与密钥。",
 		testConnection: "测试连接",
 		testConnectionDesc:
-			"会往桶里写一个很小的探测对象、读回来核对，再删掉 —— 上传、取回、删除一次测全，什么都不留。其中「不带凭据问一次那条地址」就是上面那个连接状态的来源。",
+			"会往桶里写一个很小的探测对象、读回来核对，再删掉 —— 上传、取回、删除一次测全，什么都不留。下面那盏灯是当前状态：它是测出来的事实、不是设置项，所以没有可选项 —— 想重新确认就点这个按钮。",
 		s3Import: "从凭据文件导入",
 		s3ImportDesc:
 			"读取存储服务商给你的那份 JSON（MinIO 控制台的「下载凭据」就是这种），自动填好下面几栏。只有服务地址、访问密钥和寻址方式会写进插件的数据；秘密访问密钥直接进系统钥匙串，插件不留副本。",

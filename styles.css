@@ -31,6 +31,52 @@
 	line-height: 1.4;
 }
 
+/* ─────────────────────────────────────────────
+   「测试连接」旁边那盏状态指示灯
+
+   灯的颜色**不在这里挑**：容器已经带上 `acc-test-${tone}`，灯用
+   `background-color: currentColor` 跟着文字走。分成两处各配一次色，
+   迟早会一红一绿 —— 而灯说谎比没有灯更糟（用户看一眼颜色就不再读字）。
+   ───────────────────────────────────────────── */
+.acc-status .acc-status-head {
+	display: flex;
+	align-items: center;
+	gap: 0.45em;
+	font-size: var(--font-ui-smaller);
+	margin-top: 0.25em;
+	line-height: 1.4;
+}
+
+.acc-status-dot {
+	width: 0.5em;
+	height: 0.5em;
+	border-radius: 50%;
+	background-color: currentColor;
+	flex: 0 0 auto;
+}
+
+/* 「检测中」要能看出**还在动**：静止的灰点与"某个已经问出来的状态"长得一样，
+   用户会以为它卡住了。旁边那句"正在检测…"是兜底，所以关掉动效偏好时退回静止点。 */
+.acc-status-checking {
+	animation: acc-status-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes acc-status-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.25;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.acc-status-checking {
+		animation: none;
+	}
+}
+
 .acc-test-pending {
 	color: var(--text-muted);
 }

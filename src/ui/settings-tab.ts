@@ -184,18 +184,13 @@ export class SettingsTab extends PluginSettingTab {
 			},
 
 			{
-				name: this.t("connectionStatusName"),
-				desc: this.t("connectionStatusDesc"),
-				// 别名覆盖用户会搜的词：他们要的是"能不能给别人看"，不一定知道"ACL / 匿名读"
-				aliases: ["status", "link", "share", "public", "private", "acl", "permission", "公开", "私有", "权限", "外链", "分享", "别人", "状态"],
-				// ⭐ 这一项**不是**用户能选的（2026-10-18 起）：桶公开不公开是一个**事实**，
-				// 由下面那个按钮测出来。这里只负责把事实显示出来 —— 所以是 `render` 而不是下拉。
-				render: (setting) => this.renderConnectionStatus(setting),
-			},
-
-			{
+				// ⭐ 状态与按钮**在同一项里**（2026-10-18）：用户问的是"现在通不通"，
+				// 而按钮就是让这个答案变成"刚才"的那个动作 —— 分成两项，用户得在两处
+				// 之间来回对照，还会以为它们是两件不相干的事。
 				name: this.t("testConnection"),
 				desc: this.t("testConnectionDesc"),
+				// 别名覆盖用户会搜的词：他们要的是"能不能给别人看"，不一定知道"ACL / 匿名读"
+				aliases: ["status", "test", "link", "share", "public", "private", "acl", "permission", "公开", "私有", "权限", "外链", "分享", "别人", "状态"],
 				render: (setting) => this.renderConnectionTest(setting),
 			},
 
@@ -390,60 +385,62 @@ export class SettingsTab extends PluginSettingTab {
 		}
 	}
 
-	/**
-	 * 「连接状态」—— 这一项**只显示**，不可选：桶公开不公开是一个**事实**，不是偏好。
-	 *
-	 * 状态由两处刷新：启动 / 保存设置时的自动探测，以及下面那个「测试连接」按钮。
-	 * ⚠️ 按钮那条路把**这一轮**交回的 `state` 直接写进来（不读全局）：并发时全局那一格
-	 * 可能已经是另一轮的结论。
-	 */
-	private renderConnectionStatus(setting: Setting): void {
-		const line = setting.descEl.createDiv({ cls: "acc-connection-status" });
-		this.statusEl = line;
-		this.paintStatus(line, this.plugin.currentConnectionState());
-	}
-
-	/** 测试那一轮结束后把状态写回这一行（`state` 来自返回值，不是全局）。 */
+	/** 测试那一轮结束后把状态写回那一行（`state` 来自返回值，不是全局）。 */
 	private refreshStatusLine(state: ConnectionState): void {
 		if (this.statusEl) this.paintStatus(this.statusEl, state);
 	}
 
+	/**
+	 * 把状态画成**一行带指示灯的话**。
+	 *
+	 * 颜色不在这里挑：`acc-test-${tone}` 已经按语气给容器上了色，灯用
+	 * `background-color: currentColor` 跟着走 —— 于是"灯的颜色"与"文字的颜色"
+	 * 不可能分叉。⚠️ 分两处各挑一次，错的那次一定是红绿颠倒，而灯一旦说谎
+	 * 比没有灯更糟（用户会看一眼颜色就不再读字）。
+	 */
 	private paintStatus(el: HTMLElement, state: ConnectionState): void {
 		el.empty();
-		el.createDiv({
-			cls: `acc-test-line acc-test-${connectionStateTone(state)}`,
-			text: this.t(connectionStateKey(state)),
-		});
+		const head = el.createDiv({ cls: `acc-status-head acc-test-${connectionStateTone(state)}` });
+		head.createSpan({ cls: `acc-status-dot acc-status-${state}` });
+		head.createSpan({ text: this.t(connectionStateKey(state)) });
 	}
 
 	/**
-	 * 「测试连接」按钮。
+	 * 「测试连接」—— 状态指示灯 + 按钮 + 逐行证据，**同一项**里。
 	 *
-	 * 它做**两步**，回答两个不同的问题：
+	 * 它做**三步**，回答三个不同的问题：
 	 * 1. 真的发一条 `HEAD /桶` 出去 —— 「**我**这边连得上吗？」（只做静态校验就不叫测试连接了）
-	 * 2. **匿名**请求一次「当前配置会写进笔记的那个地址」—— 「**别人**打得开我笔记里的链接吗？」
+	 * 2. **探针回路**（写 → 读回核对 → 删）—— 「上传、取回、删除这三件事还通吗？」
+	 * 3. **匿名**请求一次「当前配置会写进笔记的那个地址」—— 「**别人**打得开我笔记里的链接吗？」
 	 *
-	 * 第 2 步才是最容易被漏掉的一半：前一步全绿、而发给别人的链接全是死的，
+	 * 第 3 步才是最容易被漏掉的一半：前两步全绿、而发给别人的链接全是死的，
 	 * 是最能长期不被察觉的状态（本项目就出过一次 —— 公开前缀根本没生效，谁都没发现）。
 	 *
 	 * 结果**就地逐行显示**在说明下方：用 Notice 会一闪而过，而排查连接时用户需要
 	 * 对照着改（Notice 只在第一步通过时补一条，免得重复打扰）。
 	 */
 	private renderConnectionTest(setting: Setting): void {
-		const statusEl = setting.descEl.createDiv({ cls: "acc-connection-status" });
+		// ① 状态行（灯 + 一句话）：只显示、不可选 —— 桶公开不公开是一个**事实**，不是偏好。
+		const statusEl = setting.descEl.createDiv({ cls: "acc-connection-status acc-status" });
+		this.statusEl = statusEl;
+		this.paintStatus(statusEl, this.plugin.currentConnectionState());
+
+		// ② 结果行**另起一个容器**：测试期间要清空重画，不能连状态行一起擦掉 ——
+		// 那正好是用户最想看灯的时候（"正在检测…"）。
+		const resultEl = setting.descEl.createDiv({ cls: "acc-connection-status" });
 
 		setting.addButton((button) => {
 			button.setButtonText(this.t("testConnection")).onClick(async () => {
 				button.setDisabled(true);
 				button.setButtonText(this.t("testing"));
-				statusEl.empty();
-				statusEl.createDiv({ cls: "acc-test-line acc-test-pending", text: this.t("testing") });
+				resultEl.empty();
+				resultEl.createDiv({ cls: "acc-test-line acc-test-pending", text: this.t("testing") });
 
 				try {
 					const lines = await this.runConnectionTest();
-					statusEl.empty();
+					resultEl.empty();
 					for (const line of lines) {
-						statusEl.createDiv({
+						resultEl.createDiv({
 							cls: `acc-test-line acc-test-${line.tone}`,
 							text: this.t(line.key, line.params),
 						});
@@ -462,16 +459,24 @@ export class SettingsTab extends PluginSettingTab {
 	private async runConnectionTest(): Promise<TestLine[]> {
 		const readiness = connectionReadiness(this.app.secretStorage, this.plugin.settings);
 		if (!readiness.ready) {
+			// ⚠️ 这里**不改**状态：配置还没填完时一次测量都没发生（凭据都没发出去过），
+			// 把它说成"无法访问"是替用户下了个我们没验过的结论。
 			return [{ key: "testFail_notReady", params: { problem: readiness.problem }, tone: "error" }];
 		}
 
 		try {
 			const client = createS3Client(readiness.config);
 			const { exists } = await client.headBucket();
-			if (!exists) return [{ key: "testFail_bucketMissing", tone: "error" }];
+			if (!exists) {
+				// 桶不在 ⇒ 从"现在能不能用"的角度就是不可达。**顺手把灯也改掉**：
+				// 否则上面那盏灯还绿着，而紧挨着的这一行说桶不存在 —— 同一次测试里自相矛盾。
+				this.refreshStatusLine(this.plugin.noteConnectionUnreachable());
+				return [{ key: "testFail_bucketMissing", tone: "error" }];
+			}
 		} catch (error) {
 			// 只取**归类**，不把原始 message 抛给用户：那是给排查用的（可能带一屏 XML），
 			// 而用户此刻需要的是"下一步改哪儿"。
+			this.refreshStatusLine(this.plugin.noteConnectionUnreachable());
 			return [{ key: connectionFailureKey(classifyConnectionFailure(error)), tone: "error" }];
 		}
 
