@@ -20,10 +20,10 @@
 
    ⚠️ 这些类原先只写在代码里、样式表里一个都没有 —— 于是连接测试的结果
    **没有任何颜色**，看起来和普通说明文字一样。反馈没有视觉差异时，
-   用户会以为它根本没跑。现在按语气分三档着色。
+   用户会以为它根本没跑。现在按语气分四档着色（`ok` / `warn` / `error` / `info`）。
 
-   `--text-success` / `--text-warning` / `--text-error` 都是宿主主题变量，
-   所以跟随用户的主题；不写死颜色。
+   `--text-success` / `--text-warning` / `--text-error` / `--text-muted` 都是宿主
+   主题变量，所以跟随用户的主题；不写死颜色。
    ───────────────────────────────────────────── */
 .acc-connection-status .acc-test-line {
 	font-size: var(--font-ui-smaller);
@@ -41,6 +41,12 @@
 
 .acc-test-warn {
 	color: var(--text-warning);
+}
+
+/* 事实说明（例如"这次是临时放了一个探针对象来测的"）：
+   既不是通过也不是失败，所以借用**中性**的 muted —— 涂绿会被读成"这一项也过了"。 */
+.acc-test-info {
+	color: var(--text-muted);
 }
 
 .acc-test-error {

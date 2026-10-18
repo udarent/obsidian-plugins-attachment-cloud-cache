@@ -46,6 +46,7 @@ import {
 	linkAccessOptions,
 	localCopyOptions,
 	orphanAskOptions,
+	probeWriteFailureKey,
 	publicLinkKey,
 	publicLinkTone,
 	randomSlotPart,
@@ -60,10 +61,12 @@ interface TestLine {
 	key: string;
 	params?: Record<string, unknown>;
 	/**
-	 * 呈现语气。分三档是有意的：`warn` 表示"知道了就好"（例如桶私有 —— 那是正当选择，
-	 * 只是链接对外是死的），`error` 表示"该去改点什么"。都涂成红色会让用户去改没坏的东西。
+	 * 呈现语气。分四档是有意的：`warn` 表示"知道了就好"（例如桶私有 —— 那是正当选择，
+	 * 只是链接对外是死的），`error` 表示"该去改点什么"，`info` 是**事实说明**
+	 *（例如"这次是用临时探针对象测的"—— 既不是好消息也不是坏消息）。
+	 * 都涂成红色会让用户去改没坏的东西；把 `info` 涂成绿色会被误读成"这一项也通过了"。
 	 */
-	tone: "ok" | "warn" | "error";
+	tone: "ok" | "warn" | "error" | "info";
 }
 
 export class SettingsTab extends PluginSettingTab {
@@ -460,14 +463,27 @@ export class SettingsTab extends PluginSettingTab {
 	 * 自己另拼一个地址来测，测的就不是用户笔记里那条链接了 —— 而本项目刚因为
 	 * "推导与写入不同源"吃过一次亏（公开前缀根本没传到客户端）。
 	 *
-	 * ⚠️ 走 `plugin.refreshAccessProbe({ force: true })` 而不是这里自己发一次请求：
-	 * 这样"界面上显示的结论"与"渲染判定用的结论"**是同一份**。分成两份的话，
+	 * ⚠️ 走 `plugin.refreshAccessProbe({ force: true, allowTempProbe: true })` 而不是这里
+	 * 自己发一次请求：这样"界面上显示的结论"与"渲染判定用的结论"**是同一份**。分成两份的话，
 	 * 用户会看到"测试说公开、图却按私有取"这种自相矛盾的表现。
+	 *
+	 * ⭐ **空库也能测完这一步**（2026-10-18 补，随 1.7.0）：桶里一条对象都没有时临时放一个探针对象
+	 *（`allowTempProbe`）—— 判据是"真实对象才回答得了关于真实对象的问题"。用户点这一下
+	 * 就该得到答案，而不是被告知"先上传一个文件再来"。代价（一写一删）在说明里写明，
+	 * 结果里也有一条"这次是临时放的、已删掉"，用户不必去猜那个陌生的对象名。
 	 */
 	private async runAccessCheck(): Promise<TestLine[]> {
-		const probe = await this.plugin.refreshAccessProbe({ force: true });
+		const probe = await this.plugin.refreshAccessProbe({ force: true, allowTempProbe: true });
+		const sample = this.plugin.currentAccessProbeSample();
+
+		// 临时探针放不上去 ⇒ 探测**没发生**。这时说"没有链接可检查"是错的：
+		// 连接是通的、桶也在，坏的是**写**（上传同样会失败）—— 该去查那把密钥的写权限。
+		if (sample?.writeError) {
+			return [{ key: probeWriteFailureKey(sample.writeError), tone: "error" }];
+		}
+
 		if (probe.kind === "unknown") {
-			// 没有对象可试：**如实说无从验证**，而不是报一个假的通过
+			// 没有对象可试，且连临时探针都没放上：**如实说无从验证**，而不是报一个假的通过
 			return [{ key: "testPublic_noSample", tone: "warn" }];
 		}
 
@@ -481,14 +497,25 @@ export class SettingsTab extends PluginSettingTab {
 				params: { status: probe.status ?? "-", url: this.plugin.currentAccessProbeUrl() ?? "-" },
 				tone: publicLinkTone(kind),
 			},
-			{
-				key: `testAccess_${resolution.access}`,
-				// 把"为什么"带上：`auto` 档下用户看不到自己选的东西，只有这个理由能让他判断
-				// "该不该去存储那边改权限"。
-				params: { reason: this.t(`testAccessReason_${resolution.reason}`) },
-				tone: resolution.access === "public" ? "ok" : "warn",
-			},
 		];
+
+		// 临时探针必须**自己说明自己**：否则用户会看到一条自己没上传过的对象名，
+		// 以为插件往他桶里塞了东西（事实上是塞了，但只塞了几十个字节、而且已经删了）。
+		if (sample?.source === "temp") {
+			lines.push(
+				sample.leftBehind
+					? { key: "testProbe_tempLeftBehind", params: { key: sample.key }, tone: "warn" }
+					: { key: "testProbe_temp", params: { key: sample.key }, tone: "info" }
+			);
+		}
+
+		lines.push({
+			key: `testAccess_${resolution.access}`,
+			// 把"为什么"带上：`auto` 档下用户看不到自己选的东西，只有这个理由能让他判断
+			// "该不该去存储那边改权限"。
+			params: { reason: this.t(`testAccessReason_${resolution.reason}`) },
+			tone: resolution.access === "public" ? "ok" : "warn",
+		});
 
 		// 探测不出来（超时 / 连不上）时把话说准：这不是"桶私有"，是"我们不知道"。
 		// 判定方向仍然是内部路径（安全方向），但用户得知道该去查哪一边。

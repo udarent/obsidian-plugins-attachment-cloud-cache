@@ -178,5 +178,13 @@ await runMutations({
 			// 因为"少一个取值"这件事首先表现为集合不一致。按纪律如实写这一条。
 			expect: "选项集合必须与 ORPHAN_ASK_MODES 完全一致",
 		},
+		{
+			// 后果：网络不通被说成"写入被拒" ⇒ 用户去查密钥的写权限，而真正坏的是网络。
+			// 两件事的修法完全不同，而这句话是"临时探针放不上去"时唯一的信息来源。
+			name: "★ 网络失败被说成「存储拒绝写入」（把人引去查权限）",
+			from: '\tif (kind === "network") return "testFail_network";',
+			to: '\tif (kind === "network") return "testFail_probeWrite";',
+			expect: "网络不通仍然说网络",
+		},
 	],
 });

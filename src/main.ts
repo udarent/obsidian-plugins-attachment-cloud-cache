@@ -58,6 +58,9 @@ import type { S3Client } from "./s3/client";
 import { connectionReadiness } from "./s3/credentials";
 import { UNKNOWN_ACCESS_PROBE, probeAccess, probeUrlFor } from "./link-access";
 import type { AccessProbe } from "./link-access";
+import { TEMP_PROBE_BODY, planProbeSample, runWithTempProbeObject } from "./probe-sample";
+import type { ProbeSampleMemo } from "./probe-sample";
+import { utf8Bytes } from "./s3/hash";
 import { createLocalCopyEnsurer } from "./core/download";
 import {
 	keyOfUrl,
@@ -141,6 +144,14 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 
 	/** 上一次探测用的地址 —— 用来避免"敲一个字就发一次 HEAD"。 */
 	private probedUrl: string | null = null;
+
+	/**
+	 * 上一次探测**试的是哪条对象**（索引里的 / 桶里的 / 临时放的探针）。
+	 *
+	 * 设置页用它解释"这次是怎么测的"：临时探针必须在界面上说一句，
+	 * 否则用户会看到一个自己没上传过的对象名。
+	 */
+	private probeSample: ProbeSampleMemo | null = null;
 
 	/** 防抖句柄（`window.setTimeout` 的返回值是数字，见 {@link scheduleAccessProbe}）。 */
 	private accessProbeTimer: number | null = null;
@@ -1060,11 +1071,23 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	/**
 	 * 索引里任意一条对象的 key —— 供设置页验证「笔记里那条公开链接，**别人**打得开吗」。
 	 *
-	 * 没有则返回 `null`（还没上传过任何东西）。设置页据此**如实说"无从验证"**，
-	 * 而不是拿一个假的通过糊弄过去。
+	 * 没有则返回 `null`（还没上传过任何东西）。⚠️ 它只认**索引**：索引不是事实，
+	 * 桶才是 —— "索引空、桶里有对象"（换设备 / 索引丢了）由
+	 * {@link refreshAccessProbe} 的 `allowTempProbe` 那条路处理（列举 → 临时探针）。
 	 */
 	sampleObjectKey(): string | null {
 		return this.currentIndex().keys()[0] ?? null;
+	}
+
+	/**
+	 * 上一次探测**试的是哪条对象**（`null` = 还没探测过 / 刚被清空）。
+	 *
+	 * 设置页据此区分三种情形：索引里的真实对象（不必多说什么）、桶里的真实对象、
+	 * **临时探针对象**（必须说一句"临时放的、测完删了"）。也用于把
+	 * 「临时探针都放不上去」如实报出来，而不是含糊地说"测不了"。
+	 */
+	currentAccessProbeSample(): ProbeSampleMemo | null {
+		return this.probeSample;
 	}
 
 	/**
@@ -1087,38 +1110,127 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	}
 
 	/**
-	 * 匿名探测一次并**更新**认知。设置页的「测试连接」直接调它（`force: true`）。
+	 * 匿名探测一次并**更新**认知。设置页的「测试连接」直接调它
+	 *（`force: true` + `allowTempProbe: true`，两个都要）。
 	 *
-	 * ## 三条刻意的边界
+	 * ## 四条刻意的边界
 	 *
 	 * 1. **不需要凭据**：探测是匿名 HEAD，所以"还没配密钥"时它照样能给出结论 ——
 	 *    而"桶是不是公开的"恰恰是配置阶段就该知道的事。
+	 *    （⚠️ 只有"桶里一条对象都没有、要临时放探针"那一步需要凭据 —— 而那时
+	 *    设置页的第一步 `headBucket` 已经证明凭据可用了。）
 	 * 2. **没有对象可试** ⇒ 认知退回 `UNKNOWN`（而不是沿用上一次的结论）：这可能是
 	 *    用户刚换了桶 / 清空了库，用旧结论去决定新地址的路径是错的。
 	 * 3. **探测期间配置又变了** ⇒ 丢弃这次结果（`probedUrl` 对不上）。否则会拿
 	 *    旧地址的结论决定新地址走哪条路，而那种错误只表现为"图时好时坏"。
+	 * 4. ⭐ **只有 `allowTempProbe` 会写桶**：临时探针对象只为用户亲手点的按钮而放。
+	 *    自动探测（启动 / 保存设置）**不列举、不写** —— 它回答的只是"渲染该走哪条路"，
+	 *    为此往用户的桶里写字（还可能是每敲一个字符一次）是不可接受的。
+	 *
+	 * 三级候选见 `probe-sample.ts`：索引 → 桶里第一个对象（只读）→ 临时探针。
+	 * 前两级都是**现成的真实对象**，零写入；第三级只发生在"桶也是空的"。
 	 *
 	 * @param options.force 无视"地址没变"的短路（用户手点按钮时要真发一次）
+	 * @param options.allowTempProbe 允许临时放一个探针对象（**仅限用户点按钮**）
 	 */
-	async refreshAccessProbe(options: { force?: boolean } = {}): Promise<AccessProbe> {
-		const url = probeUrlFor(this.settings.s3, this.sampleObjectKey());
-		if (!url) {
-			this.probedUrl = null;
-			this.accessProbe = UNKNOWN_ACCESS_PROBE;
-			return this.accessProbe;
-		}
+	async refreshAccessProbe(options: { force?: boolean; allowTempProbe?: boolean } = {}): Promise<AccessProbe> {
+		const indexedKey = this.sampleObjectKey();
+		const allowTemp = options.allowTempProbe === true;
+
+		// 自动探测：索引里有对象才试；索引空就直接退回"不知道"（不为此发请求）
+		if (!indexedKey && !allowTemp) return this.forgetAccessProbe();
+
+		// 没有索引可依时，列桶和放探针都得有客户端
+		const client = indexedKey ? null : this.buildClient();
+		if (!indexedKey && !client) return this.forgetAccessProbe();
+
+		const plan = await planProbeSample({
+			indexedKeys: indexedKey ? [indexedKey] : [],
+			listFirstKey: client ? () => this.listFirstObjectKey(client) : null,
+			allowTempObject: client !== null,
+		});
+		const key = plan.key;
+		const url = probeUrlFor(this.settings.s3, key);
+		if (plan.source === "none" || !key || !url) return this.forgetAccessProbe();
 
 		// 地址没变、且已经有一个结论 ⇒ 不重复发请求（保存设置会走到这里，可能是每个字符一次）
 		if (!options.force && url === this.probedUrl && this.accessProbe.kind !== "unknown") {
 			return this.accessProbe;
 		}
 
+		if (plan.source !== "temp") {
+			return this.recordAccessProbe(url, { source: plan.source, key, leftBehind: false });
+		}
+
+		if (!client) return this.forgetAccessProbe();
+
+		// 临时探针：放上去 → 匿名测 → 删掉（清理在 `finally` 里，测失败也删）
+		const memo: ProbeSampleMemo = { source: "temp", key, leftBehind: false };
+		const outcome = await runWithTempProbeObject({
+			key,
+			put: async (probeKey) => {
+				await client.putObject(probeKey, utf8Bytes(TEMP_PROBE_BODY), "text/plain");
+			},
+			remove: (probeKey) => client.deleteObject(probeKey),
+			measure: () => this.recordAccessProbe(url, memo),
+		});
+
+		if (!outcome.placed) {
+			// 放不上去 ⇒ **探测没发生**。原始错误交回界面归类 —— 它才知道怎么说人话
+			//（"连接正常但写不进去"与"网络不通"是两句不同的话，修法也不同）。
+			this.probedUrl = null;
+			this.accessProbe = UNKNOWN_ACCESS_PROBE;
+			this.probeSample = { source: "temp", key, leftBehind: false, writeError: outcome.putError };
+			return this.accessProbe;
+		}
+
+		// ⚠️ 清理结果回填到**同一条记录**上（`recordAccessProbe` 存进 `probeSample` 的就是它）
+		memo.leftBehind = outcome.leftBehind;
+		return outcome.value ?? this.accessProbe;
+	}
+
+	/**
+	 * 桶里第一个对象的 key —— **只读**列举一次。
+	 *
+	 * 只在"索引里没有对象、而用户亲手点了测试连接"时用：索引不是事实，桶才是
+	 *（换设备 / 索引被删之后，桶里那些对象就是真对象）。
+	 *
+	 * ⚠️ 失败一律当"没找到"：没有列举权限是最常见的一种，不该因此中断测试 ——
+	 * 下一级（临时探针）照样能给出结论。真正的失败会在**写**那一步如实暴露。
+	 */
+	private async listFirstObjectKey(client: S3Client): Promise<string | null> {
+		try {
+			const listed = await client.listObjects({ maxKeys: 1 });
+			return listed.objects[0]?.key ?? null;
+		} catch (error) {
+			console.warn("[attachment-cloud-cache] 列举存储桶失败，改用临时探针对象", error);
+			return null;
+		}
+	}
+
+	/**
+	 * 发一次匿名探测、过一遍"配置没变"的闸门，并把结果与"试的是哪条对象"一起记下。
+	 *
+	 * 两件事必须在**同一处**做：`probedUrl` 既是"地址没变就别重复发"的缓存键，
+	 * 也是"这次结论还属于当前配置吗"的凭据。分成两处写，就会出现
+	 * "结论属于旧地址、却被当成新地址的结论"—— 那类错误只表现为"图时好时坏"。
+	 */
+	private async recordAccessProbe(url: string, sample: ProbeSampleMemo): Promise<AccessProbe> {
 		this.probedUrl = url;
 		const probe = await probeAccess(url);
 		// 探测期间配置变了 ⇒ 这次结论不属于当前配置
 		if (this.probedUrl !== url) return this.accessProbe;
 		this.accessProbe = probe;
+		this.probeSample = sample;
 		return probe;
+	}
+
+	/** 忘掉上一次探测的结论（没有对象可试 / 配置不完整）：降级方向是"按私有处理"。 */
+	private forgetAccessProbe(): AccessProbe {
+		this.probedUrl = null;
+		this.probeSample = null;
+		this.accessProbe = UNKNOWN_ACCESS_PROBE;
+		return this.accessProbe;
 	}
 
 	/**

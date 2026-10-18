@@ -358,6 +358,24 @@ export function publicLinkKey(kind: PublicLinkKind): string {
 }
 
 /**
+ * 「临时探针对象没放上去」→ 一句该怎么说。
+ *
+ * 这一步是**写**，所以它的失败原因和"连不上"不是同一件事：
+ * 连接与桶都验过了（第一步），坏在写权限上 —— 而**上传也会这样失败**。
+ * 所以不能拿 `testFail_*` 里那句"服务拒绝了凭据"糊过去（用户会去重填密钥，
+ * 而密钥是对的、缺的是桶的写权限）；也不能说成"没有链接可检查"（那是另一回事）。
+ *
+ * ⚠️ 网络类与限流类仍然沿用原来那两句：那两种失败**确实**是"没连上 / 稍后再试"，
+ * 换一句新话只会让用户以为存储配置有毛病。
+ */
+export function probeWriteFailureKey(error: unknown): string {
+	const kind = classifyConnectionFailure(error);
+	if (kind === "network") return "testFail_network";
+	if (kind === "throttled") return "testFail_throttled";
+	return "testFail_probeWrite";
+}
+
+/**
  * 归类 → 呈现的**语气**（界面上的颜色）。
  *
  * 分三档而不是"对/错"：`forbidden` 是**知道了就好**（桶私有是正当选择，只是链接对外是死的），

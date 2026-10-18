@@ -28,6 +28,7 @@ export function runSettingsUiSuite(mod) {
 		classifyPublicLink,
 		publicLinkKey,
 		publicLinkTone,
+		probeWriteFailureKey,
 		externalSiteModeOptions,
 		orphanAskOptions,
 		linkAccessOptions,
@@ -217,6 +218,23 @@ export function runSettingsUiSuite(mod) {
 	assert.equal(publicLinkTone("missing"), "error", "地址通则对象不在 = 前缀配错了");
 	assert.equal(publicLinkTone("unreachable"), "error", "连不上 = 地址配错了");
 	assert.equal(publicLinkTone("other"), "error");
+
+	// ============================================================
+	// 4c. 「临时探针放不上去」怎么说（1.7.1 起空库也能测完第二步）
+	// ============================================================
+	//
+	// 这一步是**写**：连接与桶都验过了（第一步），坏在写权限上，而**上传也会这样失败**。
+	// 所以不能拿"服务拒绝了凭据"糊过去（用户会去重填密钥，而密钥是对的），
+	// 也不能说"没有可检查的对象"（那是另一回事）。网络 / 限流除外 —— 那两种**确实**
+	// 就是原来那两句，换新话只会让人以为存储配置有毛病。
+	assert.equal(
+		probeWriteFailureKey({ kind: "auth" }),
+		"testFail_probeWrite",
+		"★ 写被拒要说成「写入被拒」，而不是「凭据错了」"
+	);
+	assert.equal(probeWriteFailureKey({ kind: "unknown" }), "testFail_probeWrite", "归类不明的写失败也按写入被拒说");
+	assert.equal(probeWriteFailureKey({ kind: "network" }), "testFail_network", "网络不通仍然说网络（与写权限无关）");
+	assert.equal(probeWriteFailureKey({ kind: "throttled" }), "testFail_throttled", "限流仍然说稍后再试");
 
 	// ============================================================
 	// 5. 键的解析

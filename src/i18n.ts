@@ -42,7 +42,8 @@ export const I18N: Record<string, Locale> = {
 		s3PublicUrlBaseDesc:
 			"Image links are built from this prefix plus the object path. You can leave it empty: links then use the object address (endpoint + bucket), which needs the bucket to allow anonymous reads. On a CDN or a custom domain, fill this in.",
 		testConnection: "Test connection",
-		testConnectionDesc: "Sends one request to your bucket.",
+		testConnectionDesc:
+			"Sends a request to your bucket. If nothing has been uploaded yet it briefly puts a tiny probe object in the bucket, checks it, and deletes it again.",
 		s3Import: "Import from a credentials file",
 		s3ImportDesc:
 			"Read the JSON your storage provider gives you (MinIO's “Download credentials” produces one) and fill in the fields below. Only the service address, the access key and the addressing mode are written to the plugin's data; the secret key goes straight into your OS keychain, and no copy of the file is kept.",
@@ -70,7 +71,13 @@ export const I18N: Record<string, Locale> = {
 			"Reached that address, but the object is not there — the URL base is probably wrong. Checked: {url}",
 		testPublic_unreachable: "Could not reach that address at all — the URL base is probably wrong. Checked: {url}",
 		testPublic_other: "Could not tell whether the link works — your storage answered in a way we do not recognise. Checked: {url}",
-		testPublic_noSample: "Nothing uploaded yet, so there is no link to check — upload a file first.",
+		testPublic_noSample: "There is nothing to check a link against (the bucket is empty), so whether links open elsewhere cannot be judged.",
+		// 临时探针：这一步做了**写**，必须自己说明自己，否则用户会看到一个陌生的对象名
+		testProbe_temp: "Tested with a temporary probe object ({key}). It has been deleted again.",
+		testProbe_tempLeftBehind:
+			"Tested with a temporary probe object ({key}), but it could not be deleted — please remove it from the bucket.",
+		testFail_probeWrite:
+			"Connected, but the storage refused to write — uploads will fail the same way. Check that these keys may write to the bucket.",
 
 		// ── 链接可访问性：访问方式与两种模式的差别（1.7.0）──
 		linkAccessName: "Who can open the links in your notes",
@@ -384,7 +391,8 @@ export const I18N: Record<string, Locale> = {
 		s3PublicUrlBaseDesc:
 			"笔记里的图片链接 = 这个前缀 + 对象路径。可以留空 —— 留空就用对象地址（服务地址 + 存储桶），那要求存储桶允许匿名读取；走 CDN 或自定义域名时必须填。",
 		testConnection: "测试连接",
-		testConnectionDesc: "会向存储桶发一次请求。",
+		testConnectionDesc:
+			"会向存储桶发一次请求。还没上传过任何东西时，会在桶里临时放一个很小的探测对象、测完立刻删掉。",
 		s3Import: "从凭据文件导入",
 		s3ImportDesc:
 			"读取存储服务商给你的那份 JSON（MinIO 控制台的「下载凭据」就是这种），自动填好下面几栏。只有服务地址、访问密钥和寻址方式会写进插件的数据；秘密访问密钥直接进系统钥匙串，插件不留副本。",
@@ -411,7 +419,11 @@ export const I18N: Record<string, Locale> = {
 		testPublic_missing: "那个地址能连上，但对象不在 —— 多半是前缀写错了。检查的是：{url}",
 		testPublic_unreachable: "连不上那个地址 —— 前缀可能写错了。检查的是：{url}",
 		testPublic_other: "无法判断链接是否可用 —— 存储回了一个我们没预料到的结果。检查的是：{url}",
-		testPublic_noSample: "还没上传过任何东西，没有链接可检查 —— 先上传一个文件。",
+		testPublic_noSample: "桶里没有任何对象可用来检查，因此判断不了链接在别处能不能打开。",
+		// 临时探针：这一步做了**写**，必须自己说明自己，否则用户会看到一个陌生的对象名
+		testProbe_temp: "这次是临时放了一个探测对象（{key}）来测的，测完已删掉。",
+		testProbe_tempLeftBehind: "这次是临时放了一个探测对象（{key}）来测的，但它没能删掉 —— 请到桶里手动删除。",
+		testFail_probeWrite: "连接正常，但存储拒绝了写入 —— 上传也会这样失败。请检查这把密钥是否有写入权限。",
 
 		// ── 链接可访问性：访问方式与两种模式的差别（1.7.0）──
 		linkAccessName: "笔记里的链接谁打得开",
