@@ -30,6 +30,7 @@ export function runSettingsUiSuite(mod) {
 		publicLinkTone,
 		connectionStateKey,
 		connectionStateTone,
+		publicReachNeedsAttention,
 		stateLineNeeded,
 		probeStepFailureKey,
 		externalSiteModeOptions,
@@ -734,6 +735,17 @@ export function runSettingsUiSuite(mod) {
 		assert.equal(stateLineNeeded("missing"), true, "「对象不在」推不出状态，要补");
 		assert.equal(stateLineNeeded("webpage"), true, "「回的是网页」推不出状态，要补");
 		assert.equal(stateLineNeeded("unstable"), true, "「响应不稳定」推不出稳定状态，要补");
+
+		// ⚠️ 正常结论**不要另起一行**（用户 2026-10-18：「提示文字从『探测对象…』开始的部分…
+		// 都没必要展示给用户看，用户不关心实现细节」）：公开 / 私有已经在灯上，
+		// 其余几类说明结论不成立或地址有问题，才单独说。
+		assert.equal(publicReachNeedsAttention("ok"), false, "★ 公开已由灯说明，不再解释一遍");
+		assert.equal(publicReachNeedsAttention("forbidden"), false, "★ 私有已由灯说明，不再解释一遍");
+		assert.equal(publicReachNeedsAttention("missing"), true);
+		assert.equal(publicReachNeedsAttention("webpage"), true);
+		assert.equal(publicReachNeedsAttention("unstable"), true);
+		assert.equal(publicReachNeedsAttention("unreachable"), true);
+		assert.equal(publicReachNeedsAttention("other"), true);
 		assert.equal(stateLineNeeded("other"), true, "「无法判断」推不出状态，要补");
 
 		// ⚠️ 这里曾断言 `linkAccessOptions` 的三个下拉选项（那个设置项 2026-10-18 删了），

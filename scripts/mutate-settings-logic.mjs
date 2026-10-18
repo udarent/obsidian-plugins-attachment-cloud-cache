@@ -116,10 +116,19 @@ await runMutations({
 			expect: "私有不是警告也不是错误",
 		},
 		{
+			// 后果：**又把实现细节倒给用户** —— 正常（公开 / 私有）时多出一行
+			// 「存储拒绝匿名访问…」，用户看到的是我们怎么测的，而不是结论。
+			// 用户 2026-10-18 明确要求去掉这一段。
+			name: "★ 正常结论也解释一遍（把实现细节倒给用户）",
+			from: '\treturn kind !== "ok" && kind !== "forbidden";',
+			to: "\treturn true;",
+			expect: "★ 公开已由灯说明，不再解释一遍",
+		},
+		{
 			// 后果：**同一句话说两遍** —— 结果里先说「别人也能打开」，再补一句「公开访问」。
 			// 用户 2026-10-18 明确报过的冗余（提示里出现了两次公开访问）。
 			name: "★ 结论报了两次（已说「别人也能打开」还补一句「公开访问」）",
-			from: '\treturn kind === "missing" || kind === "webpage" || kind === "other";',
+			from: '\treturn kind === "missing" || kind === "webpage" || kind === "unstable" || kind === "other";',
 			to: "\treturn true;",
 			expect: "★ 已说「别人也能打开」，别再补一句「公开访问」",
 		},

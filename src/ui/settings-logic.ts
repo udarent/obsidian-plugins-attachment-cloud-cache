@@ -124,6 +124,18 @@ export function connectionStateKey(state: ConnectionState): string {
  * 而 `missing` / `webpage` / `other` 那几行说的是「判断不了」，本身不含结论 ——
  * 这时状态行才是唯一的信息来源，必须补。
  */
+/**
+ * 「这一轮要不要单独解释匿名可达性？」
+ *
+ * `ok` / `forbidden` 是**已经定论的正常状态**（公开 / 私有），而状态灯就在同一项里写着 ——
+ * 再补一行「存储拒绝匿名访问…」既重复、又暴露实现（"我们刚才去匿名问了一次"）。
+ * 其余几类（对象不在 / 回的不是你的文件 / 响应不稳定 / 连不上 / 无法判断）说明
+ * **结论不成立或地址有问题**，用户需要知道，才单独说。
+ */
+export function publicReachNeedsAttention(kind: PublicReachKind): boolean {
+	return kind !== "ok" && kind !== "forbidden";
+}
+
 export function stateLineNeeded(kind: PublicReachKind): boolean {
 	return kind === "missing" || kind === "webpage" || kind === "unstable" || kind === "other";
 }

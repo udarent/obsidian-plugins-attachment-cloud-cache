@@ -82,7 +82,6 @@ export const I18N: Record<string, Locale> = {
 			"That address did not return your file — a proxy, a cache or a catch-all page may be answering, or the public URL prefix points somewhere else. Checked: {url}",
 		testPublic_noSample: "This time there was no object to check a link against, so whether it opens elsewhere could not be judged.",
 		// 探针回路（写 → 读 → 删）：每一段都要自己说明自己，否则用户会看到一个陌生的对象名
-		testProbe_roundTrip: "Probe object ({key}): written, read back identical ({bytes} bytes), deleted.",
 		testProbe_tempLeftBehind:
 			"The probe object ({key}) could not be deleted — please remove it from the bucket.",
 		testFail_probeWrite:
@@ -94,8 +93,6 @@ export const I18N: Record<string, Locale> = {
 
 		// ── 链接可访问性：访问方式与两种模式的差别（1.7.0）── "Who can open the links in your notes",, "Automatic (detect)", "Public read (links work anywhere)", "Internal access only (links work here only)",
 		// 判定理由（`auto` 档下必须说清"我们凭什么"） "Links can be opened by anyone: {reason}", "Links are for this plugin only: {reason}", "you chose public read.", "you chose internal access only.", "anonymous access to that URL succeeded.", "that URL refuses anonymous access, so the bucket is private.", "the URL answered but the object is gone, which does not prove the bucket is public.", "the probe did not complete, which does not prove the bucket is public.", "nothing has been probed yet.",
-		testAccess_timedOut: "The probe timed out, so it is treated as private for now. Reopen this page or test again when the network settles.",
-		testAccess_unreachable: "The probe could not reach the address, so it is treated as private for now. If links should work elsewhere, check the endpoint and the Public URL prefix.",
 
 		// ── 上传 ──
 		autoUpload: "Upload new attachments automatically",
@@ -428,15 +425,12 @@ export const I18N: Record<string, Locale> = {
 			"那个地址回的不是你的文件 —— 可能被代理 / 缓存 / 兜底页接走了，或公开前缀指到了别处。检查的是：{url}",
 		testPublic_noSample: "这次没有可用的探测对象，因此判断不了链接在别处能不能打开。",
 		// 探针回路（写 → 读 → 删）：每一段都要自己说明自己，否则用户会看到一个陌生的对象名
-		testProbe_roundTrip: "探测对象（{key}）：写入 → 读回一致（{bytes} 字节）→ 已删除。",
 		testProbe_tempLeftBehind: "探测对象（{key}）没能删掉 —— 请到桶里手动删除。",
 		testFail_probeWrite: "连接正常，但存储拒绝了写入 —— 上传也会这样失败。请检查这把密钥是否有写入权限。",
 		testFail_probeRead: "写入成功了，但读不回来 —— 请检查这把密钥是否有读取权限（取回本地副本要用它）。",
 		testFail_probeMismatch: "读回来 {read} 字节，写进去的是 {written} 字节 —— 存储或中间的代理改了数据。",
 
 		// ── 链接可访问性：访问方式与两种模式的差别（1.7.0）── "笔记里的链接谁打得开",, "自动（探测后决定）", "公开读取（链接在任何地方都能打开）", "仅内部访问（链接只在装了本插件的地方能看）", "这些链接别人也能打开：{reason}", "这些链接只有本插件能取到：{reason}", "你选的是公开读取。", "你选的是仅内部访问。", "匿名访问那条地址成功了。", "那条地址拒绝匿名访问，说明桶是私有的。", "地址能连上但对象不在，这证明不了桶是公开的。", "探测没有完成，这证明不了桶是公开的。", "还没探测过。",
-		testAccess_timedOut: "探测超时了，暂时按私有处理。网络恢复正常后重新打开本页或再点一次测试。",
-		testAccess_unreachable: "探测没能连上那个地址，暂时按私有处理。如果希望链接在别处也能打开，请检查服务地址与公开访问前缀。",
 
 		autoUpload: "新增附件自动上传",
 		autoUploadDesc:

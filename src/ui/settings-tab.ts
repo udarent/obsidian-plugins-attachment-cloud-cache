@@ -48,6 +48,7 @@ import {
 	connectionStateTone,
 	localCopyOptions,
 	orphanAskOptions,
+	publicReachNeedsAttention,
 	probeStepFailureKey,
 	publicLinkKey,
 	publicLinkTone,
@@ -523,19 +524,15 @@ export class SettingsTab extends PluginSettingTab {
 		}
 		// ⚠️ 走到这里说明回路跑起来了；状态已由插件写入（下面那两项显示的就是它）
 
-		// ② 读回：三段结果各自一句话（只有在"写成功了"之后才谈得上）
+		// ② 读回：**只在出问题时说**。
+		//
+		// ⚠️ 成功时不再显示「探测对象（.acc-…）：写入 → 读回一致（39 字节）→ 已删除」——
+		// 那是我们自己的实现细节，用户不关心（2026-10-18 用户明确要求去掉）。结论由上面的灯
+		// 和他看到的图说了算；而**失败必须说清**，那是他要去动手的地方。
 		if (sample?.readError) {
 			lines.push({ key: probeStepFailureKey("read", sample.readError), tone: "error" });
 		} else if (sample?.sizeMismatch) {
 			lines.push({ key: "testFail_probeMismatch", params: { ...sample.sizeMismatch }, tone: "error" });
-		} else if (typeof sample?.readBytes === "number") {
-			// 一条就够：这个对象是谁、写了多少字节读回多少字节、已经删掉了。
-			// 用户不该去猜那个陌生的对象名（它不是他上传的）。
-			lines.push({
-				key: "testProbe_roundTrip",
-				params: { key: sample.key, bytes: sample.readBytes },
-				tone: "info",
-			});
 		}
 
 		// ③ 匿名可达性（别人的视角）
@@ -547,13 +544,18 @@ export class SettingsTab extends PluginSettingTab {
 
 		// ⚠️ 类型一起传：2xx + 网页 = 网关 / 校验页的兜底页，不是「对象打得开」（见 `classifyPublicReach`）
 		const kind = classifyPublicLink(probe.status, probe.contentType);
-		lines.push({
-			key: publicLinkKey(kind),
-			// 地址取**这一轮真正探测过的那一条**（返回值里的 `url`），不在这里重推一遍：
-			// 重推就可能与探测用的地址不同源，而那种差异只会在用户对照时暴露。
-			params: { status: probe.status ?? "-", url: url ?? "-" },
-			tone: publicLinkTone(kind),
-		});
+		// ⚠️ **正常结论不另起一行**：`ok` / `forbidden` 就是灯上的「公开 / 私有」，
+		// 再写一句「存储拒绝匿名访问 —— 只有装了本插件的地方能打开」既是重复，也在跟用户解释
+		// 我们的实现（"刚才去匿名问了一次"）。2026-10-18 用户要求去掉这一段。
+		if (publicReachNeedsAttention(kind)) {
+			lines.push({
+				key: publicLinkKey(kind),
+				// 地址取**这一轮真正探测过的那一条**（返回值里的 `url`），不在这里重推一遍：
+				// 重推就可能与探测用的地址不同源，而那种差异只会在用户对照时暴露。
+				params: { status: probe.status ?? "-", url: url ?? "-" },
+				tone: publicLinkTone(kind),
+			});
+		}
 
 		// ④ 删不掉**必须**单独说：对象还在用户的桶里，而他自己不会想到去查（带 key 他才删得掉）
 		if (sample?.leftBehind) {
@@ -573,10 +575,8 @@ export class SettingsTab extends PluginSettingTab {
 			});
 		}
 
-		// 探测不出来（超时 / 连不上）时把话说准：这不是"桶私有"，是"我们不知道"。
-		if (probe.kind === "unreachable") {
-			lines.push({ key: probe.timedOut ? "testAccess_timedOut" : "testAccess_unreachable", tone: "warn" });
-		}
+		// ⚠️ 超时 / 连不上的补充说明**不再单独起一行**：`testPublic_unreachable` 那行
+		// 已经说了「连不上那个地址 —— 前缀可能写错了」，再补一句只是同一件事的第二种说法。
 		return lines;
 	}
 
