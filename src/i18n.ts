@@ -43,7 +43,7 @@ export const I18N: Record<string, Locale> = {
 			"Image links are built from this prefix plus the object path. You can leave it empty: links then use the object address (endpoint + bucket), which needs the bucket to allow anonymous reads. On a CDN or a custom domain, fill this in.",
 		testConnection: "Test connection",
 		testConnectionDesc:
-			"Writes one tiny probe object to your bucket, reads it back to compare, then deletes it — so uploading, fetching and deleting are all checked in one go. Nothing is kept.",
+			"Writes one tiny probe object to your bucket, reads it back to compare, then deletes it — so uploading, fetching and deleting are all checked in one go. Nothing is kept. One of those checks (asking the address without credentials) is exactly the evidence behind the setting above.",
 		s3Import: "Import from a credentials file",
 		s3ImportDesc:
 			"Read the JSON your storage provider gives you (MinIO's “Download credentials” produces one) and fill in the fields below. Only the service address, the access key and the addressing mode are written to the plugin's data; the secret key goes straight into your OS keychain, and no copy of the file is kept.",
@@ -86,7 +86,7 @@ export const I18N: Record<string, Locale> = {
 		// ── 链接可访问性：访问方式与两种模式的差别（1.7.0）──
 		linkAccessName: "Who can open the links in your notes",
 		linkAccessDesc:
-			"Your notes hold ordinary URLs, so whether other people can open them depends on your bucket's permissions, not on this plugin. Public read: the bucket allows anonymous access, so a link keeps working after you paste it into another app or send it to someone — this is what you want for sharing, and it means anyone holding the URL can view the file. Internal access only: the bucket stays private, nothing is exposed, and links pasted elsewhere will not open; images are shown here by either keeping a local copy (offline works) or, if you chose not to keep one, by a short-lived signed URL (nothing lands on disk, but offline shows nothing — that is plain image-host behaviour). Automatic detects which one your storage allows and picks the path accordingly; when it cannot tell (offline, timeout, or nothing uploaded yet) it uses internal access. Switching this does not rewrite a single link in your notes — existing links stay exactly the same, and nothing is moved or deleted in your bucket; only who can open them, and how this device gets the bytes, changes.",
+			"Your notes hold ordinary URLs, so whether other people can open them depends on your bucket's permissions, not on this plugin. Public read: the bucket allows anonymous access, so a link keeps working after you paste it into another app or send it to someone — this is what you want for sharing, and it means anyone holding the URL can view the file. Internal access only: the bucket stays private, nothing is exposed, and links pasted elsewhere will not open; images are shown here by either keeping a local copy (offline works) or, if you chose not to keep one, by a short-lived signed URL (nothing lands on disk, but offline shows nothing — that is plain image-host behaviour). Automatic detects which one your storage allows and picks the path accordingly; when it cannot tell (offline, timeout, or nothing uploaded yet) it uses internal access. Switching this does not rewrite a single link in your notes — existing links stay exactly the same, and nothing is moved or deleted in your bucket; only who can open them, and how this device gets the bytes, changes. To see what your storage actually does right now, press “Test connection” below: one of its checks is this very question, and the Automatic option follows that answer.",
 		linkAccess_auto: "Automatic (detect)",
 		linkAccess_public: "Public read (links work anywhere)",
 		linkAccess_private: "Internal access only (links work here only)",
@@ -396,7 +396,7 @@ export const I18N: Record<string, Locale> = {
 			"笔记里的图片链接 = 这个前缀 + 对象路径。可以留空 —— 留空就用对象地址（服务地址 + 存储桶），那要求存储桶允许匿名读取；走 CDN 或自定义域名时必须填。",
 		testConnection: "测试连接",
 		testConnectionDesc:
-			"会往桶里写一个很小的探测对象、读回来核对，再删掉 —— 上传、取回、删除一次测全，什么都不留。",
+			"会往桶里写一个很小的探测对象、读回来核对，再删掉 —— 上传、取回、删除一次测全，什么都不留。其中「不带凭据问一次那条地址」就是上面那一项的依据。",
 		s3Import: "从凭据文件导入",
 		s3ImportDesc:
 			"读取存储服务商给你的那份 JSON（MinIO 控制台的「下载凭据」就是这种），自动填好下面几栏。只有服务地址、访问密钥和寻址方式会写进插件的数据；秘密访问密钥直接进系统钥匙串，插件不留副本。",
@@ -434,7 +434,7 @@ export const I18N: Record<string, Locale> = {
 		// ── 链接可访问性：访问方式与两种模式的差别（1.7.0）──
 		linkAccessName: "笔记里的链接谁打得开",
 		linkAccessDesc:
-			"笔记里存的是普通地址，所以别人能不能打开，取决于你存储桶的权限，而不是这个插件。公开读取：桶允许匿名访问，链接粘到别的应用里、发给别人之后照样打得开 —— 需要对外分享就选它；代价是任何拿到地址的人都能看。仅内部访问：桶保持私有、什么都不对外暴露，粘到别处的链接会打不开；本机怎么显示图，取决于「本地副本」那一项 —— 保留副本就用副本显示（离线也能看），不留副本就改用一条短时签名地址（像图床一样：磁盘上不落文件，但离线看不到）。自动：先探测你的存储允许哪一种，再据此选路；探测不出来时（离线、超时、或还没上传过东西）按内部访问处理。切换这一项不会改写笔记里的任何一条链接 —— 已有链接一字不变，桶里的对象也不会被搬迁或删除；变的只是「谁能打开」与「本机怎么取到字节」。",
+			"笔记里存的是普通地址，所以别人能不能打开，取决于你存储桶的权限，而不是这个插件。公开读取：桶允许匿名访问，链接粘到别的应用里、发给别人之后照样打得开 —— 需要对外分享就选它；代价是任何拿到地址的人都能看。仅内部访问：桶保持私有、什么都不对外暴露，粘到别处的链接会打不开；本机怎么显示图，取决于「本地副本」那一项 —— 保留副本就用副本显示（离线也能看），不留副本就改用一条短时签名地址（像图床一样：磁盘上不落文件，但离线看不到）。自动：先探测你的存储允许哪一种，再据此选路；探测不出来时（离线、超时、或还没上传过东西）按内部访问处理。切换这一项不会改写笔记里的任何一条链接 —— 已有链接一字不变，桶里的对象也不会被搬迁或删除；变的只是「谁能打开」与「本机怎么取到字节」。想确认你存储现在的实际状况？点下面的「测试连接」—— 它其中一项就是这个问题，而「自动」档跟的就是那个结论。",
 		linkAccess_auto: "自动（探测后决定）",
 		linkAccess_public: "公开读取（链接在任何地方都能打开）",
 		linkAccess_private: "仅内部访问（链接只在装了本插件的地方能看）",
