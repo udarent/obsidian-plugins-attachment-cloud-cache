@@ -564,8 +564,7 @@ export class SettingsTab extends PluginSettingTab {
 
 		// ⑤ **结论**：只在「匿名那一问给不出状态」时才补这一行。
 		//
-		// ⚠️ 公开 / 私有时**不补**：`testPublic_ok` 与 `testPublic_forbidden` 已经把同一件事
-		// 说了一遍（"别人也能打开" / "只有装了本插件的地方能打开"），再报一句「公开访问」
+		// ⚠️ 公开 / 私有**不补**：结论就是灯上那句「公开访问 / 私有访问」，再报一句
 		// 就是同一句话说两遍 —— 用户 2026-10-18 明确指出的冗余（提示里出现了两次公开访问）。
 		// 而 `missing` / `webpage` / `other` 那几行**推不出**结论，状态行是唯一的信息来源。
 		if (stateLineNeeded(kind)) {

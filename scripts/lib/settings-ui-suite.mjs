@@ -212,17 +212,25 @@ export function runSettingsUiSuite(mod) {
 	assert.equal(classifyPublicLink(200, "text/html"), "webpage", "网页 200 不许说成公开可读");
 	assert.equal(classifyPublicLink(200, "image/png"), "ok");
 
-	for (const kind of ["ok", "forbidden", "missing", "webpage", "unstable", "unreachable", "other"]) {
+	// ⚠️ 只有**会单独说话**的那几类才有文案：`ok` / `forbidden` 就是灯上的「公开 / 私有」，
+	// 再写一行是同一句话说两遍（用户 2026-10-18 报的冗余）。所以下面两个集合必须互补 ——
+	// 有文案的类 ⇔ `publicReachNeedsAttention` 为真。这两条一起钉住"说与不说"只有一处判据。
+	for (const kind of ["missing", "webpage", "unstable", "unreachable", "other"]) {
 		assert.equal(publicLinkKey(kind), `testPublic_${kind}`, `每类都要有文案 key：${kind}`);
+		assert.equal(publicReachNeedsAttention(kind), true, `${kind} 判断不了或地址有问题，必须单独说`);
+	}
+	for (const kind of ["ok", "forbidden"]) {
+		assert.equal(
+			publicReachNeedsAttention(kind),
+			false,
+			`${kind} 的结论由状态灯负责，不许再补一行（也不许有文案 —— 那会显示成键名）`
+		);
 	}
 	assert.equal(publicLinkTone("webpage"), "warn", "「回的是网页」该去看前缀，不是当失败也不算通过");
 	assert.equal(publicLinkTone("unstable"), "warn", "「响应不稳定」该去看网关 / 反代");
 
-	// 语气分三档：`forbidden` 只是"知道了就好"（桶私有是正当选择），
-	// 而 `missing`/`unreachable` 是**地址配错了**，该去改前缀。
-	// 都涂成红色会让用户以为"连接坏了"，从而去改根本没坏的东西。
-	assert.equal(publicLinkTone("ok"), "ok");
-	assert.equal(publicLinkTone("forbidden"), "warn", "桶私有 = 提示，不是错误");
+	// 语气只分两档：`webpage`/`unstable` 是"去看一眼"，而 `missing`/`unreachable` 是
+	// **地址配错了**，该去改前缀。都涂成红色会让用户以为"连接坏了"，从而去改根本没坏的东西。
 	assert.equal(publicLinkTone("missing"), "error", "地址通则对象不在 = 前缀配错了");
 	assert.equal(publicLinkTone("unreachable"), "error", "连不上 = 地址配错了");
 	assert.equal(publicLinkTone("other"), "error");

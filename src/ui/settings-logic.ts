@@ -117,13 +117,17 @@ export function connectionStateKey(state: ConnectionState): string {
 /**
  * 「这一轮的结果里，还需要单独补一行连接状态吗？」
  *
- * ⚠️ 公开 / 私有 / 连不上时**不需要**：`testPublic_ok` / `testPublic_forbidden` /
- * `testPublic_unreachable` 已经把同一件事说了一遍，再补一句「公开访问」就是同一句话说两遍
- * （用户 2026-10-18 报的「提示里出现了两次公开访问」）。
- *
- * 而 `missing` / `webpage` / `other` 那几行说的是「判断不了」，本身不含结论 ——
+ * `missing` / `webpage` / `unstable` / `other` 那几行说的是「判断不了」，本身不含结论 ——
  * 这时状态行才是唯一的信息来源，必须补。
+ *
+ * ⚠️ 公开 / 私有**不需要**：结论就在灯上，再补一句「公开访问」是同一句话说两遍
+ * （用户 2026-10-18 报的「提示里出现了两次公开访问」）。`unreachable` 也不需要 ——
+ * 「连不上那个地址」那一行已经说清了。
  */
+export function stateLineNeeded(kind: PublicReachKind): boolean {
+	return kind === "missing" || kind === "webpage" || kind === "unstable" || kind === "other";
+}
+
 /**
  * 「这一轮要不要单独解释匿名可达性？」
  *
@@ -131,13 +135,13 @@ export function connectionStateKey(state: ConnectionState): string {
  * 再补一行「存储拒绝匿名访问…」既重复、又暴露实现（"我们刚才去匿名问了一次"）。
  * 其余几类（对象不在 / 回的不是你的文件 / 响应不稳定 / 连不上 / 无法判断）说明
  * **结论不成立或地址有问题**，用户需要知道，才单独说。
+ *
+ * ⭐ 它同时是**类型收窄**（`: kind is PublicLinkKind`）：返回 true 的那几类才配有文案。
+ * 于是"哪几类会单独说话"只有这一处判据，`publicLinkKey` 拿不到一个没有文案的 kind ——
+ * 否则界面上会直接显示那串键名，而全套门禁都发现不了。
  */
-export function publicReachNeedsAttention(kind: PublicReachKind): boolean {
+export function publicReachNeedsAttention(kind: PublicReachKind): kind is PublicLinkKind {
 	return kind !== "ok" && kind !== "forbidden";
-}
-
-export function stateLineNeeded(kind: PublicReachKind): boolean {
-	return kind === "missing" || kind === "webpage" || kind === "unstable" || kind === "other";
 }
 
 /**
@@ -397,13 +401,15 @@ export function connectionFailureKey(kind: ConnectionFailureKind): string {
  * 合并了就会出现最坏的那种表现 —— 自己这边一切正常，而发给别人的链接全是死的。
  *
  * 每一类的**修法不同**，所以也不能都归成"打不开"：
- * - `forbidden`：地址对、桶私有 ⇒ 开公开读，或配一个公开链接地址（CDN / 自定义域名）
  * - `missing`：地址通、对象不在 ⇒ 多半前缀写错（例如少了桶名）
  * - `unreachable`：地址本身不对 ⇒ 前缀写错了
  *
+ * ⚠️ `ok` / `forbidden` **不在这里**：它们是「公开 / 私有」两个结论，由那盏灯负责，
+ * 没有文案（见 `publicReachNeedsAttention` 的类型收窄）。
+ *
  * ⚠️ 实现见 `link-access.ts::classifyPublicReach`（那里是唯一一份，因为它同时是一条判定）。
  */
-export type PublicLinkKind = PublicReachKind;
+export type PublicLinkKind = Exclude<PublicReachKind, "ok" | "forbidden">;
 
 export function publicLinkKey(kind: PublicLinkKind): string {
 	return `testPublic_${kind}`;
@@ -435,16 +441,14 @@ export function probeStepFailureKey(step: "write" | "read", error: unknown): str
 /**
  * 归类 → 呈现的**语气**（界面上的颜色）。
  *
- * 分三档而不是"对/错"：`forbidden` 是**知道了就好**（桶私有是正当选择，只是链接对外是死的），
- * 而 `missing` / `unreachable` 是**地址配错了**（该去改前缀）。都涂成红色会把两件事混成一件，
- * 用户就不知道该不该动手改。
+ * 分两档而不是"对/错"：`webpage` / `unstable` 是**该去看前缀 / 网关**（桶本身未必有问题），
+ * 其余是**地址配错了**（该动手改）。都涂成红色会把两件事混成一件，用户就不知道该不该动手改。
+ *
+ * ⚠️ 公开 / 私有**没有语气**：它们的颜色由状态灯负责（`connectionStateTone`），
+ * 所以这里的入参只到 `PublicLinkKind`。
  */
-export function publicLinkTone(kind: PublicLinkKind): "ok" | "warn" | "error" {
+export function publicLinkTone(kind: PublicLinkKind): "warn" | "error" {
 	switch (kind) {
-		case "ok":
-			return "ok";
-		case "forbidden":
-			return "warn";
 		case "webpage":
 			// 地址上有个东西回了网页 —— 不是「打不开」，也不是「我们的对象打得开」。
 			// 用 warn：该去看前缀，但桶本身未必有问题。

@@ -71,9 +71,8 @@ export const I18N: Record<string, Locale> = {
 		testFail_server: "The service reported an internal error. Try again later.",
 		testFail_other: "The test failed. Check the address, the bucket name and the credentials.",
 		// ── 第二步：那个地址**别人**打得开吗（匿名探测）──
-		testPublic_ok: "The public link works — anyone can open it: {url}",
-		testPublic_forbidden:
-			"Reached that address, but it refuses anonymous access — other people cannot open your links. That is fine if the bucket is meant to stay private; if links should work elsewhere, make it publicly readable or set a public link address (a CDN or your own domain).",
+		// ⚠️ 公开 / 私有**没有文案**：结论就在那盏灯上（`connectionStatus_*`），
+		// 再写一句就是同一句话说两遍（用户 2026-10-18 报的冗余）。所以这里只列「判断不了 / 地址有问题」那几类。
 		testPublic_missing:
 			"Reached that address, but the object is not there — the public link address is probably wrong. Checked: {url}",
 		testPublic_unreachable: "Could not reach that address at all — the public link address is probably wrong. Checked: {url}",
@@ -410,8 +409,8 @@ export const I18N: Record<string, Locale> = {
 		testFail_server: "服务端出错，请稍后再试。",
 		testFail_other: "测试失败 —— 请检查地址、桶名与凭据。",
 		// ── 第二步：那个地址**别人**打得开吗（匿名探测）──
-		testPublic_ok: "公开链接可用 —— 别人也能打开：{url}",
-		testPublic_forbidden: "那个地址能连上，但拒绝匿名访问 —— 别人打不开你的链接。桶本来就不打算对外，这样是对的；若希望链接在别处也能打开，把桶设为公开读，或填一个公开链接地址（CDN / 自己的域名）。",
+		// ⚠️ 公开 / 私有**没有文案**：结论就在那盏灯上（`connectionStatus_*`），
+		// 再写一句就是同一句话说两遍（用户 2026-10-18 报的冗余）。所以这里只列「判断不了 / 地址有问题」那几类。
 		testPublic_missing: "那个地址能连上，但文件不在 —— 公开链接地址多半写错了。检查的是：{url}",
 		testPublic_unreachable: "连不上那个地址 —— 公开链接地址可能写错了。检查的是：{url}",
 		testPublic_other: "无法判断链接是否可用 —— 存储回了一个我们没预料到的结果。检查的是：{url}",

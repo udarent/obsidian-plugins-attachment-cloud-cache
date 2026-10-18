@@ -219,16 +219,19 @@ await runMutations({
 			// 这条检查**永远**报通过，而它对外的意义是零。这是最要命的一种变异：
 			// 它不会让任何东西变红（状态码反而更"正常"），只能靠"请求里有没有 Authorization"发现。
 			name: "★ 匿名探测带上了 Authorization（拿自己冒充别人，检查永远绿）",
-			from: '\t\tconst response = await transport({ url, method: "HEAD", headers: {} });',
-			to: '\t\tconst response = await transport({ url, method: "HEAD", headers: { authorization: "AWS4-HMAC-SHA256 fake" } });',
+			// ⚠️ 1.7.0 当天：匿名请求多了 `ANONYMOUS_PROBE_HEADERS`（no-cache）——
+			// 锚点必须跟着走，否则它只会报"找不到目标"（假绿）。
+			from: '\t\tconst response = await transport({ url, method: "HEAD", headers: ANONYMOUS_PROBE_HEADERS });',
+			to: '\t\tconst response = await transport({ url, method: "HEAD", headers: { ...ANONYMOUS_PROBE_HEADERS, authorization: "AWS4-HMAC-SHA256 fake" } });',
 			expect: "探测必须**不带** Authorization",
 		},
 		{
 			// 后果：网络失败直接抛到设置页 ⇒ 用户点了"测试"却什么反馈都没有
 			//（异常把整页的更新都吞了），而这本该给出"前缀可能写错了"这种可操作的结论。
 			name: "★ 连不上时抛错而不是收敛成 status:null（设置页会没反应）",
-			from: "\t\treturn { status: null };",
-			to: "\t\treturn { status: 0 };",
+			// ⚠️ 返回值多了 `contentType`（1.7.0 起用它区分「回的是网页」）—— 锚点跟着走。
+			from: "\t\treturn { status: null, contentType: null };",
+			to: "\t\treturn { status: 0, contentType: null };",
 			expect: "网络失败必须收敛成 status:null",
 		},
 		{
