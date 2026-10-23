@@ -108,8 +108,8 @@ export async function runGalleryActionsSuite(mod) {
 	);
 	assert.deepEqual(
 		actionAvailability(uploadedFree, "fetch-local", candidate),
-		{ available: false, reason: "local-copy-present" },
-		"本地已有副本时取回不成立"
+		{ available: true },
+		"本地已有副本也要成立：它的语义是“改为本地引用”，只改链接（删云端的正当出口）"
 	);
 	assert.deepEqual(
 		actionAvailability(neverUploaded, "fetch-local", candidate),

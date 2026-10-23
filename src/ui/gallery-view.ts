@@ -24,7 +24,14 @@ import { actionAvailability } from "../gallery/actions";
 import type { GalleryAction } from "../gallery/actions";
 import type { GalleryItem } from "../gallery/enumerate";
 import type { PluginContext } from "../plugin/context";
-import { deleteCloudSelected, deleteLocalSelected, loadGallery, renameItem, uploadSelected } from "../plugin/gallery-flow";
+import {
+	convertToLocalSelected,
+	deleteCloudSelected,
+	deleteLocalSelected,
+	loadGallery,
+	renameItem,
+	uploadSelected,
+} from "../plugin/gallery-flow";
 import type { GalleryModel } from "../plugin/gallery-flow";
 import { mountTaskListShell } from "./task-list-shell";
 import type { TaskListAction, TaskListLabels } from "./task-list-shell";
@@ -192,6 +199,13 @@ export class GalleryView extends ItemView {
 				countFor: (ids) => this.applicable(ids, "delete-local"),
 			},
 			{
+				// ⭐ 删云端的前置（用户 2026-10-23 定的顺序）：先把它变成本地引用，
+				// 云端那份才“没人引用”，删云端才可用。
+				key: "fetch-local",
+				label: (count: number) => t("galleryActionLocalize", { count }),
+				countFor: (ids) => this.applicable(ids, "fetch-local"),
+			},
+			{
 				key: "delete-cloud",
 				label: (count: number) => t("galleryActionDeleteCloud", { count }),
 				destructive: true,
@@ -242,6 +256,7 @@ export class GalleryView extends ItemView {
 			listHost,
 			{
 				title: this.ctx.t("galleryTitle"),
+				lines: [this.ctx.t("galleryRuleLine")],
 				cards,
 				labels: this.labels(),
 				defaultSelected: "none",
@@ -269,6 +284,40 @@ export class GalleryView extends ItemView {
 			});
 			// ⚠️ 没上报的（不在候选里 / 站外那类）如实说"跳过"，不能默认算成功
 			for (const id of selected) if (!reported.has(id)) report(id, "skipped");
+			return;
+		}
+
+		if (action === "fetch-local") {
+			const model = this.model;
+			if (!model) return;
+			const chosen = selected
+				.map((id) => ({ id, item: model.byId.get(id) }))
+				.filter((entry): entry is { id: string; item: GalleryItem } => Boolean(entry.item));
+			const usable = chosen.filter(
+				(entry) => actionAvailability(entry.item, "fetch-local", { isUploadCandidate: true }).available
+			);
+			if (usable.length === 0) {
+				for (const entry of chosen) report(entry.id, "skipped");
+				return;
+			}
+			const t = this.ctx.t;
+			const ok = await this.ctx.confirmMaintenance({
+				title: t("galleryLocalizeTitle"),
+				lines: [t("galleryLocalizeBody", { count: usable.length }), t("galleryLocalizeKeepsCloud")],
+				cta: t("galleryLocalizeCta", { count: usable.length }),
+				// 它只改笔记里的链接、不动任何文件 ⇒ 不是破坏性动作
+				destructive: false,
+			});
+			if (!ok) {
+				for (const entry of chosen) report(entry.id, "skipped");
+				return;
+			}
+			const idOf = new Map(usable.map((entry) => [entry.id, entry.id]));
+			await convertToLocalSelected(
+				this.ctx,
+				usable.map((entry) => entry.item),
+				(id, status) => report(idOf.get(id) ?? id, status)
+			);
 			return;
 		}
 

@@ -424,6 +424,7 @@ async function main() {
 					})),
 					names: Array.from(root.querySelectorAll(".acc-task-row .acc-task-name")).map((el) => el.textContent || ""),
 					hints: Array.from(root.querySelectorAll(".acc-task-row .acc-task-hint")).map((el) => el.textContent || ""),
+					lines: Array.from(root.querySelectorAll(".acc-task-lines > div")).map((el) => el.textContent || ""),
 					checkboxes: root.querySelectorAll(".acc-task-check").length,
 					expected: attachments.length,
 				};
@@ -437,6 +438,45 @@ async function main() {
 			gallery?.filters.length === 6 && gallery.filters[0]?.text === "全部" && gallery.filters[0]?.active === true,
 			(gallery?.filters ?? []).map((f) => `${f.text}${f.active ? " *" : ""}`).join(" / ")
 		);
+		check(
+			"顶部有一句固定说明，且不含数字（D-76）",
+			gallery?.lines.length === 1 && gallery.lines[0].trim().length > 0 && !/\d/.test(gallery.lines[0]),
+			JSON.stringify(gallery?.lines ?? [])
+		);
+
+		// 「改为本地引用」是“删云端”的前置（用户 2026-10-23 定的顺序）：云端有本地无的行应当可点
+		const localize = await evaluate(
+			client,
+			`(() => {
+				const root = app.workspace.getLeavesOfType("acc-gallery")[0].view.contentEl;
+				const rows = Array.from(root.querySelectorAll(".acc-task-row"));
+				const target = rows.find((row) => {
+					const hint = row.querySelector(".acc-task-hint")?.textContent || "";
+					const box = row.querySelector(".acc-task-check");
+					return hint.indexOf("云端有本地无") === 0 && box && !box.disabled;
+				});
+				if (!target) return null;
+				const box = target.querySelector(".acc-task-check");
+				box.checked = true;
+				box.dispatchEvent(new Event("change"));
+				const read = (prefix) => {
+					const button = Array.from(root.querySelectorAll(".acc-task-actions button")).find((b) =>
+						(b.textContent || "").trim().indexOf(prefix) === 0
+					);
+					return button ? { text: (button.textContent || "").trim(), disabled: button.disabled === true } : null;
+				};
+				const state = { localize: read("改为本地引用"), cloud: read("删除云端") };
+				box.checked = false;
+				box.dispatchEvent(new Event("change"));
+				return state;
+			})()`
+		);
+		check(
+			"「云端有本地无」的行 ⇒「改为本地引用」可点且数字 ≥ 1",
+			Boolean(localize?.localize) && localize.localize.disabled === false && /\([1-9]/.test(localize.localize.text),
+			JSON.stringify(localize?.localize ?? null)
+		);
+
 		check(
 			"每行都有状态标签（不是只列文件名）",
 			gallery?.names.length === gallery?.hints.length && (gallery?.hints ?? []).every((hint) => hint.trim().length > 0),

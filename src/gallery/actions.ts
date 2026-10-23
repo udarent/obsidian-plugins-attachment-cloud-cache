@@ -15,8 +15,10 @@
  *
  * 1. **「删本地」对“未上传”的文件 = 删掉唯一一份**。所以它**不是**“清缓存”，
  *    必须走回收站并由界面明示“没有云端副本”（本层只回答可用性，文案在界面）。
- * 2. **「删云端」对“仍被引用”的默认禁用**（CR-05 未定案时的默认）：删完笔记里就是死链，
+ * 2. **「删云端」对“仍被引用”的默认禁用**（CR-05 默认档）：删完笔记里就是死链，
  *    且这是全产品唯一**不可恢复**的动作。要放开必须显式改 `cloudDeleteNeedsUnreferenced`。
+ *    ⭐ **正当出口是「改为本地引用」**（`fetch-local`）：先把链接换回库内路径，那份对象于是
+ *    “没人引用”，再删云端。用户 2026-10-23 定的顺序：「需要先把状态从云端转换成本地，然后才能删」。
  * 3. **「上传」只对“上传候选”成立**：`未上传 ≠ 待上传` —— 安装包、算不出 key 的都不在候选里，
  *    把它们算进按钮数字就会让“按下只处理 N 个”变成假话。
  */
@@ -95,9 +97,12 @@ export function actionAvailability(
 			return AVAILABLE;
 
 		case "fetch-local":
-			// 只有“云端有、本地无”才需要取回；其它两种状态本地已经有文件。
-			if (item.state === "cloud-only") return AVAILABLE;
-			if (item.state === "uploaded") return unavailable("local-copy-present");
+			// ⭐ 语义是「**改为本地引用**」：把笔记里的远端 URL 换成库内路径。
+			// - `cloud-only`：本地没副本 ⇒ 先下载再改链接；
+			// - `uploaded`：本地已有副本 ⇒ 只改链接（这一步过去被当成“不需要”，
+			//   但那让“仍被引用”的对象永远删不掉云端 —— CR-05 的正确出口就在这儿）；
+			// - `not-uploaded`：云端没有它，没什么可“改成本地引用”的。
+			if (item.state === "cloud-only" || item.state === "uploaded") return AVAILABLE;
 			return unavailable("not-in-cloud");
 	}
 }

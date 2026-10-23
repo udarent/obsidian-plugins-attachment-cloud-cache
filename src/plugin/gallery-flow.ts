@@ -33,6 +33,8 @@ import { selectLocalOrphans } from "../maintenance/local-orphans";
 import { runCloudCleanup } from "../maintenance/cloud-cleanup";
 import type { CloudCleanupResult } from "../maintenance/cloud-cleanup";
 import { writeDeleteLog } from "./shared-flows";
+import { revertLinksForKeys } from "./revert-flow";
+import { createLocalCopyEnsurer } from "../core/download";
 import type { DeletedObjectRecord } from "../maintenance/delete-log";
 import type { PluginContext } from "./context";
 import type { FileCard } from "../ui/file-cards";
@@ -257,6 +259,68 @@ export async function deleteCloudSelected(
 	);
 	await writeDeleteLog(ctx, records);
 	return result;
+}
+
+/**
+ * 「改为本地引用」：先把缺的本地副本下回来，再把笔记里的远端 URL 换成本地路径。
+ *
+ * ## 为什么要有这一步（而不是直接删云端）
+ *
+ * 删云端是**不可恢复**的，而删掉之后那条链接立刻取不到对象；更糟的是删除会摘掉索引条目
+ * ⇒ 就算本地还有副本，插件也不再认这个 URL。所以对**仍被引用**的对象，正确顺序只能是：
+ * **先让它变成“本地引用”（云端那份于是没人引用）→ 再删云端**。
+ *
+ * ⚠️ 「不留副本」那一档下下载被关掉（`ensureLocalCopy` 返回 `disabled`）——
+ * 这不是失败，是用户选过的档位；调用方要如实说“先在设置里允许本地副本”。
+ */
+export async function convertToLocalSelected(
+	ctx: PluginContext,
+	items: readonly GalleryItem[],
+	onItem?: (id: string, status: "done" | "skipped" | "failed") => void
+): Promise<{ downloaded: number; blocked: number; notes: number; links: number; missing: number }> {
+	const ensureLocalCopy = createLocalCopyEnsurer({
+		app: ctx.app,
+		settings: () => ctx.settings,
+		client: () => ctx.buildClient(),
+		index: () => ctx.currentIndex(),
+		persistIndex: () => ctx.hostContext().persistIndex(),
+		// 这条是**用户显式点的**，所以下载失败要说出来（渲染路径上才逐张刷屏）
+		notify: (message) => new Notice(message),
+		t: ctx.t,
+	});
+
+	let downloaded = 0;
+	let blocked = 0;
+	const keys: string[] = [];
+	for (const item of items) {
+		if (!item.key) {
+			if (item.path) onItem?.(item.id, "skipped");
+			continue;
+		}
+		// 本地没有副本的，先下回来（否则改回本地路径会造坏链）
+		if (item.state === "cloud-only") {
+			const entry = ctx.currentIndex().get(item.key);
+			const outcome = await ensureLocalCopy(item.key, entry?.remoteUrl ?? "", null);
+			if (outcome.status === "downloaded") {
+				downloaded += 1;
+			} else if (outcome.status === "reused") {
+				// 已经有了（索引 + 文件都在）：不算下载，但可以继续改链接
+			} else {
+				// disabled / refused / unavailable / failed：这一行改不了，如实跳过
+				blocked += 1;
+				onItem?.(item.id, outcome.status === "failed" ? "failed" : "skipped");
+				continue;
+			}
+		}
+		keys.push(item.key);
+	}
+
+	if (keys.length === 0) return { downloaded, blocked, notes: 0, links: 0, missing: 0 };
+	const result = await revertLinksForKeys(ctx, keys);
+	for (const item of items) {
+		if (item.key && keys.includes(item.key)) onItem?.(item.id, "done");
+	}
+	return { downloaded, blocked, ...result };
 }
 
 export async function renameItem(ctx: PluginContext, id: string, newPath: string): Promise<void> {

@@ -22,6 +22,50 @@ import { planRevertText, revertTargets } from "../maintenance/revert";
 import type { PluginContext } from "./context";
 import { readAllNoteTexts } from "./notes-query";
 
+/**
+ * 只把**指定几个 key** 的链接改回本地路径（附件管理的「改为本地引用」用这条）。
+ *
+ * 与 `revertLinksToLocal` 共用 `revertTargets` / `planRevertText` 两份判据：
+ * 一条改全部、一条改勾中的几行 —— **判据只有一份**，差别只在"输入哪些条目"。
+ *
+ * ⚠️ 本地副本**不在**的条目会被 `revertTargets` 跳过（`missing` 计数）——
+ * 改回本地路径会造坏链，所以"缺副本"必须先去下载（调用方负责）。
+ */
+export async function revertLinksForKeys(
+	ctx: PluginContext,
+	keys: readonly string[]
+): Promise<{ notes: number; links: number; missing: number }> {
+	const wanted = new Set(keys);
+	const entries = ctx.currentIndex()
+		.toArray()
+		.filter((entry) => wanted.has(entry.key));
+	const present = new Set(ctx.app.vault.getFiles().map((file) => file.path));
+	const { targets, missing } = revertTargets({
+		entries,
+		present: (path) => present.has(path),
+	});
+	if (targets.length === 0) return { notes: 0, links: 0, missing };
+
+	const notes = await readAllNoteTexts(ctx.app);
+	let written = 0;
+	let links = 0;
+	for (const note of notes) {
+		const plan = planRevertText(note.text, targets);
+		if (plan.count === 0) continue;
+		const file = ctx.app.vault.getAbstractFileByPath(note.path) as TFile | null;
+		if (!file) continue;
+		try {
+			// ⚠️ 在 `process` 里重算（用户可能在两次读之间改过这篇笔记）
+			await ctx.app.vault.process(file, (data) => planRevertText(data, targets).text);
+			written += 1;
+			links += plan.count;
+		} catch (error) {
+			console.error(`[attachment-cloud-cache] 改为本地引用失败：${note.path}`, error);
+		}
+	}
+	return { notes: written, links, missing };
+}
+
 export async function revertLinksToLocal(ctx: PluginContext): Promise<void> {
 	const entries = ctx.currentIndex().toArray();
 	// ⚠️ 判据是**宿主的文件清单**，不是索引：索引只记"我们上传过什么"，
