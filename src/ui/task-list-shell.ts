@@ -112,6 +112,13 @@ export interface TaskListAction {
 
 export interface TaskListOptions {
 	title: string;
+	/**
+	 * 清单**自己**那一行标题（画在清单正上方，与「全选 / 全不选」同一行）。
+	 *
+	 * ⚠️ 弹窗**不要**传：宿主 `Modal` 已经把 `title` 画在窗口顶上了，再来一行就是重复。
+	 * 常驻视图没有这一层（标签页标题在别处、而且是固定不变的）⇒ 由它传。
+	 */
+	listHeading?: string;
 	/** 正文行（背景、风险、代价）—— 逐行画在清单上方。给了 `filter` 时它是**初始**那批。 */
 	lines?: readonly string[];
 	cards: readonly FileCard[];
@@ -190,8 +197,25 @@ interface RowRef {
 
 /**
  * 把清单壳挂到一个已存在的容器上。
- *
  * 容器只负责"有地方画"，不参与任何判定 —— 这样 `Modal` 与 `ItemView` 才能共用同一份装配。
+ *
+ * ⭐ **版面顺序由创建顺序决定**（`container` 的子节点就是视觉顺序）：
+ *
+ * ```
+ * 固定说明段        .acc-task-lines
+ * 过滤开关（可选）  .acc-task-filters     ← 只在给了 `filters` 时存在
+ * ─────────────────────────────────────────────
+ * 标题 │ 全选 全不选  .acc-task-toolbar   ← 清单顶部那一行
+ * 进度              .acc-task-progress
+ * 清单              .acc-task-list
+ * 空清单说明        .acc-task-empty
+ * 动作区            .acc-task-actions
+ * ```
+ *
+ * ⚠️⚠️ 「全选 / 全不选」原先建在**最后**（`new Setting(container)` 建在动作区之后），
+ * 于是它们被排到了动作按钮**下面** —— 想全选得先滚过整个清单。这是**结构**问题，
+ * 不是样式问题：修法只能是调整创建顺序，**不要**用 CSS `order` 去挪（那样 DOM 顺序
+ * 仍然在说谎，读屏与键盘 Tab 走的是 DOM 顺序）。
  */
 export function mountTaskListShell(
 	container: HTMLElement,
@@ -213,6 +237,21 @@ export function mountTaskListShell(
 		for (const line of lines ?? []) linesEl?.createDiv?.({ text: line });
 	};
 	paintLines(options.lines ?? []);
+
+	/**
+	 * 过滤开关（`Setting` 行）的容器。**建在这里是为了版面顺序**（在清单上方）；
+	 * 里面那几行在函数末尾统一挂（它们要用 `filterState` 与 `applyFilters`）。
+	 * 没有开关时**不建**这个容器 —— 否则会留一个空 div 撑出一点间距。
+	 */
+	const filtersEl = (options.filters?.length ?? 0) > 0 ? container.createDiv?.({ cls: "acc-task-filters" }) : null;
+
+	/**
+	 * ⭐ 清单顶部那一行：左边标题、右边「全选 / 全不选」（主流列表的样子）。
+	 * 按钮在函数末尾建（要与 `selected` / `updateControls` 接线），容器在这里先占好位。
+	 */
+	const toolbarEl = container.createDiv?.({ cls: "acc-task-toolbar" });
+	if (options.listHeading) toolbarEl?.createDiv?.({ cls: "acc-task-heading", text: options.listHeading });
+	const toolsEl = toolbarEl?.createDiv?.({ cls: "acc-task-tools" });
 
 	let cards: FileCard[] = [...(options.cards ?? [])];
 	/** 过滤开关的当前状态（`key` → 勾没勾）。⚠️ 只有这一份。 */
@@ -262,6 +301,13 @@ export function mountTaskListShell(
 	const footerEl = container.createDiv?.({ cls: "acc-task-actions" });
 	let ctaButton: { setButtonText?: (text: string) => unknown; setDisabled?: (value: boolean) => unknown } | null = null;
 	let cancelButton: { setDisabled?: (value: boolean) => unknown } | null = null;
+	/**
+	 * 顶部那两颗（「全选 / 全不选」）。⚠️ 它们是**原生 `<button>`**，不是宿主
+	 * `ButtonComponent` —— 后者要靠 `Setting` 才挂得上，而 `Setting` 是一整行
+	 * （名字区 + 控件区），塞进工具栏会把"左标题 / 右按钮"挤成两行。
+	 */
+	let selectAllButton: { disabled?: boolean } | null = null;
+	let selectNoneButton: { disabled?: boolean } | null = null;
 	const actionButtons: {
 		action: TaskListAction;
 		button: { setButtonText?: (text: string) => unknown; setDisabled?: (value: boolean) => unknown };
@@ -276,6 +322,8 @@ export function mountTaskListShell(
 
 	/** 更新"跟勾选数/进度有关"的那些东西（**清单本身不动**）。 */
 	const updateControls = (): void => {
+		/** 能勾的行数（下面几处都要用它 —— ⚠️ 只算一次，别在两个分支里各算一遍）。 */
+		const pickable = selectableRows(cards).length;
 		emptyEl?.setText?.(cards.length === 0 ? options.labels.empty : "");
 
 		if (phase === "run") {
@@ -285,10 +333,15 @@ export function mountTaskListShell(
 			progressEl?.setText?.("");
 		}
 
+		// 顶部那两颗：没事可做时**灰着**（点下去什么也不会发生的按钮，比没有更让人困惑）。
+		// ⚠️ 放在 `settled` 那道闸之前：完成态里 `phase` 仍是 `run` ⇒ 它们保持灰着。
+		if (selectAllButton) selectAllButton.disabled = phase === "run" || pickable === 0;
+		if (selectNoneButton) selectNoneButton.disabled = phase === "run" || selected.size === 0;
+
 		// ⚠️ 完成态的按钮由 `showSettledFooter()` 独占：这里再改一次会把「关闭」改回主按钮并启用它。
 		if (settled) return;
 
-		if (selectableRows(cards).length === 0) {
+		if (pickable === 0) {
 			ctaButton?.setButtonText?.(options.labels.close);
 			ctaButton?.setDisabled?.(phase === "run");
 		} else {
@@ -559,8 +612,10 @@ export function mountTaskListShell(
 
 	// ⭐ 范围过滤（勾选项）：勾上 = 只看当前笔记。
 	// ⚠️ 用 `addToggle` 而不是下拉：只有两个范围，勾选框一眼看得懂"我在看哪一份"。
+	// ⚠️ 挂在 `filtersEl`（清单**上方**那个容器）上，不是 `container` —— 见函数头那张版面表。
 	for (const item of options.filters ?? []) {
-		new Setting(container)
+		if (!filtersEl) break;
+		new Setting(filtersEl)
 			.setName(item.name)
 			.addToggle((toggle) =>
 				toggle.setValue(item.value).onChange((on) => {
@@ -570,26 +625,46 @@ export function mountTaskListShell(
 			);
 	}
 
-	new Setting(container)
-		.addButton((button) =>
-			button.setButtonText(options.labels.selectAll).onClick(() => {
-				if (phase === "run") return;
-				// ⚠️ 只选**能勾的**（D-70）：把不可选的行塞进 `selected`，症状是"界面灰着、提交里却有它"。
-				selected = selectEverything(keysOf(selectableRows(cards)));
-				syncChecks();
-				updateControls();
-			})
-		)
-		.addButton((button) =>
-			button.setButtonText(options.labels.selectNone).onClick(() => {
-				if (phase === "run") return;
-				selected = new Set<string>();
-				syncChecks();
-				updateControls();
-			})
-		);
+	/**
+	 * 顶部工具栏：标题右边那两颗（「全选 / 全不选」）。
+	 *
+	 * ⭐ 位置在**清单上方**（用户 2026-10-23 要求：主流列表就是这么放的）。
+	 * ⚠️ 用了原生 `<button>` ⇒ 宿主的 `button` 基础样式还在，但**没有** `mod-cta`
+	 * 这类按钮组件的修饰 —— 观感全靠 `styles.css` 里 `.acc-task-tools button`。
+	 */
+	const renderToolbar = (): void => {
+		if (!toolsEl) return;
+		/** 造一颗工具按钮并接线（两颗只差文案与动作）。 */
+		const tool = (label: string, onClick: () => void): { disabled?: boolean } => {
+			const button = toolsEl.createEl("button", {
+				cls: "acc-task-tool",
+				text: label,
+				attr: { type: "button" },
+			}) as unknown as {
+				disabled?: boolean;
+				addEventListener?: (type: string, handler: () => void) => void;
+			};
+			button.addEventListener?.("click", onClick);
+			return button;
+		};
+
+		selectAllButton = tool(options.labels.selectAll, () => {
+			if (phase === "run") return;
+			// ⚠️ 只选**能勾的**（D-70）：把不可选的行塞进 `selected`，症状是"界面灰着、提交里却有它"。
+			selected = selectEverything(keysOf(selectableRows(cards)));
+			syncChecks();
+			updateControls();
+		});
+		selectNoneButton = tool(options.labels.selectNone, () => {
+			if (phase === "run") return;
+			selected = new Set<string>();
+			syncChecks();
+			updateControls();
+		});
+	};
 
 	renderFooter();
+	renderToolbar();
 	resetRows();
 
 	return {

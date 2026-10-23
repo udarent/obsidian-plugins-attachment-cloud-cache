@@ -200,8 +200,75 @@
 	overflow-wrap: anywhere;
 }
 
-/* ── 清单式弹窗（缩略图 + 勾选 + 进度）：上传已有附件 / 清理云端空间 /
-   检查未引用的云端附件 / 挑选要缓存的文件，四条链共用这一套类名 ── */
+/* ── 清单式界面（缩略图 + 勾选 + 进度）：上传已有附件 / 清理云端空间 /
+   附件管理视图，共用这一套类名 ── */
+
+/* 顶部那句固定说明（D-76：一句话、不含数字）。
+   ⚠️ 用 muted：它是**背景信息**，不是警告 —— 涂成醒目色会让用户以为出事了。 */
+.acc-task-lines {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.45;
+}
+
+/* 范围 / 类别开关（`Setting` 行）的容器。只有给了 `filters` 时才存在（见壳的版面表）。 */
+.acc-task-filters .setting-item {
+	border: none;
+	padding: 0.2em 0;
+}
+
+/*
+ * ⭐ 清单顶部那一行：左边标题、右边「全选 / 全不选」。
+ *
+ * 位置是**结构**（创建顺序在清单之前），这里只管排布。
+ * `margin-left: auto` 把按钮组推到最右 —— 与主流列表（Finder / Notion）同一个读法：
+ * 标题在左、批量操作在右，两者都在清单**上方**，不用滚。
+ */
+.acc-task-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 1.9em;
+	margin: 0.35em 0 0.15em;
+}
+
+.acc-task-heading {
+	font-size: var(--font-ui-small);
+	font-weight: 600;
+	color: var(--text-normal);
+}
+
+.acc-task-tools {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	margin-left: auto;
+}
+
+/* 工具按钮：低存在感（它们是次要操作），但必须**看得出能点** ——
+   hover 与 disabled 两档都要有，否则"点不动"会被读成"插件坏了"。 */
+.acc-task-tools .acc-task-tool {
+	height: 24px;
+	padding: 0 8px;
+	border: 1px solid transparent;
+	background-color: transparent;
+	box-shadow: none;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1;
+	cursor: pointer;
+}
+
+.acc-task-tools .acc-task-tool:hover:not(:disabled) {
+	background-color: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.acc-task-tools .acc-task-tool:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+
 .acc-task-list {
 	/* ⚠️ 清单自己带滚动条（用户 2026-10-15 要求「进度要支持滚动条」）：
 	   几千个条目时，进度那句固定在它上方、行在这里滚 —— 两者都不会被挤出去。 */
@@ -209,13 +276,25 @@
 	overflow-y: auto;
 	scrollbar-gutter: stable;
 	margin: 0.5em 0;
+	/* 一条边界把"清单"与上下两侧的说明分隔开：几千行时没有边界，
+	   用户分不清哪里是清单结束、哪里是说明文字（也是主流列表的样子） */
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	padding: 0.15em 0.3em;
 }
 
 .acc-task-row {
 	display: flex;
 	align-items: center;
 	gap: 0.6em;
-	padding: 0.2em 0;
+	padding: 0.3em 0.4em;
+	border-radius: var(--radius-s);
+}
+
+/* 悬停整行高亮：这一行是多列拼起来的（勾选框 / 缩略图 / 名字 / 状态），
+   没有整行高亮时，勾哪一个要看很久才能把勾选框与名字对上。 */
+.acc-task-row:hover {
+	background-color: var(--background-modifier-hover);
 }
 
 .acc-task-check {
@@ -377,4 +456,125 @@
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 	user-select: text;
+}
+
+/* ─────────────────────────────────────────────
+   附件管理视图：筛选胶囊
+
+   ⭐⭐ **按下 / 弹起两种状态**（用户 2026-10-23 要求）。
+
+   ⚠️⚠️ 起因是一个"有类名、没样式"的缺陷：代码里给当前筛选加过 `is-active`，
+   而这份样式表里**一条 `acc-gallery-filter` 规则都没有** ⇒ 六个按钮长得完全一样，
+   用户看不出自己正在看哪一档。所以：
+   - `.is-active` = 按下（染强调色 + 内阴影 + 轻微下沉），其余 = 弹起（描边、无填充）；
+   - 状态**同时**写进 `aria-pressed`（读屏软件念"按下"）——两者不许各说一套。
+
+   颜色一律用主题变量（`--interactive-accent` / `--text-on-accent` / `--background-*`），
+   跟随用户主题与样式片段；不写死色值。
+   ───────────────────────────────────────────── */
+.acc-gallery-filters {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	padding: 0.2em 0 0.4em;
+}
+
+.acc-gallery-filter {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 26px;
+	padding: 0 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 999px;
+	background-color: var(--background-primary);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1;
+	cursor: pointer;
+	/*
+	 * ⚠️ 这里**故意不写** `box-shadow: none`：宿主的按钮阴影规则（`--input-shadow`）
+	 * 盖过了单类选择器 —— 实测 computed style 里仍是那圈 inset + 1px 投影，
+	 * 也就是说"清零"是一条**不生效**的声明，留着只会让人以为弹起态是平的。
+	 * 弹起态**就是**宿主那颗按钮的样子（微微浮起、一圈细描边），与按下态的内阴影
+	 * 正好构成"弹起 / 按下"这一对。要清掉得再加一层选择器，但那样反而不像宿主自己的按钮了。
+	 */
+}
+
+.acc-gallery-filter:hover {
+	background-color: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+/* 按下的手感：位移 1px（`prefers-reduced-motion` 的用户不吃动画，位移不算动画，保留） */
+.acc-gallery-filter:active {
+	transform: translateY(1px);
+}
+
+/* ⭐ 按下 —— 这是"哪个筛选生效了"的**唯一**视觉信号 */
+.acc-gallery-filter.is-active {
+	border-color: var(--interactive-accent);
+	background-color: var(--interactive-accent);
+	box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.25);
+	color: var(--text-on-accent);
+	font-weight: 600;
+}
+
+.acc-gallery-filter.is-active:hover {
+	border-color: var(--interactive-accent-hover);
+	background-color: var(--interactive-accent-hover);
+	color: var(--text-on-accent);
+}
+
+/* 胶囊上的件数：让"按下去会得到几行"在按下**之前**就看得见。
+   ⚠️ 等宽数字：否则 1 与 11 的宽度差会让整排胶囊在切换筛选时抖动。 */
+.acc-gallery-filter-count {
+	padding: 0 5px;
+	border-radius: 999px;
+	background-color: var(--background-modifier-hover);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-variant-numeric: tabular-nums;
+}
+
+/* 按下时数字也要读得出来：用半透明白压在强调色上（深浅主题都成立） */
+.acc-gallery-filter.is-active .acc-gallery-filter-count {
+	background-color: rgb(255 255 255 / 0.22);
+	color: var(--text-on-accent);
+}
+
+/* 一行为 0 的档：淡一点，但**仍可点** —— 禁用它会让"为什么是 0"无从追问。
+   ⚠️ 用 `:not(.is-active)`：当前档即便是 0，也必须保持"按下"的样子。 */
+.acc-gallery-filter.is-empty:not(.is-active) {
+	opacity: 0.55;
+}
+
+/* 刷新：推到最右、低存在感（它不该与筛选抢视线）。
+   ⚠️ 选择器多带一层 `.acc-gallery-filters`：只要一个类时，宿主的按钮阴影会盖住
+   `box-shadow: none`（与胶囊那条同一个原因）—— 它要和胶囊同排，所以必须是**平的**。 */
+.acc-gallery-filters .acc-gallery-refresh {
+	margin-left: auto;
+	height: 26px;
+	padding: 0 8px;
+	border: 1px solid transparent;
+	background-color: transparent;
+	box-shadow: none;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	cursor: pointer;
+}
+
+.acc-gallery-filters .acc-gallery-refresh:hover {
+	background-color: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+/* 视图本体：列表占满剩余宽度，别让长路径把视图撑出横向滚动条 */
+.acc-gallery {
+	overflow-x: hidden;
+}
+
+.acc-gallery-list {
+	min-width: 0;
 }

@@ -441,12 +441,30 @@ async function main() {
 				const attachments = app.vault
 					.getFiles()
 					.filter((f) => !["md", "canvas", "base"].includes(String(f.extension || "").toLowerCase()));
+				const toolbar = root.querySelector(".acc-task-toolbar");
+				const list = root.querySelector(".acc-task-list");
+				// ⚠️ 按**结构化**字段读，不按中文文案读：文案改一次，断言就假红一次。
+				const label = (el) => ((el && el.textContent) || "").trim();
 				return {
 					title: view.getDisplayText ? view.getDisplayText() : "",
 					filters: Array.from(root.querySelectorAll(".acc-gallery-filter")).map((el) => ({
-						text: (el.textContent || "").trim(),
-						active: el.classList.contains("is-active"),
+						key: el.getAttribute("data-filter") || "",
+						label: label(el.querySelector(".acc-gallery-filter-label")),
+						count: Number(label(el.querySelector(".acc-gallery-filter-count"))),
+						// 「按下 / 弹起」两个来源都必须一致：属性（读屏）与类名（视觉）
+						pressed: el.getAttribute("aria-pressed") === "true",
+						activeClass: el.classList.contains("is-active"),
 					})),
+					// 清单自己那一行标题
+					heading: label(root.querySelector(".acc-task-heading")),
+					// 顶部工具按钮（应当是「全选」「全不选」两颗）
+					tools: Array.from(root.querySelectorAll(".acc-task-tools button")).map(label),
+					// ⭐ 结构：工具栏必须在清单**之前**（DOM 顺序，不是 CSS order）
+					toolbarBeforeList: Boolean(
+						toolbar && list && (toolbar.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING)
+					),
+					// 动作区里不该再出现这两颗（它们曾经被排到动作按钮下面）
+					toolsInFooter: root.querySelectorAll(".acc-task-actions .acc-task-tool").length,
 					names: Array.from(root.querySelectorAll(".acc-task-row .acc-task-name")).map((el) => el.textContent || ""),
 					hints: Array.from(root.querySelectorAll(".acc-task-row .acc-task-hint")).map((el) => el.textContent || ""),
 					lines: Array.from(root.querySelectorAll(".acc-task-lines > div")).map((el) => el.textContent || ""),
@@ -459,9 +477,25 @@ async function main() {
 		check("「附件管理」命令能打开视图", Boolean(gallery), gallery ? "已打开" : "没找到 acc-gallery 的 leaf");
 		check("视图标题＝附件管理", gallery?.title === "附件管理", `实际：${JSON.stringify(gallery?.title)}`);
 		check(
-			"筛选栏六个按钮，默认选中「全部」",
-			gallery?.filters.length === 6 && gallery.filters[0]?.text === "全部" && gallery.filters[0]?.active === true,
-			(gallery?.filters ?? []).map((f) => `${f.text}${f.active ? " *" : ""}`).join(" / ")
+			"筛选栏六个胶囊，默认「全部」**按下**（视觉类名与 aria 同一件事）",
+			gallery?.filters.length === 6 &&
+				gallery.filters[0]?.label === "全部" &&
+				gallery.filters[0]?.pressed === true &&
+				gallery.filters[0]?.activeClass === true &&
+				gallery.filters.filter((f) => f.pressed).length === 1,
+			(gallery?.filters ?? []).map((f) => `${f.label}${f.pressed ? " [按下]" : ""}${f.activeClass ? " *" : ""}`).join(" / ")
+		);
+		check(
+			"清单有一行自己的标题（附件清单）",
+			gallery?.heading === "附件清单",
+			`实际：${JSON.stringify(gallery?.heading)}`
+		);
+		check(
+			"「全选 / 全不选」在清单**上方**，且不在动作区里",
+			(gallery?.tools ?? []).join(",") === "全选,全不选" &&
+				gallery?.toolbarBeforeList === true &&
+				gallery?.toolsInFooter === 0,
+			`tools=${JSON.stringify(gallery?.tools ?? [])} beforeList=${gallery?.toolbarBeforeList} inFooter=${gallery?.toolsInFooter}`
 		);
 		check(
 			"顶部有一句固定说明，且不含数字（D-76）",
@@ -544,50 +578,118 @@ async function main() {
 			JSON.stringify(perAction?.pair ?? perAction?.error ?? null)
 		);
 
-		// 三态互斥且不遗漏：未上传 ＋ 已上传 ＋ 云端有本地无 ＝ 全部
-		const byState = await evaluate(
+		// 三态互斥且不遗漏 ＋ 胶囊上的**件数与点开后的行数同源**（一份判据）
+		const byFilter = await evaluate(
 			client,
 			`(() => {
 				const root = app.workspace.getLeavesOfType("acc-gallery")[0].view.contentEl;
+				const pick = (key) =>
+					Array.from(root.querySelectorAll(".acc-gallery-filter")).find(
+						(el) => el.getAttribute("data-filter") === key
+					) || null;
 				const rows = () => root.querySelectorAll(".acc-task-row").length;
-				const clickFilter = (label) => {
-					const button = Array.from(root.querySelectorAll(".acc-gallery-filter")).find(
-						(el) => (el.textContent || "").trim() === label
-					);
-					if (button) button.click();
-					return rows();
-				};
-				const all = clickFilter("全部");
-				const notUploaded = clickFilter("未上传");
-				const uploaded = clickFilter("已上传");
-				const cloudOnly = clickFilter("云端有本地无");
-				clickFilter("全部");
-				return { all, notUploaded, uploaded, cloudOnly };
+				const out = {};
+				for (const key of ["all", "to-clean", "not-uploaded", "uploaded", "cloud-only", "unreferenced"]) {
+					const button = pick(key);
+					if (!button) { out[key] = null; continue; }
+					const badge = button.querySelector(".acc-gallery-filter-count");
+					const declared = Number(((badge && badge.textContent) || "").trim());
+					button.click();
+					const after = pick(key);
+					out[key] = {
+						declared,
+						rows: rows(),
+						pressed: Boolean(after && after.getAttribute("aria-pressed") === "true"),
+						pressedCount: root.querySelectorAll(".acc-gallery-filter[aria-pressed='true']").length,
+						hints: Array.from(root.querySelectorAll(".acc-task-row .acc-task-hint")).map((el) => el.textContent || ""),
+					};
+				}
+				const all = pick("all");
+				if (all) all.click();
+				return out;
 			})()`
 		);
+		const byState = byFilter
+			? {
+					all: byFilter.all?.rows ?? -1,
+					notUploaded: byFilter["not-uploaded"]?.rows ?? -1,
+					uploaded: byFilter.uploaded?.rows ?? -1,
+					cloudOnly: byFilter["cloud-only"]?.rows ?? -1,
+				}
+			: null;
+
+		check(
+			"胶囊上的件数＝点开后真的有几行（同一份判据）",
+			Boolean(byFilter) &&
+				Object.values(byFilter).every((entry) => entry && entry.declared === entry.rows),
+			Object.entries(byFilter ?? {})
+				.map(([key, entry]) => `${key}:${entry?.declared}/${entry?.rows}`)
+				.join(" ")
+		);
+		check(
+			"按下的胶囊**有且只有一个**（分段控件，不是多选筛子）",
+			Boolean(byFilter) && Object.values(byFilter).every((entry) => entry && entry.pressed && entry.pressedCount === 1),
+			Object.entries(byFilter ?? {})
+				.map(([key, entry]) => `${key}:${entry?.pressed ? "按下" : "弹起"}/${entry?.pressedCount}`)
+				.join(" ")
+		);
+
 		// 「待清理」＝ R17 的三类候选；它们的**共同点**就是“没人引用”（判据复用 `selectLocalOrphans`）
-		const toClean = await evaluate(
-			client,
-			`(() => {
-				const root = app.workspace.getLeavesOfType("acc-gallery")[0].view.contentEl;
-				const button = Array.from(root.querySelectorAll(".acc-gallery-filter")).find(
-					(el) => (el.textContent || "").trim() === "待清理"
-				);
-				if (!button) return null;
-				button.click();
-				const hints = Array.from(root.querySelectorAll(".acc-task-row .acc-task-hint")).map((el) => el.textContent || "");
-				const rows = root.querySelectorAll(".acc-task-row").length;
-				const all = Array.from(root.querySelectorAll(".acc-gallery-filter")).find(
-					(el) => (el.textContent || "").trim() === "全部"
-				);
-				all.click();
-				return { rows, hints };
-			})()`
-		);
+		const toClean = byFilter?.["to-clean"]
+			? { rows: byFilter["to-clean"].rows, hints: byFilter["to-clean"].hints }
+			: null;
 		check(
 			"「待清理」里每一行都带「没人引用」",
 			toClean !== null && toClean.rows > 0 && toClean.hints.every((hint) => hint.includes("没人引用")),
-			toClean === null ? "没有「待清理」按钮" : `${toClean.rows} 行：${JSON.stringify(toClean.hints.slice(0, 3))}`
+			toClean === null ? "没有「待清理」胶囊" : `${toClean.rows} 行：${JSON.stringify(toClean.hints.slice(0, 3))}`
+		);
+
+		// 顶部两颗工具按钮真的管用（它们从动作区下面搬到了清单上方 ⇒ 先证接线没断）
+		const selectionTools = await evaluate(
+			client,
+			`(() => {
+				const root = app.workspace.getLeavesOfType("acc-gallery")[0].view.contentEl;
+				const pick = () =>
+					Array.from(root.querySelectorAll(".acc-task-tools button")).reduce((acc, el) => {
+						const text = (el.textContent || "").trim();
+						if (text === "全选" || text === "全不选") acc[text] = el;
+						return acc;
+					}, {});
+				const checked = () =>
+					Array.from(root.querySelectorAll(".acc-task-check")).filter((box) => box.checked && !box.disabled).length;
+				const before = { tools: pick(), checked: checked() };
+				if (!before.tools["全不选"] || !before.tools["全选"]) return { error: "顶部没有这两颗按钮" };
+				// ⚠️ 顺序：先全选、再全不选。视图打开时一件都没勾 ⇒ 「全不选」是**灰的**，
+				// 先点它什么也不会发生（那条"灰着"本身就是另一条断言，见下）。
+				before.tools["全选"].click();
+				const afterAll = checked();
+				before.tools["全不选"].click();
+				const afterNone = checked();
+				return {
+					selectedAtOpen: before.checked,
+					afterNone,
+					afterAll,
+					pickable: root.querySelectorAll(".acc-task-check:not(:disabled)").length,
+					noneDisabledWhenEmpty: (() => {
+						const el = Array.from(root.querySelectorAll(".acc-task-tools button")).find(
+							(b) => (b.textContent || "").trim() === "全不选"
+						);
+						return el ? el.disabled === true : null;
+					})(),
+				};
+			})()`
+		);
+		check(
+			"「全不选」清空勾选、「全选」把能勾的都勾上",
+			selectionTools?.afterNone === 0 &&
+				selectionTools?.afterAll === selectionTools?.pickable &&
+				selectionTools?.pickable > 0,
+			JSON.stringify(selectionTools ?? null)
+		);
+		check(
+			"一件没勾时「全不选」是灰的（点下去不会有反应 ⇒ 不许看着能点）",
+			selectionTools?.noneDisabledWhenEmpty === true,
+			JSON.stringify(selectionTools ?? null)
 		);
 
 		// 「删除（云端）」的默认档（CR-05）：没人引用的可删，仍被引用的**灰掉**

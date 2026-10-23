@@ -1,10 +1,21 @@
 /**
  * **附件管理视图**（R24 / F22）：一个常驻列表 ＋ 筛选 ＋ 批量动作。
  *
+ * ## 版面（自上而下）
+ *
+ * ```
+ * 筛选胶囊：全部 18 │ 待清理 3 │ 未上传 5 │ … │            刷新
+ * 固定说明一句（不含数字）
+ * ─────────────────────────────────────────────────────────
+ * 附件清单                                    全选  全不选
+ * 清单（勾选框 + 缩略图 + 路径 + 状态标签）
+ * 动作区：上传 / 删除本地 / 改为本地引用 / 删除云端 / 重命名    取消
+ * ```
+ *
  * ## 它只做三件事
  *
- * 1. 画筛选栏（全部 / 未上传 / 已上传 / 云端有本地无 / 没人引用）；
- * 2. 把筛选结果交给**清单壳**（`task-list-shell.ts`，与两条旧命令同一份装配）；
+ * 1. 画筛选栏（全部 / 待上传 / 已上传 / 云端有本地无 / 没人引用），每个胶囊带**件数**；
+ * 2. 把筛选结果交给**清单壳**（`task-list-shell.ts`，与弹窗同一份装配）；
  * 3. 用户点动作时把"勾了哪些"转给 `plugin/gallery-flow.ts`。
  *
  * ⚠️ **不在这一层判定"能不能做"**：可用性来自 `gallery/actions.ts`（纯函数），
@@ -127,8 +138,17 @@ export class GalleryView extends ItemView {
 	}
 
 	private visible(): GalleryItem[] {
+		return this.itemsFor(this.filter);
+	}
+
+	/**
+	 * 某个筛选下的行（**一份判据**：清单与胶囊上的数字都从这里出）。
+	 *
+	 * ⚠️ 数字与实际行数必须同源 —— 各算一遍的话，迟早出现"胶囊说 3、点开是 2"。
+	 */
+	private itemsFor(key: FilterKey): GalleryItem[] {
 		const items = this.model?.items ?? [];
-		switch (this.filter) {
+		switch (key) {
 			case "to-clean":
 				// 三类候选（R17）：云端没人引用的对象 ＋ 判据算出来的本地孤立/站外缓存副本
 				return items.filter(
@@ -225,26 +245,7 @@ export class GalleryView extends ItemView {
 		root.empty?.();
 		root.addClass?.("acc-gallery");
 
-		const bar = root.createDiv?.({ cls: "acc-gallery-filters" });
-		for (const filter of FILTERS) {
-			const button = bar?.createEl?.("button", {
-				cls: "acc-gallery-filter",
-				text: this.ctx.t(filter.labelKey),
-			});
-			if (filter.key === this.filter) button?.addClass?.("is-active");
-			button?.addEventListener?.("click", () => {
-				if (this.filter === filter.key) return;
-				this.filter = filter.key;
-				this.render();
-			});
-		}
-		const refreshButton = bar?.createEl?.("button", {
-			cls: "acc-gallery-refresh",
-			text: this.ctx.t("galleryRefresh"),
-		});
-		refreshButton?.addEventListener?.("click", () => {
-			void this.refresh();
-		});
+		this.renderFilters(root);
 
 		const listHost = root.createDiv?.({ cls: "acc-gallery-list" });
 		if (!listHost) return;
@@ -256,6 +257,8 @@ export class GalleryView extends ItemView {
 			listHost,
 			{
 				title: this.ctx.t("galleryTitle"),
+				// 清单自己的那一行标题（视图没有弹窗标题可借，见 `TaskListOptions.listHeading`）
+				listHeading: this.ctx.t("galleryListHeading"),
 				lines: [this.ctx.t("galleryRuleLine")],
 				cards,
 				labels: this.labels(),
@@ -273,6 +276,65 @@ export class GalleryView extends ItemView {
 				},
 			}
 		);
+	}
+
+	/**
+	 * 筛选栏：一排**胶囊**，每个带件数。
+	 *
+	 * ## ⭐ 两种状态（用户 2026-10-23 要求）
+	 *
+	 * `is-active` = **按下**（这个筛选正在生效）、没有它 = **弹起**。视觉差异在
+	 * `styles.css` 的 `.acc-gallery-filter` 一处定义。
+	 *
+	 * ⚠️⚠️ 这一条**原来是有类名没样式**：`is-active` 从来没有任何 CSS 规则
+	 * ⇒ 六个按钮长得一模一样，用户看不出在看哪一档（这正是他提这条的原因）。
+	 * 所以判据不能只是"代码里加了类"，要有一条**真的画出来**的断言（`verify:flows`
+	 * 读 `aria-pressed`，也就是读屏软件会念出来的那个状态）。
+	 *
+	 * ## ⚠️ 为什么是**单选**而不是多选
+	 *
+	 * 六个预设里「未上传 / 已上传 / 云端有本地无」是三态的**互斥**分支（`enumerate.ts`），
+	 * 「待清理」「没人引用」是叠加维度。同时按下两个互斥分支只能得到"并集"，
+	 * 而并集不是任何用户想要的答案 ⇒ 这里是**分段控件**语义（有且只有一个按下），
+	 * 不是多选筛子。件数放在胶囊上，让"按下去会得到几行"在按下**之前**就能看见。
+	 */
+	private renderFilters(root: HTMLElement): void {
+		const bar = root.createDiv?.({ cls: "acc-gallery-filters" });
+		if (!bar) return;
+
+		for (const filter of FILTERS) {
+			const active = filter.key === this.filter;
+			const count = this.itemsFor(filter.key).length;
+			const button = bar.createEl?.("button", {
+				cls: active ? "acc-gallery-filter is-active" : "acc-gallery-filter",
+				attr: {
+					type: "button",
+					// ⭐ 结构化的身份：脚本按它点名，不按中文文案（文案改一次，断言就假红一次）
+					"data-filter": filter.key,
+					// ⭐ 读屏："按下 / 弹起"必须与视觉说同一件事
+					"aria-pressed": active ? "true" : "false",
+				},
+			});
+			button?.createSpan?.({ cls: "acc-gallery-filter-label", text: this.ctx.t(filter.labelKey) });
+			button?.createSpan?.({ cls: "acc-gallery-filter-count", text: String(count) });
+			// 这一档一行也没有 ⇒ 淡一点（点了也不会有内容），但仍然可点：
+			// 禁用它会让"为什么是 0"无从追问，而空清单那句说明本身就是答案。
+			if (count === 0) button?.addClass?.("is-empty");
+			button?.addEventListener?.("click", () => {
+				if (this.filter === filter.key) return;
+				this.filter = filter.key;
+				this.render();
+			});
+		}
+
+		const refreshButton = bar.createEl?.("button", {
+			cls: "acc-gallery-refresh",
+			text: this.ctx.t("galleryRefresh"),
+			attr: { type: "button" },
+		});
+		refreshButton?.addEventListener?.("click", () => {
+			void this.refresh();
+		});
 	}
 
 	private async execute(selected: readonly string[], report: TaskReporter, action?: string): Promise<void> {
