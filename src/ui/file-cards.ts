@@ -42,6 +42,22 @@ export type FileCardOpenTarget =
 	/** 库外地址（站外 `http(s)`）：交给系统浏览器。 */
 	| { kind: "url"; value: string };
 
+/**
+ * 一格里的一句话，以及**它该是什么语气**（2026-10-23，列表改成多列时加的）。
+ *
+ * ⚠️ 语气由**调用方**给，不在这里由文案猜：判 `text === "已上传"` 来上色，文案一改颜色就没了，
+ * 而且是静默的。`tone` 只描述"这件事的性质"，具体颜色在 `styles.css` 一处定。
+ */
+export type FileCardCellTone = "muted" | "ok" | "warn" | "accent";
+
+/** 表格模式下的**一格**（键与 `TaskListColumn.key` 对应；缺的键就是空格）。 */
+export interface FileCardCell {
+	text: string;
+	tone?: FileCardCellTone;
+	/** 悬停说明（`title`）：留全文的地方 —— 格子里一律单行省略。 */
+	title?: string;
+}
+
 /** 清单里的一项：调用方给得出多少就给多少（缺的那部分自然降级）。 */
 export interface FileCardInput {
 	/**
@@ -118,6 +134,14 @@ export interface FileCardInput {
 	 * ⚠️ 所以这一行**不进默认勾选、全选也不选它**，界面上勾选框是禁用的。
 	 */
 	selectable?: boolean;
+	/**
+	 * 表格模式下的**各列内容**（2026-10-23，R24 的列表改成多列）。
+	 *
+	 * 键由调用方与 `TaskListOptions.columns` 对齐；值为字符串或 `{ text, tone, title }`。
+	 * ⚠️ 与 `hint` / `meta` 是**两套并存的表达**：给弹窗那两条链的仍是"名字 ＋ 一行小字"，
+	 * 表格把同一批事实摊进各自的列。别指望两边自动同步 —— 谁读哪个由容器决定。
+	 */
+	cells?: Readonly<Record<string, string | FileCardCell>>;
 }
 
 export interface FileCardDeps {
@@ -164,6 +188,16 @@ export interface FileCard {
 	id: string;
 	/** 显示给用户的名字：原始文件名，没有就是 `id`。 */
 	label: string;
+	/**
+	 * **纯文件名**（不带目录），表格模式的"名称"列用它；缺省时等于 {@link label}。
+	 *
+	 * ⚠️ 为什么要和 `label` 分开：`label` 是**完整路径**（D-66：拆成"名字 + 目录"两行时，
+	 * 库根目录的文件与没有本地副本的对象推不出路径）。而表格把"位置"放进了**单独一列**，
+	 * 名称列里再带路径就是重复 —— 两种形态要的东西不一样，所以这里给两个字段，不猜。
+	 */
+	fileName: string;
+	/** 表格模式下各列的内容（见 {@link FileCardInput.cells}）；非表格模式不读它。 */
+	cells: Readonly<Record<string, FileCardCell>>;
 	/** 类型标记（大写扩展名，如 `PDF`）；拿不到扩展名时是空串。 */
 	badge: string;
 	/**
@@ -203,6 +237,34 @@ export interface FileCard {
 	openLabel: string;
 	/** 能不能勾选（`false` = 只摆出来看 / 点，见 `FileCardInput.selectable`）。 */
 	selectable: boolean;
+}
+
+/**
+ * 把入参里的 `cells` 归一化（字符串 ⇒ `{ text }`；丢掉空键与空文本）。
+ *
+ * ⚠️ 归一化只此一处：两个入口各自揉一遍，迟早出现"一个认字符串、一个不认"。
+ */
+function normalizeCells(
+	raw: Readonly<Record<string, string | FileCardCell>> | null | undefined
+): Record<string, FileCardCell> {
+	const out: Record<string, FileCardCell> = {};
+	for (const [key, value] of Object.entries(raw ?? {})) {
+		if (!key) continue;
+		if (typeof value === "string") {
+			const text = value.trim();
+			if (text !== "") out[key] = { text };
+			continue;
+		}
+		if (!value || typeof value !== "object") continue;
+		const text = typeof value.text === "string" ? value.text.trim() : "";
+		if (text === "") continue;
+		const cell: FileCardCell = { text };
+		if (value.tone) cell.tone = value.tone;
+		const title = typeof value.title === "string" ? value.title.trim() : "";
+		if (title !== "") cell.title = title;
+		out[key] = cell;
+	}
+	return out;
 }
 
 /**
@@ -282,6 +344,9 @@ export function planFileCards(
 		cards.push({
 			id,
 			label,
+			// 文件名：没有名字（云端对象、或只给了 key）时退回 id —— 那是唯一还能说的事实
+			fileName: name || id,
+			cells: normalizeCells(item.cells),
 			badge,
 			thumbUrls,
 			fromLocalCopy,

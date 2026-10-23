@@ -459,8 +459,12 @@ async function main() {
 					})),
 					// 标题栏：在清单**里面**、是清单的第一个子节点
 					heading: label(root.querySelector(".acc-task-headrow .acc-task-heading")),
-					headInsideList: Boolean(head && list && head.parentElement === list),
-					headIsFirst: Boolean(head && head === head.parentElement?.firstElementChild),
+					// 粘顶容器（headwrap）在清单里且是第一个子节点；列标题行与标题行都在它里面
+					headInsideList: Boolean(head && list && head.closest(".acc-task-list") === list),
+					headIsFirst: (() => {
+						const wrap = head && head.closest(".acc-task-headwrap");
+						return Boolean(wrap && list && wrap.parentElement === list && wrap === list.firstElementChild);
+					})(),
 					headCheck: (() => {
 						const box = root.querySelector(".acc-task-check-all");
 						if (!box) return null;
@@ -474,7 +478,28 @@ async function main() {
 					// 动作区里不该再出现全选（它曾经被排到动作按钮下面）
 					buttonsInHead: root.querySelectorAll(".acc-task-headrow button").length,
 					names: Array.from(root.querySelectorAll(".acc-task-row .acc-task-name")).map((el) => el.textContent || ""),
-					hints: Array.from(root.querySelectorAll(".acc-task-row .acc-task-hint")).map((el) => el.textContent || ""),
+					// ⭐ 表格模式（2026-10-23）：状态与"引用"各自一列 —— 不再有合并的 acc-task-hint
+					states: Array.from(root.querySelectorAll(".acc-task-row .acc-cell-state .acc-cell-text")).map(
+						(el) => (el.textContent || "").trim()
+					),
+					refs: Array.from(root.querySelectorAll(".acc-task-row .acc-cell-ref .acc-cell-text")).map(
+						(el) => (el.textContent || "").trim()
+					),
+					folders: Array.from(root.querySelectorAll(".acc-task-row .acc-cell-folder .acc-cell-text")).map(
+						(el) => (el.textContent || "").trim()
+					),
+					sizes: Array.from(root.querySelectorAll(".acc-task-row .acc-cell-size .acc-cell-text")).map(
+						(el) => (el.textContent || "").trim()
+					),
+					cols: Array.from(root.querySelectorAll(".acc-task-headcols .acc-col")).map((el) => (el.textContent || "").trim()),
+					// 网格模板：表头与行**共用一份**（--acc-cols 写在清单元素上）
+					gridTemplate: (() => {
+						const cls = (sel) => {
+							const el = root.querySelector(sel);
+							return el ? getComputedStyle(el).gridTemplateColumns : "";
+						};
+						return { row: cls(".acc-task-row"), head: cls(".acc-task-headcols") };
+					})(),
 					lines: Array.from(root.querySelectorAll(".acc-task-lines > div")).map((el) => el.textContent || ""),
 					rows: root.querySelectorAll(".acc-task-row").length,
 					expected: attachments.length,
@@ -527,9 +552,9 @@ async function main() {
 				const root = ${GALLERY_ROOT};
 				const rows = Array.from(root.querySelectorAll(".acc-task-row"));
 				const target = rows.find((row) => {
-					const hint = row.querySelector(".acc-task-hint")?.textContent || "";
+					const state = row.querySelector(".acc-cell-state .acc-cell-text")?.textContent || "";
 					const box = row.querySelector(".acc-task-check");
-					return hint.indexOf("云端有本地无") === 0 && box && !box.disabled;
+					return state.indexOf("云端有本地无") === 0 && box && !box.disabled;
 				});
 				if (!target) return null;
 				const box = target.querySelector(".acc-task-check");
@@ -554,9 +579,30 @@ async function main() {
 		);
 
 		check(
-			"每行都有状态标签（不是只列文件名）",
-			gallery?.names.length === gallery?.hints.length && (gallery?.hints ?? []).every((hint) => hint.trim().length > 0),
-			`${gallery?.hints.length} 个标签，例：${JSON.stringify((gallery?.hints ?? [])[0] ?? "")}`
+			"表格有六列，列标题齐全（名称 / 位置 / 状态 / 引用 / 大小 / 操作）",
+			(gallery?.cols ?? []).filter((c) => c !== "").join("|") === "名称|位置|状态|引用|大小|操作",
+			JSON.stringify(gallery?.cols ?? [])
+		);
+		check(
+			"每行都有状态与引用两格（不再是合并成一句的小标签）",
+			gallery?.names.length === gallery?.states.length &&
+				gallery.names.length === gallery?.refs.length &&
+				(gallery?.states ?? []).every((text) => text.trim().length > 0) &&
+				(gallery?.refs ?? []).every((text) => text.trim().length > 0),
+			`${gallery?.names.length} 行 / ${gallery?.states.length} 个状态 / ${gallery?.refs.length} 个引用格，例：${JSON.stringify(
+				[gallery?.states?.[0], gallery?.refs?.[0]]
+			)}`
+		);
+		check(
+			"位置与大小两列有内容（大小形如 `12 MB`）",
+			(gallery?.folders ?? []).length === gallery?.names.length &&
+				(gallery?.sizes ?? []).every((text) => text === "—" || /^\d+(\.\d+)? (B|KB|MB|GB)$/.test(text)),
+			`位置例：${JSON.stringify((gallery?.folders ?? [])[0] ?? "")} 大小例：${JSON.stringify((gallery?.sizes ?? [])[0] ?? "")}`
+		);
+		check(
+			"表头与行**共用同一份列宽**（网格模板逐字相同）",
+			Boolean(gallery?.gridTemplate?.row) && gallery.gridTemplate.row === gallery.gridTemplate.head,
+			JSON.stringify(gallery?.gridTemplate ?? null)
 		);
 
 		// 动作按钮的数字＝**能作用的件数**；重命名只对单选成立（§5.5 的判据在真机上的落点）
@@ -618,7 +664,9 @@ async function main() {
 						rows: rows(),
 						pressed: Boolean(after && after.getAttribute("aria-pressed") === "true"),
 						pressedCount: root.querySelectorAll(".acc-gallery-filter[aria-pressed='true']").length,
-						hints: Array.from(root.querySelectorAll(".acc-task-row .acc-task-hint")).map((el) => el.textContent || ""),
+						refs: Array.from(root.querySelectorAll(".acc-task-row .acc-cell-ref .acc-cell-text")).map(
+							(el) => (el.textContent || "").trim()
+						),
 					};
 				}
 				const all = pick("all");
@@ -653,12 +701,12 @@ async function main() {
 
 		// 「待清理」＝ R17 的三类候选；它们的**共同点**就是“没人引用”（判据复用 `selectLocalOrphans`）
 		const toClean = byFilter?.["to-clean"]
-			? { rows: byFilter["to-clean"].rows, hints: byFilter["to-clean"].hints }
+			? { rows: byFilter["to-clean"].rows, refs: byFilter["to-clean"].refs }
 			: null;
 		check(
 			"「待清理」里每一行都带「没人引用」",
-			toClean !== null && toClean.rows > 0 && toClean.hints.every((hint) => hint.includes("没人引用")),
-			toClean === null ? "没有「待清理」胶囊" : `${toClean.rows} 行：${JSON.stringify(toClean.hints.slice(0, 3))}`
+			toClean !== null && toClean.rows > 0 && toClean.refs.every((ref) => ref === "没人引用"),
+			toClean === null ? "没有「待清理」胶囊" : `${toClean.rows} 行：${JSON.stringify(toClean.refs.slice(0, 3))}`
 		);
 
 		// 标题栏那颗复选框真的管用：空 → 全选 → 全不选 → 只勾一行（半选）
@@ -738,7 +786,7 @@ async function main() {
 			`(() => {
 				const root = ${GALLERY_ROOT};
 				const list = root.querySelector(".acc-task-list");
-				const head = root.querySelector(".acc-task-headrow");
+				const head = root.querySelector(".acc-task-headwrap");
 				if (!list || !head) return { error: "没有清单 / 标题栏" };
 				const gap = () => Math.round(head.getBoundingClientRect().top - list.getBoundingClientRect().top);
 				const original = list.style.maxHeight;
@@ -772,7 +820,8 @@ async function main() {
 				const rows = Array.from(root.querySelectorAll(".acc-task-row"));
 				const textOf = (row) => ({
 					name: row.querySelector(".acc-task-name")?.textContent || "",
-					hint: row.querySelector(".acc-task-hint")?.textContent || "",
+					state: row.querySelector(".acc-cell-state .acc-cell-text")?.textContent || "",
+					ref: row.querySelector(".acc-cell-ref .acc-cell-text")?.textContent || "",
 					box: row.querySelector(".acc-task-check"),
 				});
 				const readCloud = () => {
@@ -787,10 +836,10 @@ async function main() {
 					box.dispatchEvent(new Event("change"));
 				};
 				const all = rows.map(textOf);
-				const free = all.find((row) => row.hint.includes("没人引用") && row.hint.includes("云端有本地无"));
+				const free = all.find((row) => row.ref === "没人引用" && row.state.includes("云端有本地无"));
 				// ⚠️ 不用精确等号：同一个状态后面可能还缀着「· 没人引用」。
 				// 要的是“已上传 **且仍被引用**”那一行（CR-05 只对它禁用删云端）。
-				const used = all.find((row) => row.hint.indexOf("已上传") === 0 && row.hint.indexOf("没人引用") < 0);
+				const used = all.find((row) => row.state.indexOf("已上传") === 0 && row.ref !== "没人引用");
 				let freeState = null;
 				let usedState = null;
 				if (free && !free.box.disabled) {

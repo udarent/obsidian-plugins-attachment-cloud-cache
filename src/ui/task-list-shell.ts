@@ -86,6 +86,30 @@ export interface TaskListFilter {
 }
 
 /**
+ * **多列模式**的一列（2026-10-23，附件管理改成表格时加的）。
+ *
+ * ⚠️ 列的定义在**调用方**（`ui/gallery-modal.ts` 从 i18n 取标题），壳只负责"画格子"。
+ * 壳不 import 宿主的 i18n，也不该知道"状态"和"引用"是两件事。
+ *
+ * ⚠️ 不给 `columns` ⇒ 保持原来的"两行式"行（名字 ＋ 小字），另外两条链就是这么用的。
+ * 表格不是"更好的行"，是**另一种形状**：五列 ＋ 五个动作需要宽度，短清单不需要。
+ */
+export interface TaskListColumn {
+	/** 与 `FileCard.cells` 的键对应（`name` / `open` 两列例外，见 {@link TaskListColumn.kind}）。 */
+	key: string;
+	/** 列标题（表头那一行）。 */
+	label: string;
+	/**
+	 * - `name`：缩略图 ＋ **文件名**（`FileCard.fileName`），悬停给完整路径；
+	 * - `open`：行尾那颗「打开」（需要 `onOpen`，否则这一格是空的）；
+	 * - 缺省：`card.cells[key]` 的文本。
+	 */
+	kind?: "text" | "name" | "open";
+	/** 这一列的宽度（任何 `grid-template-columns` 取值，如 `96px` / `minmax(0,1fr)`）。 */
+	width?: string;
+}
+
+/**
  * 一档**动作**（按钮）。给"同一个清单、几种处理方式"的场景用。
  *
  * ⚠️ 各档的风险等级必须与视觉等级**一一对应**：不可恢复的那一档才 `destructive`，
@@ -129,6 +153,11 @@ export interface TaskListOptions {
 		state: Readonly<Record<string, boolean>>
 	) => Promise<{ cards: readonly FileCard[]; lines?: readonly string[] }>;
 	labels: TaskListLabels;
+	/**
+	 * **多列模式**的列定义（不给 = 原来的两行式行）。见 {@link TaskListColumn}。
+	 * ⚠️ 给了它，行的 DOM 从 flex 换成 grid，且表头多出"列标题"那一行。
+	 */
+	columns?: readonly TaskListColumn[];
 	/** 多档动作（按钮）。缺省 = 单一主按钮 + 取消。 */
 	actions?: readonly TaskListAction[];
 	/** 默认勾选：`all`（默认）或 `none`。 */
@@ -325,6 +354,20 @@ export function mountTaskListShell(
 
 	const progressEl = container.createDiv?.({ cls: "acc-task-progress" });
 	const listEl = container.createDiv?.({ cls: "acc-task-list" });
+	/**
+	 * 多列模式：给清单挂上类名与**列宽**（一个 CSS 变量，行与表头共用同一份模板）。
+	 *
+	 * ⚠️ 模板只写在这一处：表头与行各拼一份的话，两边迟早错开半格 ——
+	 * 而"列没对齐"会被读成"这一行少了个东西"。
+	 */
+	const columns = options.columns ?? [];
+	const tabular = columns.length > 0;
+	if (tabular && listEl) {
+		listEl.addClass?.("is-tabular");
+		// 第一轨是勾选框（与表头那颗全选对齐），其余按列定义
+		const tracks = ["20px", ...columns.map((column) => column.width ?? "minmax(0, 1fr)")];
+		(listEl as HTMLElement & { style?: CSSStyleDeclaration }).style?.setProperty?.("--acc-cols", tracks.join(" "));
+	}
 	const emptyEl = container.createDiv?.({ cls: "acc-task-empty" });
 	/**
 	 * 按钮区单独一个容器 —— **完成态要整块换掉**（D-80）。
@@ -430,52 +473,132 @@ export function mountTaskListShell(
 	 * 画**表头**（清单的第一个子节点，`position: sticky` ⇒ 滚到哪儿都在）。
 	 *
 	 * ⚠️ 每次 `paintRows` 都要重画（`listEl.empty()` 把它一起清掉），句柄在这里重新赋值。
+	 * ⚠️ 容器叫 `acc-task-headwrap`，**不是** `acc-task-head` —— 后者是"名字 ＋ 行内标签"
+	 * 那一层的类名（D-71），套用会让它带上 `display: flex`，表头那一行会被压成内容宽度、
+	 * 列全错位（实测踩过：网格列从 257px 塌成 36px）。
 	 *
 	 * ⚠️⚠️ 复选框**放在标题左边**、与每一行的勾选框同一列：这是主流表格的读法 ——
 	 * "全选"不是一个动作按钮，而是**同一列的最上面那一格**。它有三态：
 	 * 全勾 / 半选 / 全不勾，状态由 `updateControls` 统一算（判据只此一份）。
+	 *
+	 * ⚠️ 多列模式下这里画**两行**：标题行（含全选与计数）＋ 列标题行，两行共用一个粘顶容器 ——
+	 * 各自 `sticky` 的话第二行会先滚走，露出后面滚过去的行。
 	 */
 	const paintHead = (): void => {
 		headCheck = null;
 		headCount = null;
 		if (!listEl) return;
-		const head = listEl.createDiv?.({ cls: "acc-task-headrow" });
-		if (!head) return;
+		const wrap = listEl.createDiv?.({ cls: "acc-task-headwrap" });
+		if (!wrap) return;
+		const head = wrap.createDiv?.({ cls: "acc-task-headrow" });
 
-		const box = head.createEl?.("input", {
-			// ⚠️ **不复用** `acc-task-check`：`.acc-task-check` 在界面与脚本里的意思是
-			// "**行**的勾选框"（"勾了几行""全选能勾的"都按它数）。表头这颗也算进去的话，
-			// 任何一处 `querySelectorAll(".acc-task-check")` 都会把"全选"当成第一行 ——
-			// 实测就撞过：脚本点 `boxes[0]` 想勾一行，结果点的是全选，断言因别的原因变红。
-			cls: "acc-task-check-all",
-			attr: {
-				type: "checkbox",
-				// 读屏念"全选"；三态里的半选由 `indeterminate` 自己表达（aria 会念成 mixed）
-				"aria-label": options.labels.selectAll,
-			},
-		}) as
-			| {
-					checked?: boolean;
-					indeterminate?: boolean;
-					disabled?: boolean;
-					title?: string;
-					addEventListener?: (type: string, handler: () => void) => void;
-			  }
-			| undefined;
-		if (box) {
-			box.addEventListener?.("change", () => {
-				if (phase === "run") return;
-				// ⚠️ 读 `checked`（浏览器已经把 indeterminate 清掉并翻成 true/false）：
-				// 勾上 ⇒ 全选**能勾的**（D-70：不可选的行不进 `selected`）；取消 ⇒ 清空。
-				selected = box.checked ? selectEverything(keysOf(selectableRows(cards))) : new Set<string>();
-				syncChecks();
-				updateControls();
-			});
-			headCheck = box;
+		if (head) {
+			const box = head.createEl?.("input", {
+				// ⚠️ **不复用** `acc-task-check`：`.acc-task-check` 在界面与脚本里的意思是
+				// "**行**的勾选框"（"勾了几行""全选能勾的"都按它数）。表头这颗也算进去的话，
+				// 任何一处 `querySelectorAll(".acc-task-check")` 都会把"全选"当成第一行 ——
+				// 实测就撞过：脚本点 `boxes[0]` 想勾一行，结果点的是全选，断言因别的原因变红。
+				cls: "acc-task-check-all",
+				attr: {
+					type: "checkbox",
+					// 读屏念"全选"；三态里的半选由 `indeterminate` 自己表达（aria 会念成 mixed）
+					"aria-label": options.labels.selectAll,
+				},
+			}) as
+				| {
+						checked?: boolean;
+						indeterminate?: boolean;
+						disabled?: boolean;
+						title?: string;
+						addEventListener?: (type: string, handler: () => void) => void;
+				  }
+				| undefined;
+			if (box) {
+				box.addEventListener?.("change", () => {
+					if (phase === "run") return;
+					// ⚠️ 读 `checked`（浏览器已经把 indeterminate 清掉并翻成 true/false）：
+					// 勾上 ⇒ 全选**能勾的**（D-70：不可选的行不进 `selected`）；取消 ⇒ 清空。
+					selected = box.checked ? selectEverything(keysOf(selectableRows(cards))) : new Set<string>();
+					syncChecks();
+					updateControls();
+				});
+				headCheck = box;
+			}
+
+			if (options.listHeading) head.createDiv?.({ cls: "acc-task-heading", text: options.listHeading });
+			headCount = head.createDiv?.({ cls: "acc-task-count" }) ?? null;
 		}
 
-		if (options.listHeading) head.createDiv?.({ cls: "acc-task-heading", text: options.listHeading });
-		headCount = head.createDiv?.({ cls: "acc-task-count" }) ?? null;
+		if (!tabular) return;
+		// 列标题行：第一格是勾选框那列的**占位**（什么都不写），其余按定义
+		const cols = wrap.createDiv?.({ cls: "acc-task-headcols" });
+		cols?.createDiv?.({ cls: "acc-col acc-col-spacer" });
+		for (const column of columns) {
+			cols?.createDiv?.({ cls: `acc-col acc-col-${column.key}`, text: column.label });
+		}
+	};
+
+	/**
+	 * 多列模式下画一行的各列，返回**状态文字**那一格（进度上报只改它，O(1)）。
+	 *
+	 * ⚠️ 逐项进度（完成 / 跳过 / 失败）写进**最后一格** —— 那一格本来就放「打开」，
+	 * 而跑的时候"打开"用不上；另开一格会让网格列数跟着状态变，列会左右跳。
+	 */
+	const paintCells = (row: HTMLElement, card: FileCard, status: TaskStatus): HTMLElement | null => {
+		const cells: HTMLElement[] = [];
+		for (const column of columns) {
+			const cell = row.createDiv?.({ cls: `acc-cell acc-cell-${column.key}` });
+			if (!cell) continue;
+			cells.push(cell);
+
+			if (column.kind === "name") {
+				renderThumb(cell, card);
+				// ⚠️ 类名仍是 `acc-task-name`：读屏标签、真机脚本、以及"这一行叫什么"都按它取。
+				// 表格里给**纯文件名**（目录在"位置"那一列），完整路径放 `title`。
+				cell.createSpan?.({ cls: "acc-task-name", text: card.fileName, attr: { title: card.label } });
+				if (card.hintIcon) {
+					const mark = cell.createSpan?.({
+						cls: "acc-task-hint-icon",
+						attr: { title: card.hint, "aria-label": card.hint },
+					});
+					if (mark) setIcon(mark, card.hintIcon);
+				}
+				continue;
+			}
+
+			if (column.kind === "open") {
+				if (options.onOpen && card.open) {
+					const target = card.open;
+					const link = cell.createEl?.("a", {
+						cls: "acc-task-open",
+						text: card.openLabel?.trim() || options.labels.open?.trim() || "↗",
+						attr: { href: "#", title: target.value },
+					}) as unknown as { onclick?: (event?: { preventDefault?: () => void }) => void } | undefined;
+					if (link) {
+						link.onclick = (event) => {
+							event?.preventDefault?.();
+							options.onOpen?.(target);
+						};
+					}
+				}
+				continue;
+			}
+
+			const value = card.cells?.[column.key];
+			if (!value) continue;
+			cell.createSpan?.({
+				cls: value.tone ? `acc-cell-text acc-tone-${value.tone}` : "acc-cell-text",
+				text: value.text,
+				...(value.title ? { attr: { title: value.title } } : {}),
+			});
+		}
+
+		const last = cells[cells.length - 1];
+		if (!last) return null;
+		return last.createSpan?.({
+			cls: `acc-task-status acc-task-status-${status}`,
+			text: statusText(status),
+		}) ?? null;
 	};
 
 	/** 画清单 —— **只在**换范围 / 开跑 / 点"再显示"时调用。 */
@@ -510,6 +633,12 @@ export function mountTaskListShell(
 					selected = toggleSelection(selected, card.id);
 					updateControls();
 				});
+			}
+
+			if (tabular) {
+				const statusEl = paintCells(row, card, status);
+				rowRefs.set(card.id, { box: box ?? null, statusEl: statusEl ?? null });
+				continue;
 			}
 
 			renderThumb(row, card);

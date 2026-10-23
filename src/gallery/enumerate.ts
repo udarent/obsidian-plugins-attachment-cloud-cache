@@ -235,3 +235,29 @@ export function enumerateGallery(input: GalleryEnumerateInput): GallerySnapshot 
 
 	return { items, counts };
 }
+
+/**
+ * 把字节数变成一段短文本（表格"大小"列用）：`512 B` / `3.4 KB` / `12 MB`。
+ *
+ * ## 口径（都刻意定死，别改）
+ *
+ * - **1024 进制**：与宿主自己的 MB / GB 口径一致（设置页的内存上限也按它算）。
+ * - **小于 10 时留一位小数，否则取整**：`1.5 KB` 比 `2 KB` 有用，而 `1234.6 KB` 只是噪音。
+ * - **到 GB 就停**（附件不是磁盘镜像；再往上给 `TB` 只会让这一列变宽而没人看得懂）。
+ * - 拿不到大小（`null` / 负数 / 非有限数）⇒ **空串**，由调用方决定显示什么 ——
+ *   这里不编一个 `0 B` 出来（那会被读成"这个文件是空的"）。
+ */
+export function formatSize(bytes: number | null | undefined): string {
+	if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) return "";
+	if (bytes < 1024) return `${Math.round(bytes)} B`;
+	const units = ["KB", "MB", "GB"];
+	let value = bytes / 1024;
+	let unit = 0;
+	while (value >= 1024 && unit < units.length - 1) {
+		value /= 1024;
+		unit += 1;
+	}
+	// 小于 10 留一位（3.4 KB）；否则取整（12 MB）。`toFixed` 之后再 `Number` 是为了去掉 ".0"
+	const rounded = value < 10 ? Number(value.toFixed(1)) : Math.round(value);
+	return `${rounded} ${units[unit]}`;
+}

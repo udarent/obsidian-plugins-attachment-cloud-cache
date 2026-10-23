@@ -218,26 +218,102 @@
 }
 
 /*
+ * ⚠️ 类名是 `acc-task-headwrap`，**不是** `acc-task-head`：后者是"名字 ＋ 行内标签"
+ * 那一层（D-71，`display: flex`）。撞名的后果是表头被压成内容宽度、网格列全塌，
+ * 而界面上看起来只是"列没对齐"（实测踩过一次）。
+ *
  * ⭐ 清单的**标题栏**：左边三态全选复选框、中间标题、右边「已选 N / 共 M」。
  *
- * ⚠️ 它在清单**里面**并且 `position: sticky`：几千行时标题栏不跟着滚走 ——
+ * ⚠️ 它在清单**里面**并且粘顶：几千行时标题栏不跟着滚走 ——
  * "全选"必须随时点得到（它原先被排到动作按钮下面，要滚到底才能看见）。
  * 背景色必须给：粘住时它是浮在行上方的，透明的话会与滚过去的内容叠在一起。
  *
  * ⚠️ 复选框与每一行的勾选框**同一列**（`padding` 与 `.acc-task-row` 对齐），
  * 读法是"全选＝同一列最上面那一格"，不是一颗独立的动作按钮。
  */
-.acc-task-headrow {
+.acc-task-headwrap {
 	position: sticky;
 	top: 0;
 	z-index: 1;
+	background-color: var(--background-primary);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.acc-task-headrow {
 	display: flex;
 	align-items: center;
 	gap: 0.6em;
-	padding: 0.35em 0.55em;
-	background-color: var(--background-primary);
-	border-bottom: 1px solid var(--background-modifier-border);
+	/* ⚠️ 横向内边距一律写 px：em 在表头（小字号）与行（正常字号）上算出不同的像素，
+	   两边的可用宽度就差几像素 ⇒ fr 列差 8px 以上、整张表的列歪掉（实测差 14px）。 */
+	padding: 0.35em 10px;
 	font-size: var(--font-ui-smaller);
+}
+
+/*
+ * 多列表头（列标题那一行）与多列行共用**同一份网格模板**（`--acc-cols` 由壳写进清单元素）。
+ *
+ * ⚠️ 模板只写一处：表头与行各拼一份，两边迟早错开半格 —— 而"列没对齐"会被读成
+ * "这一行少了个东西"。第一轨是勾选框（与表头那颗全选对齐）。
+ */
+.acc-task-list.is-tabular .acc-task-headcols,
+.acc-task-list.is-tabular .acc-task-row {
+	display: grid;
+	grid-template-columns: var(--acc-cols, none);
+	/* ⚠️ 间距也必须写 px：`em` 按各自字号解析，表头是小字号、行是正常字号 ⇒
+	   6 个格子累计差 10px 以上，fr 列跟着错开（实测 255.6 vs 262.1）。
+	   也就是说：**凡是"两边要严格对齐"的尺寸，都不许用 em**。 */
+	gap: 10px;
+	align-items: center;
+}
+
+.acc-task-headcols {
+	padding: 2px 10px 4px;
+	border-top: 1px solid var(--background-modifier-border-focus, var(--background-modifier-border));
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+}
+
+/* 表头格子与数据格子：单行省略（宽窄都别把列撑开） */
+.acc-col,
+.acc-cell {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* 名称列：缩略图（或类型标记）＋ 文件名，横向排 */
+.acc-task-list.is-tabular .acc-cell-name {
+	display: flex;
+	align-items: center;
+	gap: 0.5em;
+	overflow: hidden;
+}
+
+/* 表格里的名字也要能被省略号截断 —— 非表格模式用的是"完整路径可换行"那套规则 */
+.acc-task-list.is-tabular .acc-cell-name .acc-task-name {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* 单元格的语气（与 `FileCardCell.tone` 一一对应；颜色只在强调语气上给，中性一律 muted） */
+.acc-tone-muted {
+	color: var(--text-muted);
+}
+
+.acc-tone-ok {
+	color: var(--text-success, var(--text-normal));
+}
+
+.acc-tone-warn {
+	color: var(--text-warning, var(--text-muted));
+}
+
+.acc-tone-accent {
+	color: var(--color-blue, var(--text-accent));
 }
 
 .acc-task-heading {
@@ -274,7 +350,7 @@
 	display: flex;
 	align-items: center;
 	gap: 0.6em;
-	padding: 0.3em 0.55em;
+	padding: 0.3em 10px;
 	border-radius: var(--radius-s);
 }
 
@@ -385,7 +461,7 @@
 }
 
 .acc-task-more {
-	padding: 0.4em 0.55em;
+	padding: 0.4em 10px;
 	text-align: center;
 }
 
@@ -615,7 +691,7 @@ body.is-mobile .acc-gallery-filter {
 
 body.is-mobile .acc-task-headrow,
 body.is-mobile .acc-task-row {
-	padding: 0.5em 0.6em;
+	padding: 0.5em 10px;
 }
 
 body.is-mobile .acc-task-check,
@@ -628,4 +704,25 @@ body.is-mobile .acc-task-check-all {
 body.is-mobile .acc-file-thumb {
 	width: 3em;
 	height: 3em;
+}
+
+/*
+ * 手机上的表格只留四列：勾选 / 名称 / 状态 / 操作。
+ *
+ * ⚠️ 藏列时**必须同时换模板**：`display: none` 的格子会从网格里消失，
+ * 但 `--acc-cols` 里那几轨还在 —— 不换就会在右侧留出三块空白。
+ * ⚠️ 列的取舍：位置在手机上基本只有"attachments/"一个值，引用在勾选时能靠状态看出来，
+ * 大小没人会在手机上比 —— 而"名称"和"状态"是决定勾不勾的唯一依据。
+ */
+body.is-mobile .acc-task-list.is-tabular {
+	--acc-cols: 20px minmax(0, 1fr) 84px 34px;
+}
+
+body.is-mobile .acc-col-folder,
+body.is-mobile .acc-cell-folder,
+body.is-mobile .acc-col-ref,
+body.is-mobile .acc-cell-ref,
+body.is-mobile .acc-col-size,
+body.is-mobile .acc-cell-size {
+	display: none;
 }

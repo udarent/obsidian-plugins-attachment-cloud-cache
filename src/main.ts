@@ -738,8 +738,13 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 */
 	private async openGallery(): Promise<void> {
 		if (this.galleryModal) return;
-		const modal = new GalleryModal(this.flowContext(), () => {
-			this.galleryModal = null;
+		const modal = new GalleryModal(this.flowContext(), {
+			// ⭐ 行尾「打开」（D-66）：与另外两条链**同一个**打开动作（`openCardTarget`），
+			// 判定在 `file-cards.ts` —— 这里只接线，不重新判一遍。
+			onOpen: (target) => this.openCardTarget(target),
+			onClosed: () => {
+				this.galleryModal = null;
+			},
 		});
 		this.galleryModal = modal;
 		modal.open();

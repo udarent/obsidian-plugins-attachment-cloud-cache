@@ -63,7 +63,8 @@ import {
 } from "../plugin/gallery-flow";
 import type { GalleryModel } from "../plugin/gallery-flow";
 import { mountTaskListShell } from "./task-list-shell";
-import type { TaskListAction, TaskListLabels, TaskListResult } from "./task-list-shell";
+import type { TaskListAction, TaskListColumn, TaskListLabels, TaskListResult } from "./task-list-shell";
+import type { FileCardOpenTarget } from "./file-cards";
 import type { TaskReporter } from "./task-list";
 
 /**
@@ -145,7 +146,16 @@ export class GalleryModal extends Modal {
 	 */
 	private loading: Promise<void> | null = null;
 
-	constructor(private readonly ctx: PluginContext, private readonly onClosed?: () => void) {
+	/**
+	 * @param deps.onOpen 行尾「打开」（D-66）。**判定**（哪些行能打开、打开路径还是地址）在
+	 *   `ui/file-cards.ts`，真正的打开动作只有装配点（`main.ts`）知道怎么问宿主。
+	 *   不给就不画链接 —— 点不动的链接比没有更糟。
+	 * @param deps.onClosed 窗口关掉了（装配点用它清掉"当前开着的那一个"）。
+	 */
+	constructor(
+		private readonly ctx: PluginContext,
+		private readonly deps: { onOpen?: (target: FileCardOpenTarget) => void; onClosed?: () => void } = {}
+	) {
 		super(ctx.app);
 	}
 
@@ -170,7 +180,7 @@ export class GalleryModal extends Modal {
 
 	onClose(): void {
 		this.model = null;
-		this.onClosed?.();
+		this.deps.onClosed?.();
 	}
 
 	/** 重新读一遍全库并重画（打开时、点刷新时）。 */
@@ -306,8 +316,13 @@ export class GalleryModal extends Modal {
 				lines: [this.ctx.t("galleryRuleLine")],
 				cards,
 				labels: this.labels(),
+				// ⭐ 多列：附件的不同属性各占一列（用户 2026-10-23 要求）。
+				// ⚠️ 列宽写在这里、由壳统一灌进 `--acc-cols`：表头与行共用同一份模板。
+				columns: this.columns(),
 				defaultSelected: "none",
 				actions: this.actions(),
+				// 行尾「打开」（D-66）：判定在 `file-cards.ts`，真正的打开动作在装配点（`main.ts`）
+				onOpen: this.deps.onOpen,
 				// ⭐ 长任务工作台装在弹窗里 ⇒ 跑完收起窗口，结果用通知说（见文件头那条取舍）
 				autoCloseOnFinish: true,
 				run: (selected, report, action) => this.execute(selected, report, action),
@@ -317,6 +332,29 @@ export class GalleryModal extends Modal {
 				settle: (result) => this.reportResult(result),
 			}
 		);
+	}
+
+	/**
+	 * 表格的列（顺序即视觉顺序）。
+	 *
+	 * ⚠️ 列宽是**刻意**给的：五列平分会让"状态""引用"这种短词占一屏的三分之一，
+	 * 而"名称"（文件名最长、最需要看清）反而被挤。名称与位置用 fr（可伸缩），
+	 * 其余给固定 px —— 固定列宽也顺带保证"切换筛选时列不会左右跳"。
+	 *
+	 * ⚠️ 窄屏（手机）由 `styles.css` 直接换一套 `--acc-cols` 并藏掉位置 / 引用 / 大小三列，
+	 * 这里不做响应式判断：列宽是样式，不是逻辑。
+	 */
+	private columns(): TaskListColumn[] {
+		const t = this.ctx.t;
+		return [
+			// 名称 2 : 位置 1 —— 文件名普遍比目录长，平分会让"认得出是哪个文件"这件事先坏掉
+			{ key: "name", label: t("galleryColName"), kind: "name", width: "minmax(0, 2fr)" },
+			{ key: "folder", label: t("galleryColFolder"), width: "minmax(0, 1fr)" },
+			{ key: "state", label: t("galleryColState"), width: "120px" },
+			{ key: "ref", label: t("galleryColRef"), width: "84px" },
+			{ key: "size", label: t("galleryColSize"), width: "68px" },
+			{ key: "open", label: t("galleryColOpen"), kind: "open", width: "40px" },
+		];
 	}
 
 	/**

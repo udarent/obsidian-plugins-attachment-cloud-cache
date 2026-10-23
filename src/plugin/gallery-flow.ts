@@ -33,6 +33,9 @@ import { selectLocalOrphans } from "../maintenance/local-orphans";
 import { runCloudCleanup } from "../maintenance/cloud-cleanup";
 import type { CloudCleanupResult } from "../maintenance/cloud-cleanup";
 import { writeDeleteLog } from "./shared-flows";
+import { formatSize } from "../gallery/enumerate";
+import type { FileCardCell } from "../ui/file-cards";
+import { parentFolderOf } from "../vault-files";
 import { revertLinksForKeys } from "./revert-flow";
 import { createLocalCopyEnsurer } from "../core/download";
 import type { DeletedObjectRecord } from "../maintenance/delete-log";
@@ -59,8 +62,8 @@ export interface GalleryModel {
 	cleanupPaths: ReadonlySet<string>;
 }
 
-/** 卡片的状态标签文案（由调用方给的 `t` 决定语种）。 */
-function hintFor(item: GalleryItem, t: PluginContext["t"]): { hint: string; hintIcon: string } {
+/** 一行在表格里的**各列内容**（由调用方给的 `t` 决定语种）。 */
+function cellsFor(item: GalleryItem, t: PluginContext["t"]): Record<string, FileCardCell> {
 	const stateLabel =
 		item.state === "uploaded"
 			? t("galleryStateUploaded")
@@ -70,10 +73,27 @@ function hintFor(item: GalleryItem, t: PluginContext["t"]): { hint: string; hint
 					? t("galleryStateUnverified")
 					: t("galleryStateNotUploaded");
 	// ⭐ D-77：站外缓存下来的那份要**标出来** —— 删它只是清缓存（下次显示重新下载），
-	// 与“用户自己的附件”不是一回事。弹窗那条链用 `orphanRowCached` 标，视图这边同一口径。
-	const label = item.origin === "external" ? `${stateLabel} · ${t("galleryStateCached")}` : stateLabel;
-	if (!item.referenced) return { hint: `${label} · ${t("galleryStateUnreferenced")}`, hintIcon: "" };
-	return { hint: label, hintIcon: "" };
+	// 与“用户自己的附件”不是一回事。弹窗那条链用 `orphanRowCached` 标，这里同一口径。
+	const stateText = item.origin === "external" ? `${stateLabel} · ${t("galleryStateCached")}` : stateLabel;
+	// 位置：云端有本地无的行**没有**库内路径 ⇒ 给一个明确的"没有"，不留空格
+	//（空格会被读成"这一行缺了东西"，与"云端那份没有本地副本"不是一回事）。
+	const folder = item.path === null ? "" : parentFolderOf(item.path);
+
+	return {
+		state: {
+			text: stateText,
+			tone: item.state === "uploaded" ? "ok" : item.state === "cloud-only" ? "accent" : "muted",
+		},
+		ref: item.referenced
+			? { text: t("galleryCellReferenced"), tone: "muted" }
+			: { text: t("galleryCellUnreferenced"), tone: "warn", title: t("galleryCellUnreferencedHint") },
+		folder: folder === ""
+			? { text: item.path === null ? t("galleryCellNoLocal") : t("galleryCellVaultRoot"), tone: "muted" }
+			: { text: folder, title: folder },
+		size: item.size === null
+			? { text: t("galleryCellNoLocal"), tone: "muted" }
+			: { text: formatSize(item.size) },
+	};
 }
 
 /**
@@ -106,16 +126,13 @@ export async function loadGallery(ctx: PluginContext): Promise<GalleryModel> {
 	});
 
 	const cards = ctx.fileCards(
-		result.items.map((item) => {
-			const label = hintFor(item, ctx.t);
-			return {
-				id: item.id,
-				name: item.name,
-				localPath: item.path ?? undefined,
-				remoteKey: item.key ?? undefined,
-				hint: label.hint,
-			};
-		}),
+		result.items.map((item) => ({
+			id: item.id,
+			name: item.name,
+			localPath: item.path ?? undefined,
+			remoteKey: item.key ?? undefined,
+			cells: cellsFor(item, ctx.t),
+		})),
 		CARD_LIMIT
 	);
 
