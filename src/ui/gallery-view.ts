@@ -6,11 +6,13 @@
  * ```
  * 筛选胶囊：全部 18 │ 待清理 3 │ 未上传 5 │ … │            刷新
  * 固定说明一句（不含数字）
- * ─────────────────────────────────────────────────────────
- * 附件清单                                    全选  全不选
- * 清单（勾选框 + 缩略图 + 路径 + 状态标签）
+ * ┌ 附件清单 ………………………… 已选 0 / 18 ┐   ← 标题栏：☑ 全选 + 标题 + 计数（粘顶）
+ * │ ☐ 勾选框 缩略图 路径 状态标签            │
+ * └─────────────────────────────────────────┘
  * 动作区：上传 / 删除本地 / 改为本地引用 / 删除云端 / 重命名    取消
  * ```
+ *
+ * 标题栏与全选复选框由**清单壳**画（`task-list-shell.ts`）：弹窗与视图同一份装配。
  *
  * ## 它只做三件事
  *
@@ -175,6 +177,8 @@ export class GalleryView extends ItemView {
 			empty: t("galleryEmpty"),
 			selectAll: t("gallerySelectAll"),
 			selectNone: t("gallerySelectNone"),
+			// 标题栏右侧那句：与弹窗共用一句话（"已选 N / 共 M"只维护一处）
+			selectedCount: (selected: number, total: number) => t("taskListSelected", { selected, total }),
 			cancel: t("galleryClose"),
 			close: t("galleryClose"),
 			cta: (count: number) => t("galleryCtaUpload", { count }),

@@ -441,7 +441,7 @@ async function main() {
 				const attachments = app.vault
 					.getFiles()
 					.filter((f) => !["md", "canvas", "base"].includes(String(f.extension || "").toLowerCase()));
-				const toolbar = root.querySelector(".acc-task-toolbar");
+				const head = root.querySelector(".acc-task-headrow");
 				const list = root.querySelector(".acc-task-list");
 				// ⚠️ 按**结构化**字段读，不按中文文案读：文案改一次，断言就假红一次。
 				const label = (el) => ((el && el.textContent) || "").trim();
@@ -455,20 +455,26 @@ async function main() {
 						pressed: el.getAttribute("aria-pressed") === "true",
 						activeClass: el.classList.contains("is-active"),
 					})),
-					// 清单自己那一行标题
-					heading: label(root.querySelector(".acc-task-heading")),
-					// 顶部工具按钮（应当是「全选」「全不选」两颗）
-					tools: Array.from(root.querySelectorAll(".acc-task-tools button")).map(label),
-					// ⭐ 结构：工具栏必须在清单**之前**（DOM 顺序，不是 CSS order）
-					toolbarBeforeList: Boolean(
-						toolbar && list && (toolbar.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING)
-					),
-					// 动作区里不该再出现这两颗（它们曾经被排到动作按钮下面）
-					toolsInFooter: root.querySelectorAll(".acc-task-actions .acc-task-tool").length,
+					// 标题栏：在清单**里面**、是清单的第一个子节点
+					heading: label(root.querySelector(".acc-task-headrow .acc-task-heading")),
+					headInsideList: Boolean(head && list && head.parentElement === list),
+					headIsFirst: Boolean(head && head === head.parentElement?.firstElementChild),
+					headCheck: (() => {
+						const box = root.querySelector(".acc-task-check-all");
+						if (!box) return null;
+						return {
+							checked: box.checked === true,
+							indeterminate: box.indeterminate === true,
+							ariaLabel: box.getAttribute("aria-label") || "",
+						};
+					})(),
+					headCount: label(root.querySelector(".acc-task-count")),
+					// 动作区里不该再出现全选（它曾经被排到动作按钮下面）
+					buttonsInHead: root.querySelectorAll(".acc-task-headrow button").length,
 					names: Array.from(root.querySelectorAll(".acc-task-row .acc-task-name")).map((el) => el.textContent || ""),
 					hints: Array.from(root.querySelectorAll(".acc-task-row .acc-task-hint")).map((el) => el.textContent || ""),
 					lines: Array.from(root.querySelectorAll(".acc-task-lines > div")).map((el) => el.textContent || ""),
-					checkboxes: root.querySelectorAll(".acc-task-check").length,
+					rows: root.querySelectorAll(".acc-task-row").length,
 					expected: attachments.length,
 				};
 			})()`
@@ -486,16 +492,25 @@ async function main() {
 			(gallery?.filters ?? []).map((f) => `${f.label}${f.pressed ? " [按下]" : ""}${f.activeClass ? " *" : ""}`).join(" / ")
 		);
 		check(
-			"清单有一行自己的标题（附件清单）",
-			gallery?.heading === "附件清单",
-			`实际：${JSON.stringify(gallery?.heading)}`
+			"标题栏在**清单里面**、是第一个子节点，且带一行标题（附件清单）",
+			gallery?.heading === "附件清单" && gallery?.headInsideList === true && gallery?.headIsFirst === true,
+			`heading=${JSON.stringify(gallery?.heading)} inList=${gallery?.headInsideList} first=${gallery?.headIsFirst}`
 		);
 		check(
-			"「全选 / 全不选」在清单**上方**，且不在动作区里",
-			(gallery?.tools ?? []).join(",") === "全选,全不选" &&
-				gallery?.toolbarBeforeList === true &&
-				gallery?.toolsInFooter === 0,
-			`tools=${JSON.stringify(gallery?.tools ?? [])} beforeList=${gallery?.toolbarBeforeList} inFooter=${gallery?.toolsInFooter}`
+			"标题栏里放的是**全选复选框**（不是文字按钮），初始未勾、读屏名是「全选」",
+			gallery?.headCheck !== null &&
+				gallery.headCheck.checked === false &&
+				gallery.headCheck.indeterminate === false &&
+				gallery.headCheck.ariaLabel === "全选" &&
+				gallery?.buttonsInHead === 0,
+			JSON.stringify({ check: gallery?.headCheck, buttons: gallery?.buttonsInHead })
+		);
+		// ⚠️ 用**解析出来的两个数字**比，不用 endsWith：`已选 0 / 18` 与 rows=8 会被 endsWith 骗过。
+		const headCountMatch = /^已选 (\d+) \/ (\d+)$/.exec(gallery?.headCount ?? "");
+		check(
+			"标题栏右侧报「已选 0 / 共 N」，N＝清单行数",
+			Boolean(headCountMatch) && headCountMatch[1] === "0" && Number(headCountMatch[2]) === gallery?.rows,
+			JSON.stringify({ text: gallery?.headCount, rows: gallery?.rows })
 		);
 		check(
 			"顶部有一句固定说明，且不含数字（D-76）",
@@ -644,52 +659,107 @@ async function main() {
 			toClean === null ? "没有「待清理」胶囊" : `${toClean.rows} 行：${JSON.stringify(toClean.hints.slice(0, 3))}`
 		);
 
-		// 顶部两颗工具按钮真的管用（它们从动作区下面搬到了清单上方 ⇒ 先证接线没断）
+		// 标题栏那颗复选框真的管用：空 → 全选 → 全不选 → 只勾一行（半选）
 		const selectionTools = await evaluate(
 			client,
 			`(() => {
 				const root = app.workspace.getLeavesOfType("acc-gallery")[0].view.contentEl;
-				const pick = () =>
-					Array.from(root.querySelectorAll(".acc-task-tools button")).reduce((acc, el) => {
-						const text = (el.textContent || "").trim();
-						if (text === "全选" || text === "全不选") acc[text] = el;
-						return acc;
-					}, {});
-				const checked = () =>
-					Array.from(root.querySelectorAll(".acc-task-check")).filter((box) => box.checked && !box.disabled).length;
-				const before = { tools: pick(), checked: checked() };
-				if (!before.tools["全不选"] || !before.tools["全选"]) return { error: "顶部没有这两颗按钮" };
-				// ⚠️ 顺序：先全选、再全不选。视图打开时一件都没勾 ⇒ 「全不选」是**灰的**，
-				// 先点它什么也不会发生（那条"灰着"本身就是另一条断言，见下）。
-				before.tools["全选"].click();
-				const afterAll = checked();
-				before.tools["全不选"].click();
-				const afterNone = checked();
-				return {
-					selectedAtOpen: before.checked,
-					afterNone,
-					afterAll,
-					pickable: root.querySelectorAll(".acc-task-check:not(:disabled)").length,
-					noneDisabledWhenEmpty: (() => {
-						const el = Array.from(root.querySelectorAll(".acc-task-tools button")).find(
-							(b) => (b.textContent || "").trim() === "全不选"
-						);
-						return el ? el.disabled === true : null;
-					})(),
-				};
+				const box = root.querySelector(".acc-task-check-all");
+				if (!box) return { error: "标题栏里没有全选复选框" };
+				const rowBoxes = () => Array.from(root.querySelectorAll(".acc-task-row .acc-task-check"));
+				const checked = () => rowBoxes().filter((b) => b.checked && !b.disabled).length;
+				const state = () => ({
+					checked: box.checked === true,
+					indeterminate: box.indeterminate === true,
+					title: box.getAttribute("title") || "",
+					count: ((root.querySelector(".acc-task-count") || {}).textContent || "").trim(),
+				});
+				const pickable = () => rowBoxes().filter((b) => !b.disabled).length;
+				const initial = { ...state(), checkedRows: checked(), pickable: pickable() };
+
+				box.click(); // 全选
+				const afterAll = { ...state(), checkedRows: checked() };
+
+				box.click(); // 全不选
+				const afterNone = { ...state(), checkedRows: checked() };
+
+				// 只勾一行 ⇒ 半选（indeterminate），这就是"三态"的第三态
+				const first = rowBoxes().find((b) => !b.disabled);
+				if (first) {
+					first.checked = true;
+					first.dispatchEvent(new Event("change"));
+				}
+				const partial = { ...state(), checkedRows: checked() };
+				if (first) {
+					first.checked = false;
+					first.dispatchEvent(new Event("change"));
+				}
+				const restored = state();
+				return { initial, afterAll, afterNone, partial, restored };
 			})()`
 		);
 		check(
-			"「全不选」清空勾选、「全选」把能勾的都勾上",
-			selectionTools?.afterNone === 0 &&
-				selectionTools?.afterAll === selectionTools?.pickable &&
-				selectionTools?.pickable > 0,
-			JSON.stringify(selectionTools ?? null)
+			"点一下全选复选框 ⇒ 所有能勾的行都勾上，自己也变成「已勾」",
+			selectionTools?.afterAll?.checkedRows > 0 &&
+				selectionTools.afterAll.checkedRows === selectionTools?.initial?.pickable &&
+				selectionTools.afterAll.checked === true &&
+				selectionTools.afterAll.indeterminate === false &&
+				selectionTools.afterAll.title === "全不选",
+			JSON.stringify(selectionTools?.afterAll ?? selectionTools?.error ?? null)
 		);
 		check(
-			"一件没勾时「全不选」是灰的（点下去不会有反应 ⇒ 不许看着能点）",
-			selectionTools?.noneDisabledWhenEmpty === true,
-			JSON.stringify(selectionTools ?? null)
+			"再点一下 ⇒ 全部取消，计数回到 0",
+			selectionTools?.afterNone?.checkedRows === 0 &&
+				selectionTools.afterNone.checked === false &&
+				/^已选 0 \//.test(selectionTools.afterNone.count ?? ""),
+			JSON.stringify(selectionTools?.afterNone ?? null)
+		);
+		check(
+			"只勾一行 ⇒ 复选框是**半选**（indeterminate），计数跟着变",
+			selectionTools?.partial?.indeterminate === true &&
+				selectionTools.partial.checked === false &&
+				/^已选 1 \//.test(selectionTools.partial.count ?? ""),
+			JSON.stringify(selectionTools?.partial ?? null)
+		);
+		check(
+			"取消那一行 ⇒ 复选框回到未勾（不是卡在半选）",
+			selectionTools?.restored?.indeterminate === false &&
+				selectionTools.restored.checked === false &&
+				/^已选 0 \//.test(selectionTools.restored.count ?? ""),
+			JSON.stringify(selectionTools?.restored ?? null)
+		);
+
+		// 标题栏"粘顶"要真粘住：清单一滚，全选就滚走的话"随时可点"是句空话。
+		// ⚠️ 这个库里行数不一定撑满 45vh，所以临时压小 `max-height` 造出溢出（测完还原）。
+		const sticky = await evaluate(
+			client,
+			`(() => {
+				const root = app.workspace.getLeavesOfType("acc-gallery")[0].view.contentEl;
+				const list = root.querySelector(".acc-task-list");
+				const head = root.querySelector(".acc-task-headrow");
+				if (!list || !head) return { error: "没有清单 / 标题栏" };
+				const gap = () => Math.round(head.getBoundingClientRect().top - list.getBoundingClientRect().top);
+				const original = list.style.maxHeight;
+				list.style.maxHeight = "90px";
+				const before = gap();
+				list.scrollTop = 200;
+				const after = gap();
+				const moved = list.scrollTop;
+				list.scrollTop = 0;
+				list.style.maxHeight = original;
+				return { before, after, moved, position: getComputedStyle(head).position };
+			})()`
+		);
+		check(
+			"标题栏滚动时**粘在清单顶部**（全选随时点得到）",
+			// ⚠️ 判据是"**没动**"而不是"恰好是 0"：表头与清单外框之间有 1px 边框
+			// （实测 before=after=1）。真正要抓住的是"滚了 200px、表头却还在原位"。
+			sticky?.position === "sticky" &&
+				sticky?.moved > 0 &&
+				sticky?.after === sticky?.before &&
+				sticky?.before >= 0 &&
+				sticky?.before <= 2,
+			JSON.stringify(sticky ?? null)
 		);
 
 		// 「删除（云端）」的默认档（CR-05）：没人引用的可删，仍被引用的**灰掉**

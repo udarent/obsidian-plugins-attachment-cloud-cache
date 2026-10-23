@@ -204,18 +204,22 @@ interface RowRef {
  * ```
  * 固定说明段        .acc-task-lines
  * 过滤开关（可选）  .acc-task-filters     ← 只在给了 `filters` 时存在
- * ─────────────────────────────────────────────
- * 标题 │ 全选 全不选  .acc-task-toolbar   ← 清单顶部那一行
  * 进度              .acc-task-progress
- * 清单              .acc-task-list
+ * ┌ 清单 .acc-task-list ────────────────────────────┐
+ * │ ☑ 附件清单                      已选 3 / 18     │  .acc-task-headrow（粘在顶部）
+ * │ ☐ 行…                                           │  .acc-task-row
+ * └─────────────────────────────────────────────────┘
  * 空清单说明        .acc-task-empty
  * 动作区            .acc-task-actions
  * ```
  *
- * ⚠️⚠️ 「全选 / 全不选」原先建在**最后**（`new Setting(container)` 建在动作区之后），
- * 于是它们被排到了动作按钮**下面** —— 想全选得先滚过整个清单。这是**结构**问题，
- * 不是样式问题：修法只能是调整创建顺序，**不要**用 CSS `order` 去挪（那样 DOM 顺序
- * 仍然在说谎，读屏与键盘 Tab 走的是 DOM 顺序）。
+ * ⚠️⚠️ 标题栏在**清单里面**（滚动区的第一个子节点、`position: sticky`）：
+ * 它原先建在容器最末（`new Setting(container)`）⇒ 被排到动作按钮**下面**，想全选得先滚过整个清单。
+ * 搬出来之后又发现"在清单外面"仍会随页面滚走 ⇒ 现在是清单自己的表头，滚动时粘住。
+ * **位置是结构，不是样式** —— 不要用 CSS `order` 去挪（DOM 顺序仍在说谎，读屏与 Tab 跟着错）。
+ *
+ * ⚠️ 全选是**一个三态复选框**（2026-10-23 用户要求），不是两颗按钮：
+ * 全勾 / 半选（`indeterminate`）/ 全不勾都落在同一个控件上，与行的勾选框同一列、同一个读法。
  */
 export function mountTaskListShell(
 	container: HTMLElement,
@@ -244,14 +248,6 @@ export function mountTaskListShell(
 	 * 没有开关时**不建**这个容器 —— 否则会留一个空 div 撑出一点间距。
 	 */
 	const filtersEl = (options.filters?.length ?? 0) > 0 ? container.createDiv?.({ cls: "acc-task-filters" }) : null;
-
-	/**
-	 * ⭐ 清单顶部那一行：左边标题、右边「全选 / 全不选」（主流列表的样子）。
-	 * 按钮在函数末尾建（要与 `selected` / `updateControls` 接线），容器在这里先占好位。
-	 */
-	const toolbarEl = container.createDiv?.({ cls: "acc-task-toolbar" });
-	if (options.listHeading) toolbarEl?.createDiv?.({ cls: "acc-task-heading", text: options.listHeading });
-	const toolsEl = toolbarEl?.createDiv?.({ cls: "acc-task-tools" });
 
 	let cards: FileCard[] = [...(options.cards ?? [])];
 	/** 过滤开关的当前状态（`key` → 勾没勾）。⚠️ 只有这一份。 */
@@ -302,12 +298,21 @@ export function mountTaskListShell(
 	let ctaButton: { setButtonText?: (text: string) => unknown; setDisabled?: (value: boolean) => unknown } | null = null;
 	let cancelButton: { setDisabled?: (value: boolean) => unknown } | null = null;
 	/**
-	 * 顶部那两颗（「全选 / 全不选」）。⚠️ 它们是**原生 `<button>`**，不是宿主
-	 * `ButtonComponent` —— 后者要靠 `Setting` 才挂得上，而 `Setting` 是一整行
-	 * （名字区 + 控件区），塞进工具栏会把"左标题 / 右按钮"挤成两行。
+	 * 表头那颗**全选复选框**（三态）与右侧的「已选 N / 共 M」。
+	 *
+	 * ⚠️ 它们是**每次 `paintRows` 重建**的（`listEl.empty()` 会把表头一起清掉）⇒
+	 * 每次重建都要重新赋值；`updateControls` 靠这两个句柄把状态刷回去。
+	 * 这也是为什么它们**不能**像 `ctaButton` 那样只建一次。
 	 */
-	let selectAllButton: { disabled?: boolean } | null = null;
-	let selectNoneButton: { disabled?: boolean } | null = null;
+	let headCheck:
+		| {
+				checked?: boolean;
+				indeterminate?: boolean;
+				disabled?: boolean;
+				title?: string;
+		  }
+		| null = null;
+	let headCount: { setText?: (text: string) => unknown } | null = null;
 	const actionButtons: {
 		action: TaskListAction;
 		button: { setButtonText?: (text: string) => unknown; setDisabled?: (value: boolean) => unknown };
@@ -322,8 +327,8 @@ export function mountTaskListShell(
 
 	/** 更新"跟勾选数/进度有关"的那些东西（**清单本身不动**）。 */
 	const updateControls = (): void => {
-		/** 能勾的行数（下面几处都要用它 —— ⚠️ 只算一次，别在两个分支里各算一遍）。 */
-		const pickable = selectableRows(cards).length;
+		/** 能勾的行（下面几处都要用它 —— ⚠️ 只算一次，别在几个分支里各算一遍）。 */
+		const pickable = selectableRows(cards);
 		emptyEl?.setText?.(cards.length === 0 ? options.labels.empty : "");
 
 		if (phase === "run") {
@@ -333,15 +338,27 @@ export function mountTaskListShell(
 			progressEl?.setText?.("");
 		}
 
-		// 顶部那两颗：没事可做时**灰着**（点下去什么也不会发生的按钮，比没有更让人困惑）。
-		// ⚠️ 放在 `settled` 那道闸之前：完成态里 `phase` 仍是 `run` ⇒ 它们保持灰着。
-		if (selectAllButton) selectAllButton.disabled = phase === "run" || pickable === 0;
-		if (selectNoneButton) selectNoneButton.disabled = phase === "run" || selected.size === 0;
+		/**
+		 * ⭐ 表头那颗复选框的**三态**：全勾 / 半选（`indeterminate`）/ 全不勾。
+		 *
+		 * ⚠️ 判据只此一份 —— 它是"选了多少"这件事的唯一算术，按钮与行都从它派生。
+		 * ⚠️ 放在 `settled` 那道闸**之前**：完成态里 `phase` 仍是 `run` ⇒ 它保持灰着。
+		 */
+		if (headCheck) {
+			let chosen = 0;
+			for (const row of pickable) if (selected.has(row.id)) chosen += 1;
+			headCheck.checked = pickable.length > 0 && chosen >= pickable.length;
+			headCheck.indeterminate = chosen > 0 && chosen < pickable.length;
+			headCheck.disabled = phase === "run" || pickable.length === 0;
+			// 悬停说明说清"点它会发生什么"：已全勾 ⇒ 全不选；否则 ⇒ 全选。
+			headCheck.title = headCheck.checked ? options.labels.selectNone : options.labels.selectAll;
+		}
+		headCount?.setText?.(options.labels.selectedCount?.(selected.size, cards.length) ?? "");
 
 		// ⚠️ 完成态的按钮由 `showSettledFooter()` 独占：这里再改一次会把「关闭」改回主按钮并启用它。
 		if (settled) return;
 
-		if (pickable === 0) {
+		if (pickable.length === 0) {
 			ctaButton?.setButtonText?.(options.labels.close);
 			ctaButton?.setDisabled?.(phase === "run");
 		} else {
@@ -366,11 +383,63 @@ export function mountTaskListShell(
 		statusEl.setAttribute?.("class", `acc-task-status acc-task-status-${status}`);
 	};
 
-	/** 把勾选状态同步到**已画出来的**行上（全选/全不选用它）。 */
+	/** 把勾选状态同步到**已画出来的**行上（表头那颗全选复选框改完用它）。 */
 	const syncChecks = (): void => {
 		for (const [key, ref] of rowRefs) {
 			if (ref.box) ref.box.checked = selected.has(key);
 		}
+	};
+
+	/**
+	 * 画**表头**（清单的第一个子节点，`position: sticky` ⇒ 滚到哪儿都在）。
+	 *
+	 * ⚠️ 每次 `paintRows` 都要重画（`listEl.empty()` 把它一起清掉），句柄在这里重新赋值。
+	 *
+	 * ⚠️⚠️ 复选框**放在标题左边**、与每一行的勾选框同一列：这是主流表格的读法 ——
+	 * "全选"不是一个动作按钮，而是**同一列的最上面那一格**。它有三态：
+	 * 全勾 / 半选 / 全不勾，状态由 `updateControls` 统一算（判据只此一份）。
+	 */
+	const paintHead = (): void => {
+		headCheck = null;
+		headCount = null;
+		if (!listEl) return;
+		const head = listEl.createDiv?.({ cls: "acc-task-headrow" });
+		if (!head) return;
+
+		const box = head.createEl?.("input", {
+			// ⚠️ **不复用** `acc-task-check`：`.acc-task-check` 在界面与脚本里的意思是
+			// "**行**的勾选框"（"勾了几行""全选能勾的"都按它数）。表头这颗也算进去的话，
+			// 任何一处 `querySelectorAll(".acc-task-check")` 都会把"全选"当成第一行 ——
+			// 实测就撞过：脚本点 `boxes[0]` 想勾一行，结果点的是全选，断言因别的原因变红。
+			cls: "acc-task-check-all",
+			attr: {
+				type: "checkbox",
+				// 读屏念"全选"；三态里的半选由 `indeterminate` 自己表达（aria 会念成 mixed）
+				"aria-label": options.labels.selectAll,
+			},
+		}) as
+			| {
+					checked?: boolean;
+					indeterminate?: boolean;
+					disabled?: boolean;
+					title?: string;
+					addEventListener?: (type: string, handler: () => void) => void;
+			  }
+			| undefined;
+		if (box) {
+			box.addEventListener?.("change", () => {
+				if (phase === "run") return;
+				// ⚠️ 读 `checked`（浏览器已经把 indeterminate 清掉并翻成 true/false）：
+				// 勾上 ⇒ 全选**能勾的**（D-70：不可选的行不进 `selected`）；取消 ⇒ 清空。
+				selected = box.checked ? selectEverything(keysOf(selectableRows(cards))) : new Set<string>();
+				syncChecks();
+				updateControls();
+			});
+			headCheck = box;
+		}
+
+		if (options.listHeading) head.createDiv?.({ cls: "acc-task-heading", text: options.listHeading });
+		headCount = head.createDiv?.({ cls: "acc-task-count" }) ?? null;
 	};
 
 	/** 画清单 —— **只在**换范围 / 开跑 / 点"再显示"时调用。 */
@@ -378,6 +447,7 @@ export function mountTaskListShell(
 		if (!listEl) return;
 		listEl.empty?.();
 		rowRefs.clear();
+		paintHead();
 
 		for (const card of cards.slice(0, drawn)) {
 			const row = listEl.createDiv?.({ cls: "acc-task-row" });
@@ -625,46 +695,7 @@ export function mountTaskListShell(
 			);
 	}
 
-	/**
-	 * 顶部工具栏：标题右边那两颗（「全选 / 全不选」）。
-	 *
-	 * ⭐ 位置在**清单上方**（用户 2026-10-23 要求：主流列表就是这么放的）。
-	 * ⚠️ 用了原生 `<button>` ⇒ 宿主的 `button` 基础样式还在，但**没有** `mod-cta`
-	 * 这类按钮组件的修饰 —— 观感全靠 `styles.css` 里 `.acc-task-tools button`。
-	 */
-	const renderToolbar = (): void => {
-		if (!toolsEl) return;
-		/** 造一颗工具按钮并接线（两颗只差文案与动作）。 */
-		const tool = (label: string, onClick: () => void): { disabled?: boolean } => {
-			const button = toolsEl.createEl("button", {
-				cls: "acc-task-tool",
-				text: label,
-				attr: { type: "button" },
-			}) as unknown as {
-				disabled?: boolean;
-				addEventListener?: (type: string, handler: () => void) => void;
-			};
-			button.addEventListener?.("click", onClick);
-			return button;
-		};
-
-		selectAllButton = tool(options.labels.selectAll, () => {
-			if (phase === "run") return;
-			// ⚠️ 只选**能勾的**（D-70）：把不可选的行塞进 `selected`，症状是"界面灰着、提交里却有它"。
-			selected = selectEverything(keysOf(selectableRows(cards)));
-			syncChecks();
-			updateControls();
-		});
-		selectNoneButton = tool(options.labels.selectNone, () => {
-			if (phase === "run") return;
-			selected = new Set<string>();
-			syncChecks();
-			updateControls();
-		});
-	};
-
 	renderFooter();
-	renderToolbar();
 	resetRows();
 
 	return {

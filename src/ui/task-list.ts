@@ -64,8 +64,17 @@ export type TaskReporter = (key: string, status: TaskStatus) => void;
 export interface TaskListLabels {
 	/** 清单为空时的说明（要说清"为什么可能是空的"）。 */
 	empty: string;
+	/**
+	 * 标题栏那颗**全选复选框**的可读名（`aria-label`，以及未勾满时的悬停说明）。
+	 *
+	 * ⚠️ 2026-10-23 起「全选 / 全不选」不再是两颗按钮，而是标题栏里的**一个三态复选框**
+	 *（主流表格的做法：全勾 / 半选 / 全不勾都在同一个控件上）。两句文案都还用着：
+	 * 没全勾时提示"全选"、已全勾时提示"全不选"（点它会清空）。
+	 */
 	selectAll: string;
 	selectNone: string;
+	/** 标题栏右侧的「已选 N / 共 M」。⚠️ 与动作按钮上的数字**不是一回事**（那是"能作用的件数"）。 */
+	selectedCount?: (selected: number, total: number) => string;
 	cancel: string;
 	/**
 	 * 清单里**一件能勾的都没有**时，主按钮的文案（D-70）。
@@ -110,6 +119,7 @@ export function buildTaskLabels(
 		empty: t("taskListEmpty"),
 		selectAll: t("externalPickAll"),
 		selectNone: t("externalPickNone"),
+		selectedCount: (selected, total) => t("taskListSelected", { selected, total }),
 		cancel: t("externalPickCancel"),
 		close: t("taskListClose"),
 		cta: (count) => t(ctaKey, { count }),

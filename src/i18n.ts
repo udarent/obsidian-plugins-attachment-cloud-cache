@@ -325,6 +325,7 @@ export const I18N: Record<string, Locale> = {
 		taskListEmpty: "Nothing to show here.",
 		// ⭐ 一件能勾的都没有时主按钮退回成它（D-70：那种清单只剩"打开笔记去修"的行）
 		taskListClose: "Close",
+		taskListSelected: "{selected} of {total} selected",
 		taskProgressRunning: "Working… {finished}/{total}",
 		taskProgressFinished: "Finished: {done} done, {skipped} skipped, {failed} failed.",
 		taskStatusDone: "done",
@@ -706,6 +707,7 @@ export const I18N: Record<string, Locale> = {
 		taskListEmpty: "这里没有可处理的条目。",
 		// ⭐ 一件能勾的都没有时主按钮退回成它（D-70：那种清单只剩"打开笔记去修"的行）
 		taskListClose: "关闭",
+		taskListSelected: "已选 {selected} / {total}",
 		taskProgressRunning: "正在处理…… {finished}/{total}",
 		taskProgressFinished: "已结束：完成 {done} 个、跳过 {skipped} 个、失败 {failed} 个。",
 		taskStatusDone: "完成",
