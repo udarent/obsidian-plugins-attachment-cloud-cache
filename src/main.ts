@@ -743,12 +743,28 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		});
 	}
 
-	/** 打开（或聚焦）附件管理视图。 */
+	/**
+	 * 打开（或聚焦）附件管理视图。
+	 *
+	 * ⚠️ **不能**只试右侧栏：`getRightLeaf(false)` 在没有右侧栏（用户折叠了 / 工作区刚重置）时
+	 * 返回 `null` ⇒ 命令点了**毫无反应**、也没有任何提示。真机踩过：同一份构建，一次能开一次不能开，
+	 * 差别只是工作区里有没有右侧栏。
+	 * ⇒ 依次退：已开的 leaf → 右侧栏 → **主区域新标签页** → 真不行就明确说一句。
+	 */
 	private async openGallery(): Promise<void> {
-		const leaf = this.app.workspace.getRightLeaf(false);
-		if (!leaf) return;
+		const workspace = this.app.workspace;
+		const existing = workspace.getLeavesOfType(GALLERY_VIEW_TYPE)[0];
+		if (existing) {
+			await workspace.revealLeaf?.(existing);
+			return;
+		}
+		const leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf("tab");
+		if (!leaf) {
+			new Notice(this.t("galleryNoLeaf"));
+			return;
+		}
 		await leaf.setViewState({ type: GALLERY_VIEW_TYPE, active: true });
-		await this.app.workspace.revealLeaf?.(leaf);
+		await workspace.revealLeaf?.(leaf);
 	}
 
 	private maintenanceDeps(): MaintenanceDeps {

@@ -83,19 +83,15 @@ function check(name, ok, detail = "") {
 
 /** 页面内的三个动作：勾**所有可勾的行**、点主按钮、读笔记正文。 */
 async function checkAllRows(client) {
+	// ⚠️ 返回**最终勾上的行数**，不是"点了几下"：上传链路的默认是**全选**，
+	// 所以"点 0 个"完全可能是对的（实测就把它当成失败了一次）。
 	return evaluate(
 		client,
 		`(() => {
 			const modal = document.querySelector(".modal-container .modal");
-			let clicked = 0;
-			for (const row of Array.from(modal?.querySelectorAll(".acc-task-row") ?? [])) {
-				const box = row.querySelector("input.acc-task-check");
-				if (box && !box.disabled && !box.checked) {
-					box.click();
-					clicked += 1;
-				}
-			}
-			return clicked;
+			const boxes = Array.from(modal?.querySelectorAll(".acc-task-row input.acc-task-check") ?? []);
+			for (const box of boxes) if (!box.disabled && !box.checked) box.click();
+			return boxes.filter((box) => box.checked && !box.disabled).length;
 		})()`
 	);
 }
@@ -301,7 +297,7 @@ async function main() {
 		);
 
 		const clickedRows = await checkAllRows(client);
-		check("清单行都能勾上（4 行）", clickedRows === 4, `点了 ${clickedRows} 个`);
+		check("清单里 4 行都是勾上的（默认全选）", clickedRows === 4, `勾上 ${clickedRows} 行`);
 		await delay(300);
 		const ctaClicked = await clickCta(client);
 		check("主按钮可点（勾选后不再是灰的）", ctaClicked);
@@ -359,7 +355,10 @@ async function main() {
 		const localAgain = await readNote(client, NOTE);
 		check(
 			"夹具已改回本地链接",
-			typeof localAgain === "string" && localAgain.includes("assets/报告%20(1).pdf"),
+			// ⚠️ 夹具里写的是**字面空格**（`assets/报告 (1).pdf`），不是 `%20`：
+			// 断言找 `%20` 会稳定失败，与上传逻辑无关。
+			typeof localAgain === "string" &&
+				(localAgain.includes("assets/报告 (1).pdf") || localAgain.includes("assets/报告%20(1).pdf")),
 			(localAgain ?? "").trim()
 		);
 
@@ -396,12 +395,28 @@ async function main() {
 			typeof afterSecond === "string" && afterSecond.includes(endpoint),
 			(afterSecond ?? "").split("\n").filter((line) => line.includes("](")).join(" | ")
 		);
-		check(
-			"完成文案说「已存在 1 个」（reused 与 uploaded 分开报）",
-			/已存在 1 个/.test(settled.snapshot?.progress ?? "") || /already there 1/.test(settled.snapshot?.progress ?? ""),
-			settled.snapshot?.progress ?? ""
-		);
+		// ⚠️ 「已存在 N 个」出现在**通知**里（`taskProgressFinished` 只报 完成/跳过/失败，
+		// 不带 reused 之分）⇒ 断言要读 `.notice`，读进度行会稳定失败。
+		// ⭐ **先关窗**：`askTaskList` 的 summary 是关窗那一刻才返回的，通知在那之后才弹
+		// （实测：在完成态就去找通知，读到的还是**上一轮**那条）。
 		check("关掉第二次的窗口", await closeDialog(client));
+		// ⚠️ 通知在"完成态"之后才弹出，而且 `.notice` 会为**上一轮**那条停留几秒
+		// （实测读到的是第一轮的「上传 4 个、已存在 0 个」）⇒ 轮询到这一轮的那条为止。
+		let noticeText = "";
+		for (let attempt = 0; attempt < 25; attempt += 1) {
+			const noticesNow = await evaluate(
+				client,
+				`(() => Array.from(document.querySelectorAll(".notice")).map((el) => el.textContent || ""))()`
+			);
+			noticeText = (noticesNow ?? []).join(" ‖ ");
+			if (/已存在 1 个/.test(noticeText) || /already there 1/i.test(noticeText)) break;
+			await delay(200);
+		}
+		check(
+			"完成通知说「已存在 1 个」（reused 与 uploaded 分开报）",
+			/已存在 1 个/.test(noticeText) || /already there 1/i.test(noticeText),
+			noticeText || "(没有通知)"
+		);
 
 		// 夹具按前缀兜底删（中途失败也不留垃圾）
 		await evaluate(

@@ -21,7 +21,9 @@
  *
  * | 断言 | 对应条目 |
  * |---|---|
- * | 命令面板恰好两条（名字对） | 第 15 条 |
+ * | 命令面板恰好三条（名字对；R24 后并为一条见 CR-02） | 第 15 条 |
+ * | 附件管理视图：能打开、标题、五个筛选、三态行数之和＝全部 | R24 / F22 |
+ * | 附件管理：「上传 / 删除」数字＝能作用的件数；重命名勾两行就灰 | R24 / §5.5 |
  * | 上传弹窗标题＝命令名、顶部只有一段且不含数字 | 第 12/13 条 |
  * | 失效本机文件那一行：图标 ＋ 灰勾选 ＋ 「打开笔记」 | 第 11 条 |
  * | 「只看当前笔记」开关存在，勾上后清单只剩这一篇 | 第 10 条 |
@@ -118,7 +120,7 @@ function skip(name, reason) {
 
 async function main() {
 	log("═".repeat(84));
-	log(`真机探针：两条命令的清单弹窗（库=${VAULT_DIR}，port=${PORT}）`);
+	log(`真机探针：两条命令的弹窗 ＋ 附件管理视图（库=${VAULT_DIR}，port=${PORT}）`);
 	log("═".repeat(84));
 
 	// ⚠️ 它是 async（要跑 tasklist）—— 忘了 await 会让这个守卫**永远不生效**
@@ -263,11 +265,16 @@ async function main() {
 		);
 		if (setup.error) throw new Error(setup.error);
 
-		// ── 1) 命令面板恰好两条（第 15 条）──
+		// ── 1) 命令面板恰好三条（第 15 条）──
+		// ⚠️ R24（2026-10-23）加了第三条 `manage-attachments`；CR-02 会把它变成**唯一**一条，
+		// 那一步要同步改这里、烟雾的 EXPECTED_COMMANDS、验收套件的命令集合三处。
 		const commands = setup.commands.map((id) => id.split(":")[1]).sort();
 		check(
-			"命令只有两条（上传附件 / 清理附件）",
-			commands.length === 2 && commands.includes("upload-attachments") && commands.includes("check-orphans"),
+			"命令只有三条（上传附件 / 清理附件 / 附件管理）",
+			commands.length === 3 &&
+				commands.includes("upload-attachments") &&
+				commands.includes("check-orphans") &&
+				commands.includes("manage-attachments"),
 			commands.join(" / ")
 		);
 
@@ -370,7 +377,150 @@ async function main() {
 		}
 		check("上传弹窗能取消（取消按钮存在且点了关窗）", await closeDialog(client));
 
-		// ── 4) 清理附件：两类行 / 两个开关 / 站外缓存标签 ──
+		// ⚠️ **顺序有讲究**：视图这一节放在清理之前。清理那一节在这个库里会被 `skip`，
+		// 而它的跳过分支是 `return finishRun()` —— 放在它后面的断言**一条都不会跑**
+		// （实测踩过：视图断言加在末尾 ⇒ 全被吞掉、汇总里看不出来）。
+		// ── 4) 附件管理视图（R24 / F22）：能开、标题、筛选、动作数字 ──
+		// ⚠️ 这一节**只读**：只点筛选与勾选框，**不点上传 / 删除**（那个库没配存储也会真去连远端）。
+		// 视图层没有可编程 DOM 单测（替身里 `createEl` 全是桩）⇒ 这里是它唯一的证据。
+		await evaluate(
+			client,
+			`(async () => {
+				await app.commands.executeCommandById(${JSON.stringify(`${PLUGIN_ID}:manage-attachments`)});
+				return true;
+			})()`
+		);
+		await delay(1600);
+		// ⚠️ **必须先点一次刷新**：视图在 `onOpen` 里取一次 `vault.getFiles()`，之后不会自动追新文件。
+		// 而这一轮脚本造的两个夹具（`acc-verify/*`）是刚写进去的 ⇒ 不刷新时“视图的行数”与
+		// “我这一刻数到的库内附件数”来自两个时刻，会间歇性地差两行（实测 16 与 18 交替）。
+		// 点刷新既让两边同一时刻，也顺带验了那个按钮有用。
+		await evaluate(
+			client,
+			`(() => {
+				const root = app.workspace.getLeavesOfType("acc-gallery")[0].view.contentEl;
+				const button = root.querySelector(".acc-gallery-refresh");
+				if (button) button.click();
+				return Boolean(button);
+			})()`
+		);
+		await delay(1200);
+
+		const gallery = await evaluate(
+			client,
+			`(() => {
+				const leaf = app.workspace.getLeavesOfType("acc-gallery")[0];
+				const view = leaf && leaf.view;
+				const root = view && view.contentEl;
+				if (!root) return null;
+				const attachments = app.vault
+					.getFiles()
+					.filter((f) => !["md", "canvas", "base"].includes(String(f.extension || "").toLowerCase()));
+				return {
+					title: view.getDisplayText ? view.getDisplayText() : "",
+					filters: Array.from(root.querySelectorAll(".acc-gallery-filter")).map((el) => ({
+						text: (el.textContent || "").trim(),
+						active: el.classList.contains("is-active"),
+					})),
+					names: Array.from(root.querySelectorAll(".acc-task-row .acc-task-name")).map((el) => el.textContent || ""),
+					hints: Array.from(root.querySelectorAll(".acc-task-row .acc-task-hint")).map((el) => el.textContent || ""),
+					checkboxes: root.querySelectorAll(".acc-task-check").length,
+					expected: attachments.length,
+				};
+			})()`
+		);
+
+		check("「附件管理」命令能打开视图", Boolean(gallery), gallery ? "已打开" : "没找到 acc-gallery 的 leaf");
+		check("视图标题＝附件管理", gallery?.title === "附件管理", `实际：${JSON.stringify(gallery?.title)}`);
+		check(
+			"筛选栏五个按钮，默认选中「全部」",
+			gallery?.filters.length === 5 && gallery.filters[0]?.text === "全部" && gallery.filters[0]?.active === true,
+			(gallery?.filters ?? []).map((f) => `${f.text}${f.active ? " *" : ""}`).join(" / ")
+		);
+		check(
+			"每行都有状态标签（不是只列文件名）",
+			gallery?.names.length === gallery?.hints.length && (gallery?.hints ?? []).every((hint) => hint.trim().length > 0),
+			`${gallery?.hints.length} 个标签，例：${JSON.stringify((gallery?.hints ?? [])[0] ?? "")}`
+		);
+
+		// 动作按钮的数字＝**能作用的件数**；重命名只对单选成立（§5.5 的判据在真机上的落点）
+		const perAction = await evaluate(
+			client,
+			`(() => {
+				const root = app.workspace.getLeavesOfType("acc-gallery")[0].view.contentEl;
+				const boxes = Array.from(root.querySelectorAll(".acc-task-check"));
+				const read = () =>
+					Array.from(root.querySelectorAll(".acc-task-actions button")).map((b) => ({
+						text: (b.textContent || "").trim(),
+						disabled: b.disabled === true,
+					}));
+				const renameOf = (list) => list.find((b) => b.text.indexOf("重命名") === 0) || null;
+				const toggle = (box, on) => {
+					box.checked = on;
+					box.dispatchEvent(new Event("change"));
+				};
+				if (boxes.length < 2) return { error: "行数不够，勾不了两行" };
+				toggle(boxes[0], true);
+				const one = read();
+				toggle(boxes[1], true);
+				const two = read();
+				for (const box of boxes) if (box.checked) toggle(box, false);
+				return { single: renameOf(one), pair: renameOf(two), buttons: one.map((b) => b.text) };
+			})()`
+		);
+		check(
+			"勾一行 ⇒「重命名」可用",
+			perAction?.single?.disabled === false,
+			JSON.stringify(perAction?.single ?? perAction?.error ?? null)
+		);
+		check(
+			"勾两行 ⇒「重命名」灰掉（不能给多个文件改同一个名字）",
+			perAction?.pair?.disabled === true,
+			JSON.stringify(perAction?.pair ?? perAction?.error ?? null)
+		);
+
+		// 三态互斥且不遗漏：未上传 ＋ 已上传 ＋ 云端有本地无 ＝ 全部
+		const byState = await evaluate(
+			client,
+			`(() => {
+				const root = app.workspace.getLeavesOfType("acc-gallery")[0].view.contentEl;
+				const rows = () => root.querySelectorAll(".acc-task-row").length;
+				const clickFilter = (label) => {
+					const button = Array.from(root.querySelectorAll(".acc-gallery-filter")).find(
+						(el) => (el.textContent || "").trim() === label
+					);
+					if (button) button.click();
+					return rows();
+				};
+				const all = clickFilter("全部");
+				const notUploaded = clickFilter("未上传");
+				const uploaded = clickFilter("已上传");
+				const cloudOnly = clickFilter("云端有本地无");
+				clickFilter("全部");
+				return { all, notUploaded, uploaded, cloudOnly };
+			})()`
+		);
+		check(
+			"三态行数之和＝「全部」（互斥且不遗漏）",
+			byState !== null && byState.notUploaded + byState.uploaded + byState.cloudOnly === byState.all,
+			JSON.stringify(byState)
+		);
+
+		// ⭐ 「全部」＝库里的附件 ∪ 台账里“云端有本地无”的对象。
+		// ⚠️ 一开始我把期望写成“= 库里附件数”，实测 18 vs 6 才看清：那 12 条只有云端、
+		// 本地没有 —— 它们**本来就该**出现在「全部」里（§5.5 的第三态）。
+		check(
+			"「全部」＝库里附件 ＋ 云端有本地无",
+			byState !== null && byState.uploaded + byState.notUploaded === gallery?.expected,
+			`本地 ${byState?.uploaded} ＋ ${byState?.notUploaded} 应等于库里 ${gallery?.expected} 份附件`
+		);
+		check(
+			"「全部」行数＝本地附件 ＋ 仅云端对象",
+			byState !== null && byState.all === gallery?.expected + byState.cloudOnly,
+			`${byState?.all} 行 = 本地 ${gallery?.expected} ＋ 仅云端 ${byState?.cloudOnly}`
+		);
+
+		// ── 5) 清理附件：两类行 / 两个开关 / 站外缓存标签 ──
 		await runCommand(client, PLUGIN_ID, "check-orphans");
 		const { appeared: appeared2, notices: seen2 } = await waitForDialog(client);
 		// ⭐ 这一种"没出现"是**对的**：库里有一个文件读不到 ⇒ 清理命令按设计取消整次
@@ -455,6 +605,7 @@ async function main() {
 		const emptyView = await dialogSnapshot(client);
 		check("两个开关都关掉后清单为空（开关真的在筛，而不是只藏行）", emptyView.rows.length === 0, `${emptyView.rows.length} 行`);
 		check("清理弹窗能取消", await closeDialog(client));
+
 	} finally {
 		// 还原：先删造出来的文件（**按前缀兜底**：中途失败也留不下垃圾）
 		try {

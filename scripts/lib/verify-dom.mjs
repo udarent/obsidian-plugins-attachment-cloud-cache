@@ -204,7 +204,9 @@ export async function waitSettled(client, ms = 120_000) {
 	while (Date.now() < deadline) {
 		snapshot = await dialogSnapshot(client).catch(() => null);
 		const progress = snapshot?.progress ?? "";
-		const finished = /(已结束|Finished):/.test(progress);
+		// ⚠️ 中文文案用的是**全角冒号**（`已结束：完成 4 个…`）⇒ 只匹配半角 `:` 会永远等不到完成态，
+		// 而且症状是"每一条都超时 120 秒"（实测：4 分钟才结束一轮，报的却是"没停在完成态"）。
+		const finished = /(已结束|Finished)[：:]?/.test(progress);
 		const singleAction = (snapshot?.actions ?? []).length === 1;
 		if (finished && singleAction) return { settled: true, snapshot };
 		await delay(200);
