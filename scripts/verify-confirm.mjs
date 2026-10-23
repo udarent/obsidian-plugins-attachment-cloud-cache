@@ -44,7 +44,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { countObsidianProcesses, evaluate, launchAndAttach } from "./lib/obsidian-host.mjs";
 import { createMockS3 } from "./lib/mock-s3.mjs";
-import { clickCta, closeDialog, dialogSnapshot, runCommand, setToggle, waitForDialog, waitSettled } from "./lib/verify-dom.mjs";
+import { clickCta, closeDialog, dialogSnapshot, setToggle, waitForDialog, waitSettled } from "./lib/verify-dom.mjs";
 
 const PORT = Number(
 	process.argv.includes("--port")
@@ -82,6 +82,44 @@ function check(name, ok, detail = "") {
 }
 
 /** 页面内的三个动作：勾**所有可勾的行**、点主按钮、读笔记正文。 */
+/**
+ * 等到插件真的加载完（`app.plugins.plugins[<id>]` 出现），最多等 `ms`。
+ *
+ * ⚠️ 别退回"立刻读一次"：宿主启动快慢不稳定，读到空的那一刻并不代表插件坏了。
+ */
+async function waitForPlugin(client, ms) {
+	const deadline = Date.now() + ms;
+	while (Date.now() < deadline) {
+		const ready = await evaluate(
+			client,
+			`Boolean(app.plugins?.plugins?.[${JSON.stringify(PLUGIN_ID)}])`
+		).catch(() => false);
+		if (ready) return true;
+		await delay(250);
+	}
+	return false;
+}
+
+/**
+ * 启动「上传附件」清单。
+ *
+ * ⚠️ CR-02（2026-10-23）取消了两条命令 ⇒ 这条入口只剩设置页那颗按钮，
+ * 而它绑定的就是 `plugin.runUploadAttachments()`（onClick 只有这一句）。
+ * 这里直接调同一个函数：测的仍是同一条流程与同一套清单壳。
+ * （宿主 1.14.4 里 `app.setting.open()` 不生成设置弹窗，所以走 DOM 点按钮不可行。）
+ */
+async function startUpload(client) {
+	return evaluate(
+		client,
+		`(async () => {
+			const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+			if (!plugin || typeof plugin.runUploadAttachments !== "function") return false;
+			void plugin.runUploadAttachments();
+			return true;
+		})()`
+	);
+}
+
 async function checkAllRows(client) {
 	// ⚠️ 返回**最终勾上的行数**，不是"点了几下"：上传链路的默认是**全选**，
 	// 所以"点 0 个"完全可能是对的（实测就把它当成失败了一次）。
@@ -188,6 +226,11 @@ async function main() {
 		client = attached.client;
 		child = attached.child;
 
+		// ⚠️ **必须等插件加载完**：宿主启动变快时（缓存热），读到 `app.plugins` 的那一刻
+		// 社区插件可能还没 onload —— 原来这里是"立刻读一次"，于是间歇性报"插件没加载"，
+		// 而真正的原因只是"还没轮到它"。实测：同一份构建，13 秒那轮通过、5 秒那轮失败。
+		await waitForPlugin(client, 20_000);
+
 		// ── 0) 准备夹具 + 把存储指向 mock（全在内存里）──
 		const setup = await evaluate(
 			client,
@@ -262,7 +305,7 @@ async function main() {
 		if (opened !== NOTE) throw new Error(`打开笔记失败（活动文件是 ${JSON.stringify(opened)}）`);
 
 		// ── 1) 第一次上传：括号文件名 ＋ 三种 Content-Type（§5.4 第 1 / 8 条）──
-		await runCommand(client, PLUGIN_ID, "upload-attachments");
+		await startUpload(client);
 		const { appeared, notices } = await waitForDialog(client);
 		if (!appeared) {
 			const hint = await evaluate(
@@ -363,7 +406,7 @@ async function main() {
 		);
 
 		const putsBefore = mock.countByMethod("PUT");
-		await runCommand(client, PLUGIN_ID, "upload-attachments");
+		await startUpload(client);
 		const second = await waitForDialog(client);
 		if (!second.appeared) {
 			throw new Error(`第二次上传没弹清单（通知：${JSON.stringify(second.notices)}）`);

@@ -86,7 +86,6 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | **Free up local space** | Deletes local copies of files your notes still link — **permanently, not to the trash**. With a limit set, it stops at the limit. |
 | **Revert links to local paths** | Points note links back at the files in your vault. **Nothing is deleted**; files with no copy keep pointing at your storage. |
 | **Upload files from other sites** | Off by default; the site list narrows the **automatic** path only, and picking by hand is never restricted. |
-| **Upload attachments** | Opens the same list as the `Upload attachments` command (everything not in your storage yet), so you can tick what to send from here. Outside-the-vault `file:///…` files are desktop only. |
 | **When an attachment is no longer linked** | Ask (default) / notify / do nothing. Cleanup always asks. |
 | **Compatibility mode** | Keep it on for Cloudflare R2, MinIO and most self-hosted services. |
 
@@ -94,9 +93,9 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 
 | Command | What it does |
 | --- | --- |
-| **Upload attachments** | One list for everything not in your storage yet: files your notes link to, files no note links to (backing them up only — unticked by default), and files your notes point at on other sites or on this computer. Tick what to upload; links get rewritten for the ones your notes refer to. Your files stay where they are — that copy *is* the local copy. Above the list you can tick **only the current note** to see just what that note uses. ⚠️ Local files that are **no longer on this computer** are listed too (their tick box is greyed out) with an **Open note** link, so you can go and fix that link. |
-| **Clean up attachments** | Three kinds: **cloud objects** this vault uploaded that nothing links to any more, **local files** nothing links to (including ones never uploaded), and **cached copies downloaded from other sites**. Then keep, delete the local file only, or delete both. Also how you re-run the automatic prompt if you dismissed it. |
-| **Attachment manager** | A persistent view: every attachment plus filters (not uploaded / uploaded / cloud-only / unreferenced), and batch actions on the selection (upload, delete local). Rename works on a single row. ⚠️ It coexists with the two commands above for now; they will be folded into it. |
+| **Attachment manager** | The only command. A persistent view: every attachment plus filters (to clean up / not uploaded / uploaded / cloud-only / unreferenced), and batch actions on the selection (upload, delete local, use local file, delete from cloud). Rename works on a single row. |
+
+ > **Upgrading from 1.8 or earlier**: the separate **Upload attachments** and **Clean up attachments** commands are gone — both are now filters plus actions inside **Attachment manager**. If you had shortcuts bound to them, bind them again.
 
 ## Good to know
 
@@ -278,7 +277,6 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | **释放本地空间** | 删掉笔记仍引用着的附件的本地副本 —— **永久删除、不进回收站**；设了上限时只清到上限为止。 |
 | **把链接改回本地路径** | 把笔记里的链接改回指向库里的文件。**什么都不删**；没有副本的那些继续指向你的存储。 |
 | **站外文件也上传到云端** | 默认关闭；站点名单只筛**自动**那一路，手动挑选不受限制。 |
-| **上传附件** | 打开与命令 `上传附件` 的同一份清单（所有还没进你存储的东西），在这里也能逐项勾。库外本机 `file:///…` 仅桌面端。 |
 | **附件不再被引用时** | 弹窗让我选（默认）/ 只给一条通知 / 什么都不做。清理永远需要你确认。 |
 | **兼容模式** | Cloudflare R2、MinIO 与多数自建服务都要开着。 |
 
@@ -286,9 +284,9 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 
 | 命令 | 做什么 |
 | --- | --- |
-| **上传附件** | 一张清单装下所有还没进你存储的东西：笔记里引用着的文件、**没有任何笔记引用**的文件（只做备份，默认不勾）、以及笔记里指向站外或本机的文件。勾中的才上传；被引用的那些会顺手改写链接。文件**留在原地** —— 那份就是本地副本。清单上方可以勾上**只看当前笔记** —— 只列这一篇里的东西。⚠️ 指向的本机文件**已经不在**的那些也会列出来（勾选框是灰的），行尾给一个**「打开笔记」** —— 去那篇笔记里把那条链接修掉。 |
-| **清理附件** | 三类：本库上传过、已没人引用的**云端对象**；**没有任何引用的本地文件**（包括从来没上传过的）；**从别的网站下载下来的缓存副本**（删了不碰云端、不改笔记，下次显示重新下载）。勾中的按你选的处理：保留 / 只删本地 / 本地和云端都删。 |
-| **附件管理** | 一个常驻视图：全部附件 ＋ 筛选（未上传 / 已上传 / 云端有本地无 / 没人引用）＋ 勾选后批量上传或删除本地。重命名只对单条生效。⚠️ 与上面两条命令并存是暂时的，最终会合并成这一条。 |
+| **附件管理** | **唯一的命令**。一个常驻视图：全部附件 ＋ 筛选（待清理 / 未上传 / 已上传 / 云端有本地无 / 没人引用）＋ 勾选后批量处理（上传 / 删除本地 / 改为本地引用 / 删除云端）；重命名只对单条生效。 |
+
+ > **从 1.8 及更早版本升级**：原来那两条命令（**上传附件** / **清理附件**）已经取消，它们的能力变成 **附件管理** 里的筛选与动作。如果你给它们绑过快捷键，需要重绑到「附件管理」。
 
 ## 需要注意的
 

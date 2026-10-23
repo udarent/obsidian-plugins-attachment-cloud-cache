@@ -166,7 +166,6 @@ export const I18N: Record<string, Locale> = {
 		// ⚠️ 2026-10-22（D-77）：命令名去掉了限定词（原来是“no note links to”）。
 		// 清单现在是**三类**：没人引用的云端对象 / 没有引用的本地文件 / 站外缓存副本
 		// —— 都是「可以清理的附件」，名字只说那一类就是错的（D-73 同一条教训）。
-		cmdCheckOrphans: "Clean up attachments",
 		cloudCleanupDeviceBlindSpot:
 			"Only this device's references can be seen. Other devices (or another vault sharing this storage) may still be using some of these files — deleting cannot be undone.",
 		cloudCleanupPersistFailed: "Could not save the local-copy index: {error}",
@@ -251,14 +250,13 @@ export const I18N: Record<string, Locale> = {
 		orphanDeletedBoth:
 			"Removed {removed} local file(s). Storage: {deleted} deleted, {alreadyGone} already gone, {failed} failed.",
 		orphanNotice:
-			"{count} uploaded attachment(s) are no longer linked from any note or canvas. Run “{command}” to review them.",
+			"{count} uploaded attachment(s) are no longer linked from any note or canvas. Open “{command}” and pick the “To clean up” filter to review them.",
 		orphanDismissed:
-			"Nothing was deleted. To ask again, run “{command}”.",
+			"Nothing was deleted. To ask again, open “{command}” and pick the “To clean up” filter.",
 		// ⚠️ 2026-10-22（D-77）：原来写着「站外缓存不在这里处理」—— 现在它们的**本地副本**就在这里处理。
 		orphanNoneToCheck:
 			"No attachments to clean up — whatever is left is either still linked from a note or canvas, or was uploaded from another device (this one cannot see what links to those).",
 		cloudDeleteFailed: "Could not delete the object: {error}",
-		cmdUploadAttachments: "Upload attachments",
 		cmdManageAttachments: "Attachment manager",
 		galleryTitle: "Attachment manager",
 		galleryNoLeaf: "Could not open the attachment manager: no usable pane.",
@@ -304,6 +302,7 @@ export const I18N: Record<string, Locale> = {
 		galleryStateCloudOnly: "In cloud only",
 		galleryStateUnverified: "Not uploaded (unverified)",
 		galleryStateUnreferenced: "not referenced",
+		galleryStateCached: "cached external",
 		// ⭐ 命令**失败**时必须有人说话（2026-10-16 用户实测："点击命令没有反应"）。
 		// 以前异步命令抛错只留一条控制台记录，界面上什么都不发生 —— 那是最坏的失败形态。
 		// ⚠️ 不写命令名：用户刚点过它，而 `{error}` 才是他要看的东西（命令 id 进控制台日志）。
@@ -435,7 +434,7 @@ export const I18N: Record<string, Locale> = {
 		orphanAsk_always: "Ask me",
 		orphanAsk_notice: "Just show a notice",
 		orphanAsk_never: "Do nothing",
-		cleanupCommandHint: "To clean up the ones that already exist, run “{command}”.",
+		cleanupCommandHint: "To clean up the ones that already exist, open “{command}” and pick the “To clean up” filter.",
 		deleteLogName: "Deletion log",
 		deleteLogDesc: "Every cloud deletion is written here. After a permanent delete this is the only record.",
 		deleteLogButton: "Open",
@@ -557,7 +556,6 @@ export const I18N: Record<string, Locale> = {
 		// ⚠️ 2026-10-22（D-77）：命令名去掉了限定词（原来是「没有笔记引用的」）。
 		// 清单现在是**三类**：没人引用的云端对象 / 没有引用的本地文件 / 站外缓存副本
 		// —— 都是「可以清理的附件」，名字只说那一类就是错的（D-73 同一条教训）。
-		cmdCheckOrphans: "清理附件",
 		cloudCleanupDeviceBlindSpot:
 			"只能看到本设备的引用情况。其他设备（或共用这个存储的另一个库）可能还在用其中一些文件 —— 删除后无法恢复。",
 		cloudCleanupPersistFailed: "本地副本索引保存失败：{error}",
@@ -633,14 +631,13 @@ export const I18N: Record<string, Locale> = {
 		orphanLocalDeleted: "已删掉 {removed} 个本地文件；云端对象未动。",
 		orphanDeletedBoth:
 			"已删掉 {removed} 个本地文件；云端：删除 {deleted} 个、本来就不存在 {alreadyGone} 个、失败 {failed} 个。",
-		orphanNotice: "有 {count} 个已上传的附件不再被任何笔记或画布引用。运行「{command}」查看并处理。",
+		orphanNotice: "有 {count} 个已上传的附件不再被任何笔记或画布引用。打开「{command}」，切到「待清理」筛选查看并处理。",
 		orphanDismissed:
-			"什么都没删。想再问一次：运行「{command}」。",
+			"什么都没删。想再问一次：打开「{command}」，切到「待清理」筛选。",
 		// ⚠️ 2026-10-22（D-77）：原来写着「站外缓存不在这里处理」—— 现在它们的**本地副本**就在这里处理。
 		orphanNoneToCheck:
 			"没有需要清理的附件 —— 剩下的要么还有笔记或画布在引用，要么是别的设备上传的（这台设备看不见谁在引用它们）。",
 		cloudDeleteFailed: "删除对象失败：{error}",
-		cmdUploadAttachments: "上传附件",
 		cmdManageAttachments: "附件管理",
 		galleryTitle: "附件管理",
 		galleryNoLeaf: "打不开附件管理视图：没有可用的窗格。",
@@ -686,6 +683,7 @@ export const I18N: Record<string, Locale> = {
 		galleryStateCloudOnly: "云端有本地无",
 		galleryStateUnverified: "未上传（未核）",
 		galleryStateUnreferenced: "没人引用",
+		galleryStateCached: "站外缓存",
 		// ⭐ 命令**失败**时必须有人说话（2026-10-16 用户实测："点击命令没有反应"）。
 		// 以前异步命令抛错只留一条控制台记录，界面上什么都不发生 —— 那是最坏的失败形态。
 		// ⚠️ 不写命令名：用户刚点过它，而 `{error}` 才是他要看的东西（命令 id 进控制台日志）。
@@ -810,7 +808,7 @@ export const I18N: Record<string, Locale> = {
 		orphanAsk_always: "弹窗让我选",
 		orphanAsk_notice: "只给一条通知",
 		orphanAsk_never: "什么都不做",
-		cleanupCommandHint: "要处理已有的孤儿，运行命令「{command}」。",
+		cleanupCommandHint: "要处理已有的孤儿，打开「{command}」，切到「待清理」筛选。",
 		deleteLogName: "删除记录",
 		deleteLogDesc: "每次删除云端对象都会记在这里。永久删除之后，这是唯一的记录。",
 		deleteLogButton: "查看",

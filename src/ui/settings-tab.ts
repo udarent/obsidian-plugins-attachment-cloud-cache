@@ -735,7 +735,7 @@ export class SettingsTab extends PluginSettingTab {
 				name: this.t("orphanAsk"),
 				// ⭐ 命令名**从 i18n 取**（不抄字面量）：命令改名的门禁只管 README 与 `addCommand`，
 				// 抄在说明里的那份不会被它发现 —— 而"指路指到一条不存在的命令"比不指路更糟。
-				desc: `${this.t("orphanAskDesc")} ${this.t("cleanupCommandHint", { command: this.t("cmdCheckOrphans") })}`,
+				desc: `${this.t("orphanAskDesc")} ${this.t("cleanupCommandHint", { command: this.t("cmdManageAttachments") })}`,
 				aliases: ["orphan", "unused", "cleanup", "delete", "孤儿", "无人引用", "清理", "删除"],
 				control: {
 					type: "dropdown",

@@ -163,10 +163,9 @@ async function main() {
 		// `pick-external-images`）—— 也就是说它那时跑起来必定假红；现在是两条。
 		// ⭐ 增删命令时**两处都要改**：这里 + 验收里那个精确集合断言。
 		const EXPECTED_COMMANDS = [
-			`${PLUGIN_ID}:check-orphans`,
-			`${PLUGIN_ID}:upload-attachments`,
-			// R24：附件管理视图的命令。⚠️ 与上面两条并存只是过渡（CR-02 会注销旧两条，
-			// 那时这张表要同步减两行、加一行 —— 这张表是**精确集合**，漏改就假红）。
+			// ⭐ R24 / CR-02（2026-10-23）：命令面板**只有这一条**。
+			// 原来那两条（`check-orphans` / `upload-attachments`）连同 id 一并取消。
+			// ⚠️ 这张表是**精确集合**：以后增删命令必须同步改它，否则真机假红。
 			`${PLUGIN_ID}:manage-attachments`,
 		].sort();
 		const actualCommands = [...commands].sort();

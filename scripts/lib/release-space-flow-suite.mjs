@@ -403,7 +403,7 @@ export async function runReleaseSpaceFlowSuite(mod) {
 		// ⚠️ 断言的是**接线**（这条提示把用户指到那条清理命令），不是某个具体名字 ——
 		// 命令改名时两边一起走，不会因为文案调整而假红；而 `{command}` 一旦没传进来就会红。
 		assertNotice(
-			[translate("en", "cmdCheckOrphans")],
+			[translate("en", "cmdManageAttachments")],
 			"★★ 剩下那部分（没人引用的）必须指路：否则'我设了上限、也清了，怎么还占着'会变成一个说不清的谜"
 		);
 	}

@@ -219,7 +219,7 @@ export async function releaseLocalSpace(
 			new Notice(
 				ctx.t("releaseSpaceUnlinkedLeft", {
 					mb: formatMegabytes(selection.unlinkedBytes),
-					command: ctx.t("cmdCheckOrphans"),
+					command: ctx.t("cmdManageAttachments"),
 				})
 			);
 		}

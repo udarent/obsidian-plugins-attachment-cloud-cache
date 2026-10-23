@@ -268,13 +268,12 @@ async function main() {
 		// ── 1) 命令面板恰好三条（第 15 条）──
 		// ⚠️ R24（2026-10-23）加了第三条 `manage-attachments`；CR-02 会把它变成**唯一**一条，
 		// 那一步要同步改这里、烟雾的 EXPECTED_COMMANDS、验收套件的命令集合三处。
+		// ⭐ R24 / CR-02：命令面板**只有一条**。旧的两条连同 id 一并取消，
+		// 它们的能力变成视图里的「待上传」「待清理」筛选与动作栏。
 		const commands = setup.commands.map((id) => id.split(":")[1]).sort();
 		check(
-			"命令只有三条（上传附件 / 清理附件 / 附件管理）",
-			commands.length === 3 &&
-				commands.includes("upload-attachments") &&
-				commands.includes("check-orphans") &&
-				commands.includes("manage-attachments"),
+			"命令只有一条（附件管理）",
+			commands.length === 1 && commands[0] === "manage-attachments",
 			commands.join(" / ")
 		);
 
@@ -292,7 +291,29 @@ async function main() {
 		);
 
 		// ── 3) 上传附件：标题 / 顶部一段 / 行内标签 / 失效行图标 / 只看当前笔记 ──
-		await runCommand(client, PLUGIN_ID, "upload-attachments");
+		// ⚠️ 命令取消之后，「上传」这条入口只剩**设置页那颗按钮**（与原来那条命令
+		// 是**同一个实现** `runUploadAttachments`）。所以这一段改成点那颗按钮 ——
+		// 下面那些断言（标题 / 顶部一段 / 失效行 / 只看当前笔记 / aria-label）测的是
+		// 同一个清单壳，判据一个字没变，换的只是“谁去按”。
+		// ⚠️ **为什么直接调 `runUploadAttachments()` 而不是点设置页那颗按钮**：
+		// 这个宿主（1.14.4）里 `app.setting.open()` 明明返回了、`app.setting` 也在，
+		// 但设置弹窗**没有生成**（三条路都试过：`setting.open` / `app:open-settings` 命令 /
+		// `openTabById`，`document` 里始终 0 个 modal）。与其把一条真机断言押在“设置页能不能开”
+		// 这种与我们无关的宿主行为上，不如直接调**那颗按钮绑定的同一个函数**：
+		// 按钮的 onClick 只有这一句（`void this.plugin.runUploadAttachments()`），
+		// 所以下面这些断言测的仍然是同一条流程、同一个清单壳。
+		// ⚠️ 代价要说清：这一节**不再证明“设置页那颗按钮还在”** —— 那一点由
+		// `settings-tab.ts` 的 `renderUploadAll` 与 mock 层（acceptance 也调这个函数）守着。
+		const uploadStarted = await evaluate(
+			client,
+			`(async () => {
+				const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+				if (!plugin || typeof plugin.runUploadAttachments !== "function") return false;
+				void plugin.runUploadAttachments();
+				return true;
+			})()`
+		);
+		check("上传入口（设置页按钮绑定的同一个函数）能启动清单", uploadStarted === true);
 		const { appeared, notices: seen1 } = await waitForDialog(client);
 		check("「上传附件」弹出清单", appeared);
 		if (!appeared) {
@@ -380,6 +401,10 @@ async function main() {
 		// ⚠️ **顺序有讲究**：视图这一节放在清理之前。清理那一节在这个库里会被 `skip`，
 		// 而它的跳过分支是 `return finishRun()` —— 放在它后面的断言**一条都不会跑**
 		// （实测踩过：视图断言加在末尾 ⇒ 全被吞掉、汇总里看不出来）。
+		// ⚠️ 设置页还在清单弹窗下面开着：先关掉，否则后面的视图断言会撞上两层 modal。
+		await evaluate(client, `(() => { app.setting.close(); return true; })()`);
+		await delay(400);
+
 		// ── 4) 附件管理视图（R24 / F22）：能开、标题、筛选、动作数字 ──
 		// ⚠️ 这一节**只读**：只点筛选与勾选框，**不点上传 / 删除**（那个库没配存储也会真去连远端）。
 		// 视图层没有可编程 DOM 单测（替身里 `createEl` 全是桩）⇒ 这里是它唯一的证据。
@@ -643,91 +668,15 @@ async function main() {
 			`${byState?.all} 行 = 本地 ${gallery?.expected} ＋ 仅云端 ${byState?.cloudOnly}`
 		);
 
-		// ── 5) 清理附件：两类行 / 两个开关 / 站外缓存标签 ──
-		await runCommand(client, PLUGIN_ID, "check-orphans");
-		const { appeared: appeared2, notices: seen2 } = await waitForDialog(client);
-		// ⭐ 这一种"没出现"是**对的**：库里有一个文件读不到 ⇒ 清理命令按设计取消整次
-		//（判据：绝不能把「不知道」当成「没有引用」）。这时跳过，不判红。
-		const unreadable = seen2.find((text) => text.includes("读不到") || text.includes("取消了这次清理"));
-		if (!unreadable) check("「清理附件」弹出清单", appeared2);
-		if (!appeared2) {
-			if (unreadable) {
-				skip("清理弹窗（两类行 / 两个开关 / 站外缓存标签）", `这个库里有一个文件读不到，命令按设计取消了清理：${unreadable}`);
-				return finishRun();
-			}
-			// 其余情况是真失败：把"它到底说了什么"打出来
-			const hint = await evaluate(
-				client,
-				`(async () => {
-					const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
-					return {
-						orphanAsk: plugin?.settings?.orphanAsk,
-						notices: Array.from(document.querySelectorAll(".notice")).map((el) => el.textContent),
-						modals: document.querySelectorAll(".modal-container .modal").length,
-						errors: window.__accErrors ?? [],
-					};
-				})()`
-			);
-			throw new Error(`清理清单没有出现（轮询期间的通知：${JSON.stringify(seen2)}）：${JSON.stringify(hint)}`);
-		}
-
-		const cleanup = await dialogSnapshot(client);
-		check("清理标题＝命令名", cleanup.title.trim() === "清理附件", `实际：${JSON.stringify(cleanup.title)}`);
-		check(
-			"清理顶部只有一段，且不含数字",
-			cleanup.lines.length === 1 && !/\d/.test(cleanup.lines.join(" ")),
-			`${cleanup.lines.length} 段：${JSON.stringify(cleanup.lines).slice(0, 120)}`
+		// ── 5) 清理：**手动入口已并入视图**（CR-02）──
+		// ⚠️ 原来这里跑 `check-orphans` 并断言弹窗的两类行 / 两个开关 / 站外缓存标签。
+		// 命令连同 id 取消之后，云端清理的手动入口是「待清理」筛选 ＋ 动作栏 ——
+		// 那几条判据（待清理 ⊆ 没人引用、删云端的数字、改为本地引用、站外缓存标签）
+		// 已经在第 4 节按视图验过。这里只留一句记录，避免以后有人以为漏测了。
+		skip(
+			"清理命令的清单弹窗",
+			"命令已并入附件管理（CR-02）：清单形态不存在了；等价判据在「待清理」筛选与动作栏上（第 4 节已验）"
 		);
-		const localRows = cleanup.rows.filter((row) => row.name.includes("stray.png") || row.name.includes("cached.png"));
-		check("没有任何引用的本地文件进了清理清单", localRows.length >= 2, cleanup.rows.map((r) => r.name).join(" | "));
-		const cachedRow = cleanup.rows.find((row) => row.name.includes("cached.png"));
-		check(
-			"站外缓存那一行带「站外缓存」标签",
-			Boolean(cachedRow) && cachedRow.hint.includes("站外"),
-			cachedRow ? `hint=${cachedRow.hint}` : "没找到 cached.png"
-		);
-		check(
-			"本地孤立文件默认不勾",
-			localRows.every((row) => row.boxChecked === false),
-			localRows.map((row) => `${row.name}=${row.boxChecked}`).join(" / ")
-		);
-		const filterNames = cleanup.filters.map((item) => item.name);
-		check(
-			"清理有两个类别开关（云端对象 / 本地文件）",
-			filterNames.some((n) => n.includes("云端")) && filterNames.some((n) => n.includes("本地")),
-			filterNames.join(" / ")
-		);
-
-		// 关掉「云端对象」⇒ 只剩本地那一类
-		await evaluate(
-			client,
-			`(() => {
-				${DOM_HELPERS}
-				toggleFor("云端对象")?.click();
-				return true;
-			})()`
-		);
-		await delay(900);
-		const localOnly = await dialogSnapshot(client);
-		check(
-			"关掉「云端对象」后只剩本地行",
-			localOnly.rows.length === cleanup.rows.filter((row) => !row.name.includes("cached")).length ||
-				localOnly.rows.every((row) => row.hint.includes("本地") || row.hint.includes("站外")),
-			`${localOnly.rows.length} 行：${localOnly.rows.map((r) => `${r.name}(${r.hint})`).join(" | ")}`
-		);
-		// 再关掉「本地文件」⇒ 空清单（这一屏只剩这两类）
-		await evaluate(
-			client,
-			`(() => {
-				${DOM_HELPERS}
-				toggleFor("本地文件")?.click();
-				return true;
-			})()`
-		);
-		await delay(900);
-		const emptyView = await dialogSnapshot(client);
-		check("两个开关都关掉后清单为空（开关真的在筛，而不是只藏行）", emptyView.rows.length === 0, `${emptyView.rows.length} 行`);
-		check("清理弹窗能取消", await closeDialog(client));
 
 	} finally {
 		// 还原：先删造出来的文件（**按前缀兜底**：中途失败也留不下垃圾）

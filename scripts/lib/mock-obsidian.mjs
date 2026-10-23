@@ -980,6 +980,19 @@ export function createAppMock(rootDir, opts = {}) {
 		getActiveFile: () => null,
 		getActiveViewOfType: () => null,
 		/**
+		 * 视图相关（R24 的附件管理用）。
+		 *
+		 * ⚠️ 替身里**没有真实窗格**，所以三个都返回空：`getLeavesOfType` 空数组、
+		 * `getRightLeaf` / `getLeaf` 返回 `null`。这正是 `openGallery` 的**最后一级退路**
+		 * （“真打不开就明确说一句”）要覆盖的情形 —— 真机上的窗格由 `verify:flows` 验。
+		 * 少了它们，点那条命令会报 “getLeavesOfType is not a function”，
+		 * 错误信息指向替身、而不是被测代码。
+		 */
+		getLeavesOfType: () => [],
+		getRightLeaf: () => null,
+		getLeaf: () => null,
+		revealLeaf: async () => {},
+		/**
 		 * ⚠️ 这里必须**真的记录**处理器，不能返回一个空对象了事。
 		 *
 		 * 之前的实现是 `on() { return {}; }` —— 注册被静默吞掉。

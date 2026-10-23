@@ -704,37 +704,15 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 一条"确定要清理吗"等于让用户闭着眼睛按确认。
 	 */
 	private registerMaintenanceCommands(): void {
-		// ⭐⭐ **唯一**的清理入口（2026-10-16 合并了原来那条「清理云端未使用对象…」）。
+		// ⭐⭐ **命令面板只有这一条**（R24 / CR-02）：附件管理 —— 一个常驻视图，
+		// 列表 ＋ 筛选 ＋ 批量动作（上传 / 删除本地 / 改为本地引用 / 删除云端 / 改名）。
 		//
-		// ## 为什么只留这一条
-		//
-		// 原命令列的是**整个桶**（要 `ListBucket` 权限、慢、有页数上限），而它的独占能力是
-		// "处理**不属于本插件**的对象" —— 那与这条的纪律**直接冲突**：候选的筛除里明写着
-		// 「对不属于我们的对象，我们**没有任何处置权** —— 不问，也不删」（`selectOrphanAsks`
-		// 的 `not-ours`）。⚠️ 而需求文档里也**查不到**"要处理桶里别人的对象"这个诉求。
-		// ⇒ 候选改由**上传台账**产生（快、不需要列举权限、清单完整），并**继承了**那条命令
-		// 唯一的正面贡献：**站外缓存的对象一律排除**（它的引用可能写在别处 —— 链接改写失败时
-		// 笔记里留着的是**原来的站外地址**，而按 URL 回算 key 的判据根本认不出它）。
-		//
-		// ## 它同时是"那次询问被误关"的解药
-		//
-		// 三档询问**只自动出现一次**（冷却记住之后不再问），而弹窗可能被误关
-		//（用户 2026-10-14 在 Android 上："点一下边上就不见了"）⇒ 他需要一条能自己重来的路。
-		this.addCommand({
-			id: "check-orphans",
-			name: this.t("cmdCheckOrphans"),
-			callback: () => this.runCommand("check-orphans", () => this.orphanFlow?.checkNow()),
-		});
-
-		this.addCommand({
-			id: "upload-attachments",
-			name: this.t("cmdUploadAttachments"),
-			callback: () => this.runCommand("upload-attachments", () => this.runUploadAttachments()),
-		});
-
+		// ⚠️ 原来的「上传附件」「清理附件」两条命令**连同 id 一并取消**：
+		// 它们的能力分别成为视图的「待上传」「待清理」筛选与动作栏，判据一个字没变
+		//（候选仍由同一条函数算）。代价是**用户已绑的快捷键会失效**，发布说明必须写清。
+		// ⚠️ **设置页那颗「上传附件」按钮不算命令**，仍然走 `runUploadAttachments()` ——
+		// 与视图的「待上传」是同一份实现（D-68 的「同一实现只有一份」）。
 		// ⭐ 附件管理（R24 / F22）：一个常驻视图 —— 列表 ＋ 筛选 ＋ 批量动作。
-		// ⚠️ 它与上面两条命令**并存**是暂时的：R24 要求最终只留这一条（CR-02），
-		// 而那一步必须等视图在真机上验过（旧入口一删就没有回退路）。
 		this.registerView(GALLERY_VIEW_TYPE, (leaf) => new GalleryView(leaf, this.flowContext()));
 		this.addCommand({
 			id: "manage-attachments",

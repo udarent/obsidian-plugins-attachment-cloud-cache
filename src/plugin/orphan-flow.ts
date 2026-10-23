@@ -71,7 +71,7 @@ import type { PluginContext } from "./context";
  */
 const CLOUD_ID = "cloud:";
 const VAULT_ID = "vault:";
-import { cloudReferencedKeys, extractStoredKeys, writeDeleteLog } from "./shared-flows";
+import { extractStoredKeys, writeDeleteLog } from "./shared-flows";
 import { keyOfUrl, localReferencePass, UnreadableNoteError } from "./notes-query";
 
 /** 引用重算的防抖窗口。编辑途中宿主的自动保存会反复触发 `modify`。 */
@@ -134,13 +134,6 @@ export interface OrphanFlow {
 	 * 放在布局就绪之后、不阻塞启动。
 	 */
 	warmUp(): Promise<void>;
-	/**
-	 * **命令入口**：按本库此刻的引用立刻算一遍，把"我们传过、但没人引用"的对象摆出来问。
-	 *
-	 * ⚠️ 与自动那条路的差别只在两处：**不吃冷却**、**不吃 `never` 档** ——
-	 * 两者都是"别主动打扰"的措施，而这是用户自己按的（见 {@link createOrphanFlow} 里的实现）。
-	 */
-	checkNow(): Promise<void>;
 	/** 清掉两个防抖定时器、丢掉快照（卸载时）。 */
 	dispose(): void;
 }
@@ -440,7 +433,7 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 			new Notice(
 				ctx.t("orphanNotice", {
 					count: selection.asks.length,
-					command: ctx.t("cmdCheckOrphans"),
+					command: ctx.t("cmdManageAttachments"),
 				})
 			);
 			return;
@@ -685,7 +678,7 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 		// 用户 2026-10-14 在 Android 上报的正是这个 —— "点一下边上就不见了"，
 		// 而那个询问**只自动出现一次**（冷却记住之后不会再问）。
 		if (choice === "dismissed") {
-			new Notice(ctx.t("orphanDismissed", { command: ctx.t("cmdCheckOrphans") }));
+			new Notice(ctx.t("orphanDismissed", { command: ctx.t("cmdManageAttachments") }));
 			return;
 		}
 		if (choice === "keep") return;
@@ -736,43 +729,6 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 		await presentOrphans(batch, false);
 	}
 
-	/**
-	 * 命令入口：**立刻**按本库当前引用算一遍，把"我们传过、但本库已经看不见引用"的对象摆出来问。
-	 *
-	 * ## 为什么需要它（用户 2026-10-14 Android 报告）
-	 *
-	 * 那个三档弹窗**只自动出现一次**：冷却（`asked`）记住之后不会再问，而弹窗还可能被
-	 * **误关**（点背景 / ESC —— 用户的原话是"点一下边上就不见了"）⇒ 他从此失去那次决定，
-	 * 云端对象永远留着。这条命令就是"自己把那次决定拿回来"的路。
-	 *
-	 * ## 三条纪律
-	 *
-	 * - **不吃冷却**：冷却防的是"反复打扰"，而这是显式动作；
-	 * - **不吃 `never` 档**：那一档的语义是"别**主动**告诉我"，命令是用户主动要的
-	 *（与"开关/名单只管自动那一路"同一条纪律）；
-	 * - **判据与自动那条同源**：候选来自**上传台账**（`wasUploaded`，不是索引条目 —— N11），
-	 *   引用来自 `cloudReferencedKeys`（与「清理云端未使用对象…」同一处实现）。
-	 *   ⚠️ 与那条命令的区别在**候选来源**：这里只问"我们上传过的"（不列桶 ⇒ 不需要
-	 *   `ListBucket` 权限，也快得多）；那一条列全桶，管的是"桶里所有看不见引用的对象"。
-	 */
-	async function checkNow(): Promise<void> {
-		const index = ctx.currentIndex();
-		let referenced: Set<string>;
-		try {
-			referenced = await cloudReferencedKeys(ctx);
-		} catch (error) {
-			// ⚠️ 有笔记读不到 ⇒ **什么都不问**。这一侧是危险方向：漏掉的那篇可能正引用着
-			// 这些对象，把"读不到"当成"没人引用"会凭空多出一批候选（清理命令那条路同样兜）。
-			new Notice(describeError(error));
-			return;
-		}
-		const orphans = index.uploadedKeys().filter((key) => !referenced.has(key));
-		// ⚠️⚠️ 2026-10-22（D-74）：**不再在这里早退**。台账空 ≠ 没事可清 ——
-		// 本地孤立文件与台账毫无关系（从来没上传过的东西根本没有 key），
-		// 一早退它们就永远进不了清单。两类**都空**时由 `presentOrphans` 说"没有需要处理的"。
-		await presentOrphans(orphans, true);
-	}
-
 	return {
 		// ⚠️ 两个事件**共用同一个函数**（不是"互相调用"）：`create` 与 `modify` 对这条链
 		// 要做的事完全一样，写成两个实现迟早在某一次改动里分叉。
@@ -786,8 +742,6 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 		noteRenamed(oldPath, newPath) {
 			watcher.noteRenamed(oldPath, newPath);
 		},
-		// 命令入口（不是事件）：用户主动要一次"本库现在有哪些已上传但没人引用的附件"。
-		checkNow,
 		async warmUp() {
 			try {
 				await watcher.warmUp();

@@ -69,8 +69,11 @@ function hintFor(item: GalleryItem, t: PluginContext["t"]): { hint: string; hint
 				: item.evidence === "none"
 					? t("galleryStateUnverified")
 					: t("galleryStateNotUploaded");
-	if (!item.referenced) return { hint: `${stateLabel} · ${t("galleryStateUnreferenced")}`, hintIcon: "" };
-	return { hint: stateLabel, hintIcon: "" };
+	// ⭐ D-77：站外缓存下来的那份要**标出来** —— 删它只是清缓存（下次显示重新下载），
+	// 与“用户自己的附件”不是一回事。弹窗那条链用 `orphanRowCached` 标，视图这边同一口径。
+	const label = item.origin === "external" ? `${stateLabel} · ${t("galleryStateCached")}` : stateLabel;
+	if (!item.referenced) return { hint: `${label} · ${t("galleryStateUnreferenced")}`, hintIcon: "" };
+	return { hint: label, hintIcon: "" };
 }
 
 /**
