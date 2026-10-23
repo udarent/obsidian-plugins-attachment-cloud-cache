@@ -24,7 +24,7 @@ import { actionAvailability } from "../gallery/actions";
 import type { GalleryAction } from "../gallery/actions";
 import type { GalleryItem } from "../gallery/enumerate";
 import type { PluginContext } from "../plugin/context";
-import { deleteLocalSelected, loadGallery, renameItem, uploadSelected } from "../plugin/gallery-flow";
+import { deleteCloudSelected, deleteLocalSelected, loadGallery, renameItem, uploadSelected } from "../plugin/gallery-flow";
 import type { GalleryModel } from "../plugin/gallery-flow";
 import { mountTaskListShell } from "./task-list-shell";
 import type { TaskListAction, TaskListLabels } from "./task-list-shell";
@@ -34,6 +34,9 @@ export const GALLERY_VIEW_TYPE = "acc-gallery";
 
 const FILTERS = [
 	{ key: "all", labelKey: "galleryFilterAll" },
+	// ⚠️ 「待清理」不是「没人引用」的同义词：它多两类（没有任何引用的本地文件、站外缓存副本），
+	// 判据复用清理命令的 `selectLocalOrphans`（见 `gallery-flow` 的 `cleanupPaths`）。
+	{ key: "to-clean", labelKey: "galleryFilterToClean" },
 	{ key: "not-uploaded", labelKey: "galleryFilterNotUploaded" },
 	{ key: "uploaded", labelKey: "galleryFilterUploaded" },
 	{ key: "cloud-only", labelKey: "galleryFilterCloudOnly" },
@@ -119,6 +122,13 @@ export class GalleryView extends ItemView {
 	private visible(): GalleryItem[] {
 		const items = this.model?.items ?? [];
 		switch (this.filter) {
+			case "to-clean":
+				// 三类候选（R17）：云端没人引用的对象 ＋ 判据算出来的本地孤立/站外缓存副本
+				return items.filter(
+					(item) =>
+						(item.path !== null && (this.model?.cleanupPaths.has(item.path) ?? false)) ||
+						(item.state === "cloud-only" && !item.referenced)
+				);
 			case "not-uploaded":
 				return items.filter((item) => item.state === "not-uploaded");
 			case "uploaded":
@@ -180,6 +190,12 @@ export class GalleryView extends ItemView {
 				label: (count: number) => t("galleryActionDeleteLocal", { count }),
 				destructive: true,
 				countFor: (ids) => this.applicable(ids, "delete-local"),
+			},
+			{
+				key: "delete-cloud",
+				label: (count: number) => t("galleryActionDeleteCloud", { count }),
+				destructive: true,
+				countFor: (ids) => this.applicable(ids, "delete-cloud"),
 			},
 			{
 				key: "rename",
@@ -253,6 +269,46 @@ export class GalleryView extends ItemView {
 			});
 			// ⚠️ 没上报的（不在候选里 / 站外那类）如实说"跳过"，不能默认算成功
 			for (const id of selected) if (!reported.has(id)) report(id, "skipped");
+			return;
+		}
+
+		if (action === "delete-cloud") {
+			const model = this.model;
+			if (!model) return;
+			const chosen = selected
+				.map((id) => ({ id, item: model.byId.get(id) }))
+				.filter((entry): entry is { id: string; item: GalleryItem } => Boolean(entry.item));
+			// ⚠️ **再判一次可用性**（与按钮数字同一份判据）：勾选里可能混着“仍被引用”或“云端没有”的，
+			// 它们不进这次执行，但要如实说“跳过”，不能默认算成功。
+			const usable = chosen.filter(
+				(entry) => entry.item.key !== null && actionAvailability(entry.item, "delete-cloud", { isUploadCandidate: true }).available
+			);
+			const blocked = chosen.length - usable.length;
+			if (usable.length === 0) {
+				for (const entry of chosen) report(entry.id, "skipped");
+				return;
+			}
+			const t = this.ctx.t;
+			const ok = await this.ctx.confirmMaintenance({
+				title: t("galleryCloudConfirmTitle"),
+				lines: [
+					t("galleryCloudConfirmBody", { count: usable.length }),
+					...(blocked > 0 ? [t("galleryCloudConfirmBlocked", { count: blocked })] : []),
+					t("galleryCloudConfirmLocalStays"),
+				],
+				cta: t("galleryCloudConfirmCta", { count: usable.length }),
+				destructive: true,
+			});
+			if (!ok) {
+				for (const entry of chosen) report(entry.id, "skipped");
+				return;
+			}
+			const keyToId = new Map<string, string>();
+			for (const entry of usable) keyToId.set(entry.item.key as string, entry.id);
+			for (const entry of chosen) if (!keyToId.has(entry.item.key ?? "")) report(entry.id, "skipped");
+			await deleteCloudSelected(this.ctx, [...keyToId.keys()], (key, status) => {
+				report(keyToId.get(key) ?? key, status);
+			});
 			return;
 		}
 

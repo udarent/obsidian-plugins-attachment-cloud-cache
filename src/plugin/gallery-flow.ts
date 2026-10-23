@@ -22,13 +22,18 @@
  * - **取回本地**：R6 的回退下载已在渲染时自动发生；单独给一颗按钮会与它抢同一份动作，等真机确认必要性再补。
  */
 
-import { TFile as TFileClass } from "obsidian";
+import { Notice, TFile as TFileClass } from "obsidian";
 
 import { enumerateGallery } from "../gallery/enumerate";
 import type { GalleryItem, GallerySnapshot } from "../gallery/enumerate";
 import { keyOfUrl, referenceSnapshot } from "./notes-query";
 import { scanReferences, runBatchUpload } from "../maintenance/run";
 import type { BatchResult } from "../maintenance/run";
+import { selectLocalOrphans } from "../maintenance/local-orphans";
+import { runCloudCleanup } from "../maintenance/cloud-cleanup";
+import type { CloudCleanupResult } from "../maintenance/cloud-cleanup";
+import { writeDeleteLog } from "./shared-flows";
+import type { DeletedObjectRecord } from "../maintenance/delete-log";
 import type { PluginContext } from "./context";
 import type { FileCard } from "../ui/file-cards";
 
@@ -41,6 +46,15 @@ export interface GalleryModel {
 	counts: GallerySnapshot["counts"];
 	/** id → 行（视图按勾选回查状态，判可用性）。 */
 	byId: Map<string, GalleryItem>;
+	/**
+	 * 「待清理」那一组：**与清理命令同一套判据**（R17 的三类候选 —— 没人引用的云端对象、
+	 * 没有任何引用的本地文件、站外缓存下来的副本）。
+	 *
+	 * ⚠️ 它只回答“这条算不算待清理”，**不回答“该不该删”**：删不删由用户勾选 ＋ 动作判定。
+	 * ⚠️ 复用 `selectLocalOrphans`（不是照着重写一遍）：那一份带着「宿主自己的目录一个都不碰」
+	 * 与「站外缓存单独归类」两条判据，重写会在下一次收紧时分叉，而**分叉不报错**。
+	 */
+	cleanupPaths: ReadonlySet<string>;
 }
 
 /** 卡片的状态标签文案（由调用方给的 `t` 决定语种）。 */
@@ -100,11 +114,42 @@ export async function loadGallery(ctx: PluginContext): Promise<GalleryModel> {
 		CARD_LIMIT
 	);
 
+	// ── 「待清理」：复用清理命令的候选判据（R17），不另写一套 ──
+	// 台账里的 key ↔ 本地副本路径（同一个对象两处都要用到）
+	const pathOfKey = new Map<string, string>();
+	const externalPaths = new Set<string>();
+	for (const entry of index.toArray()) {
+		if (!entry.cachePath) continue;
+		pathOfKey.set(entry.key, entry.cachePath);
+		if (entry.origin === "external") externalPaths.add(entry.cachePath);
+	}
+	/** 还有人在用的本地路径 = 本地引用 ∪ 「被远端 URL 引用的对象」的本地副本。 */
+	const usedPaths = new Set<string>(snapshot.referenced);
+	for (const key of referencedKeys) {
+		const path = pathOfKey.get(key);
+		if (path) usedPaths.add(path);
+	}
+	/** 云端那一组清单已经覆盖的路径（同一个文件不列两遍）。 */
+	const coveredPaths = new Set<string>();
+	for (const key of index.uploadedKeys()) {
+		const path = pathOfKey.get(key);
+		if (path) coveredPaths.add(path);
+	}
+	const configDir = String(ctx.app.vault.configDir ?? "").replace(/\/+$/, "");
+	const orphans = selectLocalOrphans(files, {
+		usedPaths,
+		coveredPaths,
+		externalPaths,
+		excludedPrefixes: configDir ? [`${configDir}/`, ".trash/"] : [".trash/"],
+	});
+	const cleanupPaths = new Set<string>([...orphans.paths, ...orphans.cachedPaths]);
+
 	return {
 		items: result.items,
 		cards,
 		counts: result.counts,
 		byId: new Map(result.items.map((item) => [item.id, item])),
+		cleanupPaths,
 	};
 }
 
@@ -171,6 +216,49 @@ export async function deleteLocalSelected(
  * - 索引跟随由 `main.ts` 的 `vault.on("rename")` 负责，这里**不重复搬**；
  * - ⚠️ R25 的云端声明更新（`refs[hash].name`）属 CR-16，本函数暂不涉及。
  */
+/**
+ * 删云端对象（**不可恢复**）。
+ *
+ * ⚠️ 判据在 `gallery/actions.ts` 里（`delete-cloud` 只对“已在云端且没人引用”成立，
+ * CR-05 的默认档）—— 这一层**不再判一遍**，只负责执行。调用方必须先把不可用的筛掉，
+ * 否则就等于绕过了那条判据。
+ *
+ * ⚠️ 复用 `runCloudCleanup`：删一个摘一条索引、忘掉台账、404 记 `alreadyGone`（不是失败）、
+ * 其它错误如实报失败。**不在这里重写一遍删除语义**（那是全产品唯一不可恢复的动作）。
+ * ⚠️ 留痕用 `scope: "command"`：视图的这个动作就是原来那条清理命令的手动入口，
+ * 事后排查时与它同一档（不是自动询问那一档）。
+ */
+export async function deleteCloudSelected(
+	ctx: PluginContext,
+	keys: readonly string[],
+	onItem?: (key: string, status: "done" | "skipped" | "failed") => void
+): Promise<CloudCleanupResult> {
+	const client = ctx.buildClient();
+	if (!client) {
+		return {
+			deleted: 0,
+			alreadyGone: 0,
+			failed: keys.length,
+			unindexed: 0,
+		};
+	}
+	const records: DeletedObjectRecord[] = [];
+	const result = await runCloudCleanup(
+		{
+			client,
+			index: () => ctx.currentIndex(),
+			persistIndex: () => ctx.hostContext().persistIndex(),
+			notify: (message) => new Notice(message),
+			t: ctx.t,
+			onRemoved: (record) => records.push({ ...record, scope: "command" }),
+			onItem: (event) => onItem?.(event.key, event.status),
+		},
+		keys
+	);
+	await writeDeleteLog(ctx, records);
+	return result;
+}
+
 export async function renameItem(ctx: PluginContext, id: string, newPath: string): Promise<void> {
 	const file = ctx.app.vault.getAbstractFileByPath(id);
 	if (!(file instanceof TFileClass)) throw new Error("gallery rename: not a file");

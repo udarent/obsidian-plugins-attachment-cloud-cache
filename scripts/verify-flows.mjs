@@ -433,8 +433,8 @@ async function main() {
 		check("「附件管理」命令能打开视图", Boolean(gallery), gallery ? "已打开" : "没找到 acc-gallery 的 leaf");
 		check("视图标题＝附件管理", gallery?.title === "附件管理", `实际：${JSON.stringify(gallery?.title)}`);
 		check(
-			"筛选栏五个按钮，默认选中「全部」",
-			gallery?.filters.length === 5 && gallery.filters[0]?.text === "全部" && gallery.filters[0]?.active === true,
+			"筛选栏六个按钮，默认选中「全部」",
+			gallery?.filters.length === 6 && gallery.filters[0]?.text === "全部" && gallery.filters[0]?.active === true,
 			(gallery?.filters ?? []).map((f) => `${f.text}${f.active ? " *" : ""}`).join(" / ")
 		);
 		check(
@@ -500,6 +500,89 @@ async function main() {
 				return { all, notUploaded, uploaded, cloudOnly };
 			})()`
 		);
+		// 「待清理」＝ R17 的三类候选；它们的**共同点**就是“没人引用”（判据复用 `selectLocalOrphans`）
+		const toClean = await evaluate(
+			client,
+			`(() => {
+				const root = app.workspace.getLeavesOfType("acc-gallery")[0].view.contentEl;
+				const button = Array.from(root.querySelectorAll(".acc-gallery-filter")).find(
+					(el) => (el.textContent || "").trim() === "待清理"
+				);
+				if (!button) return null;
+				button.click();
+				const hints = Array.from(root.querySelectorAll(".acc-task-row .acc-task-hint")).map((el) => el.textContent || "");
+				const rows = root.querySelectorAll(".acc-task-row").length;
+				const all = Array.from(root.querySelectorAll(".acc-gallery-filter")).find(
+					(el) => (el.textContent || "").trim() === "全部"
+				);
+				all.click();
+				return { rows, hints };
+			})()`
+		);
+		check(
+			"「待清理」里每一行都带「没人引用」",
+			toClean !== null && toClean.rows > 0 && toClean.hints.every((hint) => hint.includes("没人引用")),
+			toClean === null ? "没有「待清理」按钮" : `${toClean.rows} 行：${JSON.stringify(toClean.hints.slice(0, 3))}`
+		);
+
+		// 「删除（云端）」的默认档（CR-05）：没人引用的可删，仍被引用的**灰掉**
+		const cloudAction = await evaluate(
+			client,
+			`(() => {
+				const root = app.workspace.getLeavesOfType("acc-gallery")[0].view.contentEl;
+				const rows = Array.from(root.querySelectorAll(".acc-task-row"));
+				const textOf = (row) => ({
+					name: row.querySelector(".acc-task-name")?.textContent || "",
+					hint: row.querySelector(".acc-task-hint")?.textContent || "",
+					box: row.querySelector(".acc-task-check"),
+				});
+				const readCloud = () => {
+					const button = Array.from(root.querySelectorAll(".acc-task-actions button")).find((b) =>
+						(b.textContent || "").trim().indexOf("删除云端") === 0
+					);
+					return button ? { text: (button.textContent || "").trim(), disabled: button.disabled === true } : null;
+				};
+				const toggle = (box, on) => {
+					if (!box) return;
+					box.checked = on;
+					box.dispatchEvent(new Event("change"));
+				};
+				const all = rows.map(textOf);
+				const free = all.find((row) => row.hint.includes("没人引用") && row.hint.includes("云端有本地无"));
+				// ⚠️ 不用精确等号：同一个状态后面可能还缀着「· 没人引用」。
+				// 要的是“已上传 **且仍被引用**”那一行（CR-05 只对它禁用删云端）。
+				const used = all.find((row) => row.hint.indexOf("已上传") === 0 && row.hint.indexOf("没人引用") < 0);
+				let freeState = null;
+				let usedState = null;
+				if (free && !free.box.disabled) {
+					toggle(free.box, true);
+					freeState = readCloud();
+					toggle(free.box, false);
+				}
+				if (used && !used.box.disabled) {
+					toggle(used.box, true);
+					usedState = readCloud();
+					toggle(used.box, false);
+				}
+				return { freeState, usedState, hasUsed: Boolean(used) };
+			})()`
+		);
+		check(
+			"勾「没人引用的云端对象」⇒ 删除云端可用且数字 ≥ 1",
+			Boolean(cloudAction?.freeState) && cloudAction.freeState.disabled === false && /\([1-9]/.test(cloudAction.freeState.text),
+			JSON.stringify(cloudAction?.freeState ?? null)
+		);
+		if (!cloudAction?.hasUsed) {
+			// 这个库里所有“已上传”的都恰好没人引用 ⇒ 这条判据在这里没有样本，按原因跳过。
+			skip("勾「仍被引用的已上传」⇒ 删除云端灰掉（CR-05 默认档）", "这个库里没有“已上传且仍被引用”的行");
+		} else {
+			check(
+				"勾「仍被引用的已上传」⇒ 删除云端灰掉（CR-05 默认档）",
+				Boolean(cloudAction?.usedState) && cloudAction.usedState.disabled === true,
+				JSON.stringify(cloudAction?.usedState ?? null)
+			);
+		}
+
 		check(
 			"三态行数之和＝「全部」（互斥且不遗漏）",
 			byState !== null && byState.notUploaded + byState.uploaded + byState.cloudOnly === byState.all,
