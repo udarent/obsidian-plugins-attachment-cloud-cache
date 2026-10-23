@@ -96,6 +96,7 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | --- | --- |
 | **Upload attachments** | One list for everything not in your storage yet: files your notes link to, files no note links to (backing them up only — unticked by default), and files your notes point at on other sites or on this computer. Tick what to upload; links get rewritten for the ones your notes refer to. Your files stay where they are — that copy *is* the local copy. Above the list you can tick **only the current note** to see just what that note uses. ⚠️ Local files that are **no longer on this computer** are listed too (their tick box is greyed out) with an **Open note** link, so you can go and fix that link. |
 | **Clean up attachments** | Three kinds: **cloud objects** this vault uploaded that nothing links to any more, **local files** nothing links to (including ones never uploaded), and **cached copies downloaded from other sites**. Then keep, delete the local file only, or delete both. Also how you re-run the automatic prompt if you dismissed it. |
+| **Attachment manager** | A persistent view: every attachment plus filters (not uploaded / uploaded / cloud-only / unreferenced), and batch actions on the selection (upload, delete local). Rename works on a single row. ⚠️ It coexists with the two commands above for now; they will be folded into it. |
 
 ## Good to know
 
@@ -287,6 +288,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | --- | --- |
 | **上传附件** | 一张清单装下所有还没进你存储的东西：笔记里引用着的文件、**没有任何笔记引用**的文件（只做备份，默认不勾）、以及笔记里指向站外或本机的文件。勾中的才上传；被引用的那些会顺手改写链接。文件**留在原地** —— 那份就是本地副本。清单上方可以勾上**只看当前笔记** —— 只列这一篇里的东西。⚠️ 指向的本机文件**已经不在**的那些也会列出来（勾选框是灰的），行尾给一个**「打开笔记」** —— 去那篇笔记里把那条链接修掉。 |
 | **清理附件** | 三类：本库上传过、已没人引用的**云端对象**；**没有任何引用的本地文件**（包括从来没上传过的）；**从别的网站下载下来的缓存副本**（删了不碰云端、不改笔记，下次显示重新下载）。勾中的按你选的处理：保留 / 只删本地 / 本地和云端都删。 |
+| **附件管理** | 一个常驻视图：全部附件 ＋ 筛选（未上传 / 已上传 / 云端有本地无 / 没人引用）＋ 勾选后批量上传或删除本地。重命名只对单条生效。⚠️ 与上面两条命令并存是暂时的，最终会合并成这一条。 |
 
 ## 需要注意的
 

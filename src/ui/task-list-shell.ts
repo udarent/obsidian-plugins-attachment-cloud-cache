@@ -41,6 +41,8 @@ import type { FileCard, FileCardOpenTarget } from "./file-cards";
 import { foldTaskProgress, selectionInOrder, setTaskStatus } from "./task-list";
 import type { TaskListLabels, TaskReporter, TaskStatus } from "./task-list";
 
+export type { TaskListLabels, TaskProgress, TaskReporter, TaskStatus } from "./task-list";
+
 /** 一次最多画多少行（见文件头的性能纪律）。 */
 const ROW_DRAW_CHUNK = 200;
 
@@ -99,6 +101,13 @@ export interface TaskListAction {
 	destructive?: boolean;
 	/** 这一档**什么都不做**（如"保留"）：直接带着勾选结果收口，不跑 `run`。 */
 	idle?: boolean;
+	/**
+	 * 按钮数字的来源（默认 = 勾选数）。
+	 *
+	 * ⭐ 附件管理用它实现「**数字 = 能作用的件数**」：勾 10 个里 3 个已在云端 ⇒ 上传显示 3。
+	 * 判定逻辑属于调用方（它才有行状态），壳只负责把它算出来的数字画上去。
+	 */
+	countFor?: (selected: readonly string[]) => number;
 }
 
 export interface TaskListOptions {
@@ -287,9 +296,11 @@ export function mountTaskListShell(
 			ctaButton?.setDisabled?.(phase === "run" || selected.size === 0);
 		}
 		cancelButton?.setDisabled?.(phase === "run");
+		const chosenKeys = selectionInOrder(cards, selected);
 		for (const item of actionButtons) {
-			item.button.setButtonText?.(item.action.label(selected.size));
-			item.button.setDisabled?.(phase === "run" || (selected.size === 0 && !item.action.idle));
+			const count = item.action.countFor ? item.action.countFor(chosenKeys) : selected.size;
+			item.button.setButtonText?.(item.action.label(count));
+			item.button.setDisabled?.(phase === "run" || (count === 0 && !item.action.idle));
 		}
 	};
 

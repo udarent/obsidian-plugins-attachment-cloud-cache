@@ -258,6 +258,59 @@ export class MarkdownRenderChild extends Component {
 	}
 }
 
+/** 一个"能接着建子元素"的最小 DOM 桩（只为让视图类能构造，不做任何渲染断言）。 */
+function makeEl() {
+	const el = {
+		children: [],
+		empty() {},
+		addClass() {},
+		setText() {},
+		createDiv() {
+			const child = makeEl();
+			el.children.push(child);
+			return child;
+		},
+		createSpan() {
+			const child = makeEl();
+			el.children.push(child);
+			return child;
+		},
+		createEl() {
+			const child = makeEl();
+			el.children.push(child);
+			return child;
+		},
+		addEventListener() {},
+	};
+	return el;
+}
+
+/**
+ * `ItemView` 替身（R24 的附件管理视图需要它）。
+ *
+ * ⚠️ 只保证"类能构造、视图能注册"，**不做任何渲染断言** —— 视图内容与交互靠真机脚本。
+ * 少了它，构建产物在 `class GalleryView extends ItemView` 那一行直接抛
+ * `Class extends value undefined`，而错误信息里会带整个 main.js（很难读）。
+ */
+export class ItemView extends Component {
+	constructor(leaf) {
+		super();
+		this.leaf = leaf;
+		this.app = leaf?.app ?? {};
+		this.contentEl = makeEl();
+		this.containerEl = this.contentEl;
+	}
+	getViewType() {
+		return "item-view";
+	}
+	getDisplayText() {
+		return "";
+	}
+	getIcon() {
+		return "";
+	}
+}
+
 // ─────────────────────────── 插件基类与设置页 ───────────────────────────
 //
 // ## 为什么这些也必须有替身
@@ -297,6 +350,8 @@ export class Plugin extends Component {
 		this.postProcessors = [];
 		/** 状态栏项（上传指示用）。测试可以读它断言"显示/收起"。 */
 		this.statusBarItems = [];
+		/** 注册的视图（`registerView`）。附件管理视图要能被验收看到。 */
+		this.views = [];
 		/** 内存里的 data.json 内容；测试可覆写成固定值。 */
 		this._data = {};
 	}
@@ -333,6 +388,18 @@ export class Plugin extends Component {
 		this.commands.push(command);
 		record(this, "command", command?.id ?? "(无 id)");
 		return command;
+	}
+
+	/**
+	 * 注册视图（R24 的附件管理视图）。
+	 *
+	 * ⚠️ 必须记账：只注册、不记账的话，"视图写了但没挂上"在验收里**没有任何痕迹**
+	 * （用户那边表现为"命令点了没反应"）。这里存下工厂，测试可以断言类型存在。
+	 */
+	registerView(type, factory) {
+		this.views.push({ type, factory });
+		record(this, "view", type);
+		return factory;
 	}
 
 	addRibbonIcon(icon, title) {

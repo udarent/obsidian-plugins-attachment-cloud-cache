@@ -848,8 +848,13 @@ export async function runLoadAcceptance(options = {}) {
 	const commandIds = plugin.commands.map((command) => command.id).sort();
 	assert.deepEqual(
 		commandIds,
+		// ⚠️ 按字典序：`commandIds` 是 `.sort()` 之后的，顺序不对会报"内容相同但顺序不同"。
 		[
 			"check-orphans",
+			// R24（2026-10-23）：附件管理视图的命令。⚠️ 三者并存是**过渡态**：
+			// CR-02 要求最终只留 `manage-attachments`，那一步会同时删掉另外两条，
+			// 并要改这条断言、`mutate-load-acceptance` 的 expect、README 两半命令表、烟雾期望表。
+			"manage-attachments",
 			"upload-attachments",
 		],
 		// ⚠️ 这条断言的沿革（每次增删命令都要改这里，历史写下来的目的是别让下一个人猜）：
@@ -872,7 +877,7 @@ export async function runLoadAcceptance(options = {}) {
 		//   `audit-cache`（「查看本地副本占用」）退役。它只报数字、不做任何事，而「哪些副本可以清」
 		//   现在由 `check-orphans` 的清单直接给出（D-74 之后那一屏连「没人引用的本地文件」都列了）
 		//   ⇒ 两处说同一件事，而数字那处还带「估算」的歧义。
-		"★ 两条维护命令都要注册（少一条就是「功能写了但用户找不到」）"
+		"★ 三条维护命令都要注册（少一条就是「功能写了但用户找不到」）"
 	);
 
 		const runCommand = (id) => {

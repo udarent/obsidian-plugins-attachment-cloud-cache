@@ -76,13 +76,16 @@ for (const file of CACHE_MAINTENANCE) {
 // 两处各自的理由：
 //   · `src/core/ingest.ts` —— `localCopy: "trash"`（上传后不留本地副本）删的是用户的原始附件；
 //   · `src/maintenance/orphan-removal.ts` —— 孤儿询问里"连本地一起清"，
-//     删的可能是 `localCopy: "keep"` 时附件目录里那份**用户自己的附件**。
+//     删的可能是 `localCopy: "keep"` 时附件目录里那份**用户自己的附件**；
+//   · `src/plugin/gallery-flow.ts` —— 附件管理里用户**逐个勾选**后点「删除本地」，
+//     删的是他点名的那份（可能是唯一一份）。⚠️ 这是 CR-04 的**默认档实现**：
+//     `gallery/actions.ts` 已按状态判定可用性，未上传的那些必须由界面明示"没有云端副本"。
 // ⚠️ 匹配**真的调用**（带括号），不匹配注释里的提及 —— 与下面 `adapter.remove(` 同一条理由：
 // 静态守卫最容易犯的错是"扫过头"，而"把守卫写得过宽"的代价是后来的人为了让它变绿去改注释。
 const trashSites = listSourceFiles().filter((file) => read(file).includes("trashFile("));
 assert.deepEqual(
 	trashSites,
-	["src/core/ingest.ts", "src/maintenance/orphan-removal.ts"],
+	["src/core/ingest.ts", "src/maintenance/orphan-removal.ts", "src/plugin/gallery-flow.ts"],
 	`★ \`trashFile\` 只允许出现在删**用户自己的文件**的地方（实际：${JSON.stringify(trashSites)}）。` +
 		`新出现的地点要先确认它删的不是"我们的可再生副本"—— 那些必须直接删（回收站不释放空间）`
 );

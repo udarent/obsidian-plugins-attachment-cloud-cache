@@ -102,6 +102,7 @@ import { createExternalLiveQueue } from "./render/external-live";
 import type { ExternalLiveQueue, OpenViewLike } from "./render/external-live";
 import { createExternalCacher } from "./core/external-cache";
 import { askTaskList } from "./ui/task-list-modal";
+import { GALLERY_VIEW_TYPE, GalleryView } from "./ui/gallery-view";
 import type { TaskListOptions, TaskListResult } from "./ui/task-list-modal";
 
 /**
@@ -731,6 +732,23 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			callback: () => this.runCommand("upload-attachments", () => this.runUploadAttachments()),
 		});
 
+		// ⭐ 附件管理（R24 / F22）：一个常驻视图 —— 列表 ＋ 筛选 ＋ 批量动作。
+		// ⚠️ 它与上面两条命令**并存**是暂时的：R24 要求最终只留这一条（CR-02），
+		// 而那一步必须等视图在真机上验过（旧入口一删就没有回退路）。
+		this.registerView(GALLERY_VIEW_TYPE, (leaf) => new GalleryView(leaf, this.flowContext()));
+		this.addCommand({
+			id: "manage-attachments",
+			name: this.t("cmdManageAttachments"),
+			callback: () => this.runCommand("manage-attachments", () => this.openGallery()),
+		});
+	}
+
+	/** 打开（或聚焦）附件管理视图。 */
+	private async openGallery(): Promise<void> {
+		const leaf = this.app.workspace.getRightLeaf(false);
+		if (!leaf) return;
+		await leaf.setViewState({ type: GALLERY_VIEW_TYPE, active: true });
+		await this.app.workspace.revealLeaf?.(leaf);
 	}
 
 	private maintenanceDeps(): MaintenanceDeps {

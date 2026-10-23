@@ -165,6 +165,9 @@ async function main() {
 		const EXPECTED_COMMANDS = [
 			`${PLUGIN_ID}:check-orphans`,
 			`${PLUGIN_ID}:upload-attachments`,
+			// R24：附件管理视图的命令。⚠️ 与上面两条并存只是过渡（CR-02 会注销旧两条，
+			// 那时这张表要同步减两行、加一行 —— 这张表是**精确集合**，漏改就假红）。
+			`${PLUGIN_ID}:manage-attachments`,
 		].sort();
 		const actualCommands = [...commands].sort();
 		const commandsOk =
