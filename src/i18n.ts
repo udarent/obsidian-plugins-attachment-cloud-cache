@@ -344,8 +344,6 @@ export const I18N: Record<string, Locale> = {
 		taskStatusSkipped: "skipped",
 		taskShowMore: "Show {count} more row(s) — the rest are still included",
 		fileCardOpen: "Open",
-		// ⭐ 失效附件那一行的链接去的是**引用它的笔记**（D-70），文案得说清是"笔记"
-		fileCardOpenNote: "Open note",
 		fileCardOpenMissing: "That file is no longer in the vault: {path}",
 		maintainPersistFailed: "Could not save the index after repairing it: {error}",
 		maintainSkipUnknownCopy: "The index no longer points at this file — skipped",
@@ -354,34 +352,18 @@ export const I18N: Record<string, Locale> = {
 		maintainSkipNotIndexed: "Obsidian cannot see this file yet — skipped instead of deleting it directly",
 		maintainNotConfigured: "The storage connection is not set up yet, so nothing was uploaded.",
 		maintainBatchNothing: "No attachments to upload (everything is already handled).",
-		// ⚠️ 2026-10-22（D-73）：标题**不再是"笔记引用的文件"** —— D-68 之后这条命令
-		// 涵盖四类（被引用 / 没有引用 / 站外 / 本机），旧标题只说了第一类。
-		// ⚠️ 与 `externalPickName`（设置页那一项）**恰好同字**，但两者用途不同
-		//（一个是弹窗标题、一个是设置项名）—— 改一个不必改另一个，所以各自留着键。
-		maintainBatchTitle: "Upload attachments",
 		// ⭐ 清单上方的范围勾选框（2026-10-22）：勾上 = 只列当前这篇笔记里的候选。
-		// ⚠️ 文案要说"只看"，而不是"上传当前笔记"—— 它**不改做什么**，只改看哪一份清单。
-		maintainBatchOnlyCurrentNote: "Only the current note",
 		// ⭐ 2026-10-22（D-71）：这一句现在**同时**承担"上传几个"与"文件不移动/不改名"那个承诺
 		// （原来那是第二段 `maintainBatchOriginalsStay`）—— 用户要求把列表上方的文案收掉，
 		// 而这两件事都是不能省的：前者是数量，后者是"跑完文件还在"的唯一交代。
 		// ⭐⭐ 2026-10-22（D-72）：**固定说明，不随内容变**（用户：「还是有顶部会根据内容调整的
 		// 文案,把文案简化成固定的说明文字」）。⚠️ 不许出现任何数字或主机名 —— 数量在**按钮**上
-		// （`maintainBatchCta(count)`），站点在**每一行的副标题**里（`externalRowMeta`）。
-		maintainBatchSummary:
-			"Ticked files are uploaded to your storage and the links in your notes are rewritten to point there. Files stay in your attachments folder - nothing is moved or renamed. Off-site addresses in the list will be visited; a warning icon marks a file that is already gone - open the note next to it to fix that link.",
-		maintainBatchUnreferencedHint: "no note links it",
-		// ⭐ 行内小标签（D-71）：早就在这里传过了，勾了也**不会重传字节**，只改链接
-		maintainBatchRepairHint: "link only",
 		maintainBatchDuplicatesRemoved:
 			"Deleted {count} duplicate copy(ies) the host had left behind on a name collision (same content as the copy that stays).",
 		maintainBatchCanvasSkipped:
 			"{count} reference(s) in canvases could not be rewritten (the file is not readable JSON), so they still point to their old location.",
 		// ⚠️ 2026-10-22（D-76）：**数量就在这里** —— D-72 把顶部改成固定说明时说过“数量搬到按钮上”，
 		// 但模板里没有 `{count}` ⇒ 那个数字一直被静默丢掉（套件的假 `t` 会把参数拼进去，
-		// 所以单元测试一直绿）。验收里现在有一条**真译器**的断言钉着它。
-		maintainBatchCta: "Upload and rewrite links ({count})",
-		maintainBatchMissingHint: "file is gone",
 		maintainBatchDone:
 			"Uploaded {uploaded}, already there {reused}, failed {failed}. Rewrote {links} link(s) across {notes} note(s).",
 
@@ -399,12 +381,19 @@ export const I18N: Record<string, Locale> = {
 		externalSiteListDesc:
 			"One domain per line. example.com also matches img.example.com; write example.com:8080 to match that host exactly. With “Only the ones listed”, an empty list means nothing is handled automatically.",
 		externalSiteListPlaceholder: "example.com\ncdn.example.com",
-		externalPickName: "Upload attachments",
-		// ⚠️ 2026-10-22（D-73）：① 说"搬到你的存储"是**错的** —— 1.2.0（D-17）起
-		// **文件不移动、不改名**，变的只有笔记里的链接；② 候选从 D-68 起含"没有任何笔记引用"的附件。
-		externalPickDesc:
-			"Upload the attachments in your vault that are not in your storage yet (including ones no note links to), plus the files your notes point at on other sites or on this computer. Tick each one in the list; the files themselves stay where they are.",
-		externalPickButton: "Upload attachments…",
+		// ⭐ 2026-10-23：这一项是「Revert links to local paths」的**反向**，交互也对称 ——
+		// 一次确认，不弹清单、不勾选（用户要求「取消弹窗选择的复杂交互」）。
+		uploadAllName: "Upload all attachments",
+		// ⚠️ 范围要写清：**只**库内被引用（或只差改链接）的附件 —— 站外图/本机文件不在这里；
+		// 没有任何笔记引用的也不传（传了没有笔记会指向它）。这两条是收窄，必须提前说。
+		uploadAllDesc:
+			"Send the attachments in your vault to your storage and rewrite the links in your notes to point at them. One confirmation, no list to tick: files that no note links to, and files outside your vault, are not part of this. Files stay where they are and are not renamed.",
+		uploadAllButton: "Upload all",
+		uploadAllTitle: "Upload to your storage",
+		uploadAllSummary: "Upload {count} attachment(s) and rewrite the links in your notes to the remote address.",
+		uploadAllRepairOnly: "{count} of them are already in your storage — only their links are rewritten, no bytes are uploaded again.",
+		uploadAllKeeps: "Your files stay where they are and keep their names. Nothing in your storage is deleted.",
+		uploadAllCta: "Upload {count}",
 		externalPickAll: "Select all",
 		externalPickNone: "Select none",
 		externalPickCancel: "Cancel",
@@ -737,8 +726,6 @@ export const I18N: Record<string, Locale> = {
 		taskStatusSkipped: "跳过",
 		taskShowMore: "再显示 {count} 行（其余的行照样会被处理）",
 		fileCardOpen: "打开",
-		// ⭐ 失效附件那一行的链接去的是**引用它的笔记**（D-70），文案得说清是"笔记"
-		fileCardOpenNote: "打开笔记",
 		fileCardOpenMissing: "文件已不在库里：{path}",
 		maintainPersistFailed: "修复后保存索引失败：{error}",
 		maintainSkipUnknownCopy: "索引里已经不再指向这个文件 —— 跳过",
@@ -747,34 +734,18 @@ export const I18N: Record<string, Locale> = {
 		maintainSkipNotIndexed: "Obsidian 还看不到这个文件 —— 已跳过，而不是直接删除",
 		maintainNotConfigured: "存储连接尚未配置，没有上传任何内容。",
 		maintainBatchNothing: "没有需要上传的附件（都已经处理过了）。",
-		// ⚠️ 2026-10-22（D-73）：标题**不再是"笔记引用的文件"** —— D-68 之后这条命令
-		// 涵盖四类（被引用 / 没有引用 / 站外 / 本机），旧标题只说了第一类。
-		// ⚠️ 与 `externalPickName`（设置页那一项）**恰好同字**，但两者用途不同
-		// （一个是弹窗标题、一个是设置项名）—— 改一个不必改另一个，所以各自留着键。
-		maintainBatchTitle: "上传附件",
 		// ⭐ 清单上方的范围勾选框（2026-10-22）：勾上 = 只列当前这篇笔记里的候选。
-		// ⚠️ 文案要说"只看"，而不是"上传当前笔记"—— 它**不改做什么**，只改看哪一份清单。
-		maintainBatchOnlyCurrentNote: "只看当前笔记",
 		// ⭐ 2026-10-22（D-71）：这一句现在**同时**承担"上传几个"与"文件不移动/不改名"那个承诺
 		// （原来那是第二段 `maintainBatchOriginalsStay`）—— 用户要求把列表上方的文案收掉，
 		// 而这两件事都是不能省的：前者是数量，后者是"跑完文件还在"的唯一交代。
 		// ⭐⭐ 2026-10-22（D-72）：**固定说明，不随内容变**（用户：「还是有顶部会根据内容调整的
 		// 文案,把文案简化成固定的说明文字」）。⚠️ 不许出现任何数字或主机名 —— 数量在**按钮**上
-		// （`maintainBatchCta(count)`），站点在**每一行的副标题**里（`externalRowMeta`）。
-		maintainBatchSummary:
-			"勾中的文件会传到你的存储，笔记里的链接会改成远端地址；文件留在附件目录，不移动也不改名。清单里的站外地址会被访问；标了警示图标的是已经不在了的文件，点行尾的「打开笔记」去修。",
-		maintainBatchUnreferencedHint: "没有笔记引用",
-		// ⭐ 行内小标签（D-71）：早就在这里传过了，勾了也**不会重传字节**，只改链接
-		maintainBatchRepairHint: "只改链接",
 		maintainBatchDuplicatesRemoved:
 			"已删掉 {count} 份宿主撞名留下的重复副本（内容与留下的那份完全相同）。",
 		maintainBatchCanvasSkipped:
 			"画布里有 {count} 处引用没能改写（画布文件不是可读的 JSON），它们仍指向旧位置。",
 		// ⚠️ 2026-10-22（D-76）：**数量就在这里** —— D-72 把顶部改成固定说明时说过“数量搬到按钮上”，
 		// 但模板里没有 `{count}` ⇒ 那个数字一直被静默丢掉（套件的假 `t` 会把参数拼进去，
-		// 所以单元测试一直绿）。验收里现在有一条**真译器**的断言钉着它。
-		maintainBatchCta: "上传并改写链接 ({count})",
-		maintainBatchMissingHint: "文件已不在",
 		maintainBatchDone:
 			"上传 {uploaded} 个、已存在 {reused} 个、失败 {failed} 个。在 {notes} 篇笔记里改写了 {links} 处链接。",
 
@@ -789,12 +760,19 @@ export const I18N: Record<string, Locale> = {
 		externalSiteList: "站点名单",
 		externalSiteListDesc: "一行一个域名。写 example.com 也会命中 img.example.com；写 example.com:8080 只匹配那个地址。选「仅名单内的站点」时，留空表示什么都不自动处理。",
 		externalSiteListPlaceholder: "example.com\ncdn.example.com",
-		externalPickName: "上传附件",
-		// ⚠️ 2026-10-22（D-73）：① 说"搬到你的存储"是**错的** —— 1.2.0（D-17）起
-		// **文件不移动、不改名**，变的只有笔记里的链接；② 候选从 D-68 起含"没有任何笔记引用"的附件。
-		externalPickDesc:
-			"把库里还没上传的附件（包括没有任何笔记引用的）以及笔记里指向站外或本机的文件传到你的存储。清单里可以逐项勾选，文件本身留在原处。",
-		externalPickButton: "上传附件…",
+		// ⭐ 2026-10-23：这一项是「把链接改回本地路径」的**反向**，交互也对称 ——
+		// 一次确认，不弹清单、不勾选（用户要求「取消弹窗选择的复杂交互」）。
+		uploadAllName: "上传全部附件",
+		// ⚠️ 范围要写清：**只**库内被引用（或只差改链接）的附件 —— 站外图/本机文件不在这里；
+		// 没有任何笔记引用的也不传（传了没有笔记会指向它）。两条收窄必须提前说。
+		uploadAllDesc:
+			"把库里的附件传到你的存储，并把笔记里指向它们的链接改成远端地址。只需确认一次，不用逐项勾选：没有任何笔记引用的附件、以及库外的文件不在范围内。文件留在原处，不改名。",
+		uploadAllButton: "上传全部",
+		uploadAllTitle: "上传到云端",
+		uploadAllSummary: "将上传 {count} 个附件，并把笔记里指向它们的链接改成远端地址。",
+		uploadAllRepairOnly: "其中 {count} 个已经在你的存储里，这次只改链接、不重传。",
+		uploadAllKeeps: "文件留在原处、名字不变；云端那份不会被删除。",
+		uploadAllCta: "上传 {count} 个",
 		externalPickAll: "全选",
 		externalPickNone: "全不选",
 		externalPickCancel: "取消",

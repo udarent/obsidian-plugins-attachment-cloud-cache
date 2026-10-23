@@ -634,15 +634,13 @@ export class SettingsTab extends PluginSettingTab {
 				render: (setting) => this.renderSiteList(setting),
 			},
 			{
-				name: this.t("externalPickName"),
-				desc: this.t("externalPickDesc"),
-				aliases: ["pick", "choose", "select", "选择", "挑选", "手动", "上传", "缓存"],
-				// ⚠️ **刻意不挂在开关上**：它是显式动作，判定层对它走 `purpose: "manual"` ——
-				// 开关与名单都**只管自动那一路**。关掉自动处理的人照样该能到这里手动挑。
-				// （从前挂过 `visible: externalImageCache`，那依据的是"功能关着时候选会被全部判掉"
-				// 这条**已废弃**的语义；R18 之后候选照旧列得出来。少了这一行，"合并成一个开关"
-				// 会把设置页这个入口一起关掉，而命令 `pick-external-images` 还开着 —— 两个入口
-				// 行为不一致，且文案承诺的"始终可用"就成了空话。）
+				name: this.t("uploadAllName"),
+				desc: this.t("uploadAllDesc"),
+				aliases: ["upload", "all", "cloud", "上传", "全部", "云端", "转存", "反向"],
+				// ⚠️ **刻意不挂在开关上**：它是一个**显式动作**（一键把库内附件传上去、
+				// 把本地链接改成远端地址），与「站外文件」那个自动开关管的是两回事。
+				// 用户 2026-10-23 要求它成为「把链接改回本地路径」的**反向**按钮 ——
+				// 交互形状也跟着对称：一次确认，不弹清单、不勾选。
 				render: (setting) => this.renderUploadAll(setting),
 			},
 		];
@@ -823,26 +821,31 @@ export class SettingsTab extends PluginSettingTab {
 	}
 
 	/**
-	 * 「手动选择要上传的文件」那颗按钮。
+	 * 「上传全部附件」那颗按钮 —— 「把链接改回本地路径」的**反向**（2026-10-23）。
 	 *
-	 * 用 `render` 而不是 `control`：这是一个**动作**，不是一个要存下来的值
-	 *（官方给 `render` 的场景之一就是这类"不是普通输入控件"的东西）。
+	 * 用 `render` 而不是 `control`：这是一个**动作**，不是一个要存下来的值。
 	 *
-	 * ⚠️ 它调的**就是命令那条链的实现**（`plugin.cachePickedExternalImages`）——
-	 * 设置页只是"另一个入口"，候选范围、勾选逻辑、汇总提示都不另写一份。
-	 * 两个入口行为不同是这类功能最典型的坏法：按钮能用、命令不能用（或反之），
-	 * 而且没人会发现。
+	 * ## ⭐ 它与 `renderRevertLinks` 是一对
 	 *
-	 * ⚠️ 1.2.0 起它**不要求**先打开上面那个开关（候选判定走 `purpose: "manual"`）——
-	 * 关掉自动处理的人，照样能到这里手动挑。
+	 * | | 这一个 | 那一个 |
+	 * |---|---|---|
+	 * | 做什么 | 笔记里的本地链接 → 远端地址（顺带把附件传上去） | 文档里的远端链接 → 库内路径 |
+	 * | 范围 | 库内、被引用（或只差改链接）的附件 | 索引里、本地副本还在的条目 |
+	 * | 交互 | **一次确认**，没有清单、没有勾选 | 一次确认 |
+	 *
+	 * ⚠️ 用户 2026-10-23 的原话：「设置界面的"上传附件"改成与"恢复本地链接"相反的对应
+	 * 功能，取消弹窗选择的复杂交互」。所以这里**不许**再弹清单 —— 判据全在
+	 * `plugin/upload-existing-flow.ts`，设置页只负责"点火"。
+	 *
+	 * ⚠️ 两颗按钮的**样式不同**：这一颗是 `setCta`（它是这个分组的主操作），
+	 * 那一颗是普通按钮；但**都不标破坏性** —— 它们谁都不删东西。
 	 */
 	private renderUploadAll(setting: Setting): void {
 		setting.addButton((button) =>
 			button
-				.setButtonText(this.t("externalPickButton"))
+				.setButtonText(this.t("uploadAllButton"))
 				.setCta()
 				.onClick(() => {
-					// ⭐ 与命令面板那条**同一个实现**（D-68）：清单、勾选、执行都只有一份。
 					void this.plugin.runUploadAttachments();
 				})
 		);

@@ -125,8 +125,9 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 
 ## Privacy & security
 
-- **It normally talks only to your storage** — no telemetry, no analytics. Two things can reach outside: a file you
-  tick yourself in the upload list (reading it is what you asked for), and the optional off-site feature below.
+- **It normally talks only to your storage** — no telemetry, no analytics. Only one thing can reach outside: the
+  optional off-site feature below (turning it on is the consent). “Upload all” only uploads files that are already in
+  your vault.
 - **One optional feature reaches other sites, and it never turns itself on** — off by default; enabling it is the
   consent, and the site list narrows it further. The request carries nothing beyond the file's address.
 - **A web page is never stored** — `text/html` and other `text/*` answers are refused rather than uploaded.
@@ -169,7 +170,8 @@ your storage, and can other people open my links?" without changing anything.
 - **1.2.0 moved where copies live**: the old cache folder is gone; a copy is simply the file in your attachments
   folder. Nothing to migrate — the first render registers it.
 - **Commands were merged**: `Upload files your notes link to…`, `Upload off-site or local files…` and
-  `Pick files to cache…` are now one command, **`Upload attachments`**. The cleanup command is now
+  `Pick files to cache…` are now one command, **`Upload attachments`** (a single confirmation — it no longer lists
+  each file, and it only covers attachments inside your vault). The cleanup command is now
   **`Clean up attachments`** (it also lists local files and off-site cache copies), and `Show local copy usage` was
   removed — the numbers are on the settings page, the per-file list is in the cleanup dialog.
 - **Hotkeys are bound to command ids**, not names — they keep working across these renames.
@@ -311,8 +313,8 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 
 ## 隐私与安全
 
-- **默认只连你自己的存储** —— 不含遥测、统计。只有两件事会伸到外面：**你自己在「上传附件」的清单里勾中**的
-  库外本机文件（读它是你要求的），以及下面那个可选的站外功能。
+- **默认只连你自己的存储** —— 不含遥测、统计。会伸到外面的只剩下面那个可选的站外功能（打开它就是同意）；
+  「上传全部附件」只传**库里已有的**文件，不读任何库外路径。
 - **有一个可选功能会访问其它站点，而且它不会自己启动** —— 默认关闭，打开它就是同意，站点名单再把范围收窄；
   请求里除文件地址本身不带任何其它内容。
 - **网页永远不会被存下来** —— `text/html` 与其它 `text/*` 一律拒收，而不是传上去。

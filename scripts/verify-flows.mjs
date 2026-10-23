@@ -43,7 +43,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { countObsidianProcesses, evaluate, launchAndAttach } from "./lib/obsidian-host.mjs";
 // ⚠️ 页面内的选择器与弹窗操作统一在 `lib/verify-dom.mjs`：两份探针共用，类名就不会分叉。
-import { DOM_HELPERS, closeDialog, dialogSnapshot, runCommand, waitForDialog } from "./lib/verify-dom.mjs";
+import { DOM_HELPERS, closeDialog, dialogSnapshot, runCommand, waitForConfirm, waitForDialog } from "./lib/verify-dom.mjs";
 
 const PORT = Number(
 	process.argv.includes("--port")
@@ -298,21 +298,42 @@ async function main() {
 			})()`
 		);
 
-		// ── 3) 上传附件：标题 / 顶部一段 / 行内标签 / 失效行图标 / 只看当前笔记 ──
-		// ⚠️ 命令取消之后，「上传」这条入口只剩**设置页那颗按钮**（与原来那条命令
-		// 是**同一个实现** `runUploadAttachments`）。所以这一段改成点那颗按钮 ——
-		// 下面那些断言（标题 / 顶部一段 / 失效行 / 只看当前笔记 / aria-label）测的是
-		// 同一个清单壳，判据一个字没变，换的只是“谁去按”。
-		// ⚠️ **为什么直接调 `runUploadAttachments()` 而不是点设置页那颗按钮**：
-		// 这个宿主（1.14.4）里 `app.setting.open()` 明明返回了、`app.setting` 也在，
-		// 但设置弹窗**没有生成**（三条路都试过：`setting.open` / `app:open-settings` 命令 /
-		// `openTabById`，`document` 里始终 0 个 modal）。与其把一条真机断言押在“设置页能不能开”
-		// 这种与我们无关的宿主行为上，不如直接调**那颗按钮绑定的同一个函数**：
-		// 按钮的 onClick 只有这一句（`void this.plugin.runUploadAttachments()`），
-		// 所以下面这些断言测的仍然是同一条流程、同一个清单壳。
-		// ⚠️ 代价要说清：这一节**不再证明“设置页那颗按钮还在”** —— 那一点由
-		// `settings-tab.ts` 的 `renderUploadAll` 与 mock 层（acceptance 也调这个函数）守着。
-		const uploadStarted = await evaluate(
+		// ── 3) 「上传全部附件」：**一次确认，没有清单**（2026-10-23）──
+		//
+		// 用户要求「设置界面的"上传附件"改成与"恢复本地链接"相反的对应功能，取消弹窗
+		// 选择的复杂交互」⇒ 这一节从"读清单"改成"读确认框"。判据只剩三条，但都是这次的要点：
+		// ① 弹的是确认框（`.acc-task-row` 一行都没有）；
+		// ② 说清**几件**与「文件留在原处」；
+		// ③ 取消之后有回话，而且**什么都不做**。
+		// ⚠️ **需要一个"待上传"的夹具**：这个演示库里的附件早就都传过了，而新流程
+		// 只收**库内被引用**的附件 —— 没有夹具时它一条候选都没有（直接一句"没有需要上传"）。
+		// 造一份"笔记引用着的、还没传过的"图，用完立刻删掉（不能留到第 4 节，那里数行数）。
+		const PENDING_NOTE = "acc-verify/pending-note.md";
+		const PENDING_FILE = "acc-verify/pending.png";
+		await evaluate(
+			client,
+			`(async () => {
+				// ⚠️ 必须先关掉「自动上传」：否则**造文件的瞬间**就被自动接管那条链抢走，
+				// 而它指向的是假端点 ⇒ 这里得到的是"刚加入库的附件上传失败"，而不是"待上传候选"。
+				const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+				plugin.__accAutoUpload = plugin.settings.autoUpload;
+				plugin.settings.autoUpload = false;
+				const folder = app.vault.getAbstractFileByPath("acc-verify");
+				if (!folder) await app.vault.createFolder("acc-verify").catch(() => {});
+				const bytes = new Uint8Array(${JSON.stringify(PNG)});
+				const existing = app.vault.getAbstractFileByPath(${JSON.stringify(PENDING_FILE)});
+				if (existing) await app.vault.modifyBinary(existing, bytes.buffer);
+				else await app.vault.createBinary(${JSON.stringify(PENDING_FILE)}, bytes.buffer);
+				const text = "![[pending.png]]\\n";
+				const note = app.vault.getAbstractFileByPath(${JSON.stringify(PENDING_NOTE)});
+				if (note) await app.vault.modify(note, text);
+				else await app.vault.create(${JSON.stringify(PENDING_NOTE)}, text);
+				return true;
+			})()`
+		);
+		await delay(800);
+
+		await evaluate(
 			client,
 			`(async () => {
 				const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
@@ -321,96 +342,49 @@ async function main() {
 				return true;
 			})()`
 		);
-		check("上传入口（设置页按钮绑定的同一个函数）能启动清单", uploadStarted === true);
-		const { appeared, notices: seen1 } = await waitForDialog(client);
-		check("「上传附件」弹出清单", appeared);
-		if (!appeared) {
-			const hint = await evaluate(
-				client,
-				`(async () => {
-					const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
-					return {
-						notices: Array.from(document.querySelectorAll(".notice")).map((el) => el.textContent),
-						modals: document.querySelectorAll(".modal-container .modal").length,
-						files: app.vault.getFiles().map((file) => file.path),
-						hasClient: Boolean(plugin?.buildClient?.()),
-						orphanAsk: plugin?.settings?.orphanAsk,
-						errors: window.__accErrors ?? [],
-					};
-				})()`
-			);
-			throw new Error(`上传清单没有出现（轮询期间的通知：${JSON.stringify(seen1)}）：${JSON.stringify(hint)}`);
-		}
-
-		const upload = await dialogSnapshot(client);
-		check(
-			"标题＝命令名",
-			upload.title.trim() === "上传附件",
-			`实际：${JSON.stringify(upload.title)}`
-		);
-		check(
-			"顶部只有一段，且不含数字",
-			upload.lines.length === 1 && !/\d/.test(upload.lines.join(" ")),
-			`${upload.lines.length} 段：${JSON.stringify(upload.lines).slice(0, 120)}`
-		);
-
-		const goneRow = upload.rows.find((row) => row.name.includes("x.png"));
-		check("失效的本机文件进了清单", Boolean(goneRow), `行：${upload.rows.map((r) => r.name).join(" | ")}`);
-		if (goneRow) {
-			check("失效行有警示图标（真的画出了 svg）", goneRow.hasIcon && goneRow.iconSvg, `hasIcon=${goneRow.hasIcon} svg=${goneRow.iconSvg}`);
-			check("失效行勾不了", goneRow.boxDisabled === true, `disabled=${goneRow.boxDisabled}`);
-			check("失效行的链接写的是「打开笔记」", goneRow.openText.trim() === "打开笔记", `实际：${goneRow.openText}`);
-			check("失效行副标题是完整本机路径", goneRow.meta.includes("acc-verify-does-not-exist"), goneRow.meta);
-		}
-		check(
-			"勾选框有 aria-label（读屏能读出这一行）",
-			upload.rows.every((row) => typeof row.aria === "string" && row.aria.length > 0),
-			upload.rows.map((row) => `${row.name}=${row.aria}`).join(" / ")
-		);
-		const strayRow = upload.rows.find((row) => row.name.includes("stray.png"));
-		check(
-			"没人引用的附件带「没有笔记引用」标签且默认不勾",
-			Boolean(strayRow) && strayRow.hint.length > 0 && strayRow.boxChecked === false,
-			strayRow ? `hint=${strayRow.hint} checked=${strayRow.boxChecked}` : "没找到那一行"
-		);
-
-		const onlyNote = upload.filters.find((item) => item.name.includes("当前笔记"));
-		check("有「只看当前笔记」开关", Boolean(onlyNote), upload.filters.map((f) => f.name).join(" / "));
-		if (onlyNote) {
-			const before = upload.rows.length;
-			await evaluate(
-				client,
-				`(() => {
-					${DOM_HELPERS}
-					toggleFor("当前笔记")?.click();
-					return true;
-				})()`
-			);
-			await delay(900);
-			const filtered = await dialogSnapshot(client);
+		// ⚠️ **不能用 `waitForDialog`**：它等的是"清单出现了"（`.acc-task-list`），
+		// 而这一趟弹的是**确认框**（`confirm-modal.ts`，正文是一串 `<div>`，没有清单）。
+		const confirmSeen = await waitForConfirm(client, 12_000);
+		check("「上传全部附件」弹出确认框", Boolean(confirmSeen), JSON.stringify(confirmSeen?.text ?? ""));
+		if (confirmSeen) {
 			check(
-				"勾上之后清单只剩这一篇里的东西",
-				filtered.rows.length < before && filtered.rows.some((row) => row.name.includes("x.png")),
-				`${before} 行 → ${filtered.rows.length} 行`
+				"确认框里**没有清单**（用户要求取消勾选）",
+				confirmSeen.rows === 0,
+				`${confirmSeen.rows} 行`
 			);
-			// 还原（否则下一条命令读到的还是过滤后的状态）
-			await evaluate(
-				client,
-				`(() => {
-					${DOM_HELPERS}
-					toggleFor("当前笔记")?.click();
-					return true;
-				})()`
+			check(
+				"确认框说清「几件」与「文件留在原处」",
+				// ⚠️ 两种语种都要认：真机的语种跟着宿主走（这台是中文），
+				// 只写英文那句会在中文环境里永远假红。
+				/\d/.test(confirmSeen.text) && /留在原处|stay where they are/i.test(confirmSeen.text),
+				JSON.stringify(confirmSeen.text)
 			);
-			await delay(700);
 		}
-		check("上传弹窗能取消（取消按钮存在且点了关窗）", await closeDialog(client));
+		// ⭐ 取消：必须**有回话**，且笔记与存储都不许动（取消是结构保证的：动手在确认之后）
+		const beforeCancel = await evaluate(client, `app.vault.getFiles().map((f) => f.path).length`);
+		await closeDialog(client);
+		await delay(600);
+		const afterCancel = await evaluate(client, `app.vault.getFiles().map((f) => f.path).length`);
+		const cancelSaid = await evaluate(
+			client,
+			`Array.from(document.querySelectorAll(".notice")).map((el) => el.textContent || "").join(" ｜ ")`
+		);
+		check("取消之后有回话（不是一片安静）", /取消|Cancel/i.test(String(cancelSaid)), JSON.stringify(cancelSaid));
+		check("取消之后什么都没动", afterCancel === beforeCancel, `${beforeCancel} → ${afterCancel}`);
 
-		// ⚠️ **顺序有讲究**：视图这一节放在清理之前。清理那一节在这个库里会被 `skip`，
-		// 而它的跳过分支是 `return finishRun()` —— 放在它后面的断言**一条都不会跑**
-		// （实测踩过：视图断言加在末尾 ⇒ 全被吞掉、汇总里看不出来）。
-		// ⚠️ 设置页还在清单弹窗下面开着：先关掉，否则后面的视图断言会撞上两层 modal。
-		await evaluate(client, `(() => { app.setting.close(); return true; })()`);
+		// 夹具用完就删（第 4 节要数库里的附件行数）
+		await evaluate(
+			client,
+			`(async () => {
+				for (const path of [${JSON.stringify(PENDING_NOTE)}, ${JSON.stringify(PENDING_FILE)}]) {
+					const file = app.vault.getAbstractFileByPath(path);
+					if (file) await app.vault.delete(file, true).catch(() => {});
+				}
+				const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+				if (typeof plugin.__accAutoUpload === "boolean") plugin.settings.autoUpload = plugin.__accAutoUpload;
+				return true;
+			})()`
+		);
 		await delay(400);
 
 		// ── 4) 附件管理**弹窗**（R24 / F22）：能开、标题、筛选、动作数字 ──

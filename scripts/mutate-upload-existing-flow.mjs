@@ -2,22 +2,17 @@ import { runMutations } from "./lib/mutate.mjs";
 import { runLoadAcceptance } from "./lib/load-acceptance-suite.mjs";
 
 /**
- * 变异验证：**「上传附件」那条命令的编排**（`src/plugin/upload-existing-flow.ts`）。
+ * 变异验证：**「上传全部附件」那条链的编排**（`src/plugin/upload-existing-flow.ts`）。
  *
- * ## ⚠️ 判据仍然是**端到端**那套（`load-acceptance`），只是锚点换了落脚点
+ * ## ⚠️ 2026-10-23 整份重写：原来的 13 条锚点全绑在**清单**上
  *
- * 这四条锚点原来在 `mutate-load-acceptance.mjs` 里、`source` 写的是 `src/main.ts` ——
- * 2026-10-13（A1 第六批）这条命令的编排搬进 `plugin/` 之后，它们"找不到目标"了。
- * ⚠️ **锚点找不到目标 = 那四条验证从没在跑**（假绿），比"跑失败"更糟。
+ * 用户要求「设置界面的"上传附件"改成与"恢复本地链接"相反的对应功能，取消弹窗选择的
+ * 复杂交互」⇒ 清单没了，那 13 条锚点（`summaryLines` / `buildRows` / `scope.missingLocal` /
+ * `externalRowMeta` / `title: maintainBatchTitle` …）**全部找不到目标**。
+ * 而"锚点找不到目标"在本项目是最贵的一种假绿（那条变异从没在跑，`check-mutation-preflight`
+ * 就是为此加的）⇒ 不是删掉，而是**跟着实现走**：改打在"一键流程"那几行上。
  *
- * ⇒ 修法是**让锚点跟着实现走**（不是搬回去、更不是删掉）：
- * `source` 改成新文件，`entries` 仍然从 `src/main` 打包（它 import 了这条流程，
- * 于是**被变异的代码照样会进 bundle**），`reexportDefault` 仍然显式再导一次
- * `src/main` 的 default（`export *` 按 ESM 规范不含 default —— 不写这行拿到的是
- * 模块命名空间对象，报一句看不出原因的 `not a constructor`）。
- *
- * ⭐ 于是**同一个端到端验收套件**继续当判据：变的只是"打坏哪一行"，
- * "打坏之后由谁发现"没变。这也是本项目"守卫/锚点绑通路、不绑文件"的又一次落地。
+ * ⚠️ 判据仍然是**端到端**那套（`load-acceptance`）：变的只是"打坏哪一行"。
  */
 await runMutations({
 	source: "src/plugin/upload-existing-flow.ts",
@@ -25,118 +20,58 @@ await runMutations({
 	reexportDefault: ["src/main"],
 	suite: (mod) => runLoadAcceptance({ loadPluginClass: () => mod }),
 	mutations: [
+		// ⚠️ 没有为"未引用的附件不许被传"设锚点：它在**两层**都拦着（选候选那一处 ＋
+		// 执行层的默认 `includeUnreferenced: false`），改任意一层都不改变行为 ⇒
+		// 这种锚点永远"漏过"（实测两次）。行为本身仍由验收的 8b2' 正向钉着
+		//（那一趟前后 PUT 计数必须一样），只是没有变异覆盖 —— 如实记在这里。
+
 		{
-			// 后果：取消之后**装作什么都没发生**（连一句话都没有）⇒ 用户会以为命令坏了。
-			// ⚠️ 2026-10-15：判据移进「清单式弹窗」之后，"取消 ⇒ 不改笔记 / 不下载"是**结构保证**的
-			//（动手只发生在弹窗的 `run` 回调里，取消根本不会调到它）⇒ 这条锚点改守另一半：
-			// 取消必须**如实说一句**（为此在验收里补了一条断言）。
-			name: "★ 取消之后装作什么都没发生（用户以为命令坏了）",
-			from: '\tif (!result) {\n',
-			to: '\tif (false) {\n',
+			// 后果：**算出了候选却一件都没交给执行层** —— 用户按了确认、界面说"完成"，
+			// 笔记一条都没变（而且不报错）。
+			name: "★★ 候选算出来了却没交给执行层（确认之后什么都没做）",
+			from: "\t\t\tonlyPaths: new Set(selection.paths),",
+			to: "\t\t\tonlyPaths: new Set(),",
+			expect: "笔记里的链接被改写成远端地址",
+		},
+		{
+			// 后果：**"只差改链接"的那些不再进候选** ⇒ 用户重跑修不好"已经传过、正文还是
+			// 本地路径"那种半成品记录（2026-10-21 实报的场景）。
+			name: "★★ 只差改链接的附件没进候选（重跑修不好半成品记录）",
+			from: "\t\trepairablePaths: snapshot.rewritable,\n\t\t// ⚠️ **不**收未引用的文件",
+			to: "\t\trepairablePaths: new Set(),\n\t\t// ⚠️ **不**收未引用的文件",
+			expect: "重修之后链接指向存储",
+		},
+		{
+			// 后果：确认框**不再说这是"只改链接"** ⇒ 用户看到"要上传 N 个"会以为又要传一遍
+			// 几百兆（而实际一个字节都不发）。
+			name: "★★ 确认框不说清「只改链接」（用户以为在重传一遍）",
+			from: "\tif (selection.repairPaths.length > 0) {",
+			to: "\tif (false) {",
+			expect: "确认框要说明其中几件只改链接",
+		},
+		{
+			// 后果：确认框**不再说"文件留在原处、云端不删"** —— 用户跑完发现文件还在，
+			// 会以为没生效（或反过来以为文件被搬走了）。
+			name: "★★ 确认框不再说清文件留在原地（用户以为没生效或以为文件被搬走）",
+			from: '\tlines.push(ctx.t("uploadAllKeeps"));',
+			to: '\tlines.push(ctx.t("uploadAllSummary", { count: 1 }));',
+			expect: "确认框要写清「文件留在原处、云端不删」",
+		},
+		{
+			// 后果：确认框的**标题**与这一项的名字对不上（用户点了「上传全部附件」，
+			// 弹出来的是别的一句话）。
+			name: "★ 确认框标题与这一项的名字对不上",
+			from: '\t\ttitle: ctx.t("uploadAllTitle"),',
+			to: '\t\ttitle: ctx.t("uploadAllButton"),',
+			expect: "确认框标题必须与这一项的名字对得上",
+		},
+		{
+			// 后果：**取消之后装作什么都没发生**（连一句话都没有）⇒ 用户会以为按钮坏了，
+			// 而这一次他其实什么也没做（该如实说一句）。
+			name: "★ 取消之后装作什么都没发生（用户以为按钮坏了）",
+			from: '\t\tnew Notice(ctx.t("maintainCancelled"));\n\t\treturn;\n\t}\n\n\tconst state: { summary: BatchResult | null }',
+			to: '\t\treturn;\n\t}\n\n\tconst state: { summary: BatchResult | null }',
 			expect: "取消之后要如实反馈",
-		},
-		{
-			// ⚠️ 从 mutate-load-acceptance 搬来。后果：确认框不再说清"文件留在原地、
-			// 只有链接会变"。用户的预期是从前那句"会被搬进缓存目录"来的 ——
-			// 少了这句，他跑完发现文件还在会以为没生效（反过来也可能以为文件被搬走了）。
-			// ⚠️ 2026-10-22（D-71）：那句话并进了**摘要**（原来它是单独一段，用户要求把
-			// 列表上方的文案收掉）⇒ 锚点改打在摘要上，判据仍是"这句话得在"。
-			name: "★ 确认框不再说清文件留在原地（用户以为没生效或以为文件被搬走）",
-			from: '\tconst summaryLines = (): string[] => [ctx.t("maintainBatchSummary")];',
-			to: '\tconst summaryLines = (): string[] => [ctx.t("maintainBatchTitle")];',
-			expect: "留在附件目录",
-		},
-		{
-			// 后果：算出了外链候选却不交给执行层 ⇒ 清单里承诺了「另有 N 个站外文件」，
-			// 实际一个都不处理（而且不报错）。⚠️ 2026-10-15 起**勾选**成了过滤条件，
-			// 打坏它（`to` 给空数组）就等于「用户勾了却没处理」—— 判据仍是那条端到端等待。
-			name: "★ 勾中的外链候选没交给执行层（清单承诺了却没做）",
-			from: "candidates: scope.externals.filter((candidate) => chosen.has(pickKey(candidate))),",
-			to: "candidates: [],",
-			expect: "外链图被下载、上传",
-		},
-		{
-			// 后果：**已经不在了的本机文件又进了清单**（`file:///…` 指着的那个东西被删了）——
-			// 用户看到一行连缩略图都没有、点了一定失败的条目。2026-10-16 用户实测报的正是这个
-			//（WPS 的 `Temp/ksohtml/wpsDD.tmp.jpg`）。
-			name: "★★ 不摘掉已经不在了的本机文件（它变成可勾候选，勾上必然失败）",
-			from: "\t\tdeps.localFileExists ?? localFileExists",
-			to: "\t\tasync () => true",
-			expect: "但它**勾不了**",
-		},
-		{
-			// ⚠️ 从 mutate-load-acceptance 搬来。后果：**站外那一行不写主机** ⇒ 用户是在
-			// **盲签**一份下载许可（这条命令会真的去访问那些站点）。
-			// ⚠️ 2026-10-22（D-72）：站点**不再聚合进顶部文案**（顶部是固定说明）——
-			// 判据落在**那一行的副标题**上（`externalRowMeta`），所以锚点跟着挪。
-			name: "★ 站外那一行不写主机（用户盲签下载许可）",
-			from: "\t\t\t\t\tmeta: externalRowMeta(candidate),\n\t\t\t\t\t// ⭐ 站外地址给「打开」（D-66，浏览器打开它）；**本机文件不给** ——",
-			to: '\t\t\t\t\tmeta: "",',
-			expect: "站外那一行的副标题要写明主机",
-		},
-		{
-			// 后果：**摘要里把下面那张清单又贴了一遍**（前十条路径 + 「……还有 N 个」）——
-			// 这正是用户 2026-10-16 实测提的那件事：「在上部有文件列表的摘要，但其实已经做了
-			// 下面的列表了，可以精简内容」。清单越长这条越像噪音，而下面那张清单本来就
-			// 带缩略图、能勾选、还自带滚动条。
-			name: "★★ 摘要里重复贴出文件名（与下面那张清单重复）",
-			from: '\tconst summaryLines = (): string[] => [ctx.t("maintainBatchSummary")];',
-			to: '\tconst summaryLines = (): string[] => [ctx.t("maintainBatchSummary") + " attachments/pic.png"];',
-			expect: "摘要里不该重复列出文件名",
-		},
-		{
-			// 后果：顶部**又变成随内容调整的文案** —— 用户 2026-10-22 的第二次要求是
-			// 「还是有顶部会根据内容调整的文案,把文案简化成固定的说明文字」。
-			// 判据：那段文字里**不许出现数字**（数量在按钮上）／不许出现主机名（在行里）。
-			name: "★★ 顶部文案又带上数量（用户要求固定说明）",
-			from: '\tconst summaryLines = (): string[] => [ctx.t("maintainBatchSummary")];',
-			to: '\tconst summaryLines = (): string[] => [ctx.t("maintainBatchSummary") + " (1)"];',
-			expect: "顶部是**固定说明**，不许有数字",
-		},
-		{
-			// 后果：**失效的那些又被降级成一句话**（只在文案里提个数字）⇒ 用户被指回笔记里
-			// 逐条找那条坏链 —— 2026-10-22 他报的正是这个：「只弹了一个通知」，
-			// 然后「改成列出文件列表，附件名称后面增加一个跳转链接打开所在笔记」。
-			name: "★★ 失效的本机文件不进清单（只剩一句通知，用户没法跳去修）",
-			from: "\t\t\t\t...scope.missingLocal.map((candidate) => ({",
-			to: "\t\t\t\t...scope.missingLocal.slice(0, 0).map((candidate) => ({",
-			expect: "也要**列出来**",
-		},
-		{
-			// 后果：失效行的链接指向**附件自己** —— 它已经不存在了，点了打不开；
-			// 而用户要的是"跳去那篇笔记把坏链修掉"。
-			name: "★★ 失效行的链接不指向那篇笔记（点了打不开，用户无处可修）",
-			from: '\t\t\t\t\topen: { kind: "vault" as const, value: candidate.notePath },',
-			to: "\t\t\t\t\topen: null,",
-			expect: "打开的是**引用它的那篇笔记**",
-		},
-		{
-			// 后果：失效行**变成可勾** ⇒ 用户勾上、确认，那一行永远停在等待
-			//（文件都不在了，执行层不会处理它 —— 既不是失败也不是跳过，一个字都不报）。
-			name: "★★ 失效行变成可勾（勾上必然停在等待，一个字都不报）",
-			from: "\t\t\t\t\tselectable: false,",
-			to: "\t\t\t\t\tselectable: true,",
-			expect: "但它**勾不了**",
-		},
-		{
-			// 后果：**列表上方又堆回说明段落** —— 用户 2026-10-22 明确要求
-			// 「上部的文案取消掉,信息改到列表上面去」。这些信息已经下沉到行
-			//（`没有笔记引用` / `只改链接` / 副标题里的路径 / 失效行的图标），
-			// 在摘要里再说一遍就是噪音（而用户核对时看的是行）。
-			name: "★★ 列表上方又堆回说明段落（用户要求收掉的文案）",
-			from: '\tconst summaryLines = (): string[] => [ctx.t("maintainBatchSummary")];',
-			to: '\tconst summaryLines = (): string[] => [ctx.t("maintainBatchSummary"), ctx.t("maintainBatchNothing")];',
-			expect: "列表上方只该有**一段**说明",
-		},
-		{
-			// 后果：**弹窗标题只说了一类候选**（"笔记引用的文件"）而清单里有四类 ——
-			// 2026-10-22 用户就是这么报的：「上传功能已经改成涵盖所有附件,但打开界面发现
-			// 标题是"上传笔记引用的文件",这不准确」。
-			// ⚠️ 判据是"标题 == 命令名"，所以这里换成一个明显不符的标题即可。
-			name: "★★ 弹窗标题与命令名不符（标题只说了一类候选）",
-			from: '\t\ttitle: ctx.t("maintainBatchTitle"),',
-			to: '\t\ttitle: ctx.t("maintainBatchUnreferencedHint"),',
-			expect: "弹窗标题必须与命令名一致",
 		},
 	],
 });

@@ -1,5 +1,5 @@
 /**
- * 真机探针的**页面内选择器与弹窗操作**（被 `verify-flows` / `verify-confirm` 共用）。
+ * 真机探针的**页面内选择器与弹窗操作**（被 verify-flows / verify-confirm 共用）。
  *
  * ## 为什么要有这一层
  *
@@ -9,7 +9,7 @@
  *
  * ## 一条纪律：这里只**读**界面，不替用户做决定
  *
- * `clickCta()` 会点主按钮（那是调用方明确要求的动作，`verify-confirm` 需要它）。
+ * clickCta() 会点主按钮（那是调用方明确要求的动作，verify-confirm 需要它）。
  * 除此之外这里没有任何"顺手点一下"的东西 —— 谁来点、点完断言什么，都由调用方说清。
  */
 
@@ -18,10 +18,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { evaluate } from "./obsidian-host.mjs";
 
 /**
- * 页面里的公共小工具（拼进每次 `evaluate` 的前面）。
+ * 页面里的公共小工具（拼进每次 evaluate 的前面）。
  *
- * ⚠️ 它是一串 `const …` 声明，只能待在**块**里（`(() => { … })()` 或 `(async () => { … })()`）。
- * 塞进 `Boolean(${DOM_HELPERS})` 这种表达式位置会直接语法错。
+ * ⚠️ 它是一串 const … 声明，只能待在**块**里（(() => { … })() 或 (async () => { … })()）。
+ * 塞进 Boolean(${DOM_HELPERS}) 这种表达式位置会直接语法错。
  */
 export const DOM_HELPERS = `
 	const modal = () => document.querySelector(".modal-container .modal");
@@ -87,6 +87,25 @@ export const DOM_HELPERS = `
 	 * ⚠️ **完成态那颗「关闭」也是 mod-cta 样式**（showSettledFooter 里同样 setCta），
 	 * 所以必须把"关闭 / Close"排掉 —— 否则在完成态再调一次就成了关窗。
 	 */
+	/**
+	 * 点**确认框**的主按钮（confirm-modal.ts 那一种）。
+	 * ⚠️ 与 clickCta 分开：那个只在清单壳的动作区里找（.acc-task-actions button），
+	 * 而确认框的按钮在一个普通 Setting 行里 —— 用错会一直返回 false，
+	 * 报出来的却是"主按钮点不动"。
+	 */
+	const clickAnyCta = () => {
+		const buttons = Array.from(modal()?.querySelectorAll("button") ?? []).filter(
+			(item) => (item.textContent ?? "").trim() !== ""
+		);
+		// 确认框那颗主按钮**不一定**带 mod-cta：confirm-modal.ts 只对 destructive
+		// 调 setDestructive，普通的确认按钮就是一颗素按钮（实测：按 mod-cta 找会一直是 false）。
+		const button =
+			buttons.find((item) => item.classList.contains("mod-cta")) ??
+			buttons.find((item) => !/^(Cancel|取消|关闭|Close|关闭窗口)$/.test((item.textContent ?? "").trim()));
+		if (!button) return false;
+		button.click();
+		return true;
+	};
 	const clickCta = () => {
 		const button = Array.from(modal()?.querySelectorAll(".acc-task-actions button") ?? []).find((item) => {
 			const text = (item.textContent ?? "").trim();
@@ -121,6 +140,35 @@ export async function waitForDialog(client, ms = 9000) {
 		await delay(150);
 	}
 	return { appeared: false, notices: [...notices] };
+}
+
+/**
+ * 等**确认框**（不是清单）出现，并把标题 / 正文 / 行数读出来。
+ *
+ * ⚠️ 与 waitForDialog 分开：那个等的是 .acc-task-list（清单壳），
+ * 而「上传全部附件」在 2026-10-23 之后弹的是 confirm-modal.ts 那种
+ * **一屏说明 ＋ 两颗按钮**的框 —— 用错等待器会一直等到超时，报出来的却是"弹窗没出现"。
+ */
+export async function waitForConfirm(client, ms = 9000) {
+	const deadline = Date.now() + ms;
+	while (Date.now() < deadline) {
+		const state = await evaluate(
+			client,
+			`(() => {
+				const modal = document.querySelector(".modal-container .modal");
+				if (!modal) return null;
+				const content = modal.querySelector(".modal-content");
+				return {
+					title: (modal.querySelector(".modal-title")?.textContent || "").trim(),
+					text: Array.from(content?.children ?? []).map((el) => el.textContent || "").join(" ｜ "),
+					rows: modal.querySelectorAll(".acc-task-row").length,
+				};
+			})()`
+		).catch(() => null);
+		if (state) return state;
+		await delay(200);
+	}
+	return null;
 }
 
 /** 读一眼弹窗的当前样子（含进度行与按钮区）。 */
@@ -189,13 +237,18 @@ export async function clickCta(client) {
 	return evaluate(client, `(() => { ${DOM_HELPERS} return clickCta(); })()`);
 }
 
+/** 点**确认框**的主按钮（见 `DOM_HELPERS.clickAnyCta` 的说明）。 */
+export async function clickModalCta(client) {
+	return evaluate(client, `(() => { ${DOM_HELPERS} return clickAnyCta(); })()`);
+}
+
 /**
  * 等到**完成态**（D-80）：进度行变成"已结束：…"且按钮区只剩一颗。
  *
  * ⚠️ 两个条件都要：只看进度会早一截（逐项跑完后改写/收尾还在继续，
- * `task-list-modal.ts` 的文件头专门写了这一条），只看按钮数又分不清"还没画完"。
+ * task-list-modal.ts 的文件头专门写了这一条），只看按钮数又分不清"还没画完"。
  *
- * 超时返回最后一次快照（`settled: false`），交给调用方断言 —— 这里不抛错，
+ * 超时返回最后一次快照（settled: false），交给调用方断言 —— 这里不抛错，
  * 因为"没等到完成态"本身就是一条要打印出来的失败原因。
  */
 export async function waitSettled(client, ms = 120_000) {

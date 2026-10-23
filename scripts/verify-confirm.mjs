@@ -44,7 +44,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { countObsidianProcesses, evaluate, launchAndAttach } from "./lib/obsidian-host.mjs";
 import { createMockS3 } from "./lib/mock-s3.mjs";
-import { clickCta, closeDialog, dialogSnapshot, setToggle, waitForDialog, waitSettled } from "./lib/verify-dom.mjs";
+import { clickModalCta, closeDialog, waitForConfirm } from "./lib/verify-dom.mjs";
 
 const PORT = Number(
 	process.argv.includes("--port")
@@ -100,12 +100,13 @@ async function waitForPlugin(client, ms) {
 	return false;
 }
 
+
 /**
- * 启动「上传附件」清单。
+ * 启动「上传全部附件」。
  *
  * ⚠️ CR-02（2026-10-23）取消了两条命令 ⇒ 这条入口只剩设置页那颗按钮，
  * 而它绑定的就是 `plugin.runUploadAttachments()`（onClick 只有这一句）。
- * 这里直接调同一个函数：测的仍是同一条流程与同一套清单壳。
+ * ⚠️ 2026-10-23 起它**不再弹清单**：弹出的是**一次确认**（`confirm-modal.ts`）。
  * （宿主 1.14.4 里 `app.setting.open()` 不生成设置弹窗，所以走 DOM 点按钮不可行。）
  */
 async function startUpload(client) {
@@ -116,20 +117,6 @@ async function startUpload(client) {
 			if (!plugin || typeof plugin.runUploadAttachments !== "function") return false;
 			void plugin.runUploadAttachments();
 			return true;
-		})()`
-	);
-}
-
-async function checkAllRows(client) {
-	// ⚠️ 返回**最终勾上的行数**，不是"点了几下"：上传链路的默认是**全选**，
-	// 所以"点 0 个"完全可能是对的（实测就把它当成失败了一次）。
-	return evaluate(
-		client,
-		`(() => {
-			const modal = document.querySelector(".modal-container .modal");
-			const boxes = Array.from(modal?.querySelectorAll(".acc-task-row input.acc-task-check") ?? []);
-			for (const box of boxes) if (!box.disabled && !box.checked) box.click();
-			return boxes.filter((box) => box.checked && !box.disabled).length;
 		})()`
 	);
 }
@@ -305,9 +292,15 @@ async function main() {
 		if (opened !== NOTE) throw new Error(`打开笔记失败（活动文件是 ${JSON.stringify(opened)}）`);
 
 		// ── 1) 第一次上传：括号文件名 ＋ 三种 Content-Type（§5.4 第 1 / 8 条）──
+		//
+		// ⚠️ 2026-10-23：这条入口**没有清单**了（用户要求「取消弹窗选择的复杂交互」）——
+		// 现在弹出的是**一次确认**。所以这里换三件事：
+		// ① 断言"弹的是确认框、不是清单"（`acc-task-row` 一行都没有）；
+		// ② 断言确认框说清了**几件**与**文件留在原处**；
+		// ③ 点确认之后**没有窗口可等** ⇒ 改成轮询"笔记真的被改写"。
 		await startUpload(client);
-		const { appeared, notices } = await waitForDialog(client);
-		if (!appeared) {
+		const asked = await waitForConfirm(client, 20_000);
+		if (!asked) {
 			const hint = await evaluate(
 				client,
 				`(async () => {
@@ -320,54 +313,46 @@ async function main() {
 					};
 				})()`
 			);
-			throw new Error(`上传清单没有出现（轮询期间的通知：${JSON.stringify(notices)}）：${JSON.stringify(hint)}`);
+			throw new Error(`上传确认框没有出现：${JSON.stringify(hint)}`);
 		}
-		// 缩到这一篇（否则清单里是整库的东西，勾"全选"会连用户自己的附件一起传）
-		await setToggle(client, "当前笔记", true);
-		await delay(900);
-
-		const listed = await dialogSnapshot(client);
-		const names = listed.rows.map((row) => row.name);
 		check(
-			"括号文件名的附件进了清单（D-56）",
-			names.some((name) => name.includes("报告")),
-			names.join(" | ")
+			"上传入口弹的是**一次确认**，没有清单（`acc-task-row` 一行都没有）",
+			asked.rows === 0,
+			`${asked.rows} 行`
 		);
 		check(
-			"只看当前笔记之后，清单只有这一篇的 4 个文件",
-			listed.rows.length === 4,
-			`${listed.rows.length} 行：${names.join(" | ")}`
+			"确认框说清了「几件」与「文件留在原处」",
+			// ⚠️ `waitForConfirm` 交的是**一段合并文本**（`text`），不是 `lines` 数组；
+			// 语种跟着宿主走 ⇒ 两种语言都要认。
+			/\d/.test(asked.text) && /留在原处|stay where they are/i.test(asked.text),
+			JSON.stringify(asked.text)
 		);
 
-		const clickedRows = await checkAllRows(client);
-		check("清单里 4 行都是勾上的（默认全选）", clickedRows === 4, `勾上 ${clickedRows} 行`);
-		await delay(300);
-		const ctaClicked = await clickCta(client);
-		check("主按钮可点（勾选后不再是灰的）", ctaClicked);
+		const ctaClicked = await clickModalCta(client);
+		check("确认按钮可点", ctaClicked);
 
-		const first = await waitSettled(client, 120_000);
-		check("跑完停在完成态（没自动关窗）", first.settled, first.settled ? "" : `进度行：${first.snapshot?.progress ?? "(没读到)"}`);
-		if (first.settled) {
-			const actions = first.snapshot.actions;
-			check(
-				"完成态按钮区只剩一颗「关闭」（D-80）",
-				actions.length === 1 && /^(关闭|Close)$/.test(actions[0].text),
-				JSON.stringify(actions)
-			);
-			check(
-				"完成态清单还留着（4 行都在）",
-				first.snapshot.rows.length === 4,
-				`${first.snapshot.rows.length} 行`
-			);
-			check(
-				"进度行是「已结束：完成 4 个」",
-				/已结束：完成 4 个/.test(first.snapshot.progress) || /Finished: 4 done/.test(first.snapshot.progress),
-				first.snapshot.progress
-			);
+		// 点完窗口就没了（这条链不留窗）⇒ 只能轮询"笔记真的被改写"
+		let rewritten = "";
+		const rewriteDeadline = Date.now() + 120_000;
+		while (Date.now() < rewriteDeadline) {
+			const text = await readNote(client, NOTE);
+			if (typeof text === "string" && text.includes(endpoint)) {
+				rewritten = text;
+				break;
+			}
+			await delay(300);
 		}
+		check(
+			"确认之后链接真的变成了远端地址（D-56）",
+			rewritten.includes(endpoint),
+			rewritten.split("\n").filter((line) => line.includes("](")).join(" | ") || "(还没改写)"
+		);
+		check("跑完不留窗（这条链自己收起）", await evaluate(client, `!document.querySelector(".modal-container .modal")`));
 
 		const puts = mock.requests.filter((request) => request.method === "PUT");
-		check("mock 收到 4 个 PUT（真上传了）", puts.length === 4, `${puts.length} 个：${puts.map((p) => p.key).join(" | ")}`);
+		// ⚠️ 不再断言"恰好 4 个"：没有「只看当前笔记」之后，这一趟处理的是**全库**候选
+		// （演示库里还有别的附件）。判据改成"**这四个夹具**都传上去了" —— 那才是这一节要的。
+		check("真上传了（PUT 至少 4 个）", puts.length >= 4, `${puts.length} 个：${puts.map((p) => p.key).join(" | ")}`);
 		check(
 			"每次 PUT 的签名都被服务端独立验过",
 			puts.every((request) => request.signatureOk),
@@ -407,31 +392,31 @@ async function main() {
 
 		const putsBefore = mock.countByMethod("PUT");
 		await startUpload(client);
-		const second = await waitForDialog(client);
-		if (!second.appeared) {
-			throw new Error(`第二次上传没弹清单（通知：${JSON.stringify(second.notices)}）`);
+		const second = await waitForConfirm(client, 20_000);
+		if (!second) {
+			throw new Error("第二次上传没弹确认框");
 		}
-		await setToggle(client, "当前笔记", true);
-		await delay(900);
-		const reuseList = await dialogSnapshot(client);
-		check(
-			"改回本地之后，清单里只有它（1 行）",
-			reuseList.rows.length === 1 && reuseList.rows[0].name.includes("报告"),
-			reuseList.rows.map((row) => row.name).join(" | ")
-		);
-		// 那一行的 hint 就是"它早就传过"的证据（D-57：不当成新文件重传一遍）
-		log(`  · 这一行的提示：${JSON.stringify(reuseList.rows[0]?.hint ?? "")}`);
-
-		await checkAllRows(client);
-		await delay(300);
-		await clickCta(client);
-		const settled = await waitSettled(client, 120_000);
-		check("第二次也停在完成态", settled.settled, settled.snapshot?.progress ?? "");
+		// ⚠️ 这里**不再看清单**（没有清单）：判据是"这一趟到底传没传"——
+		// 那一份早在存储里、而正文刚被改回本地 ⇒ 它属于"只差改链接"，
+		// 于是应当 **零 PUT**、链接照样被改回远端（D-57）。
+		await clickModalCta(client);
+		let secondOk = false;
+		const secondDeadline = Date.now() + 120_000;
+		while (Date.now() < secondDeadline) {
+			const text = await readNote(client, NOTE);
+			if (typeof text === "string" && text.includes(endpoint)) {
+				secondOk = true;
+				break;
+			}
+			await delay(300);
+		}
+		check("第二次也把链接改回了远端地址", secondOk);
 		check(
 			"零上传（PUT 次数没变）",
 			mock.countByMethod("PUT") === putsBefore,
 			`跑前 ${putsBefore} 次 → 跑后 ${mock.countByMethod("PUT")} 次`
 		);
+
 		const afterSecond = await readNote(client, NOTE);
 		check(
 			"链接被改回远端地址",
