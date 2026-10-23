@@ -569,3 +569,63 @@
 .acc-gallery-list {
 	min-width: 0;
 }
+
+/* ─────────────────────────────────────────────
+   附件管理弹窗的尺寸
+
+   ⭐ 它装着五列（勾选框 / 缩略图 / 路径 / 标签 / 状态）＋ 六个带件数的胶囊 ＋ 五个动作，
+   宿主的默认弹窗宽度（~600px）放不下。`min(880px, 92vw)` 是"够宽但不顶到屏幕边"。
+
+   ⚠️ 只在**桌面端**放宽：手机上没有"宽窗口"这回事，宿主会把弹窗铺满屏幕；
+   这一条若不加平台前缀，`92vw` 在手机上不会出错（算下来就是 92%），但看起来会左右留缝。
+   ───────────────────────────────────────────── */
+body:not(.is-mobile) .acc-gallery-modal {
+	width: min(880px, 92vw);
+}
+
+/* 弹窗内容区：给清单一个"能长高"的容器（桌面端也跟着受用：几百行时不会把窗口顶穿） */
+.acc-gallery-modal .modal-content {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+
+/*
+ * ⚠️ 手机端：宿主的弹窗是铺满屏幕的，清单要有机会用满剩下的高度。
+ * 弹窗里 `.modal-content` 的高度由宿主给，这里只是把"清单自己滚"改成"清单吃掉剩余空间"。
+ */
+body.is-mobile .acc-gallery-modal .acc-task-list {
+	max-height: none;
+	flex: 1 1 auto;
+	min-height: 0;
+}
+
+/* ─────────────────────────────────────────────
+   手机端的触控尺寸
+
+   ⚠️ 桌面上的 26px 胶囊、默认尺寸的勾选框，在手指下都偏小（推荐 ≥ 32–44px）。
+   `body.is-mobile` 是宿主自己挂的类，**这个插件之前一处都没用过** ——
+   也就是说移动端样式从来没专门调过。
+   ───────────────────────────────────────────── */
+body.is-mobile .acc-gallery-filter {
+	height: 34px;
+	padding: 0 12px;
+	gap: 8px;
+}
+
+body.is-mobile .acc-task-headrow,
+body.is-mobile .acc-task-row {
+	padding: 0.5em 0.6em;
+}
+
+body.is-mobile .acc-task-check,
+body.is-mobile .acc-task-check-all {
+	/* 放大的是**命中区域**，勾选框本身的比例交给宿主（`accent-color` 与主题一致） */
+	width: 20px;
+	height: 20px;
+}
+
+body.is-mobile .acc-file-thumb {
+	width: 3em;
+	height: 3em;
+}

@@ -1592,12 +1592,15 @@ export async function runLoadAcceptance(options = {}) {
 		// 所以覆写实例字段就生效），不必真去弄坏环境。
 		// ============================================================
 		{
-			// ⚠️ CR-02 之后**唯一**的命令是「附件管理」⇒ 这条兜底改在它身上验：
-			// 让"取窗格"这一步抛错（真机上这一步确实可能失败），看界面有没有说话。
+			// ⚠️ CR-02 之后**唯一**的命令是「附件管理」⇒ 这条兜底改在它身上验。
+			// ⚠️ 2026-10-23 起了**弹窗**：第一步不再是"取窗格"，而是"读全库"
+			//（`vault.getFiles()` ＋ 引用扫描）。这一步同样会抛（库读不了），而且**必须**
+			// 被命令的兜底接住 —— 不接住就是"空弹窗 + 控制台一行错"，用户看不到任何原因。
 			const manage = plugin.commands.find((command) => command.id === "manage-attachments");
 			assert.ok(manage, "★ 命令表里得找得到 manage-attachments（找不到就说明这条断言自己失效了）");
-			const originalGetLeaf = plugin.app.workspace.getLeaf;
-			plugin.app.workspace.getLeaf = () => {
+			const vault = plugin.app.vault;
+			const originalGetFiles = vault.getFiles;
+			vault.getFiles = () => {
 				throw new Error("探针：命令第一步就失败");
 			};
 			mockObsidian.Notice.instances.length = 0;
@@ -1616,7 +1619,7 @@ export async function runLoadAcceptance(options = {}) {
 					`★★ 命令失败必须把原因说出来（用户看到的不能是「没有反应」）：${said}`
 				);
 			} finally {
-				plugin.app.workspace.getLeaf = originalGetLeaf;
+				vault.getFiles = originalGetFiles;
 			}
 		}
 

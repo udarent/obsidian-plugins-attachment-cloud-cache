@@ -53,6 +53,14 @@ const PORT = Number(
 const OBSIDIAN = process.env.OBSIDIAN_EXE ?? "C:/Program Files/Obsidian/Obsidian.exe";
 /** 插件 id（与 manifest 一致）。 */
 const PLUGIN_ID = "attachment-cloud-cache";
+/**
+ * 附件管理**弹窗**根节点（页面内 JS 表达式）。
+ *
+ * ⚠️ 2026-10-23：它从侧边栏视图改成了弹窗（手机端判据），所以定位方式从
+ * `getLeavesOfType(...).view.contentEl` 换成"按弹窗类名找内容区"。
+ * 类名与 `ui/gallery-modal.ts` 的 `GALLERY_MODAL_CLASS` 是同一件事 —— 改一个要改两个。
+ */
+const GALLERY_ROOT = 'document.querySelector(".acc-gallery-modal .modal-content")';
 /** 仓库根（构建产物在它里）。 */
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 /**
@@ -405,26 +413,21 @@ async function main() {
 		await evaluate(client, `(() => { app.setting.close(); return true; })()`);
 		await delay(400);
 
-		// ── 4) 附件管理视图（R24 / F22）：能开、标题、筛选、动作数字 ──
+		// ── 4) 附件管理**弹窗**（R24 / F22）：能开、标题、筛选、动作数字 ──
 		// ⚠️ 这一节**只读**：只点筛选与勾选框，**不点上传 / 删除**（那个库没配存储也会真去连远端）。
-		// 视图层没有可编程 DOM 单测（替身里 `createEl` 全是桩）⇒ 这里是它唯一的证据。
-		await evaluate(
-			client,
-			`(async () => {
-				await app.commands.executeCommandById(${JSON.stringify(`${PLUGIN_ID}:manage-attachments`)});
-				return true;
-			})()`
-		);
-		await delay(1600);
-		// ⚠️ **必须先点一次刷新**：视图在 `onOpen` 里取一次 `vault.getFiles()`，之后不会自动追新文件。
-		// 而这一轮脚本造的两个夹具（`acc-verify/*`）是刚写进去的 ⇒ 不刷新时“视图的行数”与
+		// 弹窗层没有可编程 DOM 单测（替身里 `createEl` 全是桩）⇒ 这里是它唯一的证据。
+		await runCommand(client, PLUGIN_ID, "manage-attachments");
+		const opened = await waitForDialog(client, 12_000);
+		check("「附件管理」命令能打开弹窗", opened.appeared, JSON.stringify(opened.notices));
+		// ⚠️ **必须先点一次刷新**：弹窗在 `onOpen` 里取一次 `vault.getFiles()`，之后不会自动追新文件。
+		// 而这一轮脚本造的两个夹具（`acc-verify/*`）是刚写进去的 ⇒ 不刷新时“清单的行数”与
 		// “我这一刻数到的库内附件数”来自两个时刻，会间歇性地差两行（实测 16 与 18 交替）。
 		// 点刷新既让两边同一时刻，也顺带验了那个按钮有用。
 		await evaluate(
 			client,
 			`(() => {
-				const root = app.workspace.getLeavesOfType("acc-gallery")[0].view.contentEl;
-				const button = root.querySelector(".acc-gallery-refresh");
+				const root = ${GALLERY_ROOT};
+				const button = root && root.querySelector(".acc-gallery-refresh");
 				if (button) button.click();
 				return Boolean(button);
 			})()`
@@ -434,10 +437,9 @@ async function main() {
 		const gallery = await evaluate(
 			client,
 			`(() => {
-				const leaf = app.workspace.getLeavesOfType("acc-gallery")[0];
-				const view = leaf && leaf.view;
-				const root = view && view.contentEl;
+				const root = ${GALLERY_ROOT};
 				if (!root) return null;
+				const title = root.closest(".modal")?.querySelector(".modal-title")?.textContent || "";
 				const attachments = app.vault
 					.getFiles()
 					.filter((f) => !["md", "canvas", "base"].includes(String(f.extension || "").toLowerCase()));
@@ -446,7 +448,7 @@ async function main() {
 				// ⚠️ 按**结构化**字段读，不按中文文案读：文案改一次，断言就假红一次。
 				const label = (el) => ((el && el.textContent) || "").trim();
 				return {
-					title: view.getDisplayText ? view.getDisplayText() : "",
+					title: title.trim(),
 					filters: Array.from(root.querySelectorAll(".acc-gallery-filter")).map((el) => ({
 						key: el.getAttribute("data-filter") || "",
 						label: label(el.querySelector(".acc-gallery-filter-label")),
@@ -480,8 +482,8 @@ async function main() {
 			})()`
 		);
 
-		check("「附件管理」命令能打开视图", Boolean(gallery), gallery ? "已打开" : "没找到 acc-gallery 的 leaf");
-		check("视图标题＝附件管理", gallery?.title === "附件管理", `实际：${JSON.stringify(gallery?.title)}`);
+		check("（弹窗内容读得到）", Boolean(gallery), gallery ? "已读到" : "没找到 .acc-gallery-modal 的内容区");
+		check("弹窗标题＝附件管理", gallery?.title === "附件管理", `实际：${JSON.stringify(gallery?.title)}`);
 		check(
 			"筛选栏六个胶囊，默认「全部」**按下**（视觉类名与 aria 同一件事）",
 			gallery?.filters.length === 6 &&
@@ -498,7 +500,7 @@ async function main() {
 		);
 		check(
 			"标题栏里放的是**全选复选框**（不是文字按钮），初始未勾、读屏名是「全选」",
-			gallery?.headCheck !== null &&
+			Boolean(gallery?.headCheck) &&
 				gallery.headCheck.checked === false &&
 				gallery.headCheck.indeterminate === false &&
 				gallery.headCheck.ariaLabel === "全选" &&
@@ -522,7 +524,7 @@ async function main() {
 		const localize = await evaluate(
 			client,
 			`(() => {
-				const root = app.workspace.getLeavesOfType("acc-gallery")[0].view.contentEl;
+				const root = ${GALLERY_ROOT};
 				const rows = Array.from(root.querySelectorAll(".acc-task-row"));
 				const target = rows.find((row) => {
 					const hint = row.querySelector(".acc-task-hint")?.textContent || "";
@@ -561,7 +563,7 @@ async function main() {
 		const perAction = await evaluate(
 			client,
 			`(() => {
-				const root = app.workspace.getLeavesOfType("acc-gallery")[0].view.contentEl;
+				const root = ${GALLERY_ROOT};
 				const boxes = Array.from(root.querySelectorAll(".acc-task-check"));
 				const read = () =>
 					Array.from(root.querySelectorAll(".acc-task-actions button")).map((b) => ({
@@ -597,7 +599,7 @@ async function main() {
 		const byFilter = await evaluate(
 			client,
 			`(() => {
-				const root = app.workspace.getLeavesOfType("acc-gallery")[0].view.contentEl;
+				const root = ${GALLERY_ROOT};
 				const pick = (key) =>
 					Array.from(root.querySelectorAll(".acc-gallery-filter")).find(
 						(el) => el.getAttribute("data-filter") === key
@@ -663,7 +665,7 @@ async function main() {
 		const selectionTools = await evaluate(
 			client,
 			`(() => {
-				const root = app.workspace.getLeavesOfType("acc-gallery")[0].view.contentEl;
+				const root = ${GALLERY_ROOT};
 				const box = root.querySelector(".acc-task-check-all");
 				if (!box) return { error: "标题栏里没有全选复选框" };
 				const rowBoxes = () => Array.from(root.querySelectorAll(".acc-task-row .acc-task-check"));
@@ -734,7 +736,7 @@ async function main() {
 		const sticky = await evaluate(
 			client,
 			`(() => {
-				const root = app.workspace.getLeavesOfType("acc-gallery")[0].view.contentEl;
+				const root = ${GALLERY_ROOT};
 				const list = root.querySelector(".acc-task-list");
 				const head = root.querySelector(".acc-task-headrow");
 				if (!list || !head) return { error: "没有清单 / 标题栏" };
@@ -766,7 +768,7 @@ async function main() {
 		const cloudAction = await evaluate(
 			client,
 			`(() => {
-				const root = app.workspace.getLeavesOfType("acc-gallery")[0].view.contentEl;
+				const root = ${GALLERY_ROOT};
 				const rows = Array.from(root.querySelectorAll(".acc-task-row"));
 				const textOf = (row) => ({
 					name: row.querySelector(".acc-task-name")?.textContent || "",
@@ -840,7 +842,72 @@ async function main() {
 			`${byState?.all} 行 = 本地 ${gallery?.expected} ＋ 仅云端 ${byState?.cloudOnly}`
 		);
 
-		// ── 5) 清理：**手动入口已并入视图**（CR-02）──
+		// ⭐⭐ 跑完**收起窗口** ＋ 通知报结果（D-80 的唯一例外，见 `gallery-modal.ts` 文件头）
+		//
+		// ⚠️ 这一段会**真的按一次「上传」**。为了不真的连远端，只在**没配存储**的库上跑：
+		// 那种情况下每一项都会按"未配置"失败，零网络请求。配了存储就按原因跳过
+		//（这台机器上的演示库恰好没配，所以它是真跑过的；换机器跑要先看这一条有没有跳过）。
+		const storageConfigured = await evaluate(
+			client,
+			`(() => {
+				const settings = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]?.settings ?? {};
+				return Boolean(settings.endpoint && settings.bucket);
+			})()`
+		);
+		if (storageConfigured) {
+			skip("跑完自动收窗并用通知报结果", "这个库配了存储 —— 按一次「上传」会真的连远端，不在这里验");
+		} else {
+			// 全选 → 按「上传」→ 等窗口消失 → 读通知
+			const ran = await evaluate(
+				client,
+				`(() => {
+					const root = ${GALLERY_ROOT};
+					const all = root && root.querySelector(".acc-task-check-all");
+					if (!all) return { error: "没有全选复选框" };
+					if (!all.checked) all.click();
+					const button = Array.from(root.querySelectorAll(".acc-task-actions button")).find(
+						(el) => (el.textContent || "").trim().indexOf("上传") === 0
+					);
+					if (!button) return { error: "动作区没有「上传」" };
+					if (button.disabled) return { error: "「上传」是灰的（一件可传的都没有）" };
+					const label = (button.textContent || "").trim();
+					button.click();
+					return { clicked: label };
+				})()`
+			);
+			// 窗口应当在跑完后自己消失（不是被谁点掉的）
+			let closed = false;
+			const closeDeadline = Date.now() + 20_000;
+			while (Date.now() < closeDeadline) {
+				closed = await evaluate(client, `!document.querySelector(".acc-gallery-modal")`).catch(() => false);
+				if (closed) break;
+				await delay(200);
+			}
+			const noticeText = await evaluate(
+				client,
+				`Array.from(document.querySelectorAll(".notice")).map((el) => el.textContent || "").join(" ｜ ")`
+			);
+			check(
+				"跑完**自动收起窗口**（不留在原地挡人）",
+				closed === true,
+				`closed=${closed} clicked=${JSON.stringify(ran?.clicked ?? ran?.error ?? null)} notices=${JSON.stringify(noticeText)}`
+			);
+			check(
+				"收起之后**通知把结果说清**（三类计数，不是一句「完成」）",
+				/已处理：完成 \d+, 跳过 \d+, 失败 \d+/.test(String(noticeText ?? "")) &&
+					/失败 [1-9]/.test(String(noticeText ?? "")),
+				JSON.stringify(noticeText)
+			);
+		}
+
+
+		// ⚠️ 这一屏是**模态弹窗**（不是标签页）：后面还要开设置页 / 别的弹窗，
+		// 不关掉就会撞上两层 modal（实测踩过：断言在两层 modal 里读到空数组，报成"面板没了"）。
+		// 上面那段"跑完自动收窗"已经把窗口收掉了（配了存储的库里则会跳过）⇒ 这里再关一次是**幂等**的。
+		await closeDialog(client);
+		await delay(400);
+
+		// ── 5) 清理：**手动入口已并入附件管理**（CR-02）──
 		// ⚠️ 原来这里跑 `check-orphans` 并断言弹窗的两类行 / 两个开关 / 站外缓存标签。
 		// 命令连同 id 取消之后，云端清理的手动入口是「待清理」筛选 ＋ 动作栏 ——
 		// 那几条判据（待清理 ⊆ 没人引用、删云端的数字、改为本地引用、站外缓存标签）

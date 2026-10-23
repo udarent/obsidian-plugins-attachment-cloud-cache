@@ -3,7 +3,7 @@
  *
  * ## 分层（A1）
  *
- * `ui/gallery-view.ts`（视图）→ **本模块** → `gallery/enumerate`（纯判据）、`ui/file-cards`（行）、
+ * `ui/gallery-modal.ts`（弹窗）→ **本模块** → `gallery/enumerate`（纯判据）、`ui/file-cards`（行）、
  * `maintenance/run`（执行）。⚠️ 视图**不**直接连领域模块：它只说"用户勾了哪些、点了哪个动作"。
  *
  * ## 这一层只做三件事

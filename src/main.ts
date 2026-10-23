@@ -102,7 +102,7 @@ import { createExternalLiveQueue } from "./render/external-live";
 import type { ExternalLiveQueue, OpenViewLike } from "./render/external-live";
 import { createExternalCacher } from "./core/external-cache";
 import { askTaskList } from "./ui/task-list-modal";
-import { GALLERY_VIEW_TYPE, GalleryView } from "./ui/gallery-view";
+import { GalleryModal } from "./ui/gallery-modal";
 import type { TaskListOptions, TaskListResult } from "./ui/task-list-modal";
 
 /**
@@ -191,6 +191,14 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 而图其实好好存着 —— 反复提醒只是噪音。插件重载 = 新会话 = 再提醒一次（刻意）。
 	 */
 	private readonly unconfiguredAnnounce = createAnnounceGate();
+
+	/**
+	 * 当前开着的附件管理弹窗（`null` = 没开）。
+	 *
+	 * ⚠️ 只用来**防重复打开**：弹窗是模态的，用户不可能在它开着时再点一次命令；
+	 * 但程序调用（自动化 / 后续接线）可能，而叠出两个窗口会操作同一份状态。
+	 */
+	private galleryModal: GalleryModal | null = null;
 
 	/**
 	 * 这份 `data.json` 里带着**已被取消的 key 模板**（1.2.0），且我们已经清理过它。
@@ -712,8 +720,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		//（候选仍由同一条函数算）。代价是**用户已绑的快捷键会失效**，发布说明必须写清。
 		// ⚠️ **设置页那颗「上传附件」按钮不算命令**，仍然走 `runUploadAttachments()` ——
 		// 与视图的「待上传」是同一份实现（D-68 的「同一实现只有一份」）。
-		// ⭐ 附件管理（R24 / F22）：一个常驻视图 —— 列表 ＋ 筛选 ＋ 批量动作。
-		this.registerView(GALLERY_VIEW_TYPE, (leaf) => new GalleryView(leaf, this.flowContext()));
+		// ⭐ 附件管理（R24 / F22）：一个**弹窗** —— 列表 ＋ 筛选 ＋ 批量动作。
+		// ⚠️ 2026-10-23 由常驻视图改为弹窗（判据是手机端：抽屉比屏幕还窄，而这一屏是五列 ＋ 五个动作）。
 		this.addCommand({
 			id: "manage-attachments",
 			name: this.t("cmdManageAttachments"),
@@ -722,27 +730,29 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	}
 
 	/**
-	 * 打开（或聚焦）附件管理视图。
+	 * 打开附件管理弹窗。
 	 *
-	 * ⚠️ **不能**只试右侧栏：`getRightLeaf(false)` 在没有右侧栏（用户折叠了 / 工作区刚重置）时
-	 * 返回 `null` ⇒ 命令点了**毫无反应**、也没有任何提示。真机踩过：同一份构建，一次能开一次不能开，
-	 * 差别只是工作区里有没有右侧栏。
-	 * ⇒ 依次退：已开的 leaf → 右侧栏 → **主区域新标签页** → 真不行就明确说一句。
+	 * ⚠️ 弹窗是**模态**的：开着的时候命令面板与快捷键都进不来，所以"重复打开"实际只可能
+	 * 发生在程序调用上 ⇒ 已经开着就**什么都不做**（再 `open()` 一个会叠出两个窗口，
+	 * 而这两个窗口操作的是同一份状态）。
 	 */
 	private async openGallery(): Promise<void> {
-		const workspace = this.app.workspace;
-		const existing = workspace.getLeavesOfType(GALLERY_VIEW_TYPE)[0];
-		if (existing) {
-			await workspace.revealLeaf?.(existing);
-			return;
+		if (this.galleryModal) return;
+		const modal = new GalleryModal(this.flowContext(), () => {
+			this.galleryModal = null;
+		});
+		this.galleryModal = modal;
+		modal.open();
+		try {
+			// ⚠️ 必须 await：这一次要读全库（`vault.getFiles()` ＋ 引用扫描），**可能抛**。
+			// 不 await 就只剩一条 unhandled rejection ⇒ 用户看到空弹窗、界面上什么都没说
+			//（2026-10-16 那条「点击命令没有反应」的同一个形态）。
+			await modal.ready;
+		} catch (error) {
+			// 读不起来就别把一个空窗留在那儿 —— 先收窗，再把原因交给 `runCommand` 的兜底去说。
+			modal.close();
+			throw error;
 		}
-		const leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf("tab");
-		if (!leaf) {
-			new Notice(this.t("galleryNoLeaf"));
-			return;
-		}
-		await leaf.setViewState({ type: GALLERY_VIEW_TYPE, active: true });
-		await workspace.revealLeaf?.(leaf);
 	}
 
 	private maintenanceDeps(): MaintenanceDeps {

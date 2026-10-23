@@ -1,5 +1,13 @@
 /**
- * **附件管理视图**（R24 / F22）：一个常驻列表 ＋ 筛选 ＋ 批量动作。
+ * **附件管理弹窗**（R24 / F22）：筛选胶囊 ＋ 清单 ＋ 批量动作。
+ *
+ * ## 形态：弹窗，不是侧边栏（2026-10-23 定的，推翻此前"常驻视图"）
+ *
+ * 判据是**手机端**：手机上侧边栏是一条滑出来的抽屉、比屏幕还窄，而这一屏是
+ * 五列列表 ＋ 六个带件数的胶囊 ＋ 五个动作 ⇒ 抽屉是所有容器里最差的。弹窗在手机上
+ * 几乎是全屏，在桌面上可以放到 ~880px。⚠️ 主区标签页原本是另一个候选（更宽、能分屏），
+ * 但它需要真机证明"手机上的主区视图"可用，而我们**一次都没在手机上跑过**；
+ * 弹窗是宿主的核心 API（所有确认框都靠它），是这三个里唯一确定能在手机上工作的。
  *
  * ## 版面（自上而下）
  *
@@ -12,16 +20,25 @@
  * 动作区：上传 / 删除本地 / 改为本地引用 / 删除云端 / 重命名    取消
  * ```
  *
- * 标题栏与全选复选框由**清单壳**画（`task-list-shell.ts`）：弹窗与视图同一份装配。
+ * 标题栏与全选复选框由**清单壳**画（`task-list-shell.ts`）：与另外两条链同一份装配。
  *
  * ## 它只做三件事
  *
  * 1. 画筛选栏（全部 / 待上传 / 已上传 / 云端有本地无 / 没人引用），每个胶囊带**件数**；
- * 2. 把筛选结果交给**清单壳**（`task-list-shell.ts`，与弹窗同一份装配）；
- * 3. 用户点动作时把"勾了哪些"转给 `plugin/gallery-flow.ts`。
+ * 2. 把筛选结果交给**清单壳**；
+ * 3. 用户点动作时把"勾了哪些"转给 `plugin/gallery-flow.ts`，跑完把结果**说出来**。
  *
  * ⚠️ **不在这一层判定"能不能做"**：可用性来自 `gallery/actions.ts`（纯函数），
  * 这一层只把它的结论变成按钮上的数字与禁用状态。
+ *
+ * ## ⭐ 跑完**收起窗口**，用通知把结果说清（D-80 的反向，唯一一处）
+ *
+ * 另两条链（上传附件 / 清理附件）跑完停在原地，失败行留着（D-80）。这一屏不一样：
+ * 它是长任务（几分钟、几十项），停在原地意味着**一个挡着笔记、必须手动关掉的窗口**，
+ * 而手机上的返回键又会把它误关。⇒ 壳的 `autoCloseOnFinish` 只在这里打开，
+ * 关窗时把「完成 / 跳过 / 失败」三个数与前几个失败文件名放进一条通知。
+ *
+ * ⚠️ 代价（认了）：失败**原因**看不到（它本来在失败行上）。要查原因就再开一次、看状态标签。
  *
  * ## ⚠️ 本轮没画的两颗按钮
  *
@@ -30,8 +47,7 @@
  * - **取回本地**：R6 的回退下载已在渲染时自动发生，单独一颗按钮会与它抢动作。
  */
 
-import { ItemView, Modal, Setting } from "obsidian";
-import type { WorkspaceLeaf } from "obsidian";
+import { Modal, Notice, Setting } from "obsidian";
 
 import { actionAvailability } from "../gallery/actions";
 import type { GalleryAction } from "../gallery/actions";
@@ -47,10 +63,15 @@ import {
 } from "../plugin/gallery-flow";
 import type { GalleryModel } from "../plugin/gallery-flow";
 import { mountTaskListShell } from "./task-list-shell";
-import type { TaskListAction, TaskListLabels } from "./task-list-shell";
+import type { TaskListAction, TaskListLabels, TaskListResult } from "./task-list-shell";
 import type { TaskReporter } from "./task-list";
 
-export const GALLERY_VIEW_TYPE = "acc-gallery";
+/**
+ * 弹窗根节点的类名（`Modal#modalEl` 上）。
+ * ⚠️ 真机脚本按它定位这一屏（`document.querySelector(".acc-gallery-modal .modal-content")`）⇒
+ * 改名要同步 `scripts/verify-flows.mjs`。
+ */
+export const GALLERY_MODAL_CLASS = "acc-gallery-modal";
 
 const FILTERS = [
 	{ key: "all", labelKey: "galleryFilterAll" },
@@ -105,35 +126,54 @@ class RenameModal extends Modal {
 	}
 }
 
-export class GalleryView extends ItemView {
+/**
+ * 附件管理弹窗。
+ *
+ * ⚠️ 容器只负责"有地方画 ＋ 什么时候收起"：清单的装配、勾选、进度、动作接线全在壳里，
+ * 动作的可用性判定全在 `gallery/actions.ts`。这一层只留**筛选状态**与**跨次读库**。
+ */
+export class GalleryModal extends Modal {
 	private model: GalleryModel | null = null;
 	private filter: FilterKey = "all";
+	/**
+	 * 打开时那一次"读全库"的 Promise。
+	 *
+	 * ⚠️ 命令侧 **必须** `await` 它（见 `main.openGallery`）：这一次读库要过
+	 * `vault.getFiles()` 与全库引用扫描，**可能抛**。不 await 的话它只是一条
+	 * unhandled rejection —— 用户看到的是一个空弹窗，控制台里才有一条错
+	 * （"点了没反应"的经典形态，2026-10-16 实测报过）。
+	 */
+	private loading: Promise<void> | null = null;
 
-	constructor(leaf: WorkspaceLeaf, private readonly ctx: PluginContext) {
-		super(leaf);
+	constructor(private readonly ctx: PluginContext, private readonly onClosed?: () => void) {
+		super(ctx.app);
 	}
 
-	getViewType(): string {
-		return GALLERY_VIEW_TYPE;
-	}
-
-	getDisplayText(): string {
-		return this.ctx.t("galleryTitle");
-	}
-
-	getIcon(): string {
-		return "images";
+	/** 首次读取的结果（命令侧等它，失败就抛给 `runCommand` 的兜底去说话）。 */
+	get ready(): Promise<void> {
+		return this.loading ?? Promise.resolve();
 	}
 
 	async onOpen(): Promise<void> {
-		await this.refresh();
+		// ⭐ 类名挂在 `modalEl` 上：宽度、移动端全屏、以及真机脚本的定位都靠它。
+		this.modalEl?.addClass?.(GALLERY_MODAL_CLASS);
+		this.titleEl?.setText?.(this.ctx.t("galleryTitle"));
+		this.loading = this.refresh();
+		try {
+			await this.loading;
+		} catch {
+			// ⚠️ **这里必须吞掉**：宿主的 `open()` 不会 await `onOpen`，抛出去就只是一条
+			// unhandled rejection（界面上是空弹窗）。失败由 `ready` 交给命令侧去说话。
+			// 同一个 rejection 被两处 await 是合法的：这里接住它，`ready` 那边再抛给调用方。
+		}
 	}
 
-	async onClose(): Promise<void> {
+	onClose(): void {
 		this.model = null;
+		this.onClosed?.();
 	}
 
-	/** 重新读一遍全库并重画（打开时、动作跑完后、点刷新时）。 */
+	/** 重新读一遍全库并重画（打开时、点刷新时）。 */
 	private async refresh(): Promise<void> {
 		this.model = await loadGallery(this.ctx);
 		this.render();
@@ -261,25 +301,49 @@ export class GalleryView extends ItemView {
 			listHost,
 			{
 				title: this.ctx.t("galleryTitle"),
-				// 清单自己的那一行标题（视图没有弹窗标题可借，见 `TaskListOptions.listHeading`）
+				// 清单自己的那一行标题（弹窗标题在窗口顶上，清单里再来一行才说得清"这段是什么"）
 				listHeading: this.ctx.t("galleryListHeading"),
 				lines: [this.ctx.t("galleryRuleLine")],
 				cards,
 				labels: this.labels(),
 				defaultSelected: "none",
 				actions: this.actions(),
+				// ⭐ 长任务工作台装在弹窗里 ⇒ 跑完收起窗口，结果用通知说（见文件头那条取舍）
+				autoCloseOnFinish: true,
 				run: (selected, report, action) => this.execute(selected, report, action),
 			},
 			{
-				// 视图没有"关窗"：跑完的「关闭」= 重新读一遍（清单要反映新状态）
-				requestClose: () => {
-					void this.refresh();
-				},
-				settle: () => {
-					// 结果已在 `run` 里上报；这里不重复刷新，避免与 requestClose 撞两次
-				},
+				requestClose: () => this.close(),
+				settle: (result) => this.reportResult(result),
 			}
 		);
+	}
+
+	/**
+	 * 把这一趟的结果**说出来**（窗口已经/即将收起，这是用户唯一能看到的结论）。
+	 *
+	 * ⚠️ 三类分开报（成 / 跳 / 败）：`skipped` 不是故障，把它并进"失败"会让用户去修一件
+	 * 本来就不需要修的事（与 `TaskStatus` 那条注释同一条纪律）。
+	 * ⚠️ 失败项**点名**（最多 3 个）：窗口没了以后，失败原因只能靠重新打开、看状态标签；
+	 * 至少要让用户知道"是哪几个"，否则他连重开去查哪几个都不知道。
+	 */
+	private reportResult(result: TaskListResult | null): void {
+		if (!result?.ran || !result.progress) return;
+		const t = this.ctx.t;
+		const progress = result.progress;
+		const lines = [
+			t("galleryDoneSummary", {
+				done: progress.done,
+				skipped: progress.skipped,
+				failed: progress.failed,
+			}),
+		];
+		const names = (result.failed ?? [])
+			.map((id) => this.model?.byId.get(id)?.name ?? id)
+			.slice(0, 3)
+			.filter((name) => name !== "");
+		if (names.length > 0) lines.push(t("galleryDoneFailed", { names: names.join(", ") }));
+		new Notice(lines.join("\n"));
 	}
 
 	/**

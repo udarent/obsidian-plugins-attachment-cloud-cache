@@ -4,8 +4,8 @@
  * 两个容器共用这一份装配：
  * | 容器 | 谁在用 | 怎么收起 |
  * |---|---|---|
- * | `Modal`（弹窗） | 「上传附件」「清理附件」两条命令 | `modal.close()` |
- * | `ItemView`（附件管理视图，R24） | 视图里的「待上传 / 待清理」 | 视图自己的收起动作 |
+ * | `Modal`（弹窗） | 「上传附件」「清理附件」两条链 | `modal.close()` |
+ * | `Modal`（附件管理，R24） | 五列清单 ＋ 五个动作 | `modal.close()`，且**跑完自己收起** |
  *
  * ## ⚠️ 为什么必须是**同一个函数**，不是两套装配
  *
@@ -39,7 +39,7 @@ import { selectEverything, toggleSelection } from "./selection-logic";
 import { renderThumb } from "./file-cards";
 import type { FileCard, FileCardOpenTarget } from "./file-cards";
 import { foldTaskProgress, selectionInOrder, setTaskStatus } from "./task-list";
-import type { TaskListLabels, TaskReporter, TaskStatus } from "./task-list";
+import type { TaskListLabels, TaskProgress, TaskReporter, TaskStatus } from "./task-list";
 
 export type { TaskListLabels, TaskProgress, TaskReporter, TaskStatus } from "./task-list";
 
@@ -145,6 +145,23 @@ export interface TaskListOptions {
 	destructive?: boolean;
 	/** 点按钮之后跑的事。不传 = **只做选择**。 */
 	run?: (selected: readonly string[], report: TaskReporter, action?: string) => Promise<void>;
+	/**
+	 * 跑完**立刻收起容器**，不进入完成态（D-80 的例外，2026-10-23）。
+	 *
+	 * ## 为什么允许有例外
+	 *
+	 * D-80（评审 3-1）定的是"跑完不关窗，失败行留在原地让人看"—— 这条对**一次性的短任务弹窗**
+	 * （上传附件、清理附件）成立：用户本来就要关掉它才能继续。
+	 *
+	 * ⭐ 但**附件管理**是长任务工作台（几分钟、几十项），当它装在**弹窗**里时，"停留"就变成
+	 * "一个挡着笔记、必须手动关掉的窗口"。⇒ 这种容器自己声明 `autoCloseOnFinish: true`，
+	 * 由它负责把结果说出来（成 / 跳 / 败 ＋ 失败项点名），本壳只负责把
+	 * {@link TaskListResult.progress} 与 {@link TaskListResult.failed} 交回去。
+	 *
+	 * ⚠️ **默认 false**：不给这一项就还是 D-80 的老行为。别把这条当成"更先进"顺手打开 ——
+	 * 短任务弹窗关掉之后就只剩一条通知，而失败原因本来就在失败行上。
+	 */
+	autoCloseOnFinish?: boolean;
 	/** 点行尾「打开」时去哪（D-66）。**不传就不画链接**。 */
 	onOpen?: (target: FileCardOpenTarget) => void;
 }
@@ -156,6 +173,15 @@ export interface TaskListResult {
 	ran: boolean;
 	/** 用户点的那一档（没给 `actions` 时为 `undefined`）。 */
 	action?: string;
+	/**
+	 * 跑完的计数（成 / 跳 / 败）。只在这一趟真的跑过时给。
+	 *
+	 * ⭐ 给"跑完就把窗口收起来"的容器用（见 {@link TaskListOptions.autoCloseOnFinish}）：
+	 * 窗口没了之后，调用方**只剩这份数字**能拿来说话。
+	 */
+	progress?: TaskProgress;
+	/** 跑完**失败**的那些键（按清单顺序）。窗口收起后用来点名。 */
+	failed?: string[];
 }
 
 /**
@@ -197,7 +223,7 @@ interface RowRef {
 
 /**
  * 把清单壳挂到一个已存在的容器上。
- * 容器只负责"有地方画"，不参与任何判定 —— 这样 `Modal` 与 `ItemView` 才能共用同一份装配。
+ * 容器只负责"有地方画"，不参与任何判定 —— 所以三条链各开一个弹窗、共用同一份装配。
  *
  * ⭐ **版面顺序由创建顺序决定**（`container` 的子节点就是视觉顺序）：
  *
@@ -227,12 +253,22 @@ export function mountTaskListShell(
 	host: TaskListShellHost
 ): TaskListShell {
 	let answered = false;
+	/**
+	 * 容器**已经被收起来了**（用户点的关闭 / 取消 / ESC / 点背景 / 视图卸载）。
+	 *
+	 * ⚠️ 跑的过程中也要置位：那时 `handleContainerClose()` 刻意**不交结果**（那一趟还在跑），
+	 * 于是跑完必须由 `finally` 补交 —— 否则调用方的 `Promise` 永远悬着，也没人知道跑成了没有。
+	 */
+	let containerClosed = false;
 	const settle = (value: TaskListResult | null): void => {
 		if (answered) return;
 		answered = true;
 		host.settle(value);
 	};
-	const close = (): void => host.requestClose();
+	const close = (): void => {
+		containerClosed = true;
+		host.requestClose();
+	};
 
 	/** 正文行整块重画（换范围时数字必须与清单对得上）。 */
 	const linesEl = container.createDiv?.({ cls: "acc-task-lines" });
@@ -593,14 +629,45 @@ export function mountTaskListShell(
 		} catch (error) {
 			// 执行体意外失败 ⇒ 仍要把结果交回去，否则调用方会以为"用户取消了"。
 			void error;
+			/**
+			 * ⚠️ 整趟抛了：**没上报的那些必须有个结论**。
+			 *
+			 * 不标的话它们停在 `pending` ⇒ 进度停在 `0/N`；而容器一旦"跑完就收起"
+			 * （{@link TaskListOptions.autoCloseOnFinish}），用户看到的通知会是
+			 * 「完成 0、跳过 0、失败 0」—— **一次都没做成，却报了个全零**。
+			 * 标成 `failed` 是诚实的：这些确实没做成，而且可以重试。
+			 * 已经上报过的（done / skipped / failed）**不动**：那些是执行体自己说的话。
+			 */
+			for (const key of chosen) {
+				const current = statuses.get(key);
+				if (current === undefined || current === "pending" || current === "running") {
+					statuses = setTaskStatus(statuses, key, "failed");
+				}
+			}
 		} finally {
 			runFinished = true;
+			const progress = foldTaskProgress(statuses, runningTotal);
+			const failed = chosen.filter((key) => statuses.get(key) === "failed");
+			settledResult = { selected: chosen, ran: true, action, progress, failed };
+
+			/**
+			 * ⚠️⚠️ **容器在跑的过程中被关掉了**（手机返回键 / ESC / 点背景）。
+			 *
+			 * 原来这种情况下 `handleContainerClose()` 什么都不交（那一趟还在跑），于是
+			 * 跑完之后**没有人**交结果 ⇒ 容器的 `Promise` 永远悬着、也没人告诉用户跑成了没有。
+			 * 现在是：跑完补交一次结果（调用方据此发通知），界面不再回来。
+			 */
 			settled = true;
-			settledResult = { selected: chosen, ran: true, action };
-			paintRows();
-			updateControls();
-			// ⭐⭐ D-80（评审 3-1）：**不自动收起**。失败行留在清单里，用户看完自己关。
-			showSettledFooter();
+			if (options.autoCloseOnFinish || containerClosed) {
+				// 先交结果再收容器：调用方要在窗口消失**之前**拿到数字（它只剩这些能说话）。
+				settle(settledResult);
+				if (!containerClosed) close();
+			} else {
+				paintRows();
+				updateControls();
+				// ⭐⭐ D-80（评审 3-1）：**不自动收起**。失败行留在清单里，用户看完自己关。
+				showSettledFooter();
+			}
 		}
 	};
 
@@ -706,6 +773,8 @@ export function mountTaskListShell(
 		 * ⚠️ 跑的过程中不交结果；完成态交**跑完的结果**（D-80），不是 `null`。
 		 */
 		handleContainerClose: (): void => {
+			// ⚠️ 这里也要置位：ESC / 点背景 / 视图卸载都不经过 `close()`。
+			containerClosed = true;
 			if (phase === "run") return;
 			settle(settled ? settledResult : null);
 		},

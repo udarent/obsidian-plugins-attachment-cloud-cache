@@ -93,7 +93,7 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 
 | Command | What it does |
 | --- | --- |
-| **Attachment manager** | The only command. A persistent view: every attachment plus filters (to clean up / not uploaded / uploaded / cloud-only / unreferenced), and batch actions on the selection (upload, delete local, use local file, delete from cloud). Rename works on a single row. |
+| **Attachment manager** | The only command. Opens one dialog (a wide window on desktop, full screen on phones): every attachment plus filters (to clean up / not uploaded / uploaded / cloud-only / unreferenced, each showing how many items it holds), and batch actions on the selection (upload, delete local, use local file, delete from cloud). Rename works on a single row. **It closes itself when the batch finishes** and one notice tells you how many succeeded, were skipped, or failed. |
 
  > **Upgrading from 1.8 or earlier**: the separate **Upload attachments** and **Clean up attachments** commands are gone — both are now filters plus actions inside **Attachment manager**. If you had shortcuts bound to them, bind them again.
 
@@ -284,7 +284,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 
 | 命令 | 做什么 |
 | --- | --- |
-| **附件管理** | **唯一的命令**。一个常驻视图：全部附件 ＋ 筛选（待清理 / 未上传 / 已上传 / 云端有本地无 / 没人引用）＋ 勾选后批量处理（上传 / 删除本地 / 改为本地引用 / 删除云端）；重命名只对单条生效。 |
+| **附件管理** | **唯一的命令**。打开一个弹窗（桌面宽窗口、手机上是全屏）：全部附件 ＋ 筛选（待清理 / 未上传 / 已上传 / 云端有本地无 / 没人引用，每个筛选上都写着有几项）＋ 勾选后批量处理（上传 / 删除本地 / 改为本地引用 / 删除云端）；重命名只对单条生效。**跑完会自己关掉**，结果用一条通知告诉你成了几个、跳过几个、失败几个。 |
 
  > **从 1.8 及更早版本升级**：原来那两条命令（**上传附件** / **清理附件**）已经取消，它们的能力变成 **附件管理** 里的筛选与动作。如果你给它们绑过快捷键，需要重绑到「附件管理」。
 

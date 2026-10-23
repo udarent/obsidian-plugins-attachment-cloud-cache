@@ -285,32 +285,6 @@ function makeEl() {
 	return el;
 }
 
-/**
- * `ItemView` 替身（R24 的附件管理视图需要它）。
- *
- * ⚠️ 只保证"类能构造、视图能注册"，**不做任何渲染断言** —— 视图内容与交互靠真机脚本。
- * 少了它，构建产物在 `class GalleryView extends ItemView` 那一行直接抛
- * `Class extends value undefined`，而错误信息里会带整个 main.js（很难读）。
- */
-export class ItemView extends Component {
-	constructor(leaf) {
-		super();
-		this.leaf = leaf;
-		this.app = leaf?.app ?? {};
-		this.contentEl = makeEl();
-		this.containerEl = this.contentEl;
-	}
-	getViewType() {
-		return "item-view";
-	}
-	getDisplayText() {
-		return "";
-	}
-	getIcon() {
-		return "";
-	}
-}
-
 // ─────────────────────────── 插件基类与设置页 ───────────────────────────
 //
 // ## 为什么这些也必须有替身
