@@ -173,6 +173,9 @@ const FACTORY_SETTINGS = {
 	// 它是**自动出现**的模态框，而默认动作是"保留"（什么都不做）⇒ 最常见的结局是
 	// "什么都没发生，但用户被打断了一次"。所以这一项的存在本身就是"能关掉"这件事。
 	orphanAsk: "always" as OrphanAskMode,
+	// ⚠️ 默认**关**：它只写控制台，但"默认就在打日志"会让排障时无法区分
+	// "这条是本次的"还是"上次留下的"，也会让支持者收到无关的粘贴。
+	debugLogging: false,
 } as const;
 
 /**
@@ -193,6 +196,7 @@ const SETTINGS_SPEC: {
 	externalSiteList: stringListValue(),
 	cacheLimitMb: numberValue({ min: 0, max: CACHE_LIMIT_MB_MAX }),
 	orphanAsk: oneOfValue(ORPHAN_ASK_MODES),
+	debugLogging: boolValue(),
 };
 
 const S3_FALLBACKS: S3Config = {

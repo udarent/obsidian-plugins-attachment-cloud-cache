@@ -18,12 +18,15 @@
  * | `![[photo.png\|600]]` | 带显示尺寸/别名；⚠️ **`\|` 的那个反斜杠不属于路径** |
  * | `![[photo.png#page=2]]` | 带子路径，`#` 之后要保留 |
  * | `![alt](attachments/photo.png)` | 标准 Markdown，可带标题 |
+ * | `![alt](attachments/报告(1).pdf)` | 目标里带**成对括号**（下载来的重名文件）：边界按括号深度找，不是"第一个 `)`"（见 `markdownDestinationEnd`） |
  * | `![alt](<attachments/a b.png>)` | 含空格时用尖括号包起来 |
  * | `![alt](attachments/Pasted%20image%201.png)` | **百分号编码**的空格（宿主的「相对路径」格式） |
  * | `![alt](../assets/photo.png)` | **相对当前笔记**的路径（同上，随链接格式设置而变） |
  * | `<img src="attachments/photo.png">` | **行内 HTML**（1.8 起阅读态/实时预览都渲染）；`href` / `<video>` 同理 |
  * | `![alt][ref]` + `[ref]: photo.png` | **引用式链接**：定义行在哪都要认（改写落在定义行上） |
  * | `---` 里的 `cover: "[[photo.png]]"` | **属性区**：认（判据），但**不改**（理由见 `LinkSpan.inFrontmatter`） |
+ * | 代码块 / 行内代码 / `%%注释%%` / `<!-- -->` / `$…$` / `<code>` 里的 `[](photo.png)` | **不算引用**：这些位置宿主都不渲染（理由见 `inertRanges`） |
+ * | `\![](photo.png)` / `\![[photo.png]]` | **转义**：渲染出来是字面文本，也不算引用（见 `isEscaped`） |
  *
  * 用一个正则通吃会漏掉后几种、或者把 `|600` 一起换掉（那就改坏了）。
  * 所以这里**先定位链接范围、再按结构拆分**。
@@ -56,6 +59,27 @@
  * | `[[a.png]]` | `[a.png](url)`（原文没有 `!` 就不是嵌入） |
  *
  * 目标是**库内路径**时仍只换路径那一段 —— 形态是用户或宿主选的，我们不替他们改。
+ */
+
+/**
+ * ## 模块地图（六节，从"位置"到"结果"）
+ *
+ * 1. **惰性区域**（`inertRanges` / `isEscaped`）：宿主**不会渲染**的位置 —— 代码块、
+ *    行内代码、注释、公式、`<code>`、转义。这些位置里的目标**不是引用**。
+ *    ⚠️ 它是**唯一**的剔除点：`markdownLinks` 与 `findLinkSpans` 都从它取区间，
+ *    所以"候选 / 报告 / 云端清理 / 删除前复核"四侧不可能再分叉（D-62/D-63 的教训）。
+ * 2. **链接位置**（`markdownLinks` / `findLinkSpans` / `htmlAttributeTargets`）：
+ *    每种写法各自怎么定界。`markdownLinks` 只管位置（站外 / 本机候选也要用它），
+ *    `findLinkSpans` 在其上补齐 wikilink / 行内 HTML / 引用式定义。
+ * 3. **目标归一**（`linkTargetForms` / `normalizeLinkTarget` / `hasScheme`）：
+ *    "这条链接指着哪个文件"的**唯一**判据（含百分号解码、去扩展名、同名歧义）。
+ * 4. **目标 → 库内路径**（`referencedPathsFrom` / `resolveVaultTargets`）：
+ *    把一批目标解析成"库里真实存在"的路径。⚠️ 与改写器**同一套归一**，
+ *    歧义时**一个都不收**（否则搬走文件而链接改不掉 ⇒ 死链）。
+ * 5. **远端 key**（`keysInText` / `keysInCanvasText`）：哪些远端地址还"被引用"。
+ *    ⚠️ 与第 1/2 节是**同一语义的不同扫描**（裸 URL），惰性区域一样要剔。
+ * 6. **改写**（`planLinkRewrites` / `planCanvasRewrites` / `stillMentionsPath`）：
+ *    唯一会动用户内容的地方；属性区"认但不改"。
  */
 
 import { PLAUSIBLE_EXTENSION } from "../vault-files";
@@ -107,6 +131,8 @@ export function findLinkSpans(text: string): LinkSpan[] {
 	for (const match of text.matchAll(wiki)) {
 		const body = match[1];
 		const at = match.index ?? 0;
+		// 转义的 wikilink（`\![[x.png]]` / `\[[x.png]]`）在宿主里是**字面文本** ⇒ 不算引用
+		if (isEscaped(text, at)) continue;
 		const bodyStart = at + match[0].indexOf("[[") + 2;
 		// 路径在 `|` 与 `#` 之前（两者都在时取更靠前的那个）
 		const hashAt = body.indexOf("#");
@@ -133,20 +159,29 @@ export function findLinkSpans(text: string): LinkSpan[] {
 	}
 
 	// ── Markdown 链接/图片: `![alt](path "title")` / `![alt](<path with space>)` ──
-	const md = /!?\[[^\]\n]*\]\(([^)\n]*)\)/g;
-	for (const match of text.matchAll(md)) {
-		const body = match[1];
+	//
+	// ⚠️⚠️ 目标的边界**不能**用"遇到第一个 `)` 就停"来定（旧写法正是 `([^)\n]*)`）。
+	//
+	// 2026-10-21 用户实测报的：`[说明](../assets/【…】游立强%204年(1).pdf)` ——
+	// 文件名里那个 `(1)` 是**下载来的文件常见形态**，而 Markdown 规范允许目标里出现
+	// **成对**的括号。按"第一个 `)`"读出来的是 `…游立强%204年(1`（少了 `)` 与 `.pdf`）：
+	// - 「这份文件还有人引用吗」答**否** ⇒ 它被判成没人用（`audit` 会报成可回收）；
+	// - 改写一处都不改 ⇒ 文件**传上去了、笔记里那条还是本地路径**，用户看到的就是
+	//   「没有被上传」（他的原话）；而且它**不报错**。
+	// ⇒ 边界改成按括号嵌套深度找**真正的那个 `)`**（见 {@link markdownLinks}）。
+	// 代码区间**算一次**：这里（Markdown 那一支）与收尾的其余写法共用（D-62）
+	const frozen = inertRanges(text);
+	for (const link of markdownLinks(text, frozen)) {
+		const body = text.slice(link.start, link.end);
 		if (!body) continue;
-		const at = match.index ?? 0;
-		const bodyStart = at + match[0].indexOf("(") + 1;
 		// 这几种写法里目标就是路径本身 ⇒ 只可能"只换路径那一段"，所以别名/子路径都是 null
 		const base = {
-			linkStart: at,
-			linkEnd: at + match[0].length,
+			linkStart: link.linkStart,
+			linkEnd: link.linkEnd,
 			kind: "markdown" as const,
 			alias: null,
 			subpath: null,
-			embed: match[0].startsWith("!"),
+			embed: link.embed,
 			inFrontmatter: false,
 		};
 
@@ -154,7 +189,7 @@ export function findLinkSpans(text: string): LinkSpan[] {
 		if (body.startsWith("<")) {
 			const close = body.indexOf(">");
 			if (close <= 1) continue;
-			spans.push({ ...base, start: bodyStart + 1, end: bodyStart + close, raw: body.slice(1, close) });
+			spans.push({ ...base, start: link.start + 1, end: link.start + close, raw: body.slice(1, close) });
 			continue;
 		}
 
@@ -170,7 +205,7 @@ export function findLinkSpans(text: string): LinkSpan[] {
 		const sep = quoteAt === -1 ? -1 : quoteAt - 1;
 		const raw = (sep > 0 && /\s/.test(body[sep]) ? body.slice(0, sep) : body).trim();
 		if (!raw) continue;
-		spans.push({ ...base, start: bodyStart, end: bodyStart + raw.length, raw });
+		spans.push({ ...base, start: link.start, end: link.start + raw.length, raw });
 	}
 
 	// ── HTML 标签属性里的地址：`<img src="…">` / `<a href='…'>` / `<video src="…">` ──
@@ -223,15 +258,25 @@ export function findLinkSpans(text: string): LinkSpan[] {
 		});
 	}
 
+	// ⭐⭐ 代码块 / 行内代码 / `%%注释%%` 里的那些：**不算引用**，一条都不产出
+	// （2026-10-22，D-62，用户明确要求）。理由见 {@link inertRanges}：
+	// 宿主不渲染它们，宿主的 `resolvedLinks` 里也没有它们 —— 我们多扫出来的这一半
+	// 只会让"只在代码块里被提到"的文件进候选（白传一次），并在清理流程里保它一命。
+	// ⚠️ 在**产出处**一次性剔除（而不是在消费方各自过滤）：判据只有一份，
+	// 上传候选 / 引用快照 / 云端清理 / 删除前复核四侧不可能再分叉。
+	const spansOutsideCode = frozen.length === 0
+		? spans
+		: spans.filter((span) => !frozen.some((range) => span.start >= range.start && span.end <= range.end));
+
 	// frontmatter（属性区）里的那些标记出来 —— 改写器要跳过"属性里的 wikilink 改成 URL"
 	//（理由见 `LinkSpan.inFrontmatter`）。
 	const fm = frontmatterRange(text);
 	if (fm) {
-		for (const span of spans) span.inFrontmatter = span.start >= fm.start && span.end <= fm.end;
+		for (const span of spansOutsideCode) span.inFrontmatter = span.start >= fm.start && span.end <= fm.end;
 	}
 
 	// 按出现位置排序，便于调用方按顺序重建文本
-	return spans.sort((a, b) => a.start - b.start);
+	return spansOutsideCode.sort((a, b) => a.start - b.start);
 }
 
 /**
@@ -253,6 +298,140 @@ function frontmatterRange(text: string): { start: number; end: number } | null {
 	const close = text.search(/\r?\n---[ \t]*(\r?\n|$)/);
 	if (close < 0) return null;
 	return { start: 0, end: close };
+}
+
+/**
+ * 正文里**不是链接**的区间（"惰性区域"）：围栏代码块（``` / ~~~）、行内代码（同一串反引号之间）、
+ * Obsidian 注释（`%%…%%`）、HTML 注释（`<!-- -->`）、数学公式（`$$…$$` 与 `$…$`）、
+ * HTML 的 `<code>` / `<pre>`。
+ *
+ * ⭐ 为什么要有它（2026-10-22，D-62，用户明确要求）：这些位置里的 `[](…)` **不是引用**。
+ * - Obsidian **不渲染**它们，宿主的 `resolvedLinks` 里也没有它们 ——
+ *   我们额外扫正文是为了补宿主的盲区（属性链接 / 行内 HTML / 引用式链接），
+ *   而**这些位置从来不是盲区**；
+ * - 那些是**用户抄下来的样例**（本插件的用户就在写 Obsidian 用法笔记）⇒ 既不该被
+ *   改写，也不该因为"样例里出现过"就把它传上去、更不该因此在清理流程里保它一命。
+ *
+ * ⚠️ 用户 2026-10-22 的原话是「除了代码块,行内代码也不应该有引用附件,这和语义不符」——
+ * 于是这里列的是**所有"看起来像链接、但它不会被渲染"的位置**，不是只列代码。
+ * 同一类里刻意**没有**收的两处（都写清楚了理由，不是漏）：
+ * - **4 空格缩进的代码块**：`- 项目
+     ![图](x.png)` 是**列表续行**（正常渲染的正文），
+ *   与缩进代码块在文本上无法区分 ⇒ 收进来会误伤真实引用；
+ * - **属性区里的 Markdown 形式**（`cover: "![](x.png)"`）：Obsidian 的属性链接
+ *   （`frontmatterLinks`）两种写法都收，判据跟着宿主走（`LinkSpan.inFrontmatter`）。
+ *
+ * ⇒ 结果只有一个用法：**从链接识别里剔掉**（`markdownLinks` 与 `findLinkSpans` 都剔）。
+ * 判断做在产出处，于是上传候选 / 引用快照 / 云端清理 / 删除前复核四侧不可能再分叉。
+ *
+ * ⚠️ 判定**宁可保守**：只在"确实落在区间内"时才算，拿不准的写法都当普通正文
+ * （多认一条只是多传一次，少认一条才会把真实引用当没人用）。
+ * ⚠️ 未闭合的围栏 / `%%` / `<!--` / `$$` 一律按"到文末"处理：宿主渲染时也是这样。
+ */
+function inertRanges(text: string): { start: number; end: number }[] {
+	const ranges: { start: number; end: number }[] = [];
+	const lines = text.split("\n");
+
+	// ① 围栏代码块：行首（最多 3 个空格）的 ``` 或 ~~~，同种符号开、同种符号关
+	let open: { char: string; start: number } | null = null;
+	let lineStart = 0;
+	for (const line of lines) {
+		const lineEnd = lineStart + line.length;
+		const fence = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+		if (open === null) {
+			if (fence) open = { char: fence[1][0], start: lineStart };
+		} else if (fence && fence[1][0] === open.char) {
+			ranges.push({ start: open.start, end: lineEnd });
+			open = null;
+		}
+		lineStart = lineEnd + 1;
+	}
+	if (open) ranges.push({ start: open.start, end: text.length });
+
+	// ② 成对出现、可能跨行的定界符：`%%…%%`（Obsidian 注释）、`<!--…-->`、`$$…$$`（块级公式）、
+	//    `<code>…</code>` / `<pre>…</pre>`。未闭合一律到文末（与宿主的渲染一致）。
+	// ⚠️ 配对是"开 → 第一个关"，配完**从关之后**继续找 —— 否则 `$$x$$` 的那个闭合符
+	// 会被当成下一段的开头，把后面整篇正文都并进区间（真实引用就全丢了）。
+	const lower = text.toLowerCase();
+	const paired: [string, string][] = [
+		["%%", "%%"],
+		["<!--", "-->"],
+		["$$", "$$"],
+		["<code", "</code>"],
+		["<pre", "</pre>"],
+	];
+	for (const [opener, closer] of paired) {
+		let at = lower.indexOf(opener);
+		while (at >= 0) {
+			// ⚠️ 标签类开头要卡边界：`<premium>` 不是 `<pre>`（收窄的好处是"宁可多算"，
+			// 而放宽会把后面一整段正文都划进惰性区间 —— 那是**少认**的方向）。
+			if (opener.startsWith("<") && !/[>\s/]/.test(lower[at + opener.length] ?? ">")) {
+				at = lower.indexOf(opener, at + opener.length);
+				continue;
+			}
+			const close = lower.indexOf(closer, at + opener.length);
+			if (close < 0) {
+				ranges.push({ start: at, end: text.length });
+				break;
+			}
+			ranges.push({ start: at, end: close + closer.length });
+			at = lower.indexOf(opener, close + closer.length);
+		}
+	}
+
+	// ③ 行内数学 `$…$`：**两端都不许贴空白**（否则 `价格 $5 到 $10` 会被当成公式，
+	//    而中间那一段正文就再也不算引用了 —— 这是这条判据最容易误伤的地方）。
+	for (const match of text.matchAll(/(?<!\\)\$([^$\n]{1,300}?)\$/g)) {
+		const inner = match[1];
+		const at = match.index ?? 0;
+		if (!inner.trim()) continue;
+		if (/^\s/.test(inner) || /\s$/.test(inner)) continue;
+		if (text[at + 1] === "$" || text[at - 1] === "$") continue; // 属于 `$$` 的那一半
+		ranges.push({ start: at, end: at + match[0].length });
+	}
+
+	// ④ 行内代码：同一行里**等长**的两串反引号之间。⚠️ 两串**不必相邻**：
+	//    ```` ``a ` ![](x.png) `` ```` 是合法写法（内容里可以有单个反引号），
+	//    只认同行相邻的一对会漏掉它 —— 那正是用户说的"语义不符"里最像的一条。
+	lineStart = 0;
+	for (const line of lines) {
+		const lineEnd = lineStart + line.length;
+		const insideFence = ranges.some((range) => lineStart >= range.start && lineEnd <= range.end);
+		if (!insideFence && line.includes("`")) {
+			const runs = [...line.matchAll(/`+/g)];
+			let i = 0;
+			while (i < runs.length) {
+				const run = runs[i];
+				const width = run[0].length;
+				// 找**后面**第一串等长的（奇偶同号才算一对；找不到就换下一串）
+				let j = i + 1;
+				while (j < runs.length && runs[j][0].length !== width) j += 1;
+				if (j >= runs.length) {
+					i += 1;
+					continue;
+				}
+				const from = lineStart + (run.index ?? 0);
+				const to = lineStart + (runs[j].index ?? 0) + width;
+				ranges.push({ start: from, end: to });
+				i = j + 1;
+			}
+		}
+		lineStart = lineEnd + 1;
+	}
+
+	return ranges;
+}
+
+/**
+ * 这个位置上的字符被反斜杠转义了吗（`\![](...)` / `\[[x]]`）。
+ *
+ * 转义的链接在 Markdown 里是**字面文本**（宿主不渲染），所以它也不是引用。
+ * ⚠️ 数反斜杠的个数（奇数才算被转义）：`\\![](...)` 是"转义了的反斜杠 + 真链接"。
+ */
+function isEscaped(text: string, at: number): boolean {
+	let count = 0;
+	for (let i = at - 1; i >= 0 && text[i] === "\\"; i -= 1) count += 1;
+	return count % 2 === 1;
 }
 
 /**
@@ -306,6 +485,134 @@ export function htmlAttributeTargets(text: string): {
 	return out;
 }
 
+/**
+ * 一条 Markdown 链接（`[说明](目标)` / `![说明](目标)`）在原文里的**位置**。
+ *
+ * `start`/`end` 是**目标区域**（含引号里的标题），`linkStart`/`linkEnd` 是整条链接。
+ * 谁需要"这一条链接的目标在哪儿"就用这个结构 —— 不要再自己写正则。
+ */
+export interface MarkdownLink {
+	/** 整条链接的起点（`!` 或 `[`）。 */
+	linkStart: number;
+	/** 闭合 `)` 之后的位置。 */
+	linkEnd: number;
+	/** 目标区域的起点（`](` 之后，已跳过前导空白）。 */
+	start: number;
+	/** 目标区域的结束（不含闭合 `)`）。 */
+	end: number;
+	/** 原文里有没有 `!` 前缀。 */
+	embed: boolean;
+}
+
+/**
+ * Markdown 链接的头部：`![显示文字](`。
+ *
+ * ⚠️ 显示文字里**允许**出现 `(`（`[图 (1)](…)`）—— 这正是"目标起点不能靠
+ * `indexOf("(")` 算"的原因（它会落在标签里那个括号上）。
+ */
+const MD_LINK_HEAD = /!?\[[^\]\n]*\]\(/g;
+
+/**
+ * 找出文本里所有 Markdown 链接的**位置**（`[..](` → 外层闭合 `)`）。
+ *
+ * ## ⭐ 「Markdown 链接的目标在哪儿」只此一份
+ *
+ * 两个消费者、两套完全不同的后续规则，但**边界必须一致**：
+ * - `references.ts` 自己的改写 / 删除判据（`findLinkSpans`）—— 目标可以含空格；
+ * - `batch.ts` 的站外 / 本机候选采集（`externalUrlEntriesIn`）—— http 那一支按空白切。
+ *
+ * 各写一个正则的代价实测过：`(1)` 里那个 `)` 把目标截成半截（2026-10-21，用户报
+ * 「没有被上传」，实际是链接一处没改）；站外那一路同形
+ *（`https://…/Foo_(bar).pdf` → `…Foo_(bar`，本机 `file:///…/报告(1).pdf` 更糟：
+ * 文件被判成"早就不在了"直接摘掉）。⇒ 位置只在这里算，各自往后怎么切是各自的业务规则。
+ *
+ * 前导空白一并跳过：`[a]( x.png)` 是宿主/手写都出现过的写法；跳过之后 `start` 才真的
+ * 落在目标上（旧代码保留空白却按 `raw.length` 算 `end`，于是替换范围偏一格 —— 又一个不报错的错位）。
+ */
+export function markdownLinks(text: string, frozen: readonly { start: number; end: number }[] = inertRanges(text)): MarkdownLink[] {
+	const out: MarkdownLink[] = [];
+	if (typeof text !== "string" || text === "") return out;
+
+	for (const match of text.matchAll(MD_LINK_HEAD)) {
+		const linkStart = match.index ?? 0;
+		// ⭐⭐ **代码块 / 行内代码 / `%%注释%%` 里的不算链接**（2026-10-22，D-62）。
+		// 放在这里而不是各消费方：`findLinkSpans`（判据 + 改写）与 `batch.ts`（站外 /
+		// 本机候选）都从这一个函数拿位置 —— 一边过滤一边不过滤就会出现"下载了、
+		// 传上去了、链接永远改不掉"（改写那一侧根本看不到这条）。
+		if (frozen.some((range) => linkStart >= range.start && linkStart < range.end)) continue;
+		// 转义的链接（`\![](...)`）在 Markdown 里是**字面文本**，宿主不渲染 ⇒ 不算引用
+		if (isEscaped(text, linkStart)) continue;
+		let start = linkStart + match[0].length;
+		// 只跳空格与制表符：换行就意味着这条链接没有目标了（`markdownDestinationEnd` 会拒绝）
+		while (start < text.length && (text[start] === " " || text[start] === "\t")) start += 1;
+
+		const scan = markdownDestinationEnd(text, start);
+		if (!scan) continue;
+		out.push({
+			linkStart,
+			linkEnd: scan.closeEnd,
+			start,
+			end: scan.bodyEnd,
+			embed: match[0].startsWith("!"),
+		});
+	}
+	return out;
+}
+
+/**
+ * 一条 Markdown 链接的目标区域到哪儿结束（`(` 之后的位置 → 那个闭合 `)` 的位置）。
+ *
+ * ## ⚠️ 为什么不能"遇到第一个 `)` 就停"
+ *
+ * 文件名里带括号是**常态**（浏览器下载的 `… 4年(1).pdf`、`IMG (2).png`、`报告(最终版).docx`），
+ * 而 Markdown 规范允许目标里出现**成对**的括号。按"第一个 `)`"截断的后果已经实测过一次
+ * （2026-10-21）：`[说明](../assets/…%204年(1).pdf)` 被读成 `…%204年(1` ⇒
+ * ① 判据说"没人指着它"（可回收/可能被删）② 改写一处不改（文件传上去了、笔记里还是本地路径）
+ * —— 两个方向都**不报错**。
+ *
+ * ## 三种形态，各按各自的边界走
+ *
+ * - **尖括号** `(<a (1).png>)`：边界由 `>` 给 —— 里面的 `)` 不是分隔符；
+ * - **普通**：按括号**嵌套深度**找外层那个（`x(1).png` 里的一对是内容，不是分隔符）；
+ * - **兜底**：深度扫描在同一行里收不到闭合（典型是标题里有个**不成对**的 `(`
+ *   —— `![a](x.png "见(注")`），退回"第一个 `)`"，与修之前的行为逐字一致。
+ *   ⚠️ 这条兜底不是"以防万一"：没有它，那种写法会从"能改"退化成"整条不认"。
+ *
+ * 返回值里的 `bodyEnd` 是**目标区域的结束**（不含闭合 `)`），`closeEnd` 是 `)` 之后 ——
+ * 改写要按后者算整条链接的范围。同一行里找不到闭合就是 `null`（与旧正则不匹配等价）。
+ */
+function markdownDestinationEnd(text: string, from: number): { bodyEnd: number; closeEnd: number } | null {
+	if (from >= text.length) return null;
+
+	// 尖括号形式：边界由 `>` 给（`<a b.png>` / `<a (1).png>` 都成立）
+	if (text[from] === "<") {
+		const gt = text.indexOf(">", from + 1);
+		if (gt < 0) return null;
+		if (text.slice(from, gt).includes("\n")) return null;
+		const close = text.indexOf(")", gt + 1);
+		if (close < 0) return null;
+		if (text.slice(gt + 1, close).includes("\n")) return null;
+		return { bodyEnd: close, closeEnd: close + 1 };
+	}
+
+	let depth = 0;
+	for (let i = from; i < text.length; i += 1) {
+		const ch = text[i];
+		if (ch === "\n") break;
+		if (ch === "(") depth += 1;
+		else if (ch === ")") {
+			if (depth === 0) return { bodyEnd: i, closeEnd: i + 1 };
+			depth -= 1;
+		}
+	}
+
+	// 兜底：括号没配平（见上面的说明）⇒ 退回"第一个 `)`"，与旧行为一致
+	const fallback = text.indexOf(")", from);
+	if (fallback < 0) return null;
+	if (text.slice(from, fallback).includes("\n")) return null;
+	return { bodyEnd: fallback, closeEnd: fallback + 1 };
+}
+
 function firstIndexOf(text: string, needles: string[]): number {
 	let best = -1;
 	for (const needle of needles) {
@@ -314,6 +621,57 @@ function firstIndexOf(text: string, needles: string[]): number {
 		if (best === -1 || at < best) best = at;
 	}
 	return best;
+}
+
+/**
+ * 从一段文本里取出所有"属于本存储"的对象 key。
+ *
+ * 用于"哪些缓存副本还被引用"。**只认本存储的 URL** —— 站外链接不是我们的 key。
+ * `keyFromUrl` 由调用方注入（它是判定层的一部分，这里不重复实现）。
+ */
+export function keysInText(text: string, keyFromUrl: (url: string) => string | null): Set<string> {
+	const keys = new Set<string>();
+	if (typeof text !== "string" || text === "") return keys;
+
+	// 只找 http(s) 的裸 URL：它在笔记里总是出现在 `](...)` 或尖括号里，
+	// 截到空白/右括号/引号/尖括号为止。我们的 URL 是逐段百分号编码的，
+	// 所以 `)` 只会是 Markdown 语法的一部分，不会属于 key（`()` 会被编成 `%28%29`）。
+	//
+	// ⚠️⚠️ **惰性区域里的 URL 不算引用**（2026-10-22，D-63）：代码块 / 行内代码 / 注释 /
+	// 公式 / `<code>` 里的地址在宿主里根本不渲染，可是这条判据原来是直接扫**原文**的
+	// ⇒ 一句"我们生成的地址长这样"的样例就会把那个对象永久钉成"仍被引用"：
+	// 云端清理永远不问它、引用快照也说"在用"。与 `findLinkSpans` 同一份判据（`inertRanges`）。
+	const frozen = inertRanges(text);
+	const insideInert = (at: number) => frozen.some((range) => at >= range.start && at < range.end);
+	for (const match of text.matchAll(/https?:\/\/[^\s)>"'`\]]+/gi)) {
+		if (frozen.length > 0 && insideInert(match.index ?? 0)) continue;
+		const key = keyFromUrl(match[0]);
+		if (key) keys.add(key);
+	}
+	return keys;
+}
+/**
+ * 画布文本里的**本存储对象 key**（画布 `text` 节点里的远端地址）。
+ *
+ * ## ⚠️ 为什么它必须存在（2026-10-22 审计查出的第三处不一致）
+ *
+ * 「仍被引用吗」有两处调用方，扫的来源却不一样：
+ * - `cloudReferencedKeys`（云端清理）扫 **笔记 ＋ 画布文本**；
+ * - `scanReferences`（取引用快照）只扫**笔记** —— 于是一张只被画布卡片引用着的图，
+ *   在报告里会被报成"没有人引用 / 可回收"，而云端清理根本不会问它。
+ * 用户看到的就是"两条命令对同一份东西说法相反"。
+ *
+ * ⇒ 画布那一半抽成这一处，两侧共用；`keysInText` 仍然是"URL → key"的唯一实现。
+ * ⚠️ 只认 `text` 节点：画布的 `file` 节点**只能**指向库内文件（宿主限制），
+ * 那里不可能出现我们的远端地址。
+ */
+export function keysInCanvasText(text: string, keyFromUrl: (url: string) => string | null): Set<string> {
+	const keys = new Set<string>();
+	if (typeof text !== "string" || text === "") return keys;
+	for (const raw of canvasTextTargets(text)) {
+		for (const key of keysInText(raw, keyFromUrl)) keys.add(key);
+	}
+	return keys;
 }
 
 /** 一条改写规则：把指向 `from`（vault 路径或短名）的链接改成 `to`。 */
@@ -384,6 +742,8 @@ export function planLinkRewrites(text: string, rules: readonly RewriteRule[]): R
 		//   只换路径那段又会得到 `[[https://…]]` —— wiki 语法只解析库内文件 ⇒ **死链**；
 		// - 属性里的 Markdown 链接本来就只是**一段文本**（属性不渲染 Markdown）⇒ 改它没有收益。
 		// ⇒ 而"不改"没有任何损失：文件仍在库里，那一处引用照常工作，判据那边也照旧认它。
+		// 属性区：**认但不改**（见 `LinkSpan.inFrontmatter`）。
+		// 代码块/注释里的一律走不到这里 —— 它们在 `findLinkSpans` 里就不产出了（D-62）。
 		if (span.inFrontmatter) continue;
 
 		// 上一条换形态时可能已经吃掉了这一条（防御：宁可跳过，也不要产出错位文本）
@@ -654,24 +1014,113 @@ export function normalizeLinkTarget(target: string): string {
 	return value;
 }
 
-/**
- * 从一段文本里取出所有"属于本存储"的对象 key。
- *
- * 用于"哪些缓存副本还被引用"。**只认本存储的 URL** —— 站外链接不是我们的 key。
- * `keyFromUrl` 由调用方注入（它是判定层的一部分，这里不重复实现）。
- */
-export function keysInText(text: string, keyFromUrl: (url: string) => string | null): Set<string> {
-	const keys = new Set<string>();
-	if (typeof text !== "string" || text === "") return keys;
 
-	// 只找 http(s) 的裸 URL：它在笔记里总是出现在 `](...)` 或尖括号里，
-	// 截到空白/右括号/引号/尖括号为止。我们的 URL 是逐段百分号编码的，
-	// 所以 `)` 只会是 Markdown 语法的一部分，不会属于 key（`()` 会被编成 `%28%29`）。
-	for (const match of text.matchAll(/https?:\/\/[^\s)>"'`\]]+/gi)) {
-		const key = keyFromUrl(match[0]);
-		if (key) keys.add(key);
+
+// ─────────────── ④ 目标 → 库内路径（宿主的链接索引 / 自扫正文共用） ───────────────
+
+/**
+ * 从宿主的链接索引（`metadataCache.resolvedLinks`）里取出**被笔记引用着**的文件路径集合。
+ *
+ * ⭐ 2026-10-22（D-65）从 `maintenance/batch.ts` 挪到这里：它与"这条链接指着哪个文件"
+ * 是同一件事的两半，而 `plugin/notes-query` 不该为了一个纯判据去 import 候选层。
+ *
+ * ## 形状与来源（真机取证，2026-10-09）
+ *
+ * 实测：它是 `{ 来源文件路径: { 目标文件路径: 引用次数(number) } }`；**刚起来时是空的**，
+ * 约 2 秒内建好；⚠️ 而且它**连画布里的引用也算**（写一个指向附件的 `.canvas`，两秒后出现）。
+ *
+ * ## ⚠️ 为什么按来源**不筛**
+ *
+ * 这里只回答"哪些路径被提到过"。**能不能改写**是另一条判据
+ * （`referenceSnapshot().rewritable` 只收笔记正文与画布文本节点）—— 两件事混在一条判据里，
+ * 就会出现"画布 `file` 节点永远改不成 URL，却每轮都进待修清单"（D-57 踩过）。
+ *
+ * ⚠️ 认不出的输入（`null`、数组、字段类型不对）一律当成"没有引用" —— 宁可这轮不处理，
+ * 也不能把"没查清"当成"没有引用"的反面（那会把文件搬走）。
+ */
+export function referencedPathsFrom(resolvedLinks: unknown): Set<string> {
+	const referenced = new Set<string>();
+	if (!resolvedLinks || typeof resolvedLinks !== "object") return referenced;
+
+	// ⚠️ 这一层的入参是**宿主的对象**（形状已知但类型上不可信），所以先收成
+	// `Record<string, unknown>` 再逐层收窄：不收窄的话 `Object.entries` 会给出 `any`，
+	// 而 eslint 的 `no-unsafe-argument` 会因此判红（本项目 lint 是门禁的一部分）。
+	const table = resolvedLinks as Record<string, unknown>;
+	for (const [sourcePath, targets] of Object.entries(table)) {
+		// ⭐ 来源**不筛**：Markdown 笔记与画布同等算数（需求 R16，2026-10-09 拍板）。
+		// 空的来源路径仍然跳过 —— 那不是宿主会给的形状。
+		if (!sourcePath) continue;
+		if (!targets || typeof targets !== "object") continue;
+		for (const targetPath of Object.keys(targets)) {
+			if (targetPath) referenced.add(targetPath);
+		}
 	}
-	return keys;
+	return referenced;
+}
+
+/**
+ * 把"笔记/画布文本里写的链接目标"解析成库里**真实存在**的文件路径。
+ *
+ * ## 为什么需要它
+ *
+ * `referencedPathsFrom` 只读宿主的链接索引。而画布 `text` 节点里的 `![[x.png]]`
+ * 是**文本内容**，宿主会不会把它算进索引没有保证（取证点 E-1c）——
+ * 少了这一路，"只被画布文本引用的附件"会被判成"没人引用"而永远不被处理
+ * （与需求 R16 冲突，且不报错）。
+ *
+ * ## 匹配规则：与改写器**同一套**（含同名歧义的处理）
+ *
+ * `normalizeLinkTarget` 剥掉任意"像扩展名"的后缀并小写，于是 `photo`、`photo.png`、
+ * `attachments/photo.png` 都能对上真实路径。⚠️ **同名歧义时一个都不收**：
+ * 两个不同目录下有同名文件时，"这条引用到底指哪个"无法判断，而我们的改写器在
+ * 歧义时同样拒绝改写 —— 若这里把两个都算成"被引用"，命令就会**搬走**它们，
+ * 而笔记里的链接一处都改不掉 ⇒ 死链。宁可少处理（不搬）。
+ */
+export function resolveVaultTargets(
+	targets: readonly string[],
+	vaultPaths: readonly string[]
+): Set<string> {
+	const byPath = new Map<string, string>();
+	const byName = new Map<string, string[]>();
+
+	for (const path of vaultPaths) {
+		if (typeof path !== "string" || path === "") continue;
+		const full = normalizeLinkTarget(path);
+		if (!full) continue;
+		byPath.set(full, path);
+		const name = full.split("/").pop() ?? full;
+		const list = byName.get(name);
+		if (list) list.push(path);
+		else byName.set(name, [path]);
+	}
+
+	const out = new Set<string>();
+	for (const target of targets ?? []) {
+		const forms = linkTargetForms(target);
+		if (forms.length === 0) continue;
+		// ⭐ 与改写器**同一份归一**（含百分号解码那一形）。画布文本节点里写
+		// `![[Pasted%20image%201234.png]]` 完全可能（从别处复制来的），少认一形 =
+		// "只被画布文本引用的附件永远不被处理"（与需求 R16 冲突，且不报错）。
+		let exact: string | undefined;
+		for (const form of forms) {
+			exact = byPath.get(form);
+			if (exact) break;
+		}
+		if (exact) {
+			out.add(exact);
+			continue;
+		}
+		for (const form of forms) {
+			const name = form.split("/").pop() ?? form;
+			const candidates = byName.get(name);
+			// ⚠️ 歧义 ⇒ 不收（与改写器一致，见上面的说明）
+			if (candidates && candidates.length === 1) {
+				out.add(candidates[0]);
+				break;
+			}
+		}
+	}
+	return out;
 }
 
 // ─────────────────────────── 画布（.canvas） ───────────────────────────
@@ -856,6 +1305,8 @@ export function canvasTextTargets(text: string): string[] {
 			continue;
 		}
 		if (typeof decoded !== "string") continue;
+		// 代码块 / 行内代码 / `%%注释%%` 里的那些**已经**在 `findLinkSpans` 里被剔除了
+		//（D-62），这里不需要再分一档。
 		for (const link of findLinkSpans(decoded)) out.push(link.raw);
 	}
 	return out;

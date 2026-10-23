@@ -29,6 +29,19 @@
 
 import { embedKindFor, extensionOfName } from "../vault-files";
 
+/**
+ * 一行能"打开"到哪里（2026-10-22，D-66）。
+ *
+ * ⭐ 为什么分成两类而不是只给一个字符串：**打开方式由目标种类决定**，而两者的失败方式
+ * 完全不同 —— 库内文件可能**已经不在了**（宿主会给我们 `null`），库外地址则可能
+ * 打不开浏览器。让判据在纯函数里定种类，打开那一侧就只剩"照做"。
+ */
+export type FileCardOpenTarget =
+	/** 库内文件（vault 相对路径）：交给宿主用它自己的视图打开。 */
+	| { kind: "vault"; value: string }
+	/** 库外地址（站外 `http(s)`）：交给系统浏览器。 */
+	| { kind: "url"; value: string };
+
 /** 清单里的一项：调用方给得出多少就给多少（缺的那部分自然降级）。 */
 export interface FileCardInput {
 	/**
@@ -58,10 +71,53 @@ export interface FileCardInput {
 	 */
 	thumb?: string | readonly string[];
 	/**
+	 * 行内的**小标签**（紧跟名字）：目前只有一种用法 —— 「**没有被任何笔记引用**」（D-68）。
+	 *
+	 * ⚠️ 与 `meta` 分开两个字段：`meta` 说的是"它在哪"（路径 / 主机），
+	 * 这里是"它有什么特别之处"。拼成一行会让两者在长路径下互相遮蔽，
+	 * 而这条标签正是用户判断"要不要勾它"的唯一依据。
+	 */
+	hint?: string;
+	/**
+	 * 行内小标签的**图标**（lucide 名，如 `alert-triangle`）。给了就**只画图标**，
+	 * `hint` 变成它的悬停说明（`title` / `aria-label`）。
+	 *
+	 * ⭐ 2026-10-22（D-71，用户要求）：失效的附件不要在文案里读，**在列表里用图标标出来**。
+	 * ⚠️ 这一层**不 import 宿主**（文件头那条纪律），所以真正的图标由勾选清单
+	 * （`task-list-modal.ts`，它本来就 import `obsidian`）去画；这一层只把名字带过去。
+	 * 只读清单（`renderFileCards`）拿不到图标 API ⇒ 退回显示 `hint` 文字
+	 * （那几条链没有"图标"这个场景，显示文字也说得清）。
+	 */
+	hintIcon?: string;
+	/**
 	 * 行里的**副标题**（第二行的小字）：路径、站点、出现在哪篇笔记里这类
 	 * "能让用户核对是哪一个"的信息。空串 = 不画第二行。
 	 */
 	meta?: string;
+	/**
+	 * 「打开」这一下要去哪（D-66）。
+	 *
+	 * 缺省（不传）时**自动推导**：有本地副本 ⇒ 库内文件；有远端地址 ⇒ 那个地址。
+	 * 给 `null` 是**明确的"这一行不给打开"**（本机 `file:///…` 那条就是：宿主与浏览器
+	 * 都不认它，画一个点了没反应的链接比不画更糟）—— 所以这里区分"没给"与"给了 null"。
+	 */
+	open?: FileCardOpenTarget | null;
+	/**
+	 * 这一行末尾那颗链接的**文案**（缺省用界面的统一文案「打开」）。
+	 *
+	 * 给谁用：**已经失效**的附件那一行 —— 它自己打不开了（文件已经不在了），
+	 * 链接去的是**引用它的那篇笔记**（D-70），文案得说"打开笔记"而不是"打开"。
+	 */
+	openLabel?: string;
+	/**
+	 * 能不能勾选。**缺省 `true`**。
+	 *
+	 * ⭐ 给 `false` 的是"只摆出来给你看 / 点"的行（D-70：失效的附件）——
+	 * 它们**必然做不成任何事**，而清单里出现一个"勾了也不会被处理"的行，
+	 * 用户会以为插件漏了它（本项目那条纪律：清单里只该出现点了能成的东西）。
+	 * ⚠️ 所以这一行**不进默认勾选、全选也不选它**，界面上勾选框是禁用的。
+	 */
+	selectable?: boolean;
 }
 
 export interface FileCardDeps {
@@ -120,8 +176,33 @@ export interface FileCard {
 	thumbUrls: readonly string[];
 	/** 缩略图来自**本地副本**（= 不联网）。 */
 	fromLocalCopy: boolean;
-	/** 副标题（第二行小字）；空串 = 不画。 */
+	/**
+	 * 副标题（第二行小字）；空串 = 不画。
+	 *
+	 * - **站外 / 本机** ⇒ 由调用方给（主机 / 绝对路径，见 `externalRowMeta`）；
+	 * - **库内文件** ⇒ **空**：完整路径已经是主文本（`label`）了，再给一行就是重复。
+	 *
+	 * ⚠️ 这里的值**绝不是库内路径**（站外行那三次误读的教训，见 `externalRowMeta`）。
+	 */
 	meta: string;
+	/**
+	 * 行内的小标签（紧跟名字）；空串 = 不画。
+	 *
+	 * ⚠️ 它**不是**副标题：`meta` 说"在哪"（路径 / 主机），这里说"有什么特别"。
+	 */
+	hint: string;
+	/**
+	 * 行内小标签的图标（lucide 名）；空串 = 画 `hint` 的文字。
+	 *
+	 * ⚠️ 有它时**只画图标**，`hint` 只作 `title` / `aria-label`（见 `FileCardInput.hintIcon`）。
+	 */
+	hintIcon: string;
+	/** 「打开」的目标（见 {@link FileCardOpenTarget}）；`null` = 这一行不给打开。 */
+	open: FileCardOpenTarget | null;
+	/** 末尾那颗链接的文案；空串 = 用界面的统一文案（见 `FileCardInput.openLabel`）。 */
+	openLabel: string;
+	/** 能不能勾选（`false` = 只摆出来看 / 点，见 `FileCardInput.selectable`）。 */
+	selectable: boolean;
 }
 
 /**
@@ -144,10 +225,24 @@ export function planFileCards(
 		if (!id) continue;
 
 		const name = typeof item.name === "string" ? item.name.trim() : "";
-		const label = name || id;
+		const local = typeof item.localPath === "string" ? item.localPath.trim() : "";
+		/**
+		 * 行里**显示的那串**：库内文件给**完整路径**（`attachments/图 1.png`）。
+		 *
+		 * ⭐ 2026-10-22（D-66）参照 File Cleaner Redux 的做法（它的行文本就是 `file.path`）：
+		 * 用户要的是"文件名带路径"，而拆成"名字一行 + 目录一行"时，**库根目录的文件**
+		 * 与**没有本地副本的对象**那两行根本推不出路径 ⇒ 他实测「清理」命令后报「没有完整路径」。
+		 * 一条路径做主文本，两种情况都自然覆盖；站外 / 本机没有库内路径 ⇒ 退回文件名。
+		 */
+		const label = local || name || id;
 		// 扩展名从**名字**取（它与 key 里的那份可能是同一件事，但名字是用户认得的那个）
 		const ext = extensionOfName(name) || extensionOfName(id);
 		const badge = ext ? ext.toUpperCase() : "";
+
+		const key = typeof item.remoteKey === "string" ? item.remoteKey.trim() : "";
+		// ⚠️ 远端地址**只算一次**：缩略图与「打开」都要用它 —— 两处各算一次，
+		// 迟早出现"图能显示、点开却没有地址"（或者反过来）。
+		const remote = key ? deps.remoteUrl(key) : null;
 
 		let thumbUrls: readonly string[] = [];
 		let fromLocalCopy = false;
@@ -157,7 +252,6 @@ export function planFileCards(
 			const explicit = (typeof item.thumb === "string" ? [item.thumb] : item.thumb ?? [])
 				.map((url) => (typeof url === "string" ? url.trim() : ""))
 				.filter((url) => url !== "");
-			const local = typeof item.localPath === "string" ? item.localPath.trim() : "";
 			const localUrl = local ? deps.resourceUrl(local) : null;
 			if (explicit.length > 0) {
 				// 站外地址 / 本机得到的候选：这一串就是图本身（第一个能画出来的算数）
@@ -166,11 +260,24 @@ export function planFileCards(
 				thumbUrls = [localUrl];
 				fromLocalCopy = true;
 			} else {
-				const key = typeof item.remoteKey === "string" ? item.remoteKey.trim() : "";
-				const remote = key ? deps.remoteUrl(key) : null;
 				thumbUrls = remote ? [remote] : [];
 			}
 		}
+
+		// 副标题只留**不是路径**的那种信息：站外=主机、本机=绝对路径（见 `externalRowMeta`）。
+		// ⚠️ 库内文件的主文本已经是完整路径了，再给一行就是重复。
+		// ⚠️ 站外 / 本机**不给库内路径** —— 那条界线是 2026-10-16 用户三次误读之后定的。
+		// 打开：调用方给的最优先（`null` = 明确不给）；否则按"本地副本 ⇒ 库内文件、
+		// 有远端地址 ⇒ 那个地址"推导。推导不出来的（本机 `file:///…`）就是不给。
+		const open: FileCardOpenTarget | null =
+			item.open === null
+				? null
+				: item.open ??
+					(local
+						? { kind: "vault", value: local }
+						: remote
+							? { kind: "url", value: remote }
+							: null);
 
 		cards.push({
 			id,
@@ -178,7 +285,15 @@ export function planFileCards(
 			badge,
 			thumbUrls,
 			fromLocalCopy,
+			// 调用方给了就用它（站外=主机、本机=绝对路径）；库内行没有副标题可给
 			meta: typeof item.meta === "string" ? item.meta.trim() : "",
+			hint: typeof item.hint === "string" ? item.hint.trim() : "",
+			hintIcon: typeof item.hintIcon === "string" ? item.hintIcon.trim() : "",
+			open,
+			openLabel: typeof item.openLabel === "string" ? item.openLabel.trim() : "",
+			// ⚠️ 只有**明确 `false`** 才不可选：缺省/`undefined` 一律可选 ——
+			// 反过来（"只有 true 才可选"）会让所有既有调用方**静默**变成不可勾选。
+			selectable: item.selectable !== false,
 		});
 	}
 
@@ -242,15 +357,73 @@ export function renderThumb(container: HTMLElement, card: FileCard): void {
 	}
 }
 
-/** 把清单画进容器（`Modal.contentEl` / 确认框正文）：只读的一列（缩略图 + 名字 + 副标题）。 */
-export function renderFileCards(container: HTMLElement, cards: readonly FileCard[]): void {
+/**
+ * 渲染层的两个注入项（**每个清单都必须传 `onOpen`**，否则那一列没有「打开」）。
+ *
+ * ⚠️ 为什么"处理器"要注入而不是在这里直接调宿主：这一层刻意不 import `App`
+ * （`planFileCards` 是纯函数、渲染只碰 DOM），真机行为由 `main.ts` 那边接
+ *（与 `fileCards()` 的同一条分工：判定在纯函数、接线在装配点）。
+ */
+export interface FileCardHandlers {
+	/** 「打开」的文案（i18n）。空 = 用 `↗` 兜底，不留一个空链接。 */
+	openLabel?: string;
+	/** 点「打开」。**没给就不画链接** —— 点不动的链接比没有链接更糟。 */
+	onOpen?: (target: FileCardOpenTarget) => void;
+}
+
+/**
+ * 把一行末尾的「打开」画出来。
+ *
+ * ⚠️⚠️ 位置固定在**行的最后一个子节点**：名字在 `children[1]` 这件事有断言钉着
+ *（`file-cards-suite` 按索引取名字），把链接插到名字前面会让它静默指向别的东西。
+ */
+function renderOpen(container: HTMLElement, card: FileCard, handlers: FileCardHandlers): void {
+	const target = card.open;
+	if (!target) return;
+	const onOpen = handlers.onOpen;
+	if (!onOpen) return;
+	// ⚠️ `as unknown as`：`HTMLAnchorElement.onclick` 的签名带 `this` 与 `MouseEvent`，
+	// 而这里只需要"赋一个可被替身调用的函数" —— 替身（渲染测试）没有事件系统。
+	const link = container.createEl("a", {
+		cls: "acc-file-open",
+		// 行自己的文案优先（失效附件那一行的链接去的是**笔记**，见 `FileCardInput.openLabel`）
+		text: card.openLabel?.trim() || handlers.openLabel?.trim() || "↗",
+		// ⚠️ `target ? … : ""` 而不是 `target.value`：这条判据万一被改坏，症状要是
+		// "画了一个点不动的链接"（有断言钉着），而不是在这里抛 TypeError 把整行吞掉。
+		attr: { href: "#", title: target ? target.value : "" },
+	}) as unknown as { onclick?: (event?: { preventDefault?: () => void }) => void };
+	// ⚠️ 用 `onclick` 而不是 `addEventListener`：渲染测试用的是记账替身（没有事件系统），
+	// 而 `onclick` 在真 DOM 与替身上都是"赋一个函数"这一件事。
+	link.onclick = (event) => {
+		// 别让 `#` 把弹窗滚回顶部（真机上是可见的跳动）
+		event?.preventDefault?.();
+		onOpen(target);
+	};
+}
+
+/** 把清单画进容器（`Modal.contentEl` / 确认框正文）：只读的一列（缩略图 + 名字 + 目录 + 打开）。 */
+export function renderFileCards(
+	container: HTMLElement,
+	cards: readonly FileCard[],
+	handlers: FileCardHandlers = {}
+): void {
 	for (const card of cards ?? []) {
 		if (!card) continue;
 		const row = container.createDiv({ cls: "acc-file-card" });
 		renderThumb(row, card);
 		row.createSpan({ cls: "acc-file-name", text: card.label });
+		// ⭐ 小标签紧跟名字（D-68）：名字仍是 `children[1]`，它只往后排 ——
+		// 已有断言按 `children[1]` 取名字，插在名字**之前**会让那条断言静默指向别处。
+		// ⚠️ 有 `hintIcon` 时这一层仍显示文字（它不 import 宿主 ⇒ 画不了图标），
+		// 但把 `title` 补上 —— 同一个字段在两条渲染路径上的语义不能一半有一半没有。
+		if (card.hint) {
+			const tag = row.createSpan({ cls: card.hintIcon ? "acc-file-hint acc-file-hint-icon" : "acc-file-hint", text: card.hint });
+			if (card.hintIcon) tag.setAttribute("title", card.hint);
+		}
 		// ⚠️ 副标题是**兄弟节点、不是包一层**：这一列的 DOM 形状已经有一处断言钉着
 		// （`file-cards-suite` 按 `children[1]` 取名字），包一层会让它静默换个位置。
 		if (card.meta) row.createSpan({ cls: "acc-file-meta", text: card.meta });
+		// 「打开」永远在最后（理由见 `renderOpen`）
+		renderOpen(row, card, handlers);
 	}
 }

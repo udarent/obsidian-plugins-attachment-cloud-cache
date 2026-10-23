@@ -27,6 +27,18 @@ await withLoadedTs("src/ui/file-cards", (mod) => {
 			"and the subtitle of an off-site " +
 			"or local-file row is composed in exactly one place - the host for an off-site row, the absolute " +
 			"path when there is no host, and never a vault path (naming the note a link came from reads as if " +
-			"a note file had entered the list of files about to be uploaded)."
+			"a note file had entered the list of files about to be uploaded); each row also shows its full vault path " +
+			"as its row text (the way the reference cleanup plugin prints `file.path`) rather than as a separate " +
+			"subtitle line, so a root-level file and an object whose local copy is gone both still show where " +
+			"they live, and an open target that is a " +
+			"vault path for a file in the vault and the storage address otherwise - the link is only drawn when " +
+			"a handler was supplied, and never for a row with no target (a link that does nothing when clicked " +
+			"reads as a broken plugin); and a row may carry an inline tag right after its name (today only " +
+			"\"no note links it\", set on the rows the upload list leaves unticked by default) - kept as its own " +
+			"field rather than folded into the subtitle, because one says where the file lives and the other says " +
+			"why it is special, and an empty tag is never rendered as an empty span; and a row can be marked " +
+			"**not selectable** (a file that is gone — showing it lets the user jump to the note and fix that " +
+			"link, while ticking it could only ever end in a wait) and can carry its own link label, so a link " +
+			"that opens the note is not labelled \"Open\"."
 	);
 });

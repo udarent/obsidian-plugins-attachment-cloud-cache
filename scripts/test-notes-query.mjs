@@ -16,7 +16,11 @@ await withLoadedTs(["src/plugin/notes-query"], async (mod) => {
 		`Notes-query tests passed (${stats.sources} sources — host link index, our own body parsing ` +
 			`over ${stats.spellings} spellings (wikilink / markdown / frontmatter / inline HTML / reference definition), ` +
 			`and canvas text nodes; scheme-bearing targets never count as local references; ambiguous basenames ` +
-			`are not guessed; percent-encoded and table-escaped forms resolve; the error default of ` +
-			`vaultPathExists points the safe way).`
+			`are not guessed; percent-encoded, table-escaped and parenthesised (\`…(1).pdf\`) forms resolve; ` +
+			`the error default of vaultPathExists points the safe way; the single-note view (behind the ` +
+			`"only the current note" filter) answers with the very same rules, so a code block, an inline ` +
+			`code span or a comment never counts there either while a frontmatter link still does; ` +
+			`and the debug switch is actually wired - ` +
+			`asking for it yields exactly one stage line with its counts, leaving it out yields none).`
 	);
 });

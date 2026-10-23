@@ -105,6 +105,14 @@ import { selectUploadCandidates, type VaultFileLike } from "./batch";
  */
 export const DEFAULT_RETRY_DELAYS_MS: readonly number[] = [1200, 3000, 6000, 10000];
 
+/**
+ * "没有需要重修的路径" —— 自动接管这条路传的常数（理由见两处调用点）。
+ *
+ * ⚠️ 用一个共享的空集合而不是每处 `new Set()`：这里是**声明"这条路不做重修"**，
+ * 不是"顺手给个缺省值"，共用一个常量能让 grep 找到全部这样的地方。
+ */
+const EMPTY_PATHS: ReadonlySet<string> = new Set();
+
 export interface AttachWatchDecisionInput {
 	/** 现查到的文件（宿主 `TFile` 的形状子集）。 */
 	file: VaultFileLike | null | undefined;
@@ -165,6 +173,9 @@ export function decideAdoptCreatedFile(input: AttachWatchDecisionInput): AttachW
 		settings: input.settings,
 		index: input.index,
 		referencedPaths: input.referencedPaths,
+		// ⚠️ 空集是对的：这条路处理的是**刚出现的文件**，而它上面那条提前返回已经
+		// 把"索引里登记过这个路径"的挡掉了 ⇒ 走不到"重修"那一支（那是「上传附件」的事）。
+		repairablePaths: EMPTY_PATHS,
 	});
 	if (selection.paths.length === 1) return { adopt: true, reason: "ok", retry: false };
 
@@ -183,6 +194,7 @@ export function decideAdoptCreatedFile(input: AttachWatchDecisionInput): AttachW
 			settings: input.settings,
 			index: input.index,
 			referencedPaths: new Set([path]),
+			repairablePaths: EMPTY_PATHS,
 		}).paths.length === 1;
 	if (!onlyMissingReference) return { adopt: false, reason, retry: false };
 

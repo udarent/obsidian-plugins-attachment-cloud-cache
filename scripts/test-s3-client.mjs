@@ -7,6 +7,9 @@ import { runS3ClientSuite } from "./lib/s3-client-suite.mjs";
  * 对着**本地真实 HTTP 服务**跑，服务端用**独立重算**的签名验证请求 ——
  * 而不是拿被测代码自己的实现自我比对（那样等于什么都没证明）。
  *
+ * 也钉住"卡住"：**一次永不返回的请求必须在有限时间内失败、只发一次、且不可重试** ——
+ * 否则下载层那条 `inflight` 去重会让同一个对象在本次会话里再也不重试（D-78）。
+ *
  * 断言的重点全部落在"网络上真的发生了什么"：
  * 上传字节逐字节一致、凭据错时恰好 1 条请求、5xx 时重试且不超上限、
  * 上传过程 PUT=1 且 GET=0。这些用 mock 掉客户端是测不出来的。
@@ -21,6 +24,7 @@ await withLoadedTs("src/s3/client.ts", async (mod) => {
 			"no hand-set Host, credential errors cost exactly 1 request, 5xx retries with exponential " +
 			"backoff up to the cap, config errors never reach the network, public URLs encoded once, and a " +
 			"presigned GET really works with no headers at all (the mock verifies it the way a server would, " +
-			"and a tampered signature is rejected)."
+			"and a tampered signature is rejected), and a request that never answers is given up on once - " +
+			"not retried into 3 x 60 s - so the same object stays retryable afterwards."
 	);
 });

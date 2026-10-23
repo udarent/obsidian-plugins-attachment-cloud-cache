@@ -26,9 +26,15 @@
 
 import type { App } from "obsidian";
 import { TFile } from "obsidian";
+import { debugTimed } from "../debug-log";
 import type { NoteTextLike } from "../maintenance/batch";
-import { referencedPathsFrom, resolveVaultTargets } from "../maintenance/batch";
-import { canvasTextTargets, findLinkSpans, hasScheme } from "../maintenance/references";
+import {
+	canvasTextTargets,
+	findLinkSpans,
+	hasScheme,
+	referencedPathsFrom,
+	resolveVaultTargets,
+} from "../maintenance/references";
 import { keyFromUrl } from "../render/render-target";
 import { publicUrlFor } from "../s3/client";
 import type { PluginSettings } from "../types";
@@ -114,31 +120,172 @@ export async function readAllNoteTexts(app: App): Promise<NoteTextLike[]> {
 }
 
 /**
- * **被引用着**的文件路径集合（宿主的链接索引 + 我们自己扫的画布文本）。
+ * 一次扫描给出的两份答案（见 {@link referenceSnapshot}）。
  *
- * 这一条服务于"哪些文件不能动"：引用会被相应地改写，而没有任何引用的文件一概不碰。
- *
- * ⚠️ 两条来源**都要看**（需求 R16：画布与笔记同等算数）：
- * - 宿主的链接索引（`resolvedLinks`）—— 覆盖笔记里的所有写法；
- * - **画布文本节点**里自己扫出来的目标 —— 那部分是文本内容，宿主是否索引没有保证
- *   （取证点 E-1c），少了它"只被画布文本引用的附件"会永远不被处理。
- *   多出来的候选由后续判据兜底，**少掉的那些才是真缺陷**。
- *
- * ⚠️ 本次搬迁时补上本注释：这段说明原先**漂移到了邻近的另一个方法上**
- * （`main.ts` 里 `readAllNoteTexts` 旁边那个"内容是否已在云端"的探针 —— 它已于 2026-10-14
- * 随 D-24 删除），而方法自己一行注释也没有（2026-10-13 已归位）。
+ * ⚠️ 两份**刻意不一样**，而且方向相反，理由见 `rewritable` 的说明 ——
+ * 合并成一份会让「能不能安全删」与「能不能靠改写修好」互相污染。
  */
-export async function referencedVaultPaths(
+export interface ReferenceSnapshot {
+	/**
+	 * 被笔记或画布**指向**的库内文件路径 —— 回答「还有没有人指着它」。
+	 * 来源：宿主的链接索引 ＋ 我们自己解析的正文（下面那一段解释为什么两路都要）。
+	 */
+	referenced: ReadonlySet<string>;
+	/**
+	 * 其中**我们能自己改写**的那一部分（笔记正文里的链接 ＋ 画布**文本节点**里的链接）。
+	 *
+	 * ⭐ 用途只有一个：判断一条链接**是不是还没改到云端**（于是「上传附件」可以重修）。
+	 * - 它**不含**宿主的链接索引：索引只说"有人指着这个文件"，不说"以什么写法指着"；
+	 *   而我们能修的只有自己认得的那些写法。
+	 * - 它**不含**画布的 `file` 节点：那类节点**只能**指向库内文件（宿主限制），
+	 *   永远不会被改成 URL ⇒ 把它们算进来会让每一个摆在画布上的附件都成了"待修"
+	 *   （每次运行都把它们列一遍、还要读一遍字节，而它们根本改不了）。
+	 */
+	rewritable: ReadonlySet<string>;
+}
+
+/**
+ * 有一篇笔记读不到 —— **调用方必须放弃这次判定并如实说出来**。
+ *
+ * ⚠️ 与 `readAllNoteTexts`（读不到就跳过）**方向相反**，而且必须相反：那条路的调用方
+ * 问的是"要不要处理这个文件"（漏一篇只是少处理几个）；而 {@link locallyReferencedPaths}
+ * 的调用方问的是"要不要**删掉**这个东西"（漏一篇就可能删掉正文还在用的对象）。
+ * 把"不知道"当成"没有引用"是这里唯一不可接受的方向。
+ */
+export class UnreadableNoteError extends Error {
+	constructor(readonly path: string) {
+		super(`读不到笔记：${path}`);
+		this.name = "UnreadableNoteError";
+	}
+}
+
+/**
+ * 正文里**直接指着**的库内路径（本地链接 / 画布 `file` 与文本节点）—— 严格口径。
+ *
+ * ## ⭐ 这个函数存在，是因为四条命令对同一件事答得不一样（2026-10-22 审计）
+ *
+ * 「这份附件还有人在用吗」有两种写法：**迁移前是本地路径**、**迁移后是远端 URL**。
+ * 而 `check-orphans` 当年只查了 URL 那一半（`keysInText`），于是"链接改写失败/被改回本地"
+ * 的那些对象会被判成孤儿 —— 一模一样的理由它自己在 `isExternal` 里写着
+ *（见 `orphan-watch.ts::dropLocallyReferenced`），只是库内那半边漏了。
+ * ⇒ 现在"谁被本地链接指着"只有 {@link referenceSnapshot} 一处实现，这个函数是它的
+ * **严格版出口**：读不到一篇就抛，让调用方放弃这次判定。
+ */
+/**
+ * 一次**严格口径**的全库阅读，同时交出正文与「本地引用集合」（D-81）。
+ *
+ * ## 为什么要把“读”与“算”拆开
+ *
+ * 清理命令需要**两份**答案：本地引用集合（它自己要用）、远端 key 集合（判「还有人用吗」）。
+ * 两件事的原料都是**同一批正文** —— 从前各自读一遍，几千篇笔记的库上就是秒级 × 2。
+ * ⇒ 读一遍、把正文交出去，谁要算什么自己拿。
+ *
+ * ⚠️ **严格度不变**：读不到一篇就抛 `UnreadableNoteError`。宽松那个口径（跳过）属于另一条链
+ *（`readAllNoteTexts`），两者不能合并 —— “不知道”不能当成“没有引用”。
+ */
+export async function localReferencePass(
 	app: App,
-	options: { notes?: readonly NoteTextLike[] } = {}
-): Promise<ReadonlySet<string>> {
+	options: { debug?: boolean } = {}
+): Promise<{ notes: NoteTextLike[]; referenced: ReadonlySet<string> }> {
+	// ⚠️ 读不到就**抛**（不是跳过）：调用方要删东西，漏一篇就可能删掉仍在用的对象
+	const notes: NoteTextLike[] = [];
+	for (const note of app.vault.getMarkdownFiles()) {
+		try {
+			notes.push({ path: note.path, text: await app.vault.read(note) });
+		} catch {
+			throw new UnreadableNoteError(note.path);
+		}
+	}
+	const snapshot = await referenceSnapshot(app, { notes, strict: true, debug: options.debug === true });
+	return { notes, referenced: snapshot.referenced };
+}
+
+/**
+ * 正文里**直接指着**的库内路径（严格口径）—— {@link localReferencePass} 的一半。
+ *
+ * ⚠️ 它与同名的“一次扫描两份答案”共用同一份实现（上面那个函数）：两处各写一遍读库循环，
+ * 迟早一边严一边松。
+ */
+export async function locallyReferencedPaths(app: App, options: { debug?: boolean } = {}): Promise<ReadonlySet<string>> {
+	return (await localReferencePass(app, options)).referenced;
+}
+
+/**
+ * 一段笔记正文里的**本地**链接目标（两个视角：认 / 能改）。
+ *
+ * ## ⚠️ 为什么单独一个函数
+ *
+ * 「什么算引用」只能有一份判据。全库快照（{@link referenceSnapshot}）与单篇视角
+ * （{@link referencesInNote}）都要它 —— 两处各写一遍的话，迟早一边把代码块算进来、
+ * 另一边不算（D-62 修的正是这种"一处硬一处软"），而两侧都不会报错。
+ *
+ * ⭐ 带 scheme 的目标（`https://…` / `file:///D:/…`）**不在这里**：它们归站外缓存 / 本机文件
+ * 那条链（`batch.ts::selectExternalUploadCandidates`）。按短名去比会把"云端地址里的文件名"
+ * 错认成"某份本地副本还被人指着" —— 判据是"它是不是本地链接"，不是"它看起来像哪个文件"。
+ */
+export function localTargetsIn(text: string): { targets: string[]; rewritableTargets: string[] } {
+	/** 全部本地引用（含**不可改写**的属性区）。⚠️ 代码块/注释里的那些**不在内**（D-62）。 */
+	const targets: string[] = [];
+	/** 其中**真能改写**的那些 —— 「重修」只能落在这个集合上。 */
+	const rewritableTargets: string[] = [];
+	for (const span of findLinkSpans(text)) {
+		if (hasScheme(span.raw)) continue;
+		targets.push(span.raw);
+		// ⚠️⚠️ **属性区里的不算"可修"**（2026-10-22，D-61）：改写器**刻意不碰**它
+		// （改属性值会写坏结构化数据；只换路径那段又会得到死链）。
+		// 若把它算进来，那个文件会在「上传附件」里**每次**都列为待修、每次改 0 处
+		// —— D-57 的重修路径把"可修"用成了"改得掉"，两者必须是同一个集合。
+		// ⚠️ 但它**照旧算"被引用"**（`targets`）：属性链接是宿主真的在用的东西
+		//（`frontmatterLinks` 里有它）。
+		// ⚠️ 代码块 / 行内代码 / `%%注释%%` 里的目标在这一层**已经不存在**了
+		// （`findLinkSpans` 不产出，D-62）—— 它们既不算引用，也不算可修。
+		if (!span.inFrontmatter) rewritableTargets.push(span.raw);
+	}
+	return { targets, rewritableTargets };
+}
+
+/**
+ * **一篇笔记**直接指向的库内路径 —— 全库快照的「单篇视角」。
+ *
+ * ## 为什么需要它（2026-10-22，用户要求「只看当前笔记」）
+ *
+ * 「上传附件」的清单可以只看当前这篇笔记引用了哪些附件（勾选项）。而"这篇笔记引用了什么"
+ * 必须与全库快照**同一个口径** —— 否则清单里会冒出全库有、当前笔记其实没有的行
+ * （或者反过来，漏掉它真的引用了的行）。所以两份答案都从 {@link localTargetsIn} 出。
+ *
+ * ⚠️ `vaultPaths` 由调用方递进来（**别在这里再枚举一遍库**）：调用方通常已经有一份，
+ * 而这里只做解析，不做 I/O。
+ */
+export function referencesInNote(
+	text: string,
+	vaultPaths: readonly string[]
+): { referenced: ReadonlySet<string>; rewritable: ReadonlySet<string> } {
+	const local = localTargetsIn(text);
+	return {
+		referenced: resolveVaultTargets(local.targets, vaultPaths),
+		rewritable: resolveVaultTargets(local.rewritableTargets, vaultPaths),
+	};
+}
+
+/**
+ * 扫一遍库里的引用，同时给出 {@link ReferenceSnapshot} 的两份答案（**一次 I/O**）。
+ *
+ * ⚠️ 两个消费者（「上传附件」的候选清单与它内部那一趟执行）必须看到同一份快照，
+ * 否则"按清单授权、按另一份执行"。所以这里只扫一次、两份都从这里出。
+ */
+export async function referenceSnapshot(
+	app: App,
+	options: { notes?: readonly NoteTextLike[]; strict?: boolean; debug?: boolean } = {}
+): Promise<ReferenceSnapshot> {
+	const startedAt = Date.now();
+	const debug = options.debug === true;
 	const vaultPaths = app.vault.getFiles().map((file) => file.path);
 	const referenced = new Set(referencedPathsFrom(app.metadataCache?.resolvedLinks));
 
 	// ⭐⭐ 2026-10-15（D-32）：**再加一路 —— 我们自己解析笔记正文**。
 	//
 	// 宿主的 `resolvedLinks` 有盲区，而每一处盲区的后果都一样（**那份文件被判成"没人引用"**，
-	// 于是命令不处理它、占用报告也说没人用）：
+	// 于是命令不处理它、引用快照也说没人用）：
 	// - **属性区**（`cover: "[[x.png]]"`）：那类链接记在 `frontmatterLinks` 里，不算进 `resolvedLinks`；
 	// - **行内 HTML**（`<img src="x.png">`）：宿主收不收没有保证（画布那条已经吃过同一个亏）；
 	// - **引用式链接**（`![alt][ref]` + `[ref]: x.png`）。
@@ -146,35 +293,73 @@ export async function referencedVaultPaths(
 	// ⚠️ 这一路与删除前的复核（`references.ts::stillMentionsPath`）走**同一套解析** ——
 	// 分类层与守卫同口径，才不会出现"报告说没人用、真删又被拦下"（D-31 的教训）。
 	const notes = options.notes ?? (await readAllNoteTexts(app));
+	const rewritable = new Set<string>();
+	/** 全部本地引用（含**不可改写**的属性区）—— 一次解析，`targets` / `rewritableTargets` 分开记账。 */
 	const targets: string[] = [];
+	const rewritableTargets: string[] = [];
 	for (const note of notes) {
-		for (const span of findLinkSpans(note.text)) {
-			// ⚠️⚠️ **带 scheme 的目标不是本地引用**（`https://…` / `file:///D:/…`）：它们归另一条链
-			//（站外缓存 / 本机文件）。按**短名**去比会把"云端地址里的文件名"错认成"某份本地副本
-			// 还被人指着" ⇒ 那份副本从此清不掉（实测：验收里 `release-target` 那份当场被这条误判挡住）。
-			// 判据是"它是不是本地链接"，不是"它看起来像哪个文件"。
-			if (hasScheme(span.raw)) continue;
-			targets.push(span.raw);
-		}
+		// ⚠️ 「什么算引用」只有一份（`localTargetsIn`）—— 单篇视角走的是同一个函数，
+		// 于是「只看当前笔记」那份清单不会与全库这份说出两种话。
+		const local = localTargetsIn(note.text);
+		targets.push(...local.targets);
+		rewritableTargets.push(...local.rewritableTargets);
 	}
 	for (const path of resolveVaultTargets(targets, vaultPaths)) referenced.add(path);
+	for (const path of resolveVaultTargets(rewritableTargets, vaultPaths)) rewritable.add(path);
 
+	let canvasCount = 0;
 	for (const file of app.vault.getFiles()) {
 		if (file.extension !== "canvas") continue;
+		canvasCount += 1;
 		let text: string;
 		try {
 			text = await app.vault.read(file);
 		} catch {
-			// 读不到就当它没有引用：这里多一份候选只会多一点工作，
-			// 而"读失败"绝不能变成"把它的引用当成不存在"以外的断言。
+			// ⚠️ 严格口径下**抛**（同上：这一侧的调用方要删东西）；
+			// 宽松口径下跳过 —— 那时多一份候选只会多一点工作。
+			if (options.strict) throw new UnreadableNoteError(file.path);
 			continue;
 		}
 		const canvasTargets = canvasTextTargets(text).filter((raw) => !hasScheme(raw));
-		for (const path of resolveVaultTargets(canvasTargets, vaultPaths)) {
+		// ⚠️ 解析**只做一次**、两份答案共用（原来这里调了两遍同一个函数 ——
+		// 同一个 `from` 算两遍，改判据时只会改到一处）。
+		const canvasPaths = resolveVaultTargets(canvasTargets, vaultPaths);
+		// 画布**文本节点**里的链接与笔记同规则（`planCanvasRewrites` 的 linkRules）⇒ 可修。
+		// ⚠️ 画布文本里也可能有属性区（画布节点没有 frontmatter）—— 所以这一侧的可修
+		// 与引用是同一个集合；代码块那些已经由 `findLinkSpans` 剔除（D-62）。
+		// ⚠️ `canvasTextTargets` 只取**文本节点**：画布的 `file` 节点只指向库内文件、
+		// 永远不会被改成 URL，算进"可修"会让每个摆在画布上的附件每轮都被列一遍
+		//（见 `ReferenceSnapshot.rewritable`）。
+		for (const path of canvasPaths) {
 			referenced.add(path);
+			rewritable.add(path);
 		}
 	}
-	return referenced;
+	// ⭐ 排障出口（D-67）：**一处**说清这次扫描各段的数目。
+	// ⚠️ 只读已有变量，不为日志多扫一遍库；`targets` 与 `rewritableTargets` 的差
+	// 就是「属性区那种认但不改」的量 —— 这两条数不一致时，先看这里。
+	debugTimed(debug, "引用快照", startedAt, {
+		笔记: notes.length,
+		画布: canvasCount,
+		目标: targets.length,
+		可改写目标: rewritableTargets.length,
+		引用路径: referenced.size,
+		可改写路径: rewritable.size,
+	});
+	return { referenced, rewritable };
+}
+
+/**
+ * **被引用着**的文件路径集合（宿主的链接索引 + 我们自己扫的正文 + 画布文本）。
+ *
+ * 这一条服务于"哪些文件不能动"：引用会被相应地改写，而没有任何引用的文件一概不碰。
+ * ⚠️ 与 {@link referenceSnapshot} 是同一份判据的两种取法（那边一次给两份答案）。
+ */
+export async function referencedVaultPaths(
+	app: App,
+	options: { notes?: readonly NoteTextLike[]; debug?: boolean } = {}
+): Promise<ReadonlySet<string>> {
+	return (await referenceSnapshot(app, options)).referenced;
 }
 
 /**

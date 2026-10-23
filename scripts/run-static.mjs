@@ -7,10 +7,10 @@
  * 静态层的每一步都是**独立**的（各自读文件、各自写自己的产物），但每一步都要付一次
  * 进程启动（实测每条门禁 ~0.8 s）：
  *
- *   · 串行：`tsc` + `esbuild` + `eslint` + 11 条门禁 ≈ 21 s
- *   · 并行：三步同时起，然后 11 条门禁一起 ≈ 10 s
+ *   · 串行：`tsc` + `esbuild` + `eslint` + 全部门禁 ≈ 21 s
+ *   · 并行：三步同时起，然后 全部门禁一起 ≈ 10 s
  *
- * 对 `check:affected` 尤其明显：它的**阶段 1 就是这 11 条门禁**（原先串行 ~10 s），
+ * 对 `check:affected` 尤其明显：它的**阶段 1 就是这 全部门禁**（原先串行 ~10 s），
  * 那是日常那档最大的一块。
  *
  * ## 三条不能省的约束
@@ -29,9 +29,9 @@
  * 见 `lib/mutate.mjs` 与手册「为什么测试不能并行（实测否决，别再试）」。
  *
  * 用法：
- *   node scripts/run-static.mjs                # tsc ∥ esbuild ∥ **eslint**，然后 11 条门禁 ∥（发版档）
+ *   node scripts/run-static.mjs                # tsc ∥ esbuild ∥ **eslint**，然后 全部门禁 ∥（发版档）
  *   node scripts/run-static.mjs --lint=oxlint  # 同上，但 lint 换成 oxlint（快档：7.0 s → 0.37 s）
- *   node scripts/run-static.mjs --gates        # 只跑 11 条门禁（`affected.mjs` 用：它自己管 build/lint/tsc）
+ *   node scripts/run-static.mjs --gates        # 只跑 全部门禁（`affected.mjs` 用：它自己管 build/lint/tsc）
  *
  * ⭐ 两个 lint 的分工（2026-10-13）：**oxlint 是快档**（`check:fast`），**eslint 是门禁**（`check` / 发版档）。
  * 两者**不是替代关系而是分工**，因为成本结构完全不同（实测）：
@@ -56,8 +56,11 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..");
 
 /**
- * 11 条静态门禁 —— **清单的唯一来源**（`affected.mjs` 走 `--gates`，不再抄一份）。
+ * 13 条静态门禁 —— **清单的唯一来源**（`affected.mjs` 走 `--gates`，不再抄一份）。
  * ⚠️ 不要在别处再抄一份 —— 这里就是唯一来源。
+ *
+ * ⭐ 2026-10-22（D-79）新增 `check-mobile-api`：`manifest.json` 承诺 `isDesktopOnly: false`，
+ * 而移动端崩溃的唯一根因是**加载期碰到 Node / 桌面专属能力** —— 那条能静态查，所以进门禁。
  */
 const GATES = [
 	"check-manifest",
@@ -71,6 +74,10 @@ const GATES = [
 	"check-readme-commands",
 	"check-i18n-keys",
 	"check-notice-i18n",
+	// ⭐ 移动端：加载期不许碰 Node / 桌面专属能力（`manifest.json` 对手机用户有承诺）
+	"check-mobile-api",
+	// ⭐ 变异锚点：每条 `from` 都还在源码里（且唯一）—— 否则那些"守卫"早就空跑了
+	"check-mutation-preflight",
 ];
 
 /** `package.json` 的 scripts —— 用来核对"要不要回退走 npm"。 */

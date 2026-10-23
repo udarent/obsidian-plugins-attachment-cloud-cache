@@ -476,7 +476,13 @@ export async function runLoadAcceptance(options = {}) {
 	const pickAsks = [];
 	const pickTasksAll = async (options) => {
 		pickAsks.push(options);
-		const selected = (options.cards ?? []).map((card) => card.id);
+		const all = (options.cards ?? []).map((card) => card.id);
+		// ⚠️ 必须**尊重 `initiallySelected`**（D-68）：真弹窗只勾那些，而"没有被任何笔记引用"
+		// 的文件默认**不勾**。替身全选的话，验收会看到"未引用的也被传了"，于是把
+		// 「批量上传恰好 PUT 一次」判成失败 —— 那是**替身与真机不一致**，不是源码的问题
+		//（这类坑本项目吃过：夹具多了真机没有的东西，或者少了真机有的一步）。
+		const allowed = options.initiallySelected ? new Set(options.initiallySelected) : null;
+		const selected = allowed ? all.filter((id) => allowed.has(id)) : all;
 		await options.run?.(selected, () => {});
 		return { selected, ran: true };
 	};
@@ -843,9 +849,7 @@ export async function runLoadAcceptance(options = {}) {
 	assert.deepEqual(
 		commandIds,
 		[
-			"audit-cache",
 			"check-orphans",
-			"pick-external-images",
 			"upload-attachments",
 		],
 		// ⚠️ 这条断言的沿革（每次增删命令都要改这里，历史写下来的目的是别让下一个人猜）：
@@ -859,7 +863,16 @@ export async function runLoadAcceptance(options = {}) {
 		//      且需求文档里查不到那个诉求（站外缓存那条排除已随之搬进 `selectOrphanAsks`）；
 		//   ② `release-local-space` 撤**命令入口**（能力仍在设置页那颗按钮上）；
 		//   ③ `repair-index` 撤**命令入口**（只剩后台自检那条线，走两轮确认）。
-		"★ 四条维护命令都要注册（少一条就是「功能写了但用户找不到」）"
+		// - 2026-10-22（D-68，用户要求）：**减到三条** —— `pick-external-images` 并入
+		//   `upload-attachments`。两条链的候选层本来就重叠（库内文件 / 站外 / 本机），
+		//   合并后只有**一张**清单：被引用的、没有任何引用的（默认不勾）、站外、本机。
+		//   ⚠️ "逐张挑选"的能力没有丢（清单本来就能逐项勾），丢的是"只看当前笔记"这个范围下拉 ——
+		//   用户明确要"一个大而全的命令"，而两套清单本身就是分叉的来源。
+		// - 2026-10-22（D-75，用户：「取消掉那条单独的查看附件状态的命令」）：**减到两条** ——
+		//   `audit-cache`（「查看本地副本占用」）退役。它只报数字、不做任何事，而「哪些副本可以清」
+		//   现在由 `check-orphans` 的清单直接给出（D-74 之后那一屏连「没人引用的本地文件」都列了）
+		//   ⇒ 两处说同一件事，而数字那处还带「估算」的歧义。
+		"★ 两条维护命令都要注册（少一条就是「功能写了但用户找不到」）"
 	);
 
 		const runCommand = (id) => {
@@ -868,160 +881,52 @@ export async function runLoadAcceptance(options = {}) {
 			command.callback?.();
 		};
 
-		// ⚠️ 先把粘贴产生的链接**真的写进一篇笔记**：否则引用扫描看到的是一个没有引用的副本，
-		// 下面那些数字会与"有没有笔记引用"这件事混在一起。
-		const noteWithLink = "notes/未命名.md";
+		// ⚠️ 后面几节要往 `notes/` 里写笔记（`writeFile` 不建目录）。
+		//
+		// ⚠️ 2026-10-22（D-75，用户：「取消掉那条单独的查看附件状态的命令」）：
+		// 这里原来还有一大段「查看缓存占用」的口径用例（索引外的文件不进统计 / 字节按磁盘算 /
+		// 未引用只在引用扫过时才算 / 两轮自检摘掉失效记录）—— 那条命令退役、`audit.ts` 一起删了，
+		// 所以整段随之删除。
+		// ⭐ 那些判据没有跟着消失：「索引外的文件一个都不碰」与「引用是两半」
+		// 仍由 `release-space` / `eviction` 的套件钉着（同一份口径，那边才是真正会删东西的链）。
 		await mkdir(join(root, "notes"), { recursive: true });
-		await writeFile(join(root, noteWithLink), `这是笔记
-
-${text}`);
-		await harness.refreshPathCache();
-		const referencedCopy = entry.cachePath; // 仍被笔记引用的那份
 
 		// ============================================================
-		// ⭐⭐ 「查看缓存占用」的口径（1.2.0 / D-17）：**只认索引记过的路径**。
+		// 8a. ⭐⭐ 「索引指向的文件已不在」⇒ 后台自检**两轮之后**自己摘掉
 		//
-		// 这条口径是"取消缓存目录"之后最容易被静默取消的一处设计（设计 §20.16 #4）：
-		// 从前它靠"扫缓存目录"找孤儿；那条目录没了之后，**索引外的文件可能是用户的附件** ——
-		// 所以它既不能计入任何数字、更不能被动。
+		// （这段原本是借「查看本地副本占用」命令的失效计数来观察的；
+		//  2026-10-22（D-75）那条命令退役 ⇒ 判据改成**直接看索引**。更直接，
+		//  也不再依赖界面上那句话。）
 		//
-		// ⚠️ 断言用**增量**而不是绝对值：这段跑到现在，索引里早就有前面几节留下的记录了，
-		// 写死数字等于把断言绑在现场上（本项目为此吃过好几次亏）。
+		// ⭐ 两轮才摘是刻意的（见 `createAbsenceConfirmer`）：换设备 / 同步进行中时
+		// 「这一轮读不到」很常见，一次就摘会把**还在路上**的记录一起删掉。
 		// ============================================================
-		const trashesBeforeReport = harness.calls.trash.length;
-		const deletesBeforeReport = harness.calls.delete.length;
-		const readReport = async () => {
-			mockObsidian.Notice.instances.length = 0;
-			runCommand("audit-cache");
-			await waitFor(
-				() => mockObsidian.Notice.instances.length > 0,
-				"报告给出",
-				5000,
-				diagnose
+		{
+			const staleKey = "stale-1f.png";
+			const indexHandle = plugin.indexStore.index;
+			indexHandle.set({
+				key: staleKey,
+				cachePath: "attachments/已经不在了.png",
+				remoteUrl: `${PUBLIC_BASE}/${staleKey}`,
+				size: 7,
+				contentType: "image/png",
+				etag: "",
+				uploadedAt: new Date().toISOString(),
+				lastUsedAt: Date.now(),
+				sourceName: "已经不在了.png",
+			});
+			await plugin.runIndexSelfHeal();
+			assert.ok(
+				indexHandle.get(staleKey),
+				"★★ 第一轮只记下「这一轮它不在」，**不许立刻摘**（防误摘：同步中很常见）"
 			);
-			return mockObsidian.Notice.instances.map((n) => n.message).join(" | ");
-		};
-		// 两个语言各一条正则（套件不该假设界面语言）；取到的那一组里第一个非空数字。
-		const firstNumber = (text, pattern) => {
-			const match = pattern.exec(text);
-			if (!match) return Number.NaN;
-			for (const group of match.slice(1)) if (group !== undefined && group !== "") return Number(group);
-			return Number.NaN;
-		};
-		const filesIn = (t) => firstNumber(t, /(?:in (\d+) files|共 (\d+) 个文件)/);
-		const unusedIn = (t) => firstNumber(t, /(?:note: (\d+) |引用的 (\d+) 个)/);
-		const missingIn = (t) => firstNumber(t, /(?:(\d+) index entr|已不在 (\d+) 条)/);
-
-		const baseline = await readReport();
-		assert.ok(Number.isFinite(filesIn(baseline)), `报告应能解析出文件数，实际：${baseline}`);
-		const files0 = filesIn(baseline);
-		const unused0 = unusedIn(baseline);
-		const missing0 = missingIn(baseline);
-
-		// ① 索引外的文件：**三个数字都不许变**（这就是"索引外的文件不参与统计"的钉子）
-		const outsideFile = "attachments/用户的图.png";
-		await mkdir(join(root, "attachments"), { recursive: true });
-		await writeFile(join(root, outsideFile), Buffer.from([1, 2, 3, 4]));
-		await harness.refreshPathCache();
-		const withOutside = await readReport();
-		assert.deepEqual(
-			[filesIn(withOutside), unusedIn(withOutside), missingIn(withOutside)],
-			[files0, unused0, missing0],
-			`★ 索引外的文件不得影响任何数字（它可能是用户的附件）实际：${withOutside}`
-		);
-
-		// ② 登记一份**没有笔记引用**的副本 ⇒ 文件数 +1、"没人引用" +1，失效数不变
-		const unusedPath = "attachments/没人引用.png";
-		await writeFile(join(root, unusedPath), Buffer.from([9, 9, 9, 9, 9]));
-		const indexHandle = plugin.indexStore.index;
-		indexHandle.set({
-			key: "unused-1f.png",
-			cachePath: unusedPath,
-			remoteUrl: `${PUBLIC_BASE}/unused-1f.png`,
-			size: 5,
-			contentType: "image/png",
-			etag: "",
-			uploadedAt: new Date().toISOString(),
-			lastUsedAt: Date.now(),
-			sourceName: "没人引用.png",
-		});
-		const withUnused = await readReport();
-		assert.equal(filesIn(withUnused), files0 + 1, `★ 索引里多了一条副本 ⇒ 文件数 +1 实际：${withUnused}`);
-		assert.equal(unusedIn(withUnused), unused0 + 1, `★ 它没有笔记引用 ⇒"没人引用" +1 实际：${withUnused}`);
-		assert.equal(missingIn(withUnused), missing0, `★ 失效数不该动 实际：${withUnused}`);
-
-		// ②b ⭐⭐ 给同一份副本一条**库内链接**（某篇笔记直接指着这份文件）⇒ 它就不再是"没人引用"
-		//
-		// 现场（2026-10-15 真机）：用户的一张 `.png` 被笔记用 `![](../企业微信截图_….png)` 指着，
-		// 而报告说它「没有任何笔记引用」。原因：这一层只问了"有没有笔记提**云端那个地址**"，
-		// 没问"有没有笔记**直接指着这份本地文件**"—— 而后者才是"这张图正在被显示"。
-		//
-		// ⭐ 这一条钉的是**接线**（装配点有没有把 `referencedVaultPaths` 递给维护层）：
-		// 两半判据本身由 `maintenance-suite` 钉着，而"判定对、装配漏"照样会让用户看到假数字。
-		// ⚠️ 在原表上**追加**（不是换掉）：换掉会把别的引用一起抹掉，增量就不再只来自这一条。
-		const linksBefore = app.metadataCache.resolvedLinks ?? {};
-		harness.setResolvedLinks({
-			...linksBefore,
-			// ⚠️ `...(x ?? {})` 里的空对象兜底是**多余**的（展开 `undefined` 本来就不添加任何属性）——
-			// oxlint 的快档会报出来（`no-useless-fallback-in-spread`）。行为与原来完全一致。
-			[noteWithLink]: { ...linksBefore[noteWithLink], [unusedPath]: 1 },
-		});
-		const withLocalLink = await readReport();
-		assert.equal(
-			unusedIn(withLocalLink),
-			unused0,
-			`★ 有笔记直接指着它 ⇒ 不许再报"没人引用"（实际：${withLocalLink}）`
-		);
-		assert.equal(filesIn(withLocalLink), files0 + 1, `★ 它当然还在，只是不再算"没人引用" 实际：${withLocalLink}`);
-
-		// ③ 再登记一条**失效记录**（索引里有、磁盘上没有）⇒ 只有失效数 +1
-		indexHandle.set({
-			key: "stale-1f.png",
-			cachePath: "attachments/已经不在了.png",
-			remoteUrl: `${PUBLIC_BASE}/stale-1f.png`,
-			size: 7,
-			contentType: "image/png",
-			etag: "",
-			uploadedAt: new Date().toISOString(),
-			lastUsedAt: Date.now(),
-			sourceName: "已经不在了.png",
-		});
-		const withStale = await readReport();
-		assert.equal(
-			missingIn(withStale),
-			missing0 + 1,
-			`★ 索引指向的文件已不在 ⇒ 失效数 +1（自愈会摘掉这条）实际：${withStale}`
-		);
-		assert.equal(filesIn(withStale), files0 + 1, `★ 失效那条**不算副本** 实际：${withStale}`);
-
-		// ④ ⭐ 那条失效记录**真的会被摘掉**（不只是被报出来）。
-		// ⚠️ 这一层此前只有注释在承诺（上面那句"自愈会摘掉这条"），**没有任何断言** ——
-		// 而用户 2026-10-14 在 Android 上正是看到"索引指向的文件已不在 1 条"来报的：
-		// 他要的是"这数字会不会自己消失 / 怎么让它消失"。
-		// ⚠️ 2026-10-16：「自检并修复本地副本索引」命令退役 ⇒ 这里**不再驱动命令**，
-		// 改成驱动**后台那一条线**（它仍在跑）。判据随之变成"**两轮**确认"：
-		// 第一轮只记下"这一轮它不在"，第二轮才摘 —— 那是后台自愈防误摘的机制
-		//（见 `createAbsenceConfirmer`；它正是"立刻核一遍"那条命令用 `CONFIRM_IMMEDIATELY`
-		// 绕开的东西，那条路现在没有入口了）。
-		await plugin.runIndexSelfHeal();
-		await plugin.runIndexSelfHeal();
-		await waitFor(
-			async () => missingIn(await readReport()) === missing0,
-			"★ 后台自检两轮之后要把失效记录摘掉（占用报告里的失效数回到基线）",
-			5000,
-			diagnose
-		);
-		assert.equal(
-			indexHandle.get("stale-1f.png"),
-			undefined,
-			"★ 那条记录本身也要从索引里消失（否则下一轮又会查到它）"
-		);
-
-		// ⭐ 只读性：报告一个文件都不该动（它没有任何确认框，也没有删除路径）
-		assert.equal(harness.calls.trash.length, trashesBeforeReport, "★ 报告不许碰回收站（它只读）");
-		assert.equal(harness.calls.delete.length, deletesBeforeReport, "★ 报告不许删任何文件（它只读）");
-		assert.ok(await existsOnDisk(root, outsideFile), "★ 索引外的文件必须原封不动（它可能是用户的附件）");
-		assert.ok(await existsOnDisk(root, referencedCopy), "★ 被引用的副本当然也原封不动");
+			await plugin.runIndexSelfHeal();
+			assert.equal(
+				indexHandle.get(staleKey),
+				undefined,
+				"★★ 两轮之后要把失效记录摘掉（它指向的文件已经不在了）"
+			);
+		}
 
 		// 批量上传：把 `attachments/pic.png` 传上去，并改写笔记里的本地链接
 		const attachmentPath = "attachments/pic.png";
@@ -1082,6 +987,36 @@ ${text}`);
 		//（`release-space-flow` / `orphan-flow` 自动那一路传的是 `*_LIST_MAX`）——
 		// 判据是**清单全不全**，不是"哪个界面更好看"，所以那条边界不在这里钉。
 		const batchLines = (pickAsks.at(-1)?.lines ?? []).join(" ｜ ");
+		// ⭐⭐ 2026-10-22（D-71 / D-72，用户两次要求）：
+		// 「上部的文案取消掉,信息改到列表上面去」→「还是有顶部会根据内容调整的文案,
+		// 把文案简化成固定的说明文字」。
+		//
+		// 所以判据有两条，**两条都要**：
+		// ① 只有**一段**（原来这里是 3 段：摘要 / 什么都不搬 / 另有 2 个没有笔记引用 ——
+		//    其余四类已经下沉到行：小标签 / 副标题 / 图标）；
+		// ② 这一段是**固定说明**：不含任何数字（数量在**按钮**上「上传并改写链接 (12)」）、
+		//    不含任何主机名（站点在**每一行的副标题**里）。
+		assert.equal(
+			(pickAsks.at(-1)?.lines ?? []).length,
+			1,
+			`★★ 列表上方只该有**一段**说明（其余信息在行里）：${JSON.stringify(pickAsks.at(-1)?.lines)}`
+		);
+		assert.equal(
+			/\d/.test(batchLines),
+			false,
+			`★★ 顶部是**固定说明**，不许有数字（数量在按钮上）：${batchLines}`
+		);
+		// ⭐⭐ 2026-10-22（D-73）：**标题必须与命令名说的是同一件事**。
+		//
+		// 用户报的：「上传功能已经改成涵盖所有附件,但打开界面发现标题是"上传笔记引用的文件",
+		// 这不准确」。标题原来只说了**第一类**（被引用的），而候选有四类。
+		// ⚠️ 判据用"与命令名去省略号后逐字相同"而不是"不含某个词"：
+		// 前者挡得住任何一侧的漂移（改标题不改命令名、或反过来），后者只挡那一个词。
+		assert.equal(
+			pickAsks.at(-1)?.title,
+			plugin.t("cmdUploadAttachments").replace("…", ""),
+			`★★ 弹窗标题必须与命令名一致（功能涵盖四类候选，标题不能只说"笔记引用的文件"）：${pickAsks.at(-1)?.title}`
+		);
 		assert.ok(
 			!batchLines.includes(attachmentPath),
 			`★★ 摘要里不该重复列出文件名（那是下面那张清单的事）：${batchLines}`
@@ -1113,6 +1048,70 @@ ${text}`);
 			await existsOnDisk(root, "attachments/pic 1.png"),
 			false,
 			"★ 批量上传不得在附件目录里留下中转副本"
+		);
+
+		// ============================================================
+		// 8a2. ⭐⭐ 「已经传过、而笔记里那条链接还是本地的」⇒ 重跑这条命令必须能修好
+		//
+		// 2026-10-21 用户实报的场景（D-56 的后续）：对象早就传上去了（索引里有记录），
+		// 而正文里那条还是本地路径 —— 他看到的现象是「没有被上传」。
+		// 他想到的修法就是**再跑一次「上传附件」**，而旧判据按"已经在缓存索引里"把它跳过
+		// ⇒ 重跑永远修不好它，用户只剩手工改笔记这一条出路。
+		//
+		// 这里把那条链完整走两遍：第一次真的传上去；然后把正文**改回本地写法**
+		//（正好用用户那条的形状：相对前缀 + `%20` + 括号），第二次必须
+		// ① 一个 PUT 都不发（字节云端已有）② 把链接改成远端地址 ③ 确认框如实说这是"重修"。
+		// ============================================================
+		// ⚠️ 名字里**同时有空格与成对括号**：这正是浏览器下载重名文件给出的形状，
+		// 也是用户那条的等价物（`… 游立强 4年(1).pdf`）。`%20` 与括号各守一条判据。
+		const pdfPath = "assets/报告 (1).pdf";
+		await mkdir(join(root, "assets"), { recursive: true });
+		await writeFile(join(root, pdfPath), Buffer.from([...BATCH_BYTES, 0x7d, 0x7e]));
+		const pdfNote = "notes/报告.md";
+		await writeFile(join(root, pdfNote), "![报告](assets/报告 (1).pdf)\n");
+		harness.setResolvedLinks({ [pdfNote]: { [pdfPath]: 1 } });
+		await harness.refreshPathCache();
+
+		runCommand("upload-attachments");
+		await waitFor(
+			async () => (await readFile(join(root, pdfNote), "utf8")).includes("http"),
+			"带括号的附件第一次上传后链接被改写",
+			5000,
+			diagnose
+		);
+		const putsAfterFirst = server.countByMethod("PUT");
+
+		// 把那一行**改回本地写法**（含 `%20` 与成对括号：正是用户笔记里的形状）
+		await writeFile(join(root, pdfNote), "[FPGA工程师](../assets/报告%20(1).pdf)\n");
+		await harness.refreshPathCache();
+		mockObsidian.Notice.instances.length = 0;
+		runCommand("upload-attachments");
+		await waitFor(
+			async () => (await readFile(join(root, pdfNote), "utf8")).includes(PUBLIC_BASE),
+			"重修之后链接指向存储",
+			5000,
+			diagnose
+		);
+		const repairedText = await readFile(join(root, pdfNote), "utf8");
+		assert.ok(
+			!repairedText.includes("assets/"),
+			`★★ 重修必须把本地路径换掉（含括号与 %20 编码）：${repairedText}`
+		);
+		assert.equal(
+			server.countByMethod("PUT"),
+			putsAfterFirst,
+			`★★ 重修**不许重传字节**（云端已有同一份）：${JSON.stringify(server.requests.filter((r) => r.method === "PUT").map((r) => r.path))}`
+		);
+		// ⚠️ 必须**看得出来**那一个是"重修"（只改链接、不重传）：
+		// 不说的话，用户看到"已经传过的文件又出现在清单里"会以为去重坏了。
+		// ⭐ 2026-10-22（D-71）：这条信息从**摘要**（"其中 N 个早就传过了…"）下沉到**那一行**
+		// 的行内小标签 —— 用户核对的是行，而列表上方原来堆了八段话。
+		const repairRow = (pickAsks.at(-1)?.cards ?? []).find((card) => String(card?.id ?? "").includes("报告 (1)"));
+		assert.ok(repairRow, `★ 清单里要找到那份重修的文件：${JSON.stringify((pickAsks.at(-1)?.cards ?? []).map((card) => card.id))}`);
+		assert.equal(
+			repairRow?.hint,
+			plugin.t("maintainBatchRepairHint"),
+			`★★ 重修那一行要标「只改链接」（否则用户以为在重传一遍）：${repairRow?.hint}`
 		);
 
 		// ============================================================
@@ -1284,12 +1283,28 @@ ${text}`);
 			);
 			assert.ok(rewrittenExternal.includes("# 外链"), "★ 笔记的其它内容必须原样保留");
 
-			// ⭐ 确认框必须**列出即将访问的站点** —— 它就是这次下载的授权凭据。
-			// 只说"还有 1 张站外图"等于让用户盲签一份许可。
+			// ⭐ 站点必须是**看得见的** —— 它就是这次下载的授权凭据（只说"还有 1 张站外图"
+			// 等于让用户盲签一份许可）。
+			// ⚠️ 2026-10-22（D-72）：它**不再聚合到顶部文案里**（用户要求顶部是**固定**说明），
+			// 而是写在**那一行的副标题**上（`externalRowMeta` 给主机）—— 逐行看得见
+			// 比一句汇总更具体，授权依据没有变。
 			const externalLines = (pickAsks.at(-1)?.lines ?? []).join(" ｜ ");
-			assert.ok(
+			assert.equal(
 				externalLines.includes(EXTERNAL_HOST),
-				`★ 确认框必须列出即将访问的站点（那是授权凭据）：${externalLines}`
+				false,
+				`★★ 顶部是固定说明，不该出现主机名（站点在行里）：${externalLines}`
+			);
+			const externalRow = (pickAsks.at(-1)?.cards ?? []).find((card) =>
+				String(card?.id ?? "").includes(EXTERNAL_HOST)
+			);
+			assert.ok(
+				externalRow,
+				`★ 清单里要能找到那条站外候选：${JSON.stringify((pickAsks.at(-1)?.cards ?? []).map((card) => card.id))}`
+			);
+			assert.equal(
+				String(externalRow?.meta ?? "").includes(EXTERNAL_HOST),
+				true,
+				`★★ 站外那一行的副标题要写明主机（那是授权凭据）：${externalRow?.meta}`
 			);
 
 			// ⭐ 同一张确认框也必须说清"文件留在原地"（1.2.0 / D-17）：用户的预期
@@ -1476,10 +1491,37 @@ ${text}`);
 				ids.includes("acc-real-local.png"),
 				`★★ 还在的本机文件要照常列出来（这条链唯一能读库外文件的地方）：${ids}`
 			);
+			// ⚠️⚠️ 2026-10-22（D-70）：它**要出现**，只是**勾不了**。
+			//
+			// 用户报的第三次：「有一个文件失效了，**只弹了一个通知**」→「改成列出文件列表，
+			// 附件名称后面增加一个跳转链接打开所在笔记」。之前"从清单里摘掉、只在文案里
+			// 提一句路径"的做法，等于把他指回笔记里逐条找那条坏链。
+			// ⚠️ 但它**绝对不能可勾**：文件都不在了，勾上只会让那一行停在等待
+			// —— 清单里出现"勾了也不会被处理"的行，会被读成插件漏了它。
+			const goneRow = (dialog.cards ?? []).find((card) => String(card?.id ?? "").includes("acc-gone"));
+			assert.ok(goneRow, `★★ 已经不在的本机文件也要**列出来**（用户要能跳去笔记里修）：${ids}`);
+			assert.equal(goneRow?.selectable, false, "★★ 但它**勾不了**（必然做不成，勾上只会停在等待）");
+			assert.ok(String(goneRow?.hint ?? "").length > 0, "★ 行内标签要说清「文件已不在」（作悬停说明）");
+			// ⭐ 2026-10-22（D-71，用户要求）："在列表中用**图标**表示出来" ——
+			// 行上带的是图标名（由弹窗层用宿主的 `setIcon` 画），而不是一段文字标签。
 			assert.equal(
-				ids.includes("definitely-not-here.png"),
+				goneRow?.hintIcon,
+				"alert-triangle",
+				`★★ 失效行要用**图标**标出来（文字只作悬停说明）：${goneRow?.hintIcon}`
+			);
+			assert.deepEqual(
+				goneRow?.open,
+				{ kind: "vault", value: notePath },
+				`★★ 行尾链接打开的是**引用它的那篇笔记**（他去那里修那条坏链）：${JSON.stringify(goneRow?.open)}`
+			);
+			assert.ok(
+				String(goneRow?.meta ?? "").includes("definitely-not-here"),
+				`★ 副标题给完整路径（用户要核对"是哪一份"）：${goneRow?.meta}`
+			);
+			assert.equal(
+				(dialog.initiallySelected ?? []).some((key) => String(key).includes("acc-gone")),
 				false,
-				`★★ 已经不在的本机文件**不许**出现（列出来就是"点了一定失败"）：${ids}`
+				"★★ 默认勾选**不含**它（勾不了的行不许进初始集合）"
 			);
 			// ⭐⭐ 而**还在**的那一行**必须把地址交给宿主去画**（`file:///…`）：能不能画出来
 			// **由宿主说了算**，画不出来由 `file-cards.ts::renderThumb` 的 `onerror` 静默降级。
@@ -1503,17 +1545,23 @@ ${text}`);
 				`★★ 原文仍要留在候选里兜底（宿主前缀不被认时还有一条路）：${JSON.stringify(realUrls)}`
 			);
 			const lines = (dialog.lines ?? []).join("\n");
-			// ⭐ 摘要里的数字**必须等于**下面清单的行数 —— 2026-10-17 真机复验实测到过
-			// 「将上传 0 个文件」而清单列了 8 行（`count` 只数库内待传，清单还含站外/本机/
-			// 已缓存过的）。同一屏两处对不上，用户会以为清单是无效的。
-			const summaryHead = (dialog.lines ?? [])[0] ?? "";
-			const declaredCount = Number((/\d+/.exec(summaryHead) ?? [])[0]);
+			// ⭐⭐ 2026-10-22（D-72）：顶部已经是**固定说明**（不含数字、不含主机名、不含路径），
+			// 所以"摘要说 0 个、清单列 8 行"那类不一致**结构上不可能再发生** ——
+			// 判据改成"它就是一句固定的话"：
+			// ① 不许有数字（数量在**按钮**上）；② 路径/主机名只出现在行里。
 			assert.equal(
-				declaredCount,
-				(dialog.cards ?? []).length,
-				`★★ 摘要里的数字必须等于清单行数（不能一处说 0、一处列 8 行）：${summaryHead} ｜ 行数 ${(dialog.cards ?? []).length}`
+				/\d/.test(lines),
+				false,
+				`★★ 顶部必须是**固定说明**（不许随内容调整：没有数字、没有主机名）：${lines}`
 			);
-			assert.ok(lines.includes("definitely-not-here.png"), "★ 但要如实说出来 —— 它在笔记里正是坏链");
+
+			// ⚠️ 失效那条**不写在文案里**（D-70 / D-72）：路径在它自己那一行（`meta`）、
+			// 说明在那一行的图标上（`title`）。文案里再贴一次路径，等于又变回"说了但不给点"。
+			assert.equal(
+				lines.includes("definitely-not-here"),
+				false,
+				`★ 路径只出现在清单行里（文案里那份点不了）：${lines}`
+			);
 			assert.ok(!lines.includes("**"), `★ 文案是纯文本，不许露出 Markdown 星号：${lines}`);
 
 			// 收尾：库外那个临时目录 + 这篇笔记都要清掉（候选清单是**全库**的）
@@ -1678,18 +1726,23 @@ ${text}`);
 			const activate = (vaultPath) => {
 				app.workspace.getActiveFile = () => app.vault.getAbstractFileByPath(vaultPath);
 			};
-			const originalPick = plugin.pickExternalImages;
+			const originalPickTasks = plugin.pickTasks;
 			/**
-			 * 弹窗替身 = "用户在默认范围里看到清单、全选、点确认"。
+			 * 清单替身 = "用户只勾了**站外/本机**那几行、点确认"。
 			 *
-			 * ⚠️ 2026-10-15：确认之后那条链的**缓存与进度都在 `run` 里**（弹窗只负责列出来与收勾选）
-			 * ⇒ 替身必须把 `run` 也跑一遍，否则测到的是"挑了但什么都没做"（现象是等待超时）。
+			 * ⚠️ 2026-10-22（D-68）：「挑选外链」那条命令并入了「上传附件」，于是这里改成
+			 * 驱动**大命令**的清单 —— 只勾 `pickKey` 形态的行（站外/本机的 id 是
+			 * `笔记\0地址`；库内文件的 id 是路径，不可能含 NUL）。
+			 * ⚠️ `run` 仍要跑一遍：缓存与进度都在它里面（弹窗只负责列出来与收勾选）。
 			 */
-			const pickAllFromNote = () => {
-				plugin.pickExternalImages = async (load, run) => {
-					const picked = await load("note");
-					await run?.(picked, () => {});
-					return picked;
+			const pickOnlyExternal = () => {
+				plugin.pickTasks = async (options) => {
+					pickAsks.push(options);
+					const selected = (options.cards ?? [])
+						.map((card) => card.id)
+						.filter((id) => typeof id === "string" && id.includes("\u0000"));
+					await options.run?.(selected, () => {});
+					return { selected, ran: true };
 				};
 			};
 
@@ -1703,13 +1756,13 @@ ${text}`);
 			await writeFile(join(root, notePath), `# 勾选\n\n![x](${externalUrl})\n`, "utf8");
 			await harness.refreshPathCache();
 			activate(notePath);
-			pickAllFromNote();
+			pickOnlyExternal();
 
 			const filesBefore = await cacheFiles();
 			const entriesBefore = (await readIndex()).entries.length;
 			externalHostRequests.length = 0;
 
-			runCommand("pick-external-images");
+			runCommand("upload-attachments");
 
 			await waitFor(
 				async () => !(await readFile(join(root, notePath), "utf8")).includes(externalUrl),
@@ -1763,13 +1816,13 @@ ${text}`);
 			await writeFile(join(root, reuseNote), `![y](${sameBytesUrl})\n`, "utf8");
 			await harness.refreshPathCache();
 			activate(reuseNote);
-			pickAllFromNote();
+			pickOnlyExternal();
 
 			const filesBeforeReuse = await cacheFiles();
 			const entriesBeforeReuse = (await readIndex()).entries.length;
 			externalHostRequests.length = 0;
 
-			runCommand("pick-external-images");
+			runCommand("upload-attachments");
 			await waitFor(
 				async () => !(await readFile(join(root, reuseNote), "utf8")).includes(sameBytesUrl),
 				"已缓存过的图，勾选后也要把链接改写成自己的存储地址",
@@ -1809,10 +1862,10 @@ ${text}`);
 			await writeFile(join(root, tokenNote), `![z](${TOKEN_SHAPED_URL})\n`, "utf8");
 			await harness.refreshPathCache();
 			activate(tokenNote);
-			pickAllFromNote();
+			pickOnlyExternal();
 
 			const filesBeforeToken = await cacheFiles();
-			runCommand("pick-external-images");
+			runCommand("upload-attachments");
 			await waitFor(
 				async () => !(await readFile(join(root, tokenNote), "utf8")).includes(TOKEN_SHAPED_URL),
 				"令牌形状的 URL 也要被改写成自己存储的地址",
@@ -1839,7 +1892,7 @@ ${text}`);
 				`★ 那串令牌不该出现在文件名里（实际 ${JSON.stringify(tokenFiles[0])}）`
 			);
 
-			plugin.pickExternalImages = originalPick;
+			plugin.pickTasks = originalPickTasks;
 			app.workspace.getActiveFile = originalActiveFile;
 			plugin.settings.externalImageCache = false;
 		}
@@ -2615,6 +2668,11 @@ ${text}`);
 			mockObsidian.Notice.instances.length = 0;
 			plugin.settings.orphanAsk = "notice";
 			await writeFile(join(root, notePath), "没有任何引用了。\n", "utf8");
+			// ⚠️ 宿主的链接索引**跟着正文走**：真机上改写/清空之后它会重新解析，这里必须手动跟上。
+			// 不跟会怎样：判"本地副本还被正文指着"的那条会读到**旧的** resolvedLinks，
+			// 于是这个对象被当成"还在用"、询问不出声（2026-10-22 加本地引用那一半时踩到，
+			// 现象是"引用消失了却不弹"—— 与真机行为相反，纯属夹具没跟上）。
+			harness.setResolvedLinks({});
 			app.vault.trigger("modify", app.vault.getAbstractFileByPath(notePath));
 
 			// 1.5 s（引用重算）+ 4 s（询问防抖）—— 等它自己走完
@@ -2631,6 +2689,177 @@ ${text}`);
 				9000,
 				() => `实际提示：${JSON.stringify(mockObsidian.Notice.instances.map((n) => n.message))}`
 			);
+		}
+
+		// ============================================================
+		// 8i2. ⭐⭐ 清理命令涵盖**两类**：云端对象 ＋ **没有任何引用的本地文件**（D-74）
+		//
+		// 用户 2026-10-22：「增强清理命令功能涵盖所有可以被清理的对象，把本地孤立文件也纳入清理。
+		// 加过滤选项，可以不勾本地，也可以不勾云端。」
+		//
+		// ⚠️ 命令路只有在 `orphanAsk === "always"` 时才弹**清单**（`notice` 档只出一句通知，
+		// §8i 测的正是那一档）⇒ 这一段显式切回来。
+		// ⚠️ 替身会 `run(selected)` 但**不传 `action`** ⇒ 三档一个都不执行，
+		// 所以这一段**不删任何东西**（它只验清单长什么样）。
+		// ============================================================
+		{
+			plugin.settings.orphanAsk = "always";
+			// 造一个"从没上传过、也没有任何引用"的本地文件
+			const strayPath = "attachments/没人引用我.png";
+			await writeFile(join(root, strayPath), Buffer.from([...BATCH_BYTES, 0x92]));
+			// ⭐ 2026-10-22（D-77）：**站外缓存的本地副本** ——
+			// 一份没人引用的（要进清单）、一份被笔记直接指着的（**不进**）。
+			const cachedPath = "attachments/站外缓存图.png";
+			const cachedPinned = "attachments/站外缓存图-被引用.png";
+			await writeFile(join(root, cachedPath), Buffer.from([...BATCH_BYTES, 0x93]));
+			await writeFile(join(root, cachedPinned), Buffer.from([...BATCH_BYTES, 0x94]));
+			for (const [key, path] of [["cached-1f.png", cachedPath], ["cached-2f.png", cachedPinned]]) {
+				plugin.indexStore.index.set({
+					key,
+					cachePath: path,
+					remoteUrl: `${PUBLIC_BASE}/${key}`,
+					size: 12,
+					contentType: "image/png",
+					etag: "",
+					uploadedAt: new Date().toISOString(),
+					lastUsedAt: Date.now(),
+					sourceName: path.split("/").pop() ?? path,
+					origin: "external",
+				});
+			}
+			// 被引用的那一份：笔记里直接指着路径（最严格的那一半判据）
+			await writeFile(join(root, "notes/站外缓存引用.md"), `![](${cachedPinned})`);
+			harness.setResolvedLinks({ "notes/站外缓存引用.md": { [cachedPinned]: 1 } });
+			await harness.refreshPathCache();
+
+			const asks = [];
+			plugin.pickTasks = async (options) => {
+				asks.push(options);
+				return null; // 看完清单就取消 —— 这一段不执行任何删除
+			};
+			runCommand("check-orphans");
+			await waitFor(() => asks.length > 0, "清理命令弹出了清单", 10000, diagnose);
+			plugin.pickTasks = pickTasksAll;
+			plugin.settings.orphanAsk = "notice"; // 还原（后面还有用例在用）
+
+			const dialog = asks.at(-1);
+			const ids = (dialog.cards ?? []).map((card) => String(card.id));
+			assert.ok(
+				ids.some((id) => id.startsWith("cloud:")),
+				`★★ 清单里要有云端对象那一类：${ids.join(" | ")}`
+			);
+			assert.ok(
+				ids.includes(`vault:${strayPath}`),
+				`★★ 从来没有上传过、也没有任何引用的本地文件也要列出来（D-74）：${ids.join(" | ")}`
+			);
+			// ⚠️ 这一格守的是"还**被远端 URL 引用着**的不算孤立"：
+			// 前面几节上传过、链接也已经改成远端地址的那份附件（`attachments/pic.png`）
+			// **不许**出现在本地孤立那一列 —— 否则用户一清就把正在显示的图删掉。
+			assert.equal(
+				ids.includes("vault:attachments/pic.png"),
+				false,
+				`★★ 链接已改成远端地址的附件不算孤立（只查本地引用就会误删）：${ids.join(" | ")}`
+			);
+
+			// ⭐ 默认只勾云端：本地文件从没上传过，删了**没有云端可依**
+			const picked = (dialog.initiallySelected ?? []).map(String);
+			assert.ok(
+				picked.length > 0 && picked.every((id) => id.startsWith("cloud:")),
+				`★★ 默认只勾云端对象（本地孤立文件要用户自己决定）：${picked.join(" | ")}`
+			);
+
+			// ⭐ 两个类别开关（用户原话：「可以不勾本地，也可以不勾云端」）
+			assert.deepEqual(
+				(dialog.filters ?? []).map((item) => item.key),
+				["cloud", "local"],
+				"★★ 两个类别过滤开关"
+			);
+
+			const localOnly = await dialog.onFiltersChange({ cloud: false, local: true });
+			const localIds = localOnly.cards.map((card) => String(card.id));
+			assert.ok(
+				localIds.every((id) => id.startsWith("vault:")),
+				`★★ 关掉「云端对象」后只剩本地文件那一类：${localIds.join(" | ")}`
+			);
+			assert.ok(
+				localIds.includes(`vault:${strayPath}`),
+				`★ 刚造的那份孤立文件要在里面：${localIds.join(" | ")}`
+			);
+			// ⭐⭐ 2026-10-22（D-77，用户：「语义也扩展到所有可以被清理的附件」）：
+			// **站外缓存副本**也在清单里，但行内标「站外缓存」（与「本地」区分）、**默认不勾**。
+			const cachedRow = (localOnly.cards ?? []).find((card) => String(card.id) === `vault:${cachedPath}`);
+			assert.ok(
+				cachedRow,
+				`★★ 站外缓存下来的本地副本也要列出来（以前被硬排除，永远清不掉）：${localIds.join(" | ")}`
+			);
+			assert.equal(
+				cachedRow?.hint,
+				plugin.t("orphanRowCached"),
+				`★★ 缓存那一行要标「${plugin.t("orphanRowCached")}」（否则用户不知道删了会怎样）：${cachedRow?.hint}`
+			);
+			assert.equal(
+				picked.includes(`vault:${cachedPath}`),
+				false,
+				`★★ 缓存那一行**默认不勾**（删了下次显示要重新下载）：${picked.join(" | ")}`
+			);
+			// ⚠️ 而**被笔记直接指着**的那份缓存副本一行都不许有（那就是删正在显示的图）。
+			assert.equal(
+				localIds.includes(`vault:${cachedPinned}`),
+				false,
+				`★★ 被引用的缓存副本不进清单（与普通文件同一道判据）：${localIds.join(" | ")}`
+			);
+			// ⚠️⚠️ **宿主自己的目录一个都不许出现**：`.obsidian/` 里是插件与设置
+			//（本插件自己的 `.cache-index.json` 就在那儿）—— 它同样"没有任何笔记引用"，
+			// 但删了就是坏配置。这条是实测抓到的（第一版把它列成了可清理项）。
+			assert.equal(
+				localIds.some((id) => id.startsWith("vault:.")),
+				false,
+				`★★ 隐藏目录（.obsidian / .trash）里的文件不是可清理项：${localIds.join(" | ")}`
+			);
+			const cloudOnly = await dialog.onFiltersChange({ cloud: true, local: false });
+			assert.ok(
+				cloudOnly.cards.length > 0 && cloudOnly.cards.every((card) => String(card.id).startsWith("cloud:")),
+				`★★ 关掉「本地文件」后只剩云端对象：${cloudOnly.cards.map((card) => card.id).join(" | ")}`
+			);
+			// ⭐⭐ 2026-10-22（D-76）：**两条命令的清单弹窗统一风格**，三条判据（与「上传附件」逐字对得上）：
+			//
+			//  ① 标题 = **命令名去省略号**（问句只留给自动那条询问）；
+			//  ② 顶部是**一句固定说明**：不随内容变、**不含数字**；
+			//  ③ 数量在**要按的那个按钮上**。
+			assert.equal(
+				dialog.title,
+				plugin.t("cmdCheckOrphans").replace("…", ""),
+				`★★ 清单弹窗的标题 = 命令名（与「上传附件」同一条规则，问句只留给自动那条）：${dialog.title}`
+			);
+			assert.equal(
+				/\d/.test((cloudOnly.lines ?? []).join(" ")),
+				false,
+				`★★ 顶部是**固定说明**，不许有数字（数量在按钮上）：${JSON.stringify(cloudOnly.lines)}`
+			);
+			assert.equal(
+				(cloudOnly.lines ?? []).length,
+				1,
+				`★★ 顶部只该有**一段**（与「上传附件」一致；原来是 3~4 段且随过滤变）：${JSON.stringify(cloudOnly.lines)}`
+			);
+			// ③ 数量真的在按钮上（两个删除档）；「保留」不动任何东西 ⇒ 不带
+			const deleteActions = (dialog.actions ?? []).filter((action) => action.key !== "keep");
+			assert.equal(deleteActions.length, 2, `★ 两个删除档：${JSON.stringify((dialog.actions ?? []).map((a) => a.key))}`);
+			for (const action of deleteActions) {
+				assert.equal(
+					String(action.label(5)).includes("5"),
+					true,
+					`★★ 「${action.key}」这一档要说清**动几个**（与「上传附件」的主按钮同一个读法）：${action.label(5)}`
+				);
+			}
+			// ⚠️ 只钉“字段存在”是不够的：`buildTaskLabels` 也还要真的把 `{count}` 换掉
+			//（D-72 的生产缺陷：模板里没有 `{count}`，数字一直被静默丢掉，而套件的假 `t` 把参数拼进去了）。
+			for (const key of ["maintainBatchCta", "orphanLocalOnly", "orphanBoth"]) {
+				assert.equal(
+					plugin.t(key, { count: 7 }).includes("7"),
+					true,
+					`★★ 按钮文案要真的带上数量（模板里得有 {count}）：${key} ⇒ ${plugin.t(key, { count: 7 })}`
+				);
+			}
 		}
 
 		// ============================================================
@@ -2674,20 +2903,33 @@ ${text}`);
 				() => `实际提示：${JSON.stringify(mockObsidian.Notice.instances.map((n) => n.message))}`
 			);
 
-			// ── ② 台账清空 ⇒ 候选为空 ⇒ 如实说"没有发现"，不能静默 ──
+			// ── ② 台账清空 ⇒ **绝不能静默**：要么弹清单、要么如实说"没有发现" ──
+			//
 			// 办法：把**上传台账**清空（`forgetUploaded`）—— 那正是"这台设备什么都没上传过"。
+			//
+			// ⚠️ 2026-10-22（D-74）之后"两类都空"在这套夹具里**造不出来**：库是全局的，
+			// 前面几十节留下的文件里必然有"没人引用、也没上传过"的本地文件 ⇒ 命令照样有东西可列。
+			// 所以判据改成"**不许静默**"（两种合法出口之一），而不是死盯那一句文案。
+			// ⚠️ 别把它改成"必须弹清单"：那会在**真的**没有孤立文件的环境里假红
+			//（演示库、用户库都可能是干净的）。
 			index.forgetUploaded(orphanKey);
 			mockObsidian.Notice.instances.length = 0;
+			const emptyAsk = [];
+			plugin.pickTasks = async (options) => {
+				emptyAsk.push(options);
+				return null;
+			};
 			runCommand("check-orphans");
 			await waitFor(
 				() =>
-					mockObsidian.Notice.instances.some(
-						(notice) => notice.message === plugin.t("orphanNoneToCheck")
-					),
-				"★ 没有候选时必须如实说'没有发现'（静默会被当成命令坏了）",
+					emptyAsk.length > 0 ||
+					mockObsidian.Notice.instances.some((notice) => notice.message === plugin.t("orphanNoneToCheck")),
+				"★ 云端候选为空时也必须出声（弹清单，或如实说「没有发现」—— 绝不能静默）",
 				6000,
-				() => `实际提示：${JSON.stringify(mockObsidian.Notice.instances.map((n) => n.message))}`
+				() =>
+					`实际提示：${JSON.stringify(mockObsidian.Notice.instances.map((n) => n.message))} ｜ 清单：${emptyAsk.length}`
 			);
+			plugin.pickTasks = pickTasksAll;
 		}
 
 		// ============================================================
@@ -2746,6 +2988,55 @@ ${text}`);
 			);
 			assert.equal(await existsOnDisk(root, dupB), true, "★ 同理：歧义那两份都不许删");
 			assert.equal(harness.calls.delete.length, deletesBefore, "★ 这一趟一个文件都不该删");
+		}
+
+		// ============================================================
+		// 8j. ⭐⭐ 「大而全的上传」：**没有任何笔记引用的附件**也要真能传（D-68 的接线）
+		//
+		// ## 为什么必须在这一层测
+		//
+		// 候选那一侧（`selectUploadCandidates` 的 `includeUnreferenced`）在 `maintenance`
+		// 套件里逐格钉过 —— 但**执行层会重新算一遍候选**（安全判据在那儿）。那个口子没接上时，
+		// 用户勾了未引用项、点了确认，清单上那一行**永远停在等待**：既不是失败也不是跳过
+		//（`onItem` 只对真正处理到的那些上报），一个字都不报。2026-10-22 实测到的正是这个缺口。
+		//
+		// ⚠️ 这条同时钉住另一半：它们**默认不勾** —— 传上去不会出现在任何笔记里（只是备份），
+		// 而这类文件可能有几百个（旧图、废弃稿），默认全勾等于替用户做了"全备份"这个决定。
+		// ============================================================
+		{
+			const orphanName = "没有引用的附件";
+			const orphanPath = `attachments/${orphanName}.png`;
+			const ORPHAN_BYTES = new Uint8Array([0x6f, 0x72, 0x70, 0x68, 0x61, 0x6e, 0x21]);
+			await writeFile(join(root, orphanPath), Buffer.from(ORPHAN_BYTES));
+			await harness.refreshPathCache();
+			const orphanKey = `${orphanName}-${createHash("sha256").update(Buffer.from(ORPHAN_BYTES)).digest("hex")}.png`;
+
+			// 替身扮演"用户只勾了这一行"（真弹窗里它默认不勾，见下面的断言）
+			let rowSeen = false;
+			let tickedByDefault;
+			plugin.pickTasks = async (options) => {
+				const row = (options.cards ?? []).find((card) => card.id === orphanPath);
+				rowSeen = Boolean(row);
+				tickedByDefault = (options.initiallySelected ?? []).includes(orphanPath);
+				await options.run?.(row ? [row.id] : [], () => {});
+				return { selected: row ? [row.id] : [], ran: true };
+			};
+			runCommand("upload-attachments");
+			await waitFor(
+				() => plugin.indexStore.index.wasUploaded(orphanKey),
+				"★★ 勾上「没有被任何笔记引用」的附件之后必须**真的**上传（执行层少了 `includeUnreferenced` 就会静默跳过：那一行永远停在等待）",
+				6000,
+				diagnose
+			);
+			plugin.pickTasks = pickTasksAll; // 恢复默认替身
+
+			assert.equal(rowSeen, true, "★★ 没有引用的附件必须出现在清单里（用户要一条命令把库里该传的都传了）");
+			assert.equal(
+				tickedByDefault,
+				false,
+				"★★ 但它默认**不勾**（传上去不会出现在任何笔记里，只是备份 —— 得他自己决定）"
+			);
+			assert.equal(await existsOnDisk(root, orphanPath), true, "★ 文件留在原处：这条命令从不搬文件、从不改名");
 		}
 
 		// ============================================================

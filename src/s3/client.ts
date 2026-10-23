@@ -38,7 +38,7 @@
 
 import { requestUrl } from "obsidian";
 import { toArrayBuffer } from "./hash";
-import { S3Error, isSuccess, networkError, responseError } from "./errors";
+import { S3Error, isSuccess, networkError, responseError, timeoutError } from "./errors";
 import { S3_SERVICE, encodePath, formatAmzDate, payloadHashOf, presignUrl, signRequest, uriEncode } from "./sigv4";
 
 // 上层（上传链路、渲染钩子）要按性质决定怎么办（重试 / 提示 / 降级），
@@ -462,6 +462,14 @@ export interface S3ClientDeps {
 	maxAttempts?: number;
 	baseDelayMs?: number;
 	maxDelayMs?: number;
+	/**
+	 * 传输超时（毫秒，按 HTTP 方法）。不传用 `DEFAULT_TRANSPORT_TIMEOUTS`。
+	 *
+	 * ⭐ 2026-10-22（D-78）：`requestUrl` **没有中断能力**，所以超时只能"不再等"
+	 *（见 `raceWithTimeout`）。这一项是**测试注入点**：套件用几十毫秒验证"卡住的那次
+	 * 会失败、而且下次还能重试"，真机用默认值。
+	 */
+	timeouts?: Partial<Record<TransportMethod, number>>;
 }
 
 export interface PutResult {
@@ -575,6 +583,62 @@ function decodeXmlEntities(value: string): string {
  */
 const DEFAULT_PRESIGN_EXPIRES = 1800;
 
+/** 参与超时判定的方法（就用这几个；大写与 `request.method` 同一套写法）。 */
+export type TransportMethod = "GET" | "HEAD" | "PUT" | "POST" | "DELETE";
+
+/**
+ * 一次请求最多等多久（毫秒）。
+ *
+ * ## 为什么不是一个数
+ *
+ * 三种请求的"正常耗时"差两个数量级：
+ * - `HEAD` 只回几个头 ⇒ 30 秒还没响应基本就是死了（它还被"批量预检"串行调用，
+ *   一个卡住会让整批停在那儿）；
+ * - `GET` 要真把对象传下来 ⇒ 给 60 秒（一个 10 MB 的图在 2 Mbps 上约 40 秒）；
+ * - `PUT` 要**上传**整份字节 ⇒ 给 5 分钟，否则大附件在慢网络上会被自己的超时掐掉
+ *   （那会变成"上传永远失败"这种更糟的形态）。
+ *
+ * ⚠️ 这几个数字是**判据**，不是配置项：它们决定"卡住"与"慢"的分界。用户侧没有开关 ——
+ * 多一个开关就多一种"我调了它所以它坏了"的排查方向。
+ */
+export const DEFAULT_TRANSPORT_TIMEOUTS: Record<TransportMethod, number> = {
+	GET: 60_000,
+	HEAD: 30_000,
+	PUT: 300_000,
+	POST: 60_000,
+	DELETE: 60_000,
+};
+
+/**
+ * 超时信号：`raceWithTimeout` 内部用它区分"等到点了"与"传输自己抛错"。
+ *
+ * ⚠️ 单独一个类型而不是 `new Error("timeout")`：靠**消息**判断会误伤 ——
+ * 传输层自己也可能抛"timeout"字样的错误（`requestUrl` 在某些平台上就会），
+ * 那样一次真实的网络错误会被报成"我们主动放弃"，排查方向就错了。
+ */
+class TransportTimeout extends Error {}
+
+/**
+ * 让一个 promise 最多活 `ms` 毫秒。
+ *
+ * ⚠️ **不是取消**：底层请求还在跑（`requestUrl` 没有 abort），我们只是不再等它。
+ * 后果要记住：这次判定为失败之后，宿主的网络栈里可能还有一个请求在慢慢收尾 ——
+ * 它不会写盘（回调已经没人接了），但"服务端收到了这次 GET"是可能的。
+ * 所以文案说的是"已放弃等待"，不是"请求没有发出"。
+ */
+function raceWithTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+	if (!(ms > 0)) return work;
+	let timer: number | undefined;
+	const limit = new Promise<never>((_, reject) => {
+		// ⚠️ 用 `window.setTimeout`（与 `defaultSleep` 同一条理由）：弹窗里裸的
+		// `setTimeout` 属于另一个定时器源，行为会不一致（官方 lint 也这么要求）。
+		timer = window.setTimeout(() => reject(new TransportTimeout(`${ms}ms`)), ms);
+	});
+	return Promise.race([work, limit]).finally(() => {
+		if (timer !== undefined) window.clearTimeout(timer);
+	});
+}
+
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_BASE_DELAY_MS = 250;
 const DEFAULT_MAX_DELAY_MS = 2_000;
@@ -595,6 +659,7 @@ export class S3Client {
 	private readonly maxAttempts: number;
 	private readonly baseDelayMs: number;
 	private readonly maxDelayMs: number;
+	private readonly timeouts: Partial<Record<TransportMethod, number>>;
 
 	constructor(config: S3ClientConfig, deps: S3ClientDeps = {}) {
 		this.config = config;
@@ -604,6 +669,7 @@ export class S3Client {
 		this.maxAttempts = Math.max(1, deps.maxAttempts ?? DEFAULT_MAX_ATTEMPTS);
 		this.baseDelayMs = deps.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
 		this.maxDelayMs = deps.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
+		this.timeouts = deps.timeouts ?? {};
 	}
 
 	/** 脱敏摘要，专供日志 —— 里面**没有**密钥，`test-s3-client.mjs` 钉住这一点。 */
@@ -947,9 +1013,31 @@ export class S3Client {
 		request: S3TransportRequest,
 		context: { operation: string; key: string; attempt: number }
 	): Promise<S3TransportResponse> {
+		// ⭐⭐ 2026-10-22（D-78）：**每一次传输都有上限**。
+		//
+		// 没有它的时候，`requestUrl` 卡住就是永久卡住 —— 而 `createLocalCopyEnsurer`
+		// 用 `inflight` 去重（同 key 的第二次调用直接复用那条 Promise）⇒ 一次卡死
+		// 会让这个对象**本次会话内再也不会重试**，用户看到的是"图一直空着，重启才好"。
+		// 这正是 §25.3 那条「某次下载永不完成」的机制来源。
+		const limit = this.timeouts[request.method as TransportMethod] ?? DEFAULT_TRANSPORT_TIMEOUTS[request.method as TransportMethod] ?? DEFAULT_TRANSPORT_TIMEOUTS.GET;
 		try {
-			return await this.transport(request);
+			return await raceWithTimeout(this.transport(request), limit);
 		} catch (error) {
+			// ⚠️ 超时要**自己成形**（不可重试、code=Timeout），不能被下面那条兜底吞掉：
+			// 一旦被包成普通 `network`，`withRetry` 会照着"网络错误可重试"再等两轮，
+			// 一次 60 秒的失败变成 3 分钟 —— 而结论不会变。
+			if (error instanceof TransportTimeout) {
+				throw timeoutError({
+					operation: context.operation,
+					key: context.key,
+					timeoutMs: limit,
+					attempts: context.attempt,
+					secrets: this.secrets(),
+				});
+			}
+			// 已经是 `S3Error` 的（理论上不会再走到，传输层只抛底层异常）原样抛，
+			// 别包第二层 —— 包了就会丢掉 `kind` / `code` / `retryable`。
+			if (error instanceof S3Error) throw error;
 			// 传输层抛错 = 没拿到响应。归类为可重试的网络错误。
 			throw networkError({
 				error,

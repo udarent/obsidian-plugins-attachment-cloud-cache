@@ -265,10 +265,125 @@ export async function runVaultFilesSuite(mod) {
 	assert.equal(contentTypeForExtension("docx"), "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
 	assert.equal(contentTypeForExtension("zip"), "application/zip");
 	assert.equal(contentTypeForExtension("txt"), "text/plain");
-	assert.equal(contentTypeForExtension("exe"), DEFAULT_CONTENT_TYPE, "未知扩展名应兜底");
+	assert.equal(contentTypeForExtension("q9zz"), DEFAULT_CONTENT_TYPE, "未知扩展名应兜底");
 	assert.equal(contentTypeForExtension(""), DEFAULT_CONTENT_TYPE, "空扩展名应兜底");
 	assert.equal(contentTypeForExtension(null), DEFAULT_CONTENT_TYPE);
 	assert.equal(DEFAULT_CONTENT_TYPE, "application/octet-stream", "兜底类型应是通用二进制（否则浏览器会试图当文本渲染）");
+
+	// ⭐⭐ 2026-10-22（D-64）：按**家族**复核了一遍类型表（用户问「再统计附件的种类,看是否有遗漏」）。
+	// 量出来的缺口不在"收不收"，而在**声明成什么**：一百多个真类型落回 `octet-stream`
+	// ⇒ 浏览器点开是**下载**而不是显示（与 1.1.0 那次"PDF 变成下载框"是同一个病）。
+	for (const [ext, type] of [
+		// 图片：老表只覆盖了"能嵌入"的那几个，其余真图片全落兜底
+		["tif", "image/tiff"],
+		["jfif", "image/jpeg"],
+		["heif", "image/heif"],
+		["jxl", "image/jxl"],
+		["apng", "image/apng"],
+		// 音频 / 视频
+		["wma", "audio/x-ms-wma"],
+		["aiff", "audio/aiff"],
+		["m4b", "audio/mp4"],
+		["midi", "audio/midi"],
+		["wmv", "video/x-ms-wmv"],
+		["m4v", "video/x-m4v"],
+		["mpeg", "video/mpeg"],
+		// 文档（含宏/模板变体与两种 ODF）—— 同一批后缀此前只有"无宏那一条"有类型
+		["docm", "application/vnd.ms-word.document.macroEnabled.12"],
+		["xlsm", "application/vnd.ms-excel.sheet.macroEnabled.12"],
+		["pptm", "application/vnd.ms-powerpoint.presentation.macroEnabled.12"],
+		["dotx", "application/vnd.openxmlformats-officedocument.wordprocessingml.template"],
+		["ods", "application/vnd.oasis.opendocument.spreadsheet"],
+		["odp", "application/vnd.oasis.opendocument.presentation"],
+		["rtf", "application/rtf"],
+		["pages", "application/vnd.apple.pages"],
+		// 电子书 / 压缩包
+		["mobi", "application/x-mobipocket-ebook"],
+		["azw3", "application/vnd.amazon.ebook"],
+		["cbz", "application/vnd.comicbook+zip"],
+		["tgz", "application/gzip"],
+		["bz2", "application/x-bzip2"],
+		["zst", "application/zstd"],
+		// 文本 / 源码 / 字幕 / 日历
+		["tsv", "text/tab-separated-values"],
+		["yaml", "application/yaml"],
+		["toml", "application/toml"],
+		["css", "text/css"],
+		["srt", "text/plain"],
+		["vtt", "text/vtt"],
+		["ics", "text/calendar"],
+		["vcf", "text/vcard"],
+		// 数据 / 字体 / 3D
+		["geojson", "application/geo+json"],
+		["ipynb", "application/x-ipynb+json"],
+		["woff2", "font/woff2"],
+		["glb", "model/gltf-binary"],
+		["stl", "model/stl"],
+	]) {
+		assert.equal(contentTypeForExtension(ext), type, `★ .${ext} 要声明真实类型（否则点开是下载）`);
+	}
+
+	// ⚠️⚠️ **源码一律 `text/plain`，不许映射成可执行类型**：桶可能是公开读的，
+	// `text/javascript` 会让浏览器**执行**那份用户上传的文件。
+	for (const ext of ["js", "jsx", "tsx", "py", "rb", "sh", "ps1", "bat"]) {
+		assert.equal(
+			contentTypeForExtension(ext),
+			"text/plain",
+			`★★ 源码声明成纯文本（不许 text/javascript 之类会执行的类型）：.${ext}`
+		);
+	}
+
+	// ⭐ **刻意不补**的那几类必须留在兜底（否则会把另一半说错 / 是在猜）：
+	// `ts` 既是 TypeScript 也是 MPEG-TS 视频；其余没有公认 MIME。
+	for (const ext of ["ts", "z01", "db", "jar", "rmvb", "fbx", "xmind", "fig", "sketch", "xd", "wps", "et", "dps", "bin", "dat"]) {
+		assert.equal(
+			contentTypeForExtension(ext),
+			DEFAULT_CONTENT_TYPE,
+			`★ 没有公认类型的后缀要留在兜底（不猜）：.${ext}`
+		);
+	}
+
+	// ⭐⭐ 2026-10-22（D-65）：反向表**由正向表派生**（不再手写第二份）。这两条钉的是派生本身：
+	// ① 每个"有类型的扩展名"都能反向查回来（否则站外抓取会存成 `<哈希>.bin`，宿主不认识）；
+	// ② 规范扩展名（同名多写法时落盘用哪个）保持原样，`jpg` 不许变成 `jfif`。
+	for (const ext of ["png", "jpg", "jfif", "tif", "tiff", "ogg", "oga", "mpg", "mpeg", "txt", "srt", "md", "markdown", "gz", "tgz"]) {
+		const mime = contentTypeForExtension(ext);
+		assert.ok(
+			extensionFromMime(mime) !== "",
+			`★ .${ext} 的类型 ${mime} 必须能反向查出扩展名（派生表漏了这一行）`
+		);
+	}
+	for (const [mime, ext] of [
+		["image/jpeg", "jpg"],
+		["image/tiff", "tiff"],
+		["audio/ogg", "ogg"],
+		["video/mpeg", "mpg"],
+		["text/plain", "txt"],
+		["text/markdown", "md"],
+		["application/gzip", "gz"],
+	]) {
+		assert.equal(
+			extensionFromMime(mime),
+			ext,
+			`★★ ${mime} 的落盘扩展名要稳定（用户在文件名里看到它）：应为 .${ext}`
+		);
+	}
+
+	// MIME → 扩展名那一侧与上面**成对**（站外抓取只有 MIME 时靠它落名字）
+	for (const [mime, ext] of [
+		["image/jxl", "jxl"],
+		["audio/x-ms-wma", "wma"],
+		["video/mpeg", "mpg"],
+		["application/vnd.oasis.opendocument.spreadsheet", "ods"],
+		["application/x-mobipocket-ebook", "mobi"],
+		["application/x-bzip2", "bz2"],
+		["text/tab-separated-values", "tsv"],
+		["font/woff2", "woff2"],
+		["model/gltf-binary", "glb"],
+		["application/vnd.microsoft.portable-executable", "exe"],
+	]) {
+		assert.equal(resolveExtension("", mime), ext, `★ ${mime} 要能反推出后缀（否则存成哈希.bin，宿主不认识）`);
+	}
 
 	// resolveContentType：宿主给的 MIME 优先，但通用类型不算"给了"
 	assert.equal(resolveContentType("photo.png", "image/png"), "image/png");

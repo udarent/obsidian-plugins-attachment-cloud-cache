@@ -67,6 +67,14 @@ export interface TaskListLabels {
 	selectAll: string;
 	selectNone: string;
 	cancel: string;
+	/**
+	 * 清单里**一件能勾的都没有**时，主按钮的文案（D-70）。
+	 *
+	 * ⭐ 那种清单（只有"已经失效、只能打开笔记去修"的行）没有可执行的动作 ——
+	 * 主按钮退回成"关闭"，否则它会一直灰着，用户找不到出口（而 ESC / 点背景不是
+	 * 每个人都知道的出口）。
+	 */
+	close: string;
 	/** 主按钮文字，随勾选数变化。 */
 	cta: (count: number) => string;
 	/** 跑的时候那一行（还没跑完）。 */
@@ -78,6 +86,13 @@ export interface TaskListLabels {
 	statusSkipped: string;
 	/** "再显示 N 行"那颗按钮（清单一次只画前若干行，见 `task-list-modal.ts` 的性能纪律）。 */
 	showMore: (count: number) => string;
+	/**
+	 * 行尾那颗「打开」的文案（D-66）。
+	 *
+	 * ⚠️ 可选：没给就不画链接 —— 而**生产上三条链都经 `buildTaskLabels` 给齐**
+	 * （与 `file-cards.ts::FileCardHandlers` 同一个口径：点不动的链接比没有更糟）。
+	 */
+	open?: string;
 }
 
 /**
@@ -96,6 +111,7 @@ export function buildTaskLabels(
 		selectAll: t("externalPickAll"),
 		selectNone: t("externalPickNone"),
 		cancel: t("externalPickCancel"),
+		close: t("taskListClose"),
 		cta: (count) => t(ctaKey, { count }),
 		running: (progress) => t("taskProgressRunning", { finished: progress.finished, total: progress.total }),
 		finished: (progress) =>
@@ -104,6 +120,7 @@ export function buildTaskLabels(
 		statusFailed: t("taskStatusFailed"),
 		statusSkipped: t("taskStatusSkipped"),
 		showMore: (count) => t("taskShowMore", { count }),
+		open: t("fileCardOpen"),
 	};
 }
 

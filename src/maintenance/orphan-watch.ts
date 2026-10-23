@@ -193,8 +193,13 @@ export function createOrphanWatcher(deps: OrphanWatchDeps): OrphanWatcher {
 export type OrphanSkipReason =
 	/** 不是我们经手过的对象 ⇒ 我们不该动它。 */
 	| "not-ours"
-	/** 站外缓存（`origin: "external"`）⇒ 一律不问，理由见 `selectOrphanAsks` 的 `isExternal`。 */
+	/**
+	 * 站外缓存（`origin: "external"`）的**云端对象** ⇒ 一律不问，理由见 `selectOrphanAsks` 的 `isExternal`。
+	 * ⚠️ 只管云端：它们的**本地副本**走 `local-orphans.ts` 的 `cachedPaths`（D-77）。
+	 */
 	| "external"
+	/** 本地副本**还被正文直接指着** ⇒ 它不是孤儿，理由见 `dropLocallyReferenced`。 */
+	| "locally-referenced"
 	/** 这个会话里已经问过它了（用户做过选择，别再追着问）。 */
 	| "already-asked";
 
@@ -202,6 +207,60 @@ export interface OrphanAskSelection {
 	/** 值得拿去问用户的 key（保持输入顺序）。 */
 	asks: string[];
 	skipped: Array<{ key: string; reason: OrphanSkipReason }>;
+}
+
+/**
+ * 把"本地副本**还被正文直接指着**"的 key 从候选人里摘掉（纯函数）。
+ *
+ * ## ⚠️⚠️ 为什么必须有它（2026-10-22 审计查出的：两条命令对同一件事答得相反）
+ *
+ * 孤儿的判据是"**本库看不见引用**"，而"引用"有两种写法 —— **迁移前是本地路径**
+ *（`![](attachments/x.png)`）、**迁移后是远端 URL**（`![](https://…/x-hash.png)`）。
+ * 上传那条链的承诺是"传上去 + 把链接改成 URL"，所以正常情况下对象一上传、正文里
+ * 就只剩 URL 了 ⇒ 只查 URL 也够。**但"不正常"是常态可达的**：
+ * - 链接改写**失败**（D-56 的括号截断就是这么暴露的：对象传上去了、正文还是本地路径）；
+ * - 用户自己把链接**改回本地**（D-50「把链接改回本地路径」的退出路径）；
+ * - 用户先传了文件、后来才在笔记里补了一条**指向本地副本**的链接。
+ *
+ * 这几种状态下，正文里**只有本地路径、没有 URL** ⇒ 只查 URL 的判据会把这个对象
+ * 判成"没人引用"，于是「检查未引用的云端附件…」把它列出来、用户选「连云端一起删」
+ * ⇒ **删掉一个正文还在显示的对象**；如果本地副本也不在了（「不留副本」档、
+ * 或副本被清理过），那就是**最后一份也没了**。
+ *
+ * ⭐ 这不是新发现，而是**同一条理由**已经在 `selectOrphanAsks` 的 `isExternal` 里写着：
+ * 「站外缓存的链接**改写失败**时，笔记里留着的是原来的站外地址…于是这个对象会被**误判成
+ * 没人引用**」—— 当年那条处理是"把站外缓存整体排除"。库内这一半有完全一样的形态，
+ * 只是它**改写失败时留下的是本地路径**，所以要在**路径那一侧**补上同样的排除。
+ *
+ * ## 判法
+ *
+ * 对象 key → 它的本地副本路径（索引条目）→ 这个路径在正文里被本地链接指着吗。
+ * ⚠️ **没有条目**（「不留副本」档）就**映射不出来**：那种档位下本地没有副本，
+ * 正文指着它的本地路径只可能是死链 ⇒ 照旧当孤儿（保持原行为，别替用户猜）。
+ * ⚠️ 判据本身（"这个路径还被指着吗"）不在这里：它由调用方用**与其它命令同一份**
+ * `referencedPaths` 传进来（`notes-query.ts::locallyReferencedPaths`），
+ * 于是"谁被引用"只有一处实现。
+ */
+export function dropLocallyReferenced(
+	candidates: readonly string[],
+	context: {
+		/** 对象 key → 它的本地副本路径（索引里的 `cachePath`）。 */
+		cachePathOf: (key: string) => string | null | undefined;
+		/** 正文里**直接指着**的库内路径（与其它命令同一份快照）。 */
+		referencedPaths: ReadonlySet<string>;
+	}
+): { kept: string[]; skipped: string[] } {
+	const kept: string[] = [];
+	const skipped: string[] = [];
+	for (const key of candidates ?? []) {
+		const path = context.cachePathOf(key);
+		if (path && context.referencedPaths.has(path)) {
+			skipped.push(key);
+			continue;
+		}
+		kept.push(key);
+	}
+	return { kept, skipped };
 }
 
 /**

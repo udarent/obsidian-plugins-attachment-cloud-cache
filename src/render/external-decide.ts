@@ -17,7 +17,7 @@
  *
  * | 结果 | 含义 |
  * |---|---|
- * | `ignore` | **根本不该处理**：地址形态不对、指向**宿主自己的文本文件**（笔记/画布/数据库）、**指向网页**（后缀是页面或页面程序，**两路**）、**"只被指向"的地址看起来不像文件**（两道形状判据，闸门是 `embedded` —— 笔记真正**显示**它时不施加）、属于本存储、回环/链路本地、存储未就绪，以及（**仅自动**）功能关着或站点被名单挡住 |
+ * | `ignore` | **根本不该处理**：地址形态不对、指向**宿主自己的文本文件**（笔记/画布/数据库）、**指向网页**（后缀是页面或页面程序，**两路**）、**是安装包或系统镜像**（程序分发，**两路**）、**"只被指向"的地址看起来不像文件**（两道形状判据，闸门是 `embedded` —— 笔记真正**显示**它时不施加）、属于本存储、回环/链路本地、存储未就绪，以及（**仅自动**）功能关着或站点被名单挡住 |
  * | `cache` | 该搬 —— **自动**路径直接入队，**候选**路径把它列进清单 |
  *
  * ⭐ `purpose` 决定"功能开关与站点名单这一次管不管"：
@@ -49,8 +49,10 @@
 import type { PluginSettings } from "../types";
 import {
 	NOTE_LIKE_REASON,
+	PROGRAM_REASON,
 	extensionFromUrl,
 	isNoteLikeExtension,
+	isProgramExtension,
 	isWebPageExtension,
 	urlHasFileTypeSuffix,
 	urlLooksLikeFileName,
@@ -401,6 +403,23 @@ export function decideExternalCache(input: ExternalCacheInput): ExternalCacheDec
 		return { action: "ignore", reason: PAGE_REASON };
 	}
 
+	// ⭐⭐ **安装包 / 可执行程序 / 系统镜像**不是笔记资料（D-58，2026-10-21 用户实测报的）——
+	// 两路都拦。
+	//
+	// 他笔记里写着 `[下载地址](https://…/Cherry-Studio-0.9.19-setup.exe)`，清单把这条
+	// **84.6 MB** 的安装包列了出来（真机 HEAD：`application/octet-stream` +
+	// `Content-Disposition: attachment`）⇒ 确认后会下载 84 MB、传进桶、库里留一份 84 MB
+	// 副本，并把「下载地址」改成桶地址。他要的是"资料跟着笔记走"，不是"桶变成软件分发站"。
+	//
+	// ⚠️ 判据是 `isProgramExtension`（表在 `vault-files.ts`，**黑名单**、只收程序分发），
+	// **不是**"认不认识这个后缀"：`.psd` / `.dwg` / `.mobi` / `.bin` 这类类型表外的**真实资料**
+	// 照旧进清单 —— 白名单式判据会**静默少列**（用户既看不到也不报错）。
+	// ⇒ 与下面那两道**形状**判据不是同一件事：形状问"像不像文件"，这条问"是不是资料"。
+	// 所以它不受 `embedded` 闸门约束（笔记"显示"一个 `.exe` 同样没有意义）。
+	if (isProgramExtension(extension)) {
+		return { action: "ignore", reason: PROGRAM_REASON };
+	}
+
 	// ⭐⭐ **"只被指向"的地址**必须"看起来像个文件" —— 两道形状判据（闸门是 `embedded`）。
 	//
 	// ## 为什么是 `embedded` 而不是 `purpose`
@@ -422,10 +441,14 @@ export function decideExternalCache(input: ExternalCacheInput): ExternalCacheDec
 	//（点后面是**纯数字**，那是版本号 / 编号的形状）都在这一道被拦下。
 	//
 	// ⚠️⚠️ **为什么第二道不能写成"后缀得是我们认识的类型"（白名单）**：那会把类型表里没有的
-	// **真实文件**（`.exe` / `.iso` / `.bin`）**静默**拦在清单外 —— 用户既看不到也不报错。
+	// **真实资料**（`.psd` / `.dwg` / `.mobi` / `.bin`）**静默**拦在清单外 —— 用户既看不到也不报错。
 	// 2026-10-16 差一点就这么修，是用户那句「**如果是外部网站的文件下载链接，应该看做是附件才对**」
 	// 把方向掰回来的。⇒ 只问"**像不像**文件类型"，不问"认不认识"。
 	// 判据本身（含"怎么取后缀"）都收在 `vault-files.ts` 一处。
+	//
+	// ⭐ 而"程序分发"那一类是**另一件事**（D-58，见上面那条闸门）：它不是"形状可疑"，
+	// 而是**语义上不是笔记资料** ⇒ 用一张只收安装包/镜像的**黑名单**处理，
+	// 与这里的"像不像"互不替代（`.exe` 过得了这两道，但在上面就被拦下了）。
 	if (!input.embedded) {
 		if (!urlLooksLikeFileName(src)) {
 			return { action: "ignore", reason: NOT_A_FILE_REASON };

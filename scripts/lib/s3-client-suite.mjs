@@ -27,6 +27,11 @@
  * 报出来的是那个错误的消息 —— 而我们要检验的恰恰是"它不该抛错"。
  * 断言必须能**说清自己为什么红**。
  *
+ * ## 也管"卡住"
+ *
+ * 第 15 组钉住超时：一次卡住的请求必须在**有限时间**内失败、只发一次、且**不可重试**。
+ * 没有这条，一次卡死会让同一个 key 在本次会话里再也不重试（下载层的 `inflight`）。
+ *
  * ## 覆盖不到的
  *
  * 真机 / 真实存储的差异（TLS、代理、R2 与 MinIO 的细节差异）这里测不了，
@@ -884,5 +889,54 @@ export async function runS3ClientSuite(mod) {
 		assert.equal(sent.length, 1, "解析失败不该重试（重试拿到的还是同一段坏响应）");
 	}
 
-	return { scenarios: 14 };
+	// ============================================================
+	// 15. ⭐⭐ 卡住的请求**必须被判死**，而且只等一次（D-78）
+	//
+	// 现场：`requestUrl` 没有中断能力，一个卡住的 GET 会永远挂着；而下载层的
+	// `inflight` 去重会把"这条永不完成的 Promise"复用给同一个 key 的后续调用
+	// ⇒ 那个对象**本次会话内再也不会重试**（§25.3 那条"某次下载永不完成"）。
+	//
+	// 判据三条，缺一不可：
+	// ① 它会失败（不是永远挂着）；② 只发了 **1** 次请求（超时不该被当成可重试的
+	//   网络错误再等两轮）；③ 错因是 `Timeout` 且**不可重试** —— 后者是前者的因。
+	// ============================================================
+	{
+		const sent = [];
+		const client = makeClient(mod, "http://127.0.0.1:1", {}, {
+			// 传输永不返回（模拟 requestUrl 卡在 DNS / TLS / 服务端不响应）
+			transport: (request) => {
+				sent.push(request);
+				return new Promise(() => {});
+			},
+			// ⚠️ 只有注入点能把它压到几十毫秒 —— 默认 60 秒会让这条用例跑 1 分钟
+			timeouts: { GET: 40 },
+		});
+
+		const started = Date.now();
+		await assert.rejects(
+			() => client.getObject("卡住.png"),
+			(error) => {
+				assert.equal(error.code, "Timeout", `卡住必须是超时，实际：${error.code} / ${error.message}`);
+				assert.equal(error.kind, "network", "超时仍属网络性质（文案与建议照旧）");
+				assert.equal(
+					error.retryable,
+					false,
+					`★★ 超时**不可重试** —— 否则一次卡死会变成 3 × 60 秒（用户白等两分钟，结论不变）：${error.message}`
+				);
+				assert.ok(
+					error.message.includes("秒"),
+					`★ 文案要说清等了多久（用户才知道该怀疑网络，而不是去改配置）：${error.message}`
+				);
+				return true;
+			}
+		);
+		assert.equal(
+			sent.length,
+			1,
+			`★★ 超时只发 1 次（可重试的话是 3 次），实际 ${sent.length} 次`
+		);
+		assert.ok(Date.now() - started < 5_000, "必须真的提前返回，而不是等到默认的 60 秒");
+	}
+
+	return { scenarios: 15 };
 }

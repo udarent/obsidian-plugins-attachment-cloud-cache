@@ -163,7 +163,10 @@ export const I18N: Record<string, Locale> = {
 
 		// ── 维护命令 ──
 		// ── 云端空间清理（F15）──
-		cmdCheckOrphans: "Clean up cloud attachments that no note links to…",
+		// ⚠️ 2026-10-22（D-77）：命令名去掉了限定词（原来是“no note links to”）。
+		// 清单现在是**三类**：没人引用的云端对象 / 没有引用的本地文件 / 站外缓存副本
+		// —— 都是「可以清理的附件」，名字只说那一类就是错的（D-73 同一条教训）。
+		cmdCheckOrphans: "Clean up attachments…",
 		cloudCleanupDeviceBlindSpot:
 			"Only this device's references can be seen. Other devices (or another vault sharing this storage) may still be using some of these files — deleting cannot be undone.",
 		cloudCleanupPersistFailed: "Could not save the local-copy index: {error}",
@@ -218,39 +221,50 @@ export const I18N: Record<string, Locale> = {
 		releaseSpaceUnlinkedLeft:
 			"Also about {mb} MB of local copies are linked from no note — those are not part of this cleanup: they may need removing from your storage as well, so run “{command}” for them.",
 		orphanTitle: "Clean up these attachments no note links to?",
-		orphanBody:
-			"{count} attachment(s) you uploaded are no longer linked from any note or canvas.",
+		// ⚠️ 2026-10-22（D-74）：不再说"you uploaded" —— 清单里有从来没上传过的本地文件。
+		orphanBody: "{count} attachment(s) are no longer linked from any note or canvas.",
+		// ⭐ 行内小标签：两类候选混在一屏，靠它区分（过滤开关也叫这两个名字）
+		orphanRowCloud: "cloud",
+		orphanRowLocal: "local",
+		// ⭐ 2026-10-22（D-77）：站外缓存下来的本地副本（删了下次显示重新下载）
+		orphanRowCached: "cached",
+		orphanFilterCloud: "Cloud objects",
+		orphanFilterLocal: "Local files",
 		orphanMore: "…and {count} more.",
 		orphanLocalNote:
-			"Deleting the local copies only frees space in your vault - linking one again downloads it back. Deleting from your storage cannot be undone.",
+			"Deleting a local copy only frees space in your vault - linking it again downloads it back. Deleting from your storage cannot be undone.",
+		// ⭐ 2026-10-22（D-76）：清单弹窗的标题（与另一条命令同一个规则：**就是命令名去省略号**）。
+		// ⚠️ 自动那条询问仍然用 `orphanTitle`（它是**问句**：那是一次没人要求的打扰）。
+		orphanListTitle: "Clean up attachments",
+		// ⭐⭐ 2026-10-22（D-76）：清单顶部是**一句固定说明**（与「上传附件」同一个规则）：
+		// 不含数量、不随内容变。数量在**两个删除档的按钮上**。
+		// 原来这里是 3~4 段（带 count 的一句 + 条件出现的「从没上传过」+
+		// `orphanLocalNote` + `cloudCleanupDeviceBlindSpot`），而上传那边只有一句 ⇒ 两屏看起来不是一个产品。
+		orphanListBody:
+			"Ticked attachments are handled however you choose below: deleting the local file only frees space in your vault - if the cloud copy is still there, linking it again downloads it back, while deleting from storage cannot be undone. A file tagged “local” that was never uploaded has no cloud copy to fall back on. A file tagged “cached” was downloaded from another site: removing it touches neither your storage nor your notes, it is simply downloaded again the next time it is shown. Only references this vault can see are counted, so objects uploaded from another device are not listed.",
 		orphanKeep: "Keep them",
-		orphanLocalOnly: "Delete local copies",
-		orphanBoth: "Delete locally and from storage",
-		orphanLocalDeleted: "Removed {removed} local copy(ies). Your storage was left untouched.",
+		// ⚠️ 改叫"files"而不是"copies"（D-74）：那些从来没上传过的是**唯一一份**，不是副本。
+		// ⭐ D-76：带 `{count}` —— 两个删除档都要说清“这一下动几个”。
+		orphanLocalOnly: "Delete local files only ({count})",
+		orphanBoth: "Delete locally and from storage ({count})",
+		orphanLocalDeleted: "Removed {removed} local file(s). Your storage was left untouched.",
 		orphanDeletedBoth:
-			"Removed {removed} local copy(ies). Storage: {deleted} deleted, {alreadyGone} already gone, {failed} failed.",
+			"Removed {removed} local file(s). Storage: {deleted} deleted, {alreadyGone} already gone, {failed} failed.",
 		orphanNotice:
 			"{count} uploaded attachment(s) are no longer linked from any note or canvas. Run “{command}” to review them.",
 		orphanDismissed:
 			"Nothing was deleted. To ask again, run “{command}”.",
+		// ⚠️ 2026-10-22（D-77）：原来写着「站外缓存不在这里处理」—— 现在它们的**本地副本**就在这里处理。
 		orphanNoneToCheck:
-			"No unreferenced attachments found — everything we uploaded is either still linked from a note or canvas, or came in from another site (those are never handled here).",
+			"No attachments to clean up — whatever is left is either still linked from a note or canvas, or was uploaded from another device (this one cannot see what links to those).",
 		cloudDeleteFailed: "Could not delete the object: {error}",
-		cmdAuditCache: "Show local copy usage",
-		// ⭐ 与设置页那颗「Delete local copies…」是**同一条链**（`releaseLocalSpace`），
-		// 命令面板侧多一个限定词：这里说的是**清理哪些**（没有任何笔记引用的那些）。
-		cmdUploadAttachments: "Upload files your notes link to…",
+		cmdUploadAttachments: "Upload attachments…",
 		// ⭐ 命令**失败**时必须有人说话（2026-10-16 用户实测："点击命令没有反应"）。
 		// 以前异步命令抛错只留一条控制台记录，界面上什么都不发生 —— 那是最坏的失败形态。
 		// ⚠️ 不写命令名：用户刚点过它，而 `{error}` 才是他要看的东西（命令 id 进控制台日志）。
 		cmdFailed: "The command could not run: {error}",
 
-		maintainUsageReport:
-			"Local copies: {totalMb} MB in {count} files. Not linked from any note: {unused} ({reclaimableMb} MB — an estimate: nothing is removed before your storage is confirmed to still have it). {missing} index entr(ies) point at files that are gone. Limit: {limit}.",
-		// ⚠️ 只在真有失效记录时单独弹这一句（见 `auditCache` 命令的接线）：
-		// 那行数字本身不带处置办法，用户 2026-10-14 在 Android 上把它读成了"索引坏了"。
-		maintainUsageMissingHint:
-			"Those {count} stale record(s) are harmless — the background check drops them on its own.",
+
 		selfHealRepaired:
 			"Local-copy index repaired automatically: {count} record(s) pointed at files that are no longer there.",
 		legacyKeyTemplateUpgraded:
@@ -262,14 +276,20 @@ export const I18N: Record<string, Locale> = {
 			"automatic handling stays off, because you had it set to do nothing automatically — you can still pick files one by one",
 		maintainMoreItems: "…and {count} more",
 		maintainCancelled: "Cancelled — nothing was changed.",
-		// ── 清单类弹窗（缩略图 + 勾选 + 进度）：上传附件 / 检查未被引用的云端附件 / 挑选要缓存的文件共用 ──
+		// ── 清单类弹窗（缩略图 + 勾选 + 进度）：上传附件 / 清理没有笔记引用的云端附件共用 ──
 		taskListEmpty: "Nothing to show here.",
+		// ⭐ 一件能勾的都没有时主按钮退回成它（D-70：那种清单只剩"打开笔记去修"的行）
+		taskListClose: "Close",
 		taskProgressRunning: "Working… {finished}/{total}",
 		taskProgressFinished: "Finished: {done} done, {skipped} skipped, {failed} failed.",
 		taskStatusDone: "done",
 		taskStatusFailed: "failed",
 		taskStatusSkipped: "skipped",
 		taskShowMore: "Show {count} more row(s) — the rest are still included",
+		fileCardOpen: "Open",
+		// ⭐ 失效附件那一行的链接去的是**引用它的笔记**（D-70），文案得说清是"笔记"
+		fileCardOpenNote: "Open note",
+		fileCardOpenMissing: "That file is no longer in the vault: {path}",
 		maintainPersistFailed: "Could not save the index after repairing it: {error}",
 		maintainSkipUnknownCopy: "The index no longer points at this file — skipped",
 		maintainSkipUnconfirmed: "Could not confirm the cloud still has it — skipped",
@@ -277,36 +297,34 @@ export const I18N: Record<string, Locale> = {
 		maintainSkipNotIndexed: "Obsidian cannot see this file yet — skipped instead of deleting it directly",
 		maintainNotConfigured: "The storage connection is not set up yet, so nothing was uploaded.",
 		maintainBatchNothing: "No attachments to upload (everything is already handled).",
-		maintainBatchTitle: "Upload files your notes link to",
+		// ⚠️ 2026-10-22（D-73）：标题**不再是"笔记引用的文件"** —— D-68 之后这条命令
+		// 涵盖四类（被引用 / 没有引用 / 站外 / 本机），旧标题只说了第一类。
+		// ⚠️ 与 `externalPickName`（设置页那一项）**恰好同字**，但两者用途不同
+		//（一个是弹窗标题、一个是设置项名）—— 改一个不必改另一个，所以各自留着键。
+		maintainBatchTitle: "Upload attachments",
+		// ⭐ 清单上方的范围勾选框（2026-10-22）：勾上 = 只列当前这篇笔记里的候选。
+		// ⚠️ 文案要说"只看"，而不是"上传当前笔记"—— 它**不改做什么**，只改看哪一份清单。
+		maintainBatchOnlyCurrentNote: "Only the current note",
+		// ⭐ 2026-10-22（D-71）：这一句现在**同时**承担"上传几个"与"文件不移动/不改名"那个承诺
+		// （原来那是第二段 `maintainBatchOriginalsStay`）—— 用户要求把列表上方的文案收掉，
+		// 而这两件事都是不能省的：前者是数量，后者是"跑完文件还在"的唯一交代。
+		// ⭐⭐ 2026-10-22（D-72）：**固定说明，不随内容变**（用户：「还是有顶部会根据内容调整的
+		// 文案,把文案简化成固定的说明文字」）。⚠️ 不许出现任何数字或主机名 —— 数量在**按钮**上
+		// （`maintainBatchCta(count)`），站点在**每一行的副标题**里（`externalRowMeta`）。
 		maintainBatchSummary:
-			"Upload {count} file(s) — anything already in your storage is reused — and rewrite note links to point at your storage.",
-		// ⚠️ 1.2.0（D-17）起，"上传后把原文件搬走"这件事**不存在了** —— 那份文件留在原地、
-		// 就地作为本地副本（没有缓存目录可搬）。所以必须照实说"不移动、不改名"：
-		// 从前这里承诺的正是"附件目录里不再留一份"，照抄下来会让用户以为命令没生效。
-		// 同时说清"没被引用的文件不碰"。
-		maintainBatchOriginalsStay:
-			"Nothing is moved or renamed: the file stays in your attachments folder and remains the local copy — only the links in your notes are rewritten. Files that no note refers to are left alone.",
-		maintainBatchSkipsUnreferenced:
-			"{count} file(s) in your vault are not linked from any note, so they are left alone.",
-		maintainBatchDuplicates:
-			"{count} of them look like the copy the host leaves behind when a name collides (photo 1.png next to photo.png). Once its link is rewritten that copy is deleted — its bytes are identical to the one that stays.",
+			"Ticked files are uploaded to your storage and the links in your notes are rewritten to point there. Files stay in your attachments folder - nothing is moved or renamed. Off-site addresses in the list will be visited; a warning icon marks a file that is already gone - open the note next to it to fix that link.",
+		maintainBatchUnreferencedHint: "no note links it",
+		// ⭐ 行内小标签（D-71）：早就在这里传过了，勾了也**不会重传字节**，只改链接
+		maintainBatchRepairHint: "link only",
 		maintainBatchDuplicatesRemoved:
 			"Deleted {count} duplicate copy(ies) the host had left behind on a name collision (same content as the copy that stays).",
 		maintainBatchCanvasSkipped:
 			"{count} reference(s) in canvases could not be rewritten (the file is not readable JSON), so they still point to their old location.",
-		maintainBatchCta: "Upload and rewrite links",
-		maintainBatchExternal:
-			"Also {count} file(s) hosted elsewhere, on {sites} site(s): {hosts}",
-		// ⚠️ 本机文件那条**必须带路径**：不加目录白名单（用户 2026-10-15 定）之后，
-		// "看得见要读哪条路径"是那次授权唯一能成立的前提。⚠️ `{count}` 是**全部**条数，
-		// 列表最多三条（多的省略）—— 数字准确、清单诚实。
-		// ⚠️ 这一行是**纯文本**（Confirm 的正文，不渲染 Markdown）⇒ 不许写 `**强调**`
-		//（2026-10-16 用户实测看到的就是一对露出来的星号）。
-		maintainBatchLocalFiles: "Also {count} local file(s) on this computer (outside the vault): {paths}",
-		// ⭐ 已经**不在本机**的那些（列清单前问过一次 `stat`）：它们不进清单（点了一定失败），
-		// 但必须说出来 —— 在笔记里它们正是**坏链**，用户找不到会以为漏了。
-		maintainBatchLocalFilesMissing:
-			"There are {count} local file(s) that are no longer on this computer (nothing to upload): {paths}",
+		// ⚠️ 2026-10-22（D-76）：**数量就在这里** —— D-72 把顶部改成固定说明时说过“数量搬到按钮上”，
+		// 但模板里没有 `{count}` ⇒ 那个数字一直被静默丢掉（套件的假 `t` 会把参数拼进去，
+		// 所以单元测试一直绿）。验收里现在有一条**真译器**的断言钉着它。
+		maintainBatchCta: "Upload and rewrite links ({count})",
+		maintainBatchMissingHint: "file is gone",
 		maintainBatchDone:
 			"Uploaded {uploaded}, already there {reused}, failed {failed}. Rewrote {links} link(s) across {notes} note(s).",
 
@@ -324,24 +342,15 @@ export const I18N: Record<string, Locale> = {
 		externalSiteListDesc:
 			"One domain per line. example.com also matches img.example.com; write example.com:8080 to match that host exactly. With “Only the ones listed”, an empty list means nothing is handled automatically.",
 		externalSiteListPlaceholder: "example.com\ncdn.example.com",
-		externalPickName: "Pick files to upload",
+		externalPickName: "Upload attachments",
+		// ⚠️ 2026-10-22（D-73）：① 说"搬到你的存储"是**错的** —— 1.2.0（D-17）起
+		// **文件不移动、不改名**，变的只有笔记里的链接；② 候选从 D-68 起含"没有任何笔记引用"的附件。
 		externalPickDesc:
-			"Choose files from the current note or the whole vault — only those are handled. Choosing is the same as agreeing, with or without the switch above.",
-		externalPickButton: "Pick files…",
-		externalPickTitle: "Pick files to upload",
-		externalPickScope: "Where to look",
-		externalPickScopeNote: "Current note",
-		externalPickScopeVault: "Whole vault",
-		externalPickEmpty:
-			"No files to upload here (they may already be in your storage, or the storage connection is not set up).",
+			"Upload the attachments in your vault that are not in your storage yet (including ones no note links to), plus the files your notes point at on other sites or on this computer. Tick each one in the list; the files themselves stay where they are.",
+		externalPickButton: "Upload attachments…",
 		externalPickAll: "Select all",
 		externalPickNone: "Select none",
-		externalPickCta: "Upload the {count} selected",
 		externalPickCancel: "Cancel",
-		externalPickNothing: "No files were uploaded.",
-		externalPickDone:
-			"Uploaded {cached} file(s); {partial} were uploaded but their link could not be rewritten; {failed} failed.",
-		cmdPickExternal: "Upload files from other sites or your computer…",
 		externalCached: "Uploaded the file from {host} and rewrote the link.",
 		// ── 本机文件（file:///D:/…）：与站外同一套链，只有"字节从哪来"不同 ──
 		localCached: "Uploaded the local file {name} and rewrote the link.",
@@ -360,8 +369,14 @@ export const I18N: Record<string, Locale> = {
 		cacheLimitDesc:
 			"Caps the space local copies may take. The least recently used ones are deleted first and come back when you view them again. 0 means no limit.",
 		cacheLimitPlaceholder: "0 = no limit",
-		cacheLimitNone: "unlimited",
 		cacheLimitValue: "{mb} MB",
+		// ⭐ 2026-10-22（D-79）：设置页那行「当前占用」—— 只读索引，界面写清「约」。
+		localUsageName: "Space used",
+		localUsageDesc:
+			"An estimate from the index of how much your local copies take - it does not check every "
+			+ "file on disk. To see what could be cleaned up, run Clean up attachments.",
+		localUsageValue: "{count} local copy(ies), about {mb} MB.",
+		localUsageEmpty: "No local copies yet.",
 		// 缓存清理只有一种方式（直接删除），所以通知只有一条。
 		cacheEvicted:
 			"Over the local copy limit: deleted {count} least recently used copies ({mb} MB). They will be downloaded again when you view them.",
@@ -382,6 +397,8 @@ export const I18N: Record<string, Locale> = {
 		deleteLogTitle: "Cloud deletions",
 		deleteLogEmpty: "No cloud deletions have been recorded yet.",
 		deleteLogUnavailable: "The deletion log cannot be located in this environment.",
+		debugLogging: "Debug logging",
+		debugLoggingDesc: "Print each stage's counts and timings to the developer console (it has to show Verbose output). Nothing else changes, and nothing appears in the interface.",
 	},
 	zh: {
 		sectionStorage: "存储连接",
@@ -492,7 +509,10 @@ export const I18N: Record<string, Locale> = {
 		ingestIndexPersistFailed: "文件已上传，但本地副本索引保存失败：{error}",
 
 		// ── 云端空间清理（F15）──
-		cmdCheckOrphans: "清理没有笔记引用的云端附件…",
+		// ⚠️ 2026-10-22（D-77）：命令名去掉了限定词（原来是「没有笔记引用的」）。
+		// 清单现在是**三类**：没人引用的云端对象 / 没有引用的本地文件 / 站外缓存副本
+		// —— 都是「可以清理的附件」，名字只说那一类就是错的（D-73 同一条教训）。
+		cmdCheckOrphans: "清理附件…",
 		cloudCleanupDeviceBlindSpot:
 			"只能看到本设备的引用情况。其他设备（或共用这个存储的另一个库）可能还在用其中一些文件 —— 删除后无法恢复。",
 		cloudCleanupPersistFailed: "本地副本索引保存失败：{error}",
@@ -541,35 +561,47 @@ export const I18N: Record<string, Locale> = {
 		releaseSpaceUnlinkedLeft:
 			"另有约 {mb} MB 是「没有任何笔记引用」的本地副本 —— 那不属于这次清理：它们可能需要连云端对象一起处理，请用「{command}」。",
 		orphanTitle: "要清理这些没有笔记引用的附件吗？",
-		orphanBody: "你上传过的 {count} 个附件已经不再被任何笔记或画布引用了。",
+		// ⚠️ 2026-10-22（D-74）：不再说"你上传过的" —— 清单里有从来没上传过的本地文件。
+		orphanBody: "下列 {count} 个附件已经不再被任何笔记或画布引用了。",
+		// ⭐ 行内小标签：两类候选混在一屏，靠它区分（过滤开关也叫这两个名字）
+		orphanRowCloud: "云端",
+		orphanRowLocal: "本地",
+		// ⭐ 2026-10-22（D-77）：站外缓存下来的本地副本（删了下次显示重新下载）
+		orphanRowCached: "站外缓存",
+		orphanFilterCloud: "云端对象",
+		orphanFilterLocal: "本地文件",
 		orphanMore: "……还有 {count} 个。",
 		orphanLocalNote:
 			"只删本地副本只是腾出库里的空间 —— 以后笔记里再引用它，会自动重新下载；从存储里删掉就找不回来了。",
+		// ⭐ 2026-10-22（D-76）：清单弹窗的标题（与另一条命令同一个规则：**就是命令名去省略号**）。
+		// ⚠️ 自动那条询问仍然用 `orphanTitle`（它是**问句**：那是一次没人要求的打扰）。
+		orphanListTitle: "清理附件",
+		// ⭐⭐ 2026-10-22（D-76）：清单顶部是**一句固定说明**（与「上传附件」同一个规则）：
+		// 不含数量、不随内容变。数量在**两个删除档的按钮上**。
+		orphanListBody:
+			"勾中的附件按下面选的方式处理：只删本地文件只是腾出库里的空间 —— 云端还在的话，以后笔记里再引用它会自动重新下载；从存储里删掉就找不回来了。标着「本地」、从来没上传过的那些没有云端可依。标着「站外缓存」的是从别的网站下载的副本：删掉不碰云端、也不改笔记，只是下次显示时要重新联网下载。这个清单只算本库看得见的引用，别的设备上传的对象不在这里。",
 		orphanKeep: "保留",
-		orphanLocalOnly: "只删本地副本",
-		orphanBoth: "云端和本地一起删",
-		orphanLocalDeleted: "已删掉 {removed} 个本地副本；云端对象未动。",
+		// ⚠️ 改叫"本地文件"而不是"本地副本"（D-74）：那些从来没上传过的是**唯一一份**，不是副本。
+		// ⭐ D-76：带 `{count}` —— 两个删除档都要说清“这一下动几个”。
+		orphanLocalOnly: "只删本地文件 ({count})",
+		orphanBoth: "云端和本地一起删 ({count})",
+		orphanLocalDeleted: "已删掉 {removed} 个本地文件；云端对象未动。",
 		orphanDeletedBoth:
-			"已删掉 {removed} 个本地副本；云端：删除 {deleted} 个、本来就不存在 {alreadyGone} 个、失败 {failed} 个。",
+			"已删掉 {removed} 个本地文件；云端：删除 {deleted} 个、本来就不存在 {alreadyGone} 个、失败 {failed} 个。",
 		orphanNotice: "有 {count} 个已上传的附件不再被任何笔记或画布引用。运行「{command}」查看并处理。",
 		orphanDismissed:
 			"什么都没删。想再问一次：运行「{command}」。",
-		orphanNoneToCheck: "没有需要处理的 —— 已上传的附件要么还有笔记或画布在引用，要么是从站外上传来的（那一类不在这里处理）。",
+		// ⚠️ 2026-10-22（D-77）：原来写着「站外缓存不在这里处理」—— 现在它们的**本地副本**就在这里处理。
+		orphanNoneToCheck:
+			"没有需要清理的附件 —— 剩下的要么还有笔记或画布在引用，要么是别的设备上传的（这台设备看不见谁在引用它们）。",
 		cloudDeleteFailed: "删除对象失败：{error}",
-		cmdAuditCache: "查看本地副本占用",
-		// ⭐ 与设置页那颗「清理本地副本…」是**同一条链**（`releaseLocalSpace`），
-		// 命令面板侧多一个限定词：这里说的是**清理哪些**（没有任何笔记引用的那些）。
-		cmdUploadAttachments: "上传笔记引用的文件…",
+		cmdUploadAttachments: "上传附件…",
 		// ⭐ 命令**失败**时必须有人说话（2026-10-16 用户实测："点击命令没有反应"）。
 		// 以前异步命令抛错只留一条控制台记录，界面上什么都不发生 —— 那是最坏的失败形态。
 		// ⚠️ 不写命令名：用户刚点过它，而 `{error}` 才是他要看的东西（命令 id 进控制台日志）。
 		cmdFailed: "命令执行失败：{error}",
 
-		maintainUsageReport:
-			"本地副本共 {count} 个文件、{totalMb} MB。其中没有任何笔记引用的 {unused} 个（{reclaimableMb} MB —— 这是估算：真正删除前会先确认你的存储里仍然有它）。索引指向的文件已不在 {missing} 条。上限：{limit}。",
-		// ⚠️ 同上：只在真有失效记录时弹（那行数字不带处置办法，会被读成"索引坏了"）。
-		maintainUsageMissingHint:
-			"那 {count} 条失效记录无害 —— 后台自检会自己摘掉。",
+
 		selfHealRepaired: "本地副本索引已自动修复：{count} 条记录指向的本地副本已经不在了。",
 		legacyKeyTemplateUpgraded:
 			"「对象 key 模板」设置已取消：之后上传的对象固定命名为「原文件名-内容哈希.扩展名」，存储里可以按名字找到文件（文件名因此也会出现在你的存储服务商那边）。已有链接不受影响；按旧命名传过的内容若再贴一次，会在云端多存一份。",
@@ -577,17 +609,23 @@ export const I18N: Record<string, Locale> = {
 			"设置改版：「遇到站外文件链接时」那一档已并入上面的开关「站外文件也上传到云端」，你原来的选择已折算进去 —— {state}。",
 		legacyExternalKeptOn: "自动处理保持开启",
 		legacyExternalKeptOff:
-			"自动处理保持关闭（你原本选的是「什么都不做」）；「手动选择要上传的文件」仍然随时可用",
+			"自动处理保持关闭（你原本选的是「什么都不做」）；「上传附件…」仍然随时可用",
 		maintainMoreItems: "……还有 {count} 个",
 		maintainCancelled: "已取消，没有改动任何内容。",
-		// ── 清单类弹窗（缩略图 + 勾选 + 进度）：上传附件 / 检查未被引用的云端附件 / 挑选要缓存的文件共用 ──
+		// ── 清单类弹窗（缩略图 + 勾选 + 进度）：上传附件 / 清理没有笔记引用的云端附件共用 ──
 		taskListEmpty: "这里没有可处理的条目。",
+		// ⭐ 一件能勾的都没有时主按钮退回成它（D-70：那种清单只剩"打开笔记去修"的行）
+		taskListClose: "关闭",
 		taskProgressRunning: "正在处理…… {finished}/{total}",
 		taskProgressFinished: "已结束：完成 {done} 个、跳过 {skipped} 个、失败 {failed} 个。",
 		taskStatusDone: "完成",
 		taskStatusFailed: "失败",
 		taskStatusSkipped: "跳过",
 		taskShowMore: "再显示 {count} 行（其余的行照样会被处理）",
+		fileCardOpen: "打开",
+		// ⭐ 失效附件那一行的链接去的是**引用它的笔记**（D-70），文案得说清是"笔记"
+		fileCardOpenNote: "打开笔记",
+		fileCardOpenMissing: "文件已不在库里：{path}",
 		maintainPersistFailed: "修复后保存索引失败：{error}",
 		maintainSkipUnknownCopy: "索引里已经不再指向这个文件 —— 跳过",
 		maintainSkipUnconfirmed: "确认不了云端是否还有它 —— 跳过",
@@ -595,34 +633,34 @@ export const I18N: Record<string, Locale> = {
 		maintainSkipNotIndexed: "Obsidian 还看不到这个文件 —— 已跳过，而不是直接删除",
 		maintainNotConfigured: "存储连接尚未配置，没有上传任何内容。",
 		maintainBatchNothing: "没有需要上传的附件（都已经处理过了）。",
-		maintainBatchTitle: "上传笔记引用的文件",
+		// ⚠️ 2026-10-22（D-73）：标题**不再是"笔记引用的文件"** —— D-68 之后这条命令
+		// 涵盖四类（被引用 / 没有引用 / 站外 / 本机），旧标题只说了第一类。
+		// ⚠️ 与 `externalPickName`（设置页那一项）**恰好同字**，但两者用途不同
+		// （一个是弹窗标题、一个是设置项名）—— 改一个不必改另一个，所以各自留着键。
+		maintainBatchTitle: "上传附件",
+		// ⭐ 清单上方的范围勾选框（2026-10-22）：勾上 = 只列当前这篇笔记里的候选。
+		// ⚠️ 文案要说"只看"，而不是"上传当前笔记"—— 它**不改做什么**，只改看哪一份清单。
+		maintainBatchOnlyCurrentNote: "只看当前笔记",
+		// ⭐ 2026-10-22（D-71）：这一句现在**同时**承担"上传几个"与"文件不移动/不改名"那个承诺
+		// （原来那是第二段 `maintainBatchOriginalsStay`）—— 用户要求把列表上方的文案收掉，
+		// 而这两件事都是不能省的：前者是数量，后者是"跑完文件还在"的唯一交代。
+		// ⭐⭐ 2026-10-22（D-72）：**固定说明，不随内容变**（用户：「还是有顶部会根据内容调整的
+		// 文案,把文案简化成固定的说明文字」）。⚠️ 不许出现任何数字或主机名 —— 数量在**按钮**上
+		// （`maintainBatchCta(count)`），站点在**每一行的副标题**里（`externalRowMeta`）。
 		maintainBatchSummary:
-			"将上传 {count} 个文件（已经传过的会直接复用），并把笔记里的链接改成指向你的存储。",
-		// ⚠️ 别在文案里写 markdown（`**加粗**`）：确认弹窗是 `createDiv({ text })`、
-		// 提示是宿主的 Notice，两者都**按纯文本**渲染 —— 星号会原样显示给用户。
-		// ⚠️ 1.2.0（D-17）：上传后文件**留在附件目录里**（它就是本地副本，没有缓存目录可搬）——
-		// 照实说"不移动、不改名"，否则用户会以为命令没生效（从前这里承诺的正是"搬走"）。
-		maintainBatchOriginalsStay:
-			"不会移动或改名：文件留在附件目录里，就地作为本地副本 —— 只有笔记里的链接会被改写。没有任何笔记引用的文件不会被碰。",
-		maintainBatchSkipsUnreferenced: "另有 {count} 个文件没有被任何笔记引用，不会被处理。",
-		maintainBatchDuplicates:
-			"其中 {count} 个看起来是宿主撞名时另落下的副本（照片.png 旁边的 照片 1.png）：链接改写成功后那份会被删掉 —— 它与留下来的那份内容完全一样。",
+			"勾中的文件会传到你的存储，笔记里的链接会改成远端地址；文件留在附件目录，不移动也不改名。清单里的站外地址会被访问；标了警示图标的是已经不在了的文件，点行尾的「打开笔记」去修。",
+		maintainBatchUnreferencedHint: "没有笔记引用",
+		// ⭐ 行内小标签（D-71）：早就在这里传过了，勾了也**不会重传字节**，只改链接
+		maintainBatchRepairHint: "只改链接",
 		maintainBatchDuplicatesRemoved:
 			"已删掉 {count} 份宿主撞名留下的重复副本（内容与留下的那份完全相同）。",
 		maintainBatchCanvasSkipped:
 			"画布里有 {count} 处引用没能改写（画布文件不是可读的 JSON），它们仍指向旧位置。",
-		maintainBatchCta: "上传并改写链接",
-		maintainBatchExternal: "另有 {count} 个文件托管在站外，来自 {sites} 个站点：{hosts}",
-		// ⚠️ 本机文件那条**必须带路径**：不加目录白名单（用户 2026-10-15 定）之后，
-		// "看得见要读哪条路径"是那次授权唯一能成立的前提。⚠️ `{count}` 是**全部**条数，
-		// 列表最多三条（多的省略）—— 数字准确、清单诚实。
-		// ⚠️ 这一行是**纯文本**（弹窗正文，不渲染 Markdown）⇒ 不许写 `**强调**`
-		//（2026-10-16 用户实测看到的就是一对露出来的星号）。
-		maintainBatchLocalFiles: "另有 {count} 个是本机文件（在你电脑上、不在库里）：{paths}",
-		// ⭐ 已经**不在本机**的那些（列清单前问过一次 `stat`）：它们不进清单（点了一定失败），
-		// 但必须说出来 —— 在笔记里它们正是**坏链**，用户找不到会以为漏了。
-		maintainBatchLocalFilesMissing:
-			"有 {count} 个本机文件在这台电脑上已经找不到了，没有可上传的内容：{paths}",
+		// ⚠️ 2026-10-22（D-76）：**数量就在这里** —— D-72 把顶部改成固定说明时说过“数量搬到按钮上”，
+		// 但模板里没有 `{count}` ⇒ 那个数字一直被静默丢掉（套件的假 `t` 会把参数拼进去，
+		// 所以单元测试一直绿）。验收里现在有一条**真译器**的断言钉着它。
+		maintainBatchCta: "上传并改写链接 ({count})",
+		maintainBatchMissingHint: "文件已不在",
 		maintainBatchDone:
 			"上传 {uploaded} 个、已存在 {reused} 个、失败 {failed} 个。在 {notes} 篇笔记里改写了 {links} 处链接。",
 
@@ -637,21 +675,15 @@ export const I18N: Record<string, Locale> = {
 		externalSiteList: "站点名单",
 		externalSiteListDesc: "一行一个域名。写 example.com 也会命中 img.example.com；写 example.com:8080 只匹配那个地址。选「仅名单内的站点」时，留空表示什么都不自动处理。",
 		externalSiteListPlaceholder: "example.com\ncdn.example.com",
-		externalPickName: "手动选择要上传的文件",
-		externalPickDesc: "在「当前笔记」或「全库」里勾选文件，只处理勾中的那些。勾选就是同意，上面的开关关着也照样可用。",
-		externalPickButton: "挑选文件…",
-		externalPickTitle: "选择要上传的文件",
-		externalPickScope: "范围",
-		externalPickScopeNote: "当前笔记",
-		externalPickScopeVault: "全库",
-		externalPickEmpty: "这个范围里没有可上传的文件（可能已经在你自己的存储里，或者存储连接还没配好）。",
+		externalPickName: "上传附件",
+		// ⚠️ 2026-10-22（D-73）：① 说"搬到你的存储"是**错的** —— 1.2.0（D-17）起
+		// **文件不移动、不改名**，变的只有笔记里的链接；② 候选从 D-68 起含"没有任何笔记引用"的附件。
+		externalPickDesc:
+			"把库里还没上传的附件（包括没有任何笔记引用的）以及笔记里指向站外或本机的文件传到你的存储。清单里可以逐项勾选，文件本身留在原处。",
+		externalPickButton: "上传附件…",
 		externalPickAll: "全选",
 		externalPickNone: "全不选",
-		externalPickCta: "上传选中的 {count} 个",
 		externalPickCancel: "取消",
-		externalPickNothing: "没有上传任何文件。",
-		externalPickDone: "已上传 {cached} 个；{partial} 个已上传但没能改写链接；{failed} 个失败。",
-		cmdPickExternal: "上传站外或本机文件…",
 		externalCached: "已上传来自 {host} 的文件并改写链接。",
 		// ── 本机文件（file:///D:/…）：与站外同一套链，只有"字节从哪来"不同 ──
 		localCached: "已把本机文件 {name} 上传上去并改写链接。",
@@ -669,8 +701,14 @@ export const I18N: Record<string, Locale> = {
 		cacheLimit: "本地副本上限（MB）",
 		cacheLimitDesc: "限制本地副本占用的空间。超出时先删最久没用过的，下次看到会重新下载。填 0 表示不限制。",
 		cacheLimitPlaceholder: "0 = 不限制",
-		cacheLimitNone: "不限",
 		cacheLimitValue: "{mb} MB",
+		// ⭐ 2026-10-22（D-79）：设置页那行「当前占用」—— 只读索引，界面写清「约」。
+		localUsageName: "占用空间",
+		localUsageDesc:
+			"这个数字来自索引，不逐个核对磁盘。想看哪些可以清，"
+			+ "跑「清理附件…」，那里逐行列着。",
+		localUsageValue: "{count} 份本地副本，约 {mb} MB。",
+		localUsageEmpty: "还没有本地副本。",
 		// 缓存清理只有一种方式（直接删除），所以通知只有一条。
 		cacheEvicted:
 			"超出本地副本上限：已删除 {count} 份最久没用过的副本（{mb} MB）。下次看到它们时会自动重新下载。",
@@ -689,6 +727,8 @@ export const I18N: Record<string, Locale> = {
 		deleteLogTitle: "云端删除记录",
 		deleteLogEmpty: "还没有删除记录。",
 		deleteLogUnavailable: "这个环境里找不到删除记录（插件目录未知）。",
+		debugLogging: "排障日志",
+		debugLoggingDesc: "在开发者控制台打印每个阶段的计数与耗时（需勾选 Verbose 级别）。不改变任何行为，也不会显示在界面上。",
 	},
 };
 

@@ -270,7 +270,15 @@ export async function evaluate(client, expression) {
  *
  * @returns `{ client, child }`；调用方负责在自己结束时 `client.close()` 与 `child.kill()`。
  */
-export async function launchAndAttach({ exe, port, vault, waitSeconds, log = () => {} }) {
+/**
+ * ⭐ 2026-10-22（D-82）：`path` 给了就用 `obsidian://open?path=` 打开**一个目录**
+ *（不必先在 `obsidian.json` 里注册它）。
+ *
+ * 用途：需要一个**干净且完全可控**的库的探针 —— 自己造、自己扫，不碰用户的
+ *（用户库里一个读不到的文件就会让"严格口径"那条链整条取消。那是对的，但也意味着
+ * 探针什么都量不到）。
+ */
+export async function launchAndAttach({ exe, port, vault, path, waitSeconds, log = () => {} }) {
 	if (!existsSync(exe)) throw new Error(`找不到 Obsidian：${exe}`);
 
 	// ⚠️ 参数缺一不可：只给 remote-debugging-port 会因 GPU 进程崩溃而退出。
@@ -282,11 +290,24 @@ export async function launchAndAttach({ exe, port, vault, waitSeconds, log = () 
 			`--remote-debugging-port=${port}`,
 			"--disable-gpu",
 			"--no-sandbox",
-			`obsidian://open?vault=${encodeURIComponent(vault)}`,
+			...(path
+				? [`obsidian://open?path=${encodeURIComponent(path)}`]
+				: [`obsidian://open?vault=${encodeURIComponent(vault)}`]),
 		],
 		{ stdio: "ignore", detached: false }
 	);
 	child.on("exit", (code) => log(`  （Obsidian 退出，code=${code}）`));
+
+	// ⚠️ 失败路径必须**收掉这个子进程**，否则它会活到自己退出为止 —— 而 Obsidian 是单实例的，
+	// 下一次运行就会看到"系统里有 2 个 Obsidian 进程在跑"然后干等 90 秒（实测连撞三次）。
+	// 父进程（本脚本）一退出它也会跟着走，但那有几秒延迟，足够把下一轮卡死。
+	const killOnFailure = () => {
+		try {
+			child.kill();
+		} catch {
+			// 已经退了
+		}
+	};
 
 	// 等 CDP 起来（Node 的 fetch 不走 HTTP_PROXY，正好能直连 localhost）
 	//
@@ -320,6 +341,7 @@ export async function launchAndAttach({ exe, port, vault, waitSeconds, log = () 
 					"  处理：关掉所有 Obsidian 窗口后重跑（若那个实例是用户正在用的，先问一句再结束它）。"
 			);
 		}
+		killOnFailure();
 		throw new Error(
 			`调试端口 ${port} 在 ${waitSeconds} 秒内没有就绪，且没有别的 Obsidian 实例在跑。\n` +
 				`  这更像是我们启动的实例自己没能起来：确认 ${exe} 能正常打开，\n` +
@@ -365,11 +387,25 @@ export async function launchAndAttach({ exe, port, vault, waitSeconds, log = () 
 							`用 OBSIDIAN_VAULT=<名字> 指定其中之一。`
 						: `也可以用 OBSIDIAN_VAULT 指定别的名字。`)
 				: "vault 已经打开了，所以更像是插件本身没加载起来 —— 看上面的控制台输出。";
+		killOnFailure();
 		throw new Error(
 			`宿主在 60 秒内没有就绪（app.plugins 一直不可用）。\n  实际状态：${JSON.stringify(state)}\n  ${hint}`
 		);
 	}
 	log("  ✓ 宿主已就绪（app.plugins 可用）");
+
+	// ⚠️ 给了 `path` 时它还没有名字（首次打开 ⇒ 名字＝目录名），
+	// 所以改成核对 `adapter.basePath`：那才是「真的打开了这个目录」的直接证据。
+	if (path) {
+		const basePath = await evaluate(client, `String(app?.vault?.adapter?.basePath ?? "")`);
+		const normalize = (value) => String(value).split("\\").join("/").replace(/\/$/, "").toLowerCase();
+		if (!normalize(basePath).endsWith(normalize(path))) {
+			killOnFailure();
+		throw new Error(`请求打开目录 ${path}，实际打开的是 ${basePath}`);
+		}
+		log(`  ✓ 打开的确实是指定的目录：${path}`);
+		return { client, child };
+	}
 
 	// ⭐ 实际打开的是不是我们**请求**的那个 vault？（见文件头第 4 点）
 	const actualVault = await evaluate(client, `app?.vault?.getName?.() ?? null`);
@@ -377,6 +413,7 @@ export async function launchAndAttach({ exe, port, vault, waitSeconds, log = () 
 		const available = knownVaultNames();
 		const availableHint =
 			available.length > 0 ? `本机 Obsidian 认得这些 vault：${available.join("、")}。` : "";
+		killOnFailure();
 		throw new Error(
 			`请求打开的 vault 是「${vault}」，实际打开的是「${actualVault}」。\n` +
 				`  ⚠️ Obsidian 在名字对不上时**不会报错**，它会退回上次打开的 vault —— 于是这一轮\n` +

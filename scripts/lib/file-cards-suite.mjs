@@ -18,6 +18,57 @@ import assert from "node:assert/strict";
  * 渲染钩子改写了 `HTMLImageElement.prototype.src` 的 setter，而那一层在"缺本地副本"时会
  * **去下载那个对象**：这个对话框问的正是"要不要删掉它"。
  */
+/**
+ * 记账替身：只记录"被怎么用"，不需要真 DOM。
+ *
+ * ⚠️ 提到套件顶部是为了让 ⑦（渲染）与 ⑦b（打开）共用**同一个**替身 ——
+ * 两份替身迟早有一份不支持某个方法，而症状是"那一节静默走不到"。
+ */
+function makeRowEl(tag = "div") {
+	const el = {
+		tag,
+		attrs: {},
+		classes: [],
+		text: "",
+		children: [],
+		createDiv: (options = {}) => {
+			const child = makeRowEl("div");
+			child.cls = options.cls;
+			child.text = options.text ?? "";
+			el.children.push(child);
+			return child;
+		},
+		createSpan: (options = {}) => {
+			const child = makeRowEl("span");
+			child.cls = options.cls;
+			child.text = options.text ?? "";
+			el.children.push(child);
+			return child;
+		},
+		createEl: (childTag, options = {}) => {
+			const child = makeRowEl(childTag);
+			child.cls = options.cls;
+			child.text = options.text ?? "";
+			child.attrs = options.attr ?? {};
+			el.children.push(child);
+			return child;
+		},
+		// ⚠️ 真实 DOM 元素一定有它，而"候选链"那一步走的正是 `setAttribute`
+		//（**不能**走 `img.src = …`：渲染钩子改写了那个 setter）⇒ 替身也得有。
+		setAttribute: (name, value) => {
+			el.attrs[name] = value;
+		},
+		addClass: (cls) => el.classes.push(cls),
+		setText: (text) => {
+			el.text = text;
+		},
+		remove: () => {
+			el.removed = true;
+		},
+	};
+	return el;
+}
+
 export function runFileCardsSuite(mod) {
 	const { planFileCards, renderFileCards, externalRowMeta } = mod;
 	assert.ok(typeof planFileCards === "function", "应当导出清单判定");
@@ -151,56 +202,7 @@ export function runFileCardsSuite(mod) {
 	// ⑦ 渲染：`src` 走 `attr`（setAttribute），且加载失败要降级成标记
 	// ============================================================
 	{
-		const calls = [];
-		/** 记账替身：只记录"被怎么用"，不需要真 DOM。 */
-		const makeEl = (tag) => {
-			const el = {
-				tag,
-				attrs: {},
-				classes: [],
-				text: "",
-				children: [],
-				createDiv: (options = {}) => {
-					const child = makeEl("div");
-					child.cls = options.cls;
-					child.text = options.text ?? "";
-					el.children.push(child);
-					return child;
-				},
-				createSpan: (options = {}) => {
-					const child = makeEl("span");
-					child.cls = options.cls;
-					child.text = options.text ?? "";
-					el.children.push(child);
-					return child;
-				},
-				createEl: (childTag, options = {}) => {
-					const child = makeEl(childTag);
-					child.cls = options.cls;
-					child.text = options.text ?? "";
-					child.attrs = options.attr ?? {};
-					calls.push({ tag: childTag, attr: options.attr ?? {} });
-					el.children.push(child);
-					return child;
-				},
-				// ⚠️ 真实 DOM 元素一定有它，而"候选链"那一步走的正是 `setAttribute`
-				//（**不能**走 `img.src = …`：渲染钩子改写了那个 setter）⇒ 替身也得有，
-				// 否则"接着试下一条候选"在套件里根本走不到。
-				setAttribute: (name, value) => {
-					el.attrs[name] = value;
-				},
-				addClass: (cls) => el.classes.push(cls),
-				setText: (text) => {
-					el.text = text;
-				},
-				remove: () => {
-					el.removed = true;
-				},
-			};
-			return el;
-		};
-
-		const root = makeEl("root");
+		const root = makeRowEl("root");
 		renderFileCards(root, [
 			{ id: "a1b2.png", label: "报告.png", badge: "PNG", thumbUrls: ["https://cdn.example.com/a1b2.png"] },
 		]);
@@ -211,7 +213,7 @@ export function runFileCardsSuite(mod) {
 		assert.equal(img.tag, "img", "图片行要真的渲染一个 img");
 		// ⭐ 最要紧的一条：地址走 **attr**（setAttribute），不走被渲染钩子改写的 `img.src`
 		assert.equal(
-			calls[0]?.attr?.src,
+			img.attrs.src,
 			"https://cdn.example.com/a1b2.png",
 			"★ 缩略图地址必须通过 attr 写（走 img.src 会被渲染钩子接走 → 缺副本时触发下载）"
 		);
@@ -221,7 +223,7 @@ export function runFileCardsSuite(mod) {
 		// **永远不加载**；而它不加载时**连 `onerror` 都不触发** ⇒ 连"降级成类型标记"
 		// 那条兜底也走不到，用户看到的就是一块空白、也没有任何报错可查。
 		assert.ok(
-			!("loading" in (calls[0]?.attr ?? {})),
+			!("loading" in img.attrs),
 			"★ 缩略图不许带 loading 属性（原生懒加载在宿主弹窗里可能永远不加载，且不报错）"
 		);
 		assert.equal(row.children[1].text, "报告.png", "名字要显示出来（那是核对的主要依据）");
@@ -234,7 +236,7 @@ export function runFileCardsSuite(mod) {
 		// ⭐⭐ 候选是**一串**：第一条画不出来要**接着试**第二条，全试完才降级（D-45）。
 		// 站外 `http(s)` 只有一条；库外本机文件有两条（宿主前缀 + 原文）——
 		// 而"宿主认哪一种"由**运行时**说了算 ⇒ 不接着试就等于把决定权又抢回我们手里。
-		const rootChain = makeEl("root");
+		const rootChain = makeRowEl("root");
 		renderFileCards(rootChain, [
 			{
 				id: "g7h8.png",
@@ -257,10 +259,162 @@ export function runFileCardsSuite(mod) {
 		assert.equal(chained.text, "PNG", "降级后显示类型标记");
 
 		// 非图片：直接就是标记，没有 img
-		const root2 = makeEl("root");
+		const root2 = makeRowEl("root");
 		renderFileCards(root2, [{ id: "b7c8.pdf", label: "报告.pdf", badge: "PDF", thumbUrls: [] }]);
 		assert.equal(root2.children[0].children[0].children.length, 0, "没有缩略图时不渲染 img");
 		assert.equal(root2.children[0].children[0].text, "PDF", "非图片显示类型标记");
+	}
+
+	// ============================================================
+	// ⑦b 路径与「打开」（D-66，用户拿 File Cleaner Redux 的清单作参照）
+	//
+	// 两件事：① 名字之外要给**目录**（同名文件在三个目录里都有时，裸名字分不出是哪一份）；
+	// ② 行尾给一个**真的能点开原件**的入口。判定在这里，打开动作在 `main.ts`（注入）。
+	// ============================================================
+	{
+		// ① 库内文件：副标题默认是**完整路径**（含目录与文件名），打开目标是**库内路径**
+		const [vault] = planFileCards(
+			[{ id: "attachments/图 1.png", name: "图 1.png", localPath: "attachments/图 1.png" }],
+			deps
+		);
+		assert.equal(
+			vault.label,
+			"attachments/图 1.png",
+			"★★ 库内文件的主文本要是**完整路径**（参照 File Cleaner Redux 的 `file.path`）"
+		);
+		assert.equal(vault.meta, "", "★ 路径已经在主文本里，副标题不再重复一遍");
+		assert.deepEqual(vault.open, { kind: "vault", value: "attachments/图 1.png" }, "★ 库内文件打开的是那条路径");
+
+		// ② 根目录的文件：完整路径就等于文件名（⚠️ 仍然要给 —— 这一条正是用户报的缺口：
+		//    只推"目录"时，根目录文件第二行是空的，用户看到的就是"没有路径"）
+		const [root] = planFileCards([{ id: "图.png", name: "图.png", localPath: "图.png" }], deps);
+		assert.equal(root.label, "图.png", "★★ 根目录文件的完整路径就是文件名（不许退回「没有路径」）");
+		assert.deepEqual(root.open, { kind: "vault", value: "图.png" }, "★ 根目录文件照样能打开");
+
+		// ③ 远端对象（没有本地副本）：打开目标是**远端地址**；
+		//    ⚠️ 副标题**留空**（算不出库内路径 —— 「不留副本」档就是这种行，不许编一个）
+		const [remote] = planFileCards([{ id: "b2.png", name: "b2.png", remoteKey: "b2.png" }], deps);
+		assert.deepEqual(remote.open, { kind: "url", value: "https://cdn.example.com/b2.png" }, "★ 没有本地副本时打开远端地址");
+		assert.equal(remote.label, "b2.png", "★ 没有本地副本时主文本退回文件名（不编造一个路径）");
+
+		// ④ 什么都没推出来的（本机 file:/// 那条）：**不给**打开 —— 点了没反应比没有更糟
+		const [none] = planFileCards([{ id: "file:///D:/a.png", thumb: ["app://local/D:/a.png"] }], deps);
+		assert.equal(none.open, null, "★★ 推不出目标时不给「打开」（别画一个点不动的链接）");
+
+		// ⑤ 调用方可以**明确说不给**（`null`）覆盖推导结果
+		const [vetoed] = planFileCards(
+			[{ id: "c3.png", localPath: "attachments/c3.png", open: null }],
+			deps
+		);
+		assert.equal(vetoed.open, null, "★ 调用方给 `null` 时不许被自动推导盖掉");
+
+		// ⑥ 调用方给了 `meta`（站外那类是主机 / 本机绝对路径）时，**不许**被目录盖掉
+		const [external] = planFileCards(
+			[{ id: "k1", name: "a.png", meta: "cdn.example.com", open: { kind: "url", value: "https://cdn.example.com/a.png" } }],
+			deps
+		);
+		assert.equal(external.meta, "cdn.example.com", "★★ 调用方给的副标题优先（站外行显示主机，不是路径）");
+
+		// ⑦ 渲染：给了处理器才画链接，且位置在**最后**（名字仍必须留在 `children[1]`）
+		const opened = [];
+		const rootEl = makeRowEl();
+		renderFileCards(rootEl, [vault], { openLabel: "打开", onOpen: (target) => opened.push(target) });
+		const row = rootEl.children[0];
+		const link = row.children[row.children.length - 1];
+		assert.equal(link.tag, "a", "★ 行尾要画一个链接");
+		assert.equal(link.text, "打开", "★ 文案来自 i18n（不许写死在渲染层）");
+		assert.equal(row.children[1].text, "attachments/图 1.png", "★★ 主文本仍在 children[1]（插在前面会让断言静默指向别处）");
+		link.onclick?.({ preventDefault: () => {} });
+		assert.deepEqual(opened, [{ kind: "vault", value: "attachments/图 1.png" }], "★ 点一下要把目标交出去");
+
+		// ⑧ 没有处理器 ⇒ **不画链接**（点不动的链接比没有更糟）
+		const plain = makeRowEl();
+		renderFileCards(plain, [vault]);
+		assert.ok(
+			!plain.children[0].children.some((child) => child.tag === "a"),
+			"★★ 没给 onOpen 时不许画链接"
+		);
+
+		// ⑩ 行内小标签（D-68）：`hint` 紧跟名字，`children[1]` 仍是名字
+		{
+			const [tagged] = planFileCards(
+				[
+					{
+						id: "attachments/old.png",
+						localPath: "attachments/old.png",
+						hint: "没有笔记引用",
+					},
+				],
+				deps
+			);
+			assert.equal(tagged.hint, "没有笔记引用", "★ 调用方给的标签要原样带上");
+
+			const el = makeRowEl();
+			renderFileCards(el, [tagged]);
+			const row = el.children[0];
+			assert.equal(row.children[1].text, "attachments/old.png", "★★ 名字仍在 children[1]（标签只能往后排）");
+			assert.equal(row.children[2]?.text, "没有笔记引用", "★ 标签紧跟名字");
+			assert.equal(row.children[2]?.cls, "acc-file-hint", "★ 样式钩子固定（真机靠它认这一行）");
+
+			// ⚠️ 反向：不给标签时**不画**（空 span 会让行高多出一截）
+			const [plainRow] = planFileCards([{ id: "attachments/x.png", localPath: "attachments/x.png" }], deps);
+			assert.equal(plainRow.hint, "", "★ 没给标签时是空串");
+			const plainEl = makeRowEl();
+			renderFileCards(plainEl, [plainRow]);
+			assert.ok(
+				!plainEl.children[0].children.some((child) => child.cls === "acc-file-hint"),
+				"★★ 没有标签时不许画一个空 span"
+			);
+		}
+
+		// ⑪ 失效附件那一行（D-70）：**勾不了**，链接去的是引用它的那篇笔记
+		{
+			const [gone] = planFileCards(
+				[
+					{
+						id: "notes/a.md file:///D:/gone/x.png",
+						name: "x.png",
+						meta: "file:///D:/gone/x.png",
+						hint: "文件已不在",
+						open: { kind: "vault", value: "notes/a.md" },
+						openLabel: "打开笔记",
+						hintIcon: "alert-triangle",
+						selectable: false,
+					},
+				],
+				deps
+			);
+			assert.equal(gone.selectable, false, "★★ `selectable: false` 要原样带上（界面据此禁用勾选框）");
+			assert.equal(gone.openLabel, "打开笔记", "★ 行自己的链接文案要带上（它打开的是笔记，不是附件）");
+			assert.equal(
+				gone.hintIcon,
+				"alert-triangle",
+				"★★ 图标名要带上（用户要求「在列表里用图标表示」；画图标的只有弹窗层）"
+			);
+			assert.deepEqual(gone.open, { kind: "vault", value: "notes/a.md" }, "★ 打开目标是**引用它的那篇笔记**");
+
+			// ⚠️ 缺省 = 可选。反过来的默认值（只有 `true` 才可选）会让**所有既有调用方**
+			// 静默变成"勾不动"，而那种坏法在界面上只表现为"全都勾不上"。
+			const [normal] = planFileCards([{ id: "a.png", localPath: "a.png" }], deps);
+			assert.equal(normal.selectable, true, "★★ 不给 `selectable` 时默认可勾选");
+			assert.equal(normal.openLabel, "", "★ 没给行文案时是空串（渲染层退回统一文案）");
+
+			// 渲染：行自己的文案优先于界面的统一文案
+			const el = makeRowEl();
+			renderFileCards(el, [gone], { openLabel: "打开", onOpen: () => {} });
+			const goneRow = el.children[0];
+			const goneLink = goneRow.children[goneRow.children.length - 1];
+			assert.equal(goneLink.text, "打开笔记", "★★ 行自己的文案优先（否则点开的是笔记、写的却是「打开」）");
+			assert.equal(goneRow.children[1].text, "x.png", "★ 名字仍在 children[1]（链接只能排在最后）");
+		}
+
+		// ⑨ 这一行**没有目标**（本机 file:///）⇒ 也不画 —— 即使调用方给了处理器
+		const noTarget = makeRowEl();
+		renderFileCards(noTarget, [none], { openLabel: "打开", onOpen: () => assert.fail("没有目标的行走不该有打开") });
+		assert.ok(
+			!noTarget.children[0].children.some((child) => child.tag === "a"),
+			"★★ 没有打开目标的行走不许画链接"
+		);
 	}
 
 	// ============================================================

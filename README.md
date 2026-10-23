@@ -86,7 +86,7 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | **Free up local space** | Deletes local copies of files your notes still link — **permanently, not to the trash**. With a limit set, it stops at the limit. |
 | **Revert links to local paths** | Points note links back at the files in your vault. **Nothing is deleted**; files with no copy keep pointing at your storage. |
 | **Upload files from other sites** | Off by default; the site list narrows the **automatic** path only, and picking by hand is never restricted. |
-| **Pick files to upload** | Tick individual off-site or outside-the-vault files; desktop only, and only the kinds a note can embed. |
+| **Upload attachments** | Opens the same list as the `Upload attachments…` command (everything not in your storage yet), so you can tick what to send from here. Outside-the-vault `file:///…` files are desktop only. |
 | **When an attachment is no longer linked** | Ask (default) / notify / do nothing. Cleanup always asks. |
 | **Compatibility mode** | Keep it on for Cloudflare R2, MinIO and most self-hosted services. |
 
@@ -94,10 +94,8 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 
 | Command | What it does |
 | --- | --- |
-| **Show local copy usage** | What your copies take, and how much of it no note refers to any more — an estimate. |
-| **Upload files your notes link to…** | Lists what your notes link to; tick the ones to upload and rewrite. Your files stay where they are — that copy *is* the local copy. |
-| **Upload files from other sites or your computer…** | Lists files outside your vault; tick the ones to fetch. Picking them is the consent. |
-| **Clean up cloud attachments that no note links to…** | Everything this vault uploaded, minus everything still linked. Then keep, delete only the copy, or delete both. Also how you re-run the automatic prompt if you dismissed it. |
+| **Upload attachments…** | One list for everything not in your storage yet: files your notes link to, files no note links to (backing them up only — unticked by default), and files your notes point at on other sites or on this computer. Tick what to upload; links get rewritten for the ones your notes refer to. Your files stay where they are — that copy *is* the local copy. Above the list you can tick **only the current note** to see just what that note uses. ⚠️ Local files that are **no longer on this computer** are listed too (their tick box is greyed out) with an **Open note** link, so you can go and fix that link. |
+| **Clean up attachments…** | Three kinds: **cloud objects** this vault uploaded that nothing links to any more, **local files** nothing links to (including ones never uploaded), and **cached copies downloaded from other sites**. Then keep, delete the local file only, or delete both. Also how you re-run the automatic prompt if you dismissed it. |
 
 ## Good to know
 
@@ -128,7 +126,7 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 ## Privacy & security
 
 - **It normally talks only to your storage** — no telemetry, no analytics. Two things can reach outside: a file you
-  tick yourself in **Pick files to upload** (reading it is what you asked for), and the optional off-site feature below.
+  tick yourself in the upload list (reading it is what you asked for), and the optional off-site feature below.
 - **One optional feature reaches other sites, and it never turns itself on** — off by default; enabling it is the
   consent, and the site list narrows it further. The request carries nothing beyond the file's address.
 - **A web page is never stored** — `text/html` and other `text/*` answers are refused rather than uploaded.
@@ -151,6 +149,31 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 
 Reproduce the storage checks with `npm run verify:real-storage`, and the connection probe with
 `node scripts/verify-connection-probe.mjs`.
+
+## Troubleshooting
+
+Start with **Settings → Attachment Cloud Cache → Test connection**: its status light answers "can this vault reach
+your storage, and can other people open my links?" without changing anything.
+
+| What you see | What it usually is | What to do |
+|---|---|---|
+| Images stay blank, `403` in the console | The bucket is **private** and the note holds a direct link | Nothing to fix: with a private bucket the plugin keeps a local copy and shows that instead |
+| Images blank **and** the status light says *Unreachable* | Endpoint / bucket / keys | Re-run Test connection, then re-check the endpoint (some providers need the region written into it) |
+| A file is marked "gone from this computer" in the upload list | The `file:///…` target was deleted or moved (temp folders do this) | Open the note from that row and fix the link — the plugin will not upload a file it cannot read |
+| A command appears to do nothing | Two known causes: storage not configured yet (it says so), or the vault has a note that **cannot be read** | The cleanup command refuses to run in that case **on purpose** — it will not treat "unknown" as "unused" |
+| After switching devices the images do not come back | The index records paths **on that device** | Copy the plugin folder **without** `.cache-index.json` (see Good to know) |
+| A download seems stuck | Requests now time out (60 s for a download) and the object stays retryable | If it still hangs, open an issue with the console log |
+
+## Upgrading
+
+- **1.2.0 moved where copies live**: the old cache folder is gone; a copy is simply the file in your attachments
+  folder. Nothing to migrate — the first render registers it.
+- **Commands were merged**: `Upload files your notes link to…`, `Upload off-site or local files…` and
+  `Pick files to cache…` are now one command, **`Upload attachments…`**. The cleanup command is now
+  **`Clean up attachments…`** (it also lists local files and off-site cache copies), and `Show local copy usage` was
+  removed — the numbers are on the settings page, the per-file list is in the cleanup dialog.
+- **Hotkeys are bound to command ids**, not names — they keep working across these renames.
+- Settings are additive: new keys get defaults, and unknown keys from older versions are ignored.
 
 ## Getting help
 
@@ -254,7 +277,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | **释放本地空间** | 删掉笔记仍引用着的附件的本地副本 —— **永久删除、不进回收站**；设了上限时只清到上限为止。 |
 | **把链接改回本地路径** | 把笔记里的链接改回指向库里的文件。**什么都不删**；没有副本的那些继续指向你的存储。 |
 | **站外文件也上传到云端** | 默认关闭；站点名单只筛**自动**那一路，手动挑选不受限制。 |
-| **手动选择要上传的文件** | 勾选具体的站外或库外本机文件；仅桌面端，且只收能嵌进笔记的那几类。 |
+| **上传附件** | 打开与命令 `上传附件…` 的同一份清单（所有还没进你存储的东西），在这里也能逐项勾。库外本机 `file:///…` 仅桌面端。 |
 | **附件不再被引用时** | 弹窗让我选（默认）/ 只给一条通知 / 什么都不做。清理永远需要你确认。 |
 | **兼容模式** | Cloudflare R2、MinIO 与多数自建服务都要开着。 |
 
@@ -262,10 +285,8 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 
 | 命令 | 做什么 |
 | --- | --- |
-| **查看本地副本占用** | 本地副本占了多少、其中多少已经没有笔记引用 —— 这是**估算**。 |
-| **上传笔记引用的文件…** | 列出笔记里引用着的文件；只上传你勾中的那些并改写链接。文件**留在原地** —— 那份就是本地副本。 |
-| **上传站外或本机文件…** | 列出**库外**的文件；勾中的才会被取回 —— 勾选本身就是同意。 |
-| **清理没有笔记引用的云端附件…** | 本库上传过的、减去仍被笔记或画布引用的。勾中的按你选的处理：保留 / 只删本地副本 / 连云端一起删。 |
+| **上传附件…** | 一张清单装下所有还没进你存储的东西：笔记里引用着的文件、**没有任何笔记引用**的文件（只做备份，默认不勾）、以及笔记里指向站外或本机的文件。勾中的才上传；被引用的那些会顺手改写链接。文件**留在原地** —— 那份就是本地副本。清单上方可以勾上**只看当前笔记** —— 只列这一篇里的东西。⚠️ 指向的本机文件**已经不在**的那些也会列出来（勾选框是灰的），行尾给一个**「打开笔记」** —— 去那篇笔记里把那条链接修掉。 |
+| **清理附件…** | 三类：本库上传过、已没人引用的**云端对象**；**没有任何引用的本地文件**（包括从来没上传过的）；**从别的网站下载下来的缓存副本**（删了不碰云端、不改笔记，下次显示重新下载）。勾中的按你选的处理：保留 / 只删本地 / 本地和云端都删。 |
 
 ## 需要注意的
 
@@ -290,7 +311,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 
 ## 隐私与安全
 
-- **默认只连你自己的存储** —— 不含遥测、统计。只有两件事会伸到外面：**你自己在「手动选择要上传的文件」里勾中**的
+- **默认只连你自己的存储** —— 不含遥测、统计。只有两件事会伸到外面：**你自己在「上传附件…」的清单里勾中**的
   库外本机文件（读它是你要求的），以及下面那个可选的站外功能。
 - **有一个可选功能会访问其它站点，而且它不会自己启动** —— 默认关闭，打开它就是同意，站点名单再把范围收窄；
   请求里除文件地址本身不带任何其它内容。
@@ -311,6 +332,29 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 
 存储侧的检查可用 `npm run verify:real-storage` 复现，连接探测用
 `node scripts/verify-connection-probe.mjs`。
+
+## 故障排查
+
+先看 **设置 → Attachment Cloud Cache → 测试连接**：那盏状态灯回答的是「这个库连得上你的存储吗、别人打得开我的链接吗」，
+全程不改任何东西。
+
+| 你看到的 | 通常是什么 | 怎么办 |
+|---|---|---|
+| 图一直空着，控制台有 `403` | 桶是**私有**的，而笔记里写的是直链 | 不用修：私有桶下插件保留本地副本并用它显示 |
+| 图空着，**且**状态灯是「无法访问」 | 服务地址 / 桶名 / 密钥 | 重跑一次「测试连接」，再核对地址（有些服务商要求把区域写进地址里） |
+| 上传清单里说某个文件「已经不在这台电脑上」 | 那条 `file:///…` 指向的文件被删或挪走了（临时目录经常这样） | 点那一行的「打开笔记」把链接改掉 —— 插件不会去传一个读不到的文件 |
+| 点了命令像没反应 | 两种已知原因：还没配置存储（它会说），或者库里有一篇笔记**读不到** | 清理命令在这种情况会**故意**取消 —— 它不会把「不知道」当成「没人引用」 |
+| 换设备之后图不显示 | 索引记的是**那台设备**上的路径 | 复制插件目录时**不要**带 `.cache-index.json`（见上面「需要注意的」） |
+| 某次下载像卡住了 | 请求现在有上限（下载 60 秒），而且那个对象下次还能重试 | 若仍然卡住，带控制台日志提 issue |
+
+## 升级 / 迁移
+
+- **1.2.0 改了副本的位置**：不再有「缓存目录」，副本就是附件目录里那份文件。不需要迁移 —— 第一次显示时会登记。
+- **命令合并过**：`上传笔记引用的文件…`、`上传站外或本机文件…`、`挑选要缓存的外链…` 现在是同一条
+  **`上传附件…`**；清理那条叫 **`清理附件…`**（也会列出本地文件与站外缓存副本）；`查看本地副本占用` 已去掉 ——
+  数字在设置页，逐行清单在清理弹窗里。
+- **快捷键绑的是命令 id**，不是名字 —— 上面的改名不影响已绑的快捷键。
+- 设置只增不减：新键有默认值，旧版本留下的未知键会被忽略。
 
 ## 遇到问题
 

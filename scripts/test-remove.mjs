@@ -58,7 +58,6 @@ const CACHE_MAINTENANCE = [
 	"src/maintenance/run.ts",
 	"src/maintenance/rotation.ts",
 	"src/maintenance/eviction.ts",
-	"src/maintenance/audit.ts",
 ];
 for (const file of CACHE_MAINTENANCE) {
 	assert.ok(

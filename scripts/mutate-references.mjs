@@ -16,7 +16,6 @@ import { runMaintenanceSuite } from "./lib/maintenance-suite.mjs";
 await runMutations({
 	source: "src/maintenance/references.ts",
 	entries: [
-		"src/maintenance/audit",
 		"src/maintenance/references",
 		"src/maintenance/batch",
 		"src/cache/index",
@@ -27,6 +26,50 @@ await runMutations({
 	],
 	suite: runMaintenanceSuite,
 	mutations: [
+		{
+			// 后果：同名歧义时"两个都算被引用" ⇒ 命令把 a/dup.png 与 b/dup.png 都搬进缓存，
+			// 而改写器在歧义时**拒绝改写**（它分不清 `![[dup.png]]` 指哪个）⇒ 两处链接
+			// 全成死链。宁可少处理。
+			name: "★ 画布引用的同名歧义被当成「都算引用」（搬走却改不掉 ⇒ 死链）",
+			from:
+				"\t\t\tif (candidates && candidates.length === 1) {\n" +
+				"\t\t\t\tout.add(candidates[0]);\n" +
+				"\t\t\t\tbreak;\n" +
+				"\t\t\t}",
+			to: "\t\t\tfor (const hit of candidates ?? []) out.add(hit);",
+			expect: "同名歧义一个都不收",
+		},
+		// ── ⭐ 2026-10-22（D-65）：下面两条随 `referencedPathsFrom` / `resolveVaultTargets` 一起
+		// 从 `mutate-batch.mjs` 搬过来 —— 判据归位到 references.ts，锚点跟着判据走。
+		{
+			// 后果：**画布里的引用被丢掉** ⇒ 只被画布引用的附件永远进不了候选
+			//（用户把图摆在画布里是最常见的用法之一，而需求 R16 明确要求"同等算数"）。
+			// ⚠️ 方向与 1.1.0 之前相反：那时是"画布必须排除"（画布里的引用改不了），
+			// 现在改写器会改画布，所以"漏掉画布"才是缺陷。
+			name: "★ 画布里的引用被丢掉（只被画布引用的附件永远不被处理）",
+			from: "\t\t// \u2b50 来源**不筛**：Markdown 笔记与画布同等算数（需求 R16，2026-10-09 拍板）。\n\t\t// 空的来源路径仍然跳过 —— 那不是宿主会给的形状。\n\t\tif (!sourcePath) continue;",
+			to: "\t\tif (!/\\.md$/i.test(sourcePath)) continue;\n\t\tif (!sourcePath) continue;",
+			expect: "画布里的引用**算数**",
+		},
+		{
+			// 后果：画布文本节点里的**编码写法**解析不到真实文件 ⇒ "只被画布文本引用的附件"
+			// 永远不被处理（与需求 R16 冲突），而且不报错。
+			// ⚠️ 与改写器共用同一份归一（`linkTargetForms`）：两边各写一遍的话，
+			// 就是"正文里认得出、画布里认不出"（或反过来）那类静默分叉。
+			name: "★ 画布文本里的编码写法解析不到文件（只被画布引用的附件永远不被处理）",
+			from: "\t\tconst forms = linkTargetForms(target);",
+			to: "\t\tconst forms = linkTargetForms(target).slice(0, 1);",
+			expect: "画布文本里的编码写法也要解析到真实文件",
+		},
+		{
+			// 后果：**画布文本里的远端地址不算"仍被引用"** ⇒ 一张只被画布卡片引用着的图，
+			// 占用报告说"没有人引用 / 可回收"，而云端清理根本不问它（2026-10-22 审计查出的
+			// 第三处不一致：报告的扫描漏了画布那一半）。
+			name: "★★ 画布文本里的地址不取 key（报告说没人引用、清理却不问 —— 三条命令各说各的）",
+			from: "\tfor (const raw of canvasTextTargets(text)) {\n\t\tfor (const key of keysInText(raw, keyFromUrl)) keys.add(key);",
+			to: "\tfor (const raw of []) {\n\t\tfor (const key of keysInText(raw, keyFromUrl)) keys.add(key);",
+			expect: "画布**文本节点**里的远端地址要算进",
+		},
 		{
 			// 后果：`[说明](report)`（笔记里没写扩展名）匹配不上 `report.pdf` 那条规则 ⇒
 			// **那个附件永远不会被改写**（链接一直是本地的），而命令报告"成功"。
@@ -127,6 +170,31 @@ await runMutations({
 			expect: "编码 + 相对前缀也要算「还指着它」",
 		},
 		{
+			// 后果：目标里带**成对括号**时被截断（`… 4年(1).pdf` → `… 4年(1`）⇒
+			// 「还有人引用吗」答否、改写一处不改。2026-10-21 用户实测报的就是这一条：
+			// 对象早传上去了，而笔记里那条链接还是本地路径（他看到的现象是「没有被上传」）。
+			name: "★★ Markdown 目标按「第一个 `)`」截断（带括号的文件名永远改不到、也判成没人用）",
+			from: "\t\t\tif (depth === 0) return { bodyEnd: i, closeEnd: i + 1 };",
+			to: "\t\t\tif (true) return { bodyEnd: i, closeEnd: i + 1 };",
+			expect: "目标里的成对括号不许截断路径段",
+		},
+		{
+			// 后果：括号没配平时（标题里半个 `(`）整条链接**不被认作引用** ——
+			// 这条兜底看着像"以防万一"，没有它，那种写法会从"能改"退化成"不认"。
+			name: "★★ 括号不配平时不退回「第一个 `)`」（标题里半个括号的链接整条失效）",
+			from: '\tconst fallback = text.indexOf(")", from);',
+			to: "\tconst fallback = -1;",
+			expect: "标题里的括号不配平时要退回",
+		},
+		{
+			// 后果：路径段的起点按 `indexOf("(")` 算 ⇒ 显示文字里带括号时（`[图 (1)](…)`）
+			// 起点落进标签里，读到的是 `(1` 这种碎片 —— 与截断同一类失效。
+			name: "★★ 路径段起点用了 `indexOf`（显示文字带括号时起点落进标签里）",
+			from: "\t\tlet start = linkStart + match[0].length;",
+			to: '\t\tlet start = linkStart + match[0].indexOf("(") + 1;',
+			expect: "显示文字里的括号不许把路径段的起点带偏",
+		},
+		{
 			// 后果：`![[图.png\|600]]`（表格里的常见写法）取到的路径是 `图.png\` ⇒
 			// 归一之后对不上任何文件 ⇒ **判据说没人指着它、改写也不改**（两侧一起静默失效）。
 			name: "★★ wikilink 的转义竖线没剥掉（那种写法判据与改写一起失效）",
@@ -148,6 +216,42 @@ await runMutations({
 			from: "\tfor (const match of text.matchAll(REFERENCE_DEFINITION)) {",
 			to: "\tfor (const match of text.matchAll(/$^/gm)) {",
 			expect: "取对路径段",
+		},
+		{
+			// 后果：**代码块 / 行内代码 / `%%注释%%` 里的 Markdown 地址仍被当成链接**（D-62）。
+			// ⚠️ 这一条钉的是 `markdownLinks`（站外/本机候选也从这里拿位置）：候选收进来就会
+			// **下载 + 上传**，而改写那一趟看不到它（`findLinkSpans` 已剔掉）⇒ 链接永远改不掉。
+			name: "★★ 代码块里的 Markdown 地址仍被当成链接（下载上传了、链接却永远不改）",
+			from: "\t\tif (frozen.some((range) => linkStart >= range.start && linkStart < range.end)) continue;",
+			to: "\t\tif (false) continue;",
+			expect: "不算候选",
+		},
+		{
+			// 后果：**惰性区域里的远端地址仍被算成"仍被引用"**（`keysInText` 这条扫描与
+			// `findLinkSpans` 是两份实现）：一句"我们生成的地址长这样"的代码块样例
+			// 会把那个对象永久钉住 ⇒ 云端清理永远不问它、占用报告也说"在用"。
+			name: "★★ 代码块里的远端地址仍算「仍被引用」（对象永远清不掉）",
+			from: "\t\tif (frozen.length > 0 && insideInert(match.index ?? 0)) continue;",
+			to: "\t\tif (false) continue;",
+			expect: "惰性区域里的地址不算引用",
+		},
+		{
+			// 后果：**转义的链接被当成引用**（`\![](x.png)` 在宿主里是字面文本）⇒
+			// 用户把一条链接"转义掉"（想让它显示成文字）之后，那个文件仍被算作"有人在用"，
+			// 于是清理流程永远不碰它、上传清单里也一直有它。
+			name: "★★ 转义（`\\![](...)`）的链接仍被当成引用",
+			from: "\t\tif (isEscaped(text, linkStart)) continue;",
+			to: "\t\tif (false) continue;",
+			expect: "一条都不产出",
+		},
+		{
+			// 后果：**行内代码 / 注释 / 公式 / `<code>` 里的目标被当成引用**（2026-10-22，D-62/D-63）——
+			// 于是"只在样例里被提到"的文件进「上传附件」白传一次，清理流程还会一直保着它；
+			// 而宿主自己（`resolvedLinks`）根本不认这些位置 ⇒ 两条链对同一份文件说法不同。
+			name: "★★ 代码块/行内代码/注释里的目标仍被算成引用（白传一次、清理也不删）",
+			from: "\tconst spansOutsideCode = frozen.length === 0\n\t\t? spans\n\t\t: spans.filter((span) => !frozen.some((range) => span.start >= range.start && span.end <= range.end));",
+			to: "\tconst spansOutsideCode = spans;",
+			expect: "一条都不产出",
 		},
 		{
 			// 后果：属性区里的 wikilink 被换成 Markdown 图片（`cover: ![x.png](url)`）⇒

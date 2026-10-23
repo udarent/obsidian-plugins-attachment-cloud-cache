@@ -24,6 +24,20 @@
  * 这里只负责"文件名唯一化"这一步。
  */
 
+/**
+ * ## 模块地图（四组，各答一个问题）
+ *
+ * 1. **类型元数据**：扩展名 → `Content-Type`（{@link CONTENT_TYPE_BY_EXTENSION}），
+ *    以及"宿主能不能直接预览"（{@link EMBED_KIND_BY_EXTENSION}）。
+ *    ⚠️ 两张表**刻意不合并**：一张答"我该声明成什么"，一张答"宿主渲染得出来吗"，
+ *    后者的每一行都要宿主侧证据（见它自己的说明）。反向表由前者派生。
+ * 2. **判据**（这算不算附件）：笔记类 {@link isNoteLikeExtension}、程序分发
+ *    {@link isProgramExtension}、网页 {@link isWebPageExtension} —— 三个**黑名单**，
+ *    共同点是"语义上不是笔记要托管的资料"，与"像不像一个文件"是两个问题。
+ * 3. **扩展名解析**：从文件名 / MIME / URL 里取扩展名，以及"像不像一个扩展名"的形状判据。
+ * 4. **库内路径与命名**：路径归一、父目录、唯一化、宿主的附件目录。
+ */
+
 import { normalizePath } from "obsidian";
 
 /**
@@ -165,7 +179,7 @@ export const NOTE_LIKE_REASON = "是笔记/画布/数据库文件，不是附件
  *
  * ## ⚠️ 这里替掉了原来的两份私有实现
  *
- * `maintenance/audit.ts` 与 `maintenance/eviction.ts` 原本各有一个
+ * `maintenance/eviction.ts` 与当时那个本地副本审计模块（`audit.ts`，2026-10-22 / D-75 已删）原本各有一个
  * `normalize(path)`，只处理反斜杠与前导斜杠 —— 于是 `a//b`、`a/` 这类写法
  * 与宿主的写法**对不上**。差别是真实存在的（新实现把它们折成 `a/b`、`a`），
  * 而且它顺手把"用户从 Windows 粘过来的反斜杠路径"也一并处理了。
@@ -191,62 +205,255 @@ export function normalizeVaultPath(path: unknown): string {
  */
 const CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
 	// 图片
+	apng: "image/apng",
 	avif: "image/avif",
 	bmp: "image/bmp",
 	gif: "image/gif",
 	heic: "image/heic",
+	heif: "image/heif",
 	ico: "image/x-icon",
+	jfif: "image/jpeg",
 	jpeg: "image/jpeg",
 	jpg: "image/jpeg",
+	jxl: "image/jxl",
 	png: "image/png",
 	svg: "image/svg+xml",
+	tif: "image/tiff",
 	tiff: "image/tiff",
 	webp: "image/webp",
 	// 音频
 	"3gp": "audio/3gpp",
 	aac: "audio/aac",
+	aiff: "audio/aiff",
+	amr: "audio/amr",
 	flac: "audio/flac",
 	m4a: "audio/mp4",
+	m4b: "audio/mp4",
+	mid: "audio/midi",
+	midi: "audio/midi",
 	mp3: "audio/mpeg",
 	oga: "audio/ogg",
 	ogg: "audio/ogg",
 	opus: "audio/opus",
 	wav: "audio/wav",
+	wma: "audio/x-ms-wma",
 	// 视频
 	avi: "video/x-msvideo",
+	flv: "video/x-flv",
+	m4v: "video/x-m4v",
 	mkv: "video/x-matroska",
 	mov: "video/quicktime",
 	mp4: "video/mp4",
+	mpeg: "video/mpeg",
+	mpg: "video/mpeg",
 	ogv: "video/ogg",
 	webm: "video/webm",
-	// 文档与压缩包
+	wmv: "video/x-ms-wmv",
+	// 文档（常见办公格式 + 两种 ODF）
 	doc: "application/msword",
+	docm: "application/vnd.ms-word.document.macroEnabled.12",
 	docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-	epub: "application/epub+zip",
+	dotx: "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
+	key: "application/vnd.apple.keynote",
+	numbers: "application/vnd.apple.numbers",
+	odg: "application/vnd.oasis.opendocument.graphics",
+	odp: "application/vnd.oasis.opendocument.presentation",
+	ods: "application/vnd.oasis.opendocument.spreadsheet",
 	odt: "application/vnd.oasis.opendocument.text",
+	pages: "application/vnd.apple.pages",
 	pdf: "application/pdf",
+	potx: "application/vnd.openxmlformats-officedocument.presentationml.template",
 	ppt: "application/vnd.ms-powerpoint",
+	pptm: "application/vnd.ms-powerpoint.presentation.macroEnabled.12",
 	pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+	rtf: "application/rtf",
 	xls: "application/vnd.ms-excel",
+	xlsm: "application/vnd.ms-excel.sheet.macroEnabled.12",
+	xltx: "application/vnd.openxmlformats-officedocument.spreadsheetml.template",
 	xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+	// 电子书 / 漫画
+	azw3: "application/vnd.amazon.ebook",
+	cbr: "application/vnd.comicbook-rar",
+	cbz: "application/vnd.comicbook+zip",
+	djvu: "image/vnd.djvu",
+	epub: "application/epub+zip",
+	fb2: "application/x-fictionbook+xml",
+	mobi: "application/x-mobipocket-ebook",
 	// 压缩包
 	"7z": "application/x-7z-compressed",
+	bz2: "application/x-bzip2",
+	cab: "application/vnd.ms-cab-compressed",
 	gz: "application/gzip",
 	rar: "application/vnd.rar",
 	tar: "application/x-tar",
+	tgz: "application/gzip",
+	xz: "application/x-xz",
 	zip: "application/zip",
-	// 文本类（浏览器可直接显示）
+	zst: "application/zstd",
+	// 文本与源码
+	//
+	// ⚠️ 源码一律 **`text/plain`**，**不**映射成 `text/javascript` 之类可执行的类型：
+	// 桶可能是公开读的，`text/javascript` 会让浏览器**执行**那份用户上传的文件。
+	// 声明成纯文本，行为正好是我们要的（点开直接看到代码）。
+	bat: "text/plain",
+	bib: "text/plain",
+	c: "text/plain",
+	conf: "text/plain",
+	cpp: "text/plain",
+	cs: "text/plain",
+	css: "text/css",
 	csv: "text/csv",
-	html: "text/html",
+	go: "text/plain",
+	h: "text/plain",
 	htm: "text/html",
+	html: "text/html",
+	ini: "text/plain",
+	java: "text/plain",
+	js: "text/plain",
+	jsx: "text/plain",
 	json: "application/json",
+	log: "text/plain",
+	markdown: "text/markdown",
 	md: "text/markdown",
+	org: "text/plain",
+	pl: "text/plain",
+	ps1: "text/plain",
+	py: "text/plain",
+	rb: "text/plain",
+	rs: "text/plain",
+	rst: "text/plain",
+	sh: "text/plain",
+	sql: "text/plain",
+	tex: "text/plain",
+	toml: "application/toml",
+	tsv: "text/tab-separated-values",
+	tsx: "text/plain",
 	txt: "text/plain",
 	xml: "application/xml",
+	yaml: "application/yaml",
+	yml: "application/yaml",
+	// 字幕 / 日历 / 名片
+	ass: "text/plain",
+	ics: "text/calendar",
+	lrc: "text/plain",
+	srt: "text/plain",
+	ssa: "text/plain",
+	vcf: "text/vcard",
+	vtt: "text/vtt",
+	// 数据与笔记本
+	geojson: "application/geo+json",
+	gpx: "application/gpx+xml",
+	ipynb: "application/x-ipynb+json",
+	kml: "application/vnd.google-earth.kml+xml",
+	parquet: "application/vnd.apache.parquet",
+	sqlite: "application/vnd.sqlite3",
+	// 字体
+	otf: "font/otf",
+	ttf: "font/ttf",
+	woff: "font/woff",
+	woff2: "font/woff2",
+	// 设计 / CAD / 3D
+	"3mf": "model/3mf",
+	blend: "application/x-blender",
+	dwg: "image/vnd.dwg",
+	dxf: "image/vnd.dxf",
+	glb: "model/gltf-binary",
+	gltf: "model/gltf+json",
+	obj: "model/obj",
+	step: "model/step",
+	stl: "model/stl",
+	stp: "model/step",
+	// 程序分发（只有**库内 / 本机**这两条路会传它们，见 `PROGRAM_EXTENSIONS`）
+	apk: "application/vnd.android.package-archive",
+	deb: "application/vnd.debian.binary-package",
+	dmg: "application/x-apple-diskimage",
+	exe: "application/vnd.microsoft.portable-executable",
+	iso: "application/x-iso9660-image",
+	msi: "application/x-msi",
+	rpm: "application/x-rpm",
 };
+
+/**
+ * ⚠️ **刻意不补**的那些后缀（各有理由，别顺手加）：
+ * - `ts` —— **有歧义**：既是 TypeScript 源码，也是 MPEG-TS 视频。声明成任一种都会把另一半说错，
+ *   所以留在 {@link DEFAULT_CONTENT_TYPE}（通用二进制）；
+ * - `bin` / `dat` / `z01` / `db` / `jar` / `rmvb` / `fbx` / `xmind` / `fig` / `sketch` / `xd` /
+ *   `wps` / `et` / `dps` —— 没有公认的 MIME（或各家自造），猜一个不如老实说"这是二进制"；
+ * - `php` / `jsp` / `asp` / `aspx` / `cgi` / `do` / `action` —— 它们是**服务端页面**的后缀
+ *   （见 `PAGE_EXTENSIONS`）。库里那份是源码，但同一个后缀在站外被判成页面，
+ *   这里再声明一个文本类型只会让两个判断看起来矛盾。
+ */
 
 /** 上传不认识的后缀时的兜底类型（对象存储要求这个头）。 */
 export const DEFAULT_CONTENT_TYPE = "application/octet-stream";
+
+/**
+ * 这些后缀指向的是**可执行程序 / 安装包 / 系统镜像** —— 不是笔记要托管的"资料"。
+ *
+ * ## 为什么要有这一张表（D-58，2026-10-21 用户实测报的）
+ *
+ * 他在一篇笔记里写了 `[下载地址](https://…/Cherry-Studio-0.9.19-setup.exe)`，
+ * 而「上传附件」的清单把这条 **84.6 MB 的安装包**列了出来（真机 HEAD 实测：
+ * `application/octet-stream` + `Content-Disposition: attachment`）。确认之后会：
+ * 下载 84 MB → 传进桶 → 库里留一份 84 MB 副本 → 把「下载地址」改成桶地址。
+ * 他要的是"笔记里的资料跟着笔记走"，不是"把我的桶变成软件分发站"。
+ *
+ * ## ⚠️ 这是**黑名单**，不是白名单 —— 方向必须记清楚
+ *
+ * ⚠️⚠️ 这里的判据**不是**"我们认不认识这个后缀"。类型表外的**真实资料**
+ *（`.psd` / `.dwg` / `.sketch` / `.mobi` / `.bin`…）照旧进清单 —— 白名单式的判据
+ * 会**静默少列**（用户既看不到也不报错），本项目的既有纪律见 `external-decide.ts` 那段。
+ * 这张表只收一类东西：**程序分发**（安装包与镜像）。它们不是"形状可疑"，而是
+ * **语义上就不是笔记资料**（与"像不像一个文件"是两个问题）。
+ *
+ * ⚠️ `.bin` **刻意不在表里**：它同时是固件 / 裸数据（这个仓库的用户就在做 FPGA），
+ * 拦掉会让真实资料静默消失。同理 `.jar`（既可能是程序，也可能是别人给的库）。
+ */
+const PROGRAM_EXTENSIONS = new Set([
+	// 可执行程序与安装包
+	"appimage",
+	"appx",
+	"appxbundle",
+	"dmg",
+	"deb",
+	"exe",
+	"ipa",
+	"mpkg",
+	"msi",
+	"msp",
+	"msix",
+	"msixbundle",
+	"pkg",
+	"rpm",
+	"snap",
+	"apk",
+	"aab",
+	// 磁盘 / 系统镜像
+	"esd",
+	"img",
+	"iso",
+	"vhd",
+	"vhdx",
+	"vmdk",
+	"wim",
+]);
+
+/**
+ * 这个后缀是不是**程序分发**（安装包 / 可执行程序 / 系统镜像）—— 见 {@link PROGRAM_EXTENSIONS}。
+ *
+ * 输入容错（去点、小写、去空白）交给 {@link normalizeExtension}，与兄弟判据一致 ——
+ * 一个容忍、一个不容忍的症状是"某条入口偏偏漏了这一类"，且不报错。
+ */
+export function isProgramExtension(extension: unknown): boolean {
+	return PROGRAM_EXTENSIONS.has(normalizeExtension(extension));
+}
+
+/**
+ * 上面那条判据的**唯一文案**（诊断用，进 `skipped` 统计）。
+ *
+ * ⚠️ "安装包/镜像"这两个词要留着：文案是用户唯一能看到"为什么我的链接没被处理"的线索。
+ */
+export const PROGRAM_REASON = "地址是安装包或系统镜像（不是笔记里的资料）";
 
 /**
  * 这些后缀指向的是一张**网页**，而不是一个可供下载的文件。
@@ -309,72 +516,65 @@ export function isWebPageExtension(extension: unknown): boolean {
 }
 
 /**
- * MIME → 扩展名（与上面那张表**成对**维护：站外抓取时只有 MIME、没有文件名）。
+ * MIME → 扩展名：**从上面那张表派生**，不再手写第二份（D-65，2026-10-22）。
  *
- * 补齐到与 `CONTENT_TYPE_BY_EXTENSION` 同一批类型 —— 理由是同一条：
- * 站外抓一个 PDF/音频时，名字是 URL 的最后一段（常常没有可用扩展名），
- * 只能靠响应头里的 MIME 反推。反推不出来就会存成 `<哈希>.bin`，
- * 于是缓存目录里那个文件在 Obsidian 里**不显示**（它不认识的类型）。
+ * ## 为什么改成派生
  *
- * 同一 MIME 有多个候选扩展名时取**最常见**的那个（`image/jpeg` → `jpg`），
- * 因为这个名字会被用户看到。
+ * 原来是**两张手写的表**（扩展名→类型、MIME→扩展名），靠注释里一句"成对维护"约束。
+ * 结果是补一侧忘另一侧：2026-10-22 那次复量（D-64）一口气补了几十个类型，
+ * 两张表要分别加一遍；漏了任何一边，症状都是"站外抓下来的文件存成 `<哈希>.bin`，
+ * 宿主不认识那个后缀、于是**根本不显示**"—— 而且不报错。
+ * 现在只有上面一张 `CONTENT_TYPE_BY_EXTENSION`，反向表在模块加载时**算出来**。
+ *
+ * ## 三个概念要分清（都不是"第二张表"）
+ *
+ * - **规范扩展名**（{@link CANONICAL_EXTENSION_BY_MIME}）：同一个 MIME 有几个候选写法时，
+ *   落盘名字用哪个（`image/jpeg` → `jpg` 而不是 `jfif`）。没列出的取**正向表里第一个**。
+ * - **别名**（{@link MIME_ALIASES}）：同一个东西的另一种 MIME 拼法
+ *   （`image/jpg`、`text/xml`、`audio/x-wav`）—— 它们不在正向表里，只在这一侧出现。
+ * - 参数部分（`image/png; charset=binary`）在 {@link extensionFromMime} 里切掉。
  */
-const EXTENSION_BY_MIME: Record<string, string> = {
-	// 图片
-	"image/avif": "avif",
-	"image/bmp": "bmp",
-	"image/gif": "gif",
-	"image/heic": "heic",
-	"image/heif": "heic",
-	"image/jpeg": "jpg",
-	"image/jpg": "jpg",
-	"image/png": "png",
-	"image/svg+xml": "svg",
-	"image/tiff": "tiff",
-	"image/webp": "webp",
-	"image/x-icon": "ico",
-	"image/vnd.microsoft.icon": "ico",
-	// 音频
-	"audio/3gpp": "3gp",
-	"audio/aac": "aac",
-	"audio/flac": "flac",
-	"audio/mp4": "m4a",
-	"audio/mpeg": "mp3",
+const CANONICAL_EXTENSION_BY_MIME: Record<string, string> = {
+	// 同类里有多个"像扩展名"的写法时，用户看到的那个（其余按正向表顺序取第一个）
 	"audio/ogg": "ogg",
-	"audio/opus": "opus",
-	"audio/wav": "wav",
-	"audio/x-wav": "wav",
-	// 视频
-	"video/mp4": "mp4",
-	"video/ogg": "ogv",
-	"video/quicktime": "mov",
-	"video/webm": "webm",
-	"video/x-matroska": "mkv",
-	"video/x-msvideo": "avi",
-	// 文档与压缩包
-	"application/epub+zip": "epub",
-	"application/gzip": "gz",
-	"application/json": "json",
-	"application/msword": "doc",
-	"application/pdf": "pdf",
-	"application/vnd.ms-excel": "xls",
-	"application/vnd.ms-powerpoint": "ppt",
-	"application/vnd.oasis.opendocument.text": "odt",
-	"application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
-	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
-	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
-	"application/vnd.rar": "rar",
-	"application/x-7z-compressed": "7z",
-	"application/x-tar": "tar",
-	"application/xml": "xml",
-	"application/zip": "zip",
-	// 文本类
-	"text/csv": "csv",
-	"text/html": "html",
+	"image/jpeg": "jpg",
+	"image/tiff": "tiff",
 	"text/markdown": "md",
 	"text/plain": "txt",
+	"video/mpeg": "mpg",
+};
+
+/**
+ * 同一个 MIME 的**别名写法**（同一个东西的另一种拼法）。
+ *
+ * ⚠️ 这里也是"落盘扩展名"的**覆盖位**：`image/heif` 在正向表里有自己的 `heif`，
+ * 但落盘要归一到 `heic`（同一种格式的两种写法，宿主的识别面以 `heic` 为准 ——
+ * 有断言钉着）。写在派生结果之上，顺序见 {@link buildExtensionByMime}。
+ */
+const MIME_ALIASES: Record<string, string> = {
+	"audio/x-wav": "wav",
+	"image/heif": "heic",
+	"image/jpg": "jpg",
+	"image/vnd.microsoft.icon": "ico",
 	"text/xml": "xml",
 };
+
+/**
+ * 由正向表 + 上面两个小表算出反向表（模块加载时一次）。
+ *
+ * ⚠️ 顺序**有意义**：`Object.entries` 保持插入顺序，所以"第一个列出的扩展名"是稳定的
+ * （`image/png` 只有 `png`，`application/gzip` 先列 `gz` 后列 `tgz` ⇒ 取 `gz`）。
+ * 靠顺序而不是再写一遍映射，正是这张表能少一份的原因。
+ */
+function buildExtensionByMime(): Record<string, string> {
+	const derived: Record<string, string> = {};
+	for (const [extension, mime] of Object.entries(CONTENT_TYPE_BY_EXTENSION)) {
+		if (!(mime in derived)) derived[mime] = extension;
+	}
+	return { ...derived, ...CANONICAL_EXTENSION_BY_MIME, ...MIME_ALIASES };
+}
+
+const EXTENSION_BY_MIME: Record<string, string> = buildExtensionByMime();
 
 /** 由扩展名给 Content-Type。空扩展名 / 未知扩展名 → 兜底类型。 */
 export function contentTypeForExtension(ext: unknown): string {

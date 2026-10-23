@@ -79,5 +79,13 @@ await runMutations({
 			to: 'const tries = "";',
 			expect: "重试过要在消息里体现",
 		},
+		{
+			// 后果：**一次超时变成 3 × 60 秒** —— 用户白等两分钟，结论不变；
+			// 而且下载层的去重槽要等那三轮都跑完才能释放。
+			name: "★★ 超时被当成可重试的网络错误（一次卡死 = 三分钟）",
+			from: "\t\tretryable: false,",
+			to: "\t\tretryable: true,",
+			expect: "不可重试",
+		},
 	],
 });

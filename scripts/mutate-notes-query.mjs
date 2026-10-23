@@ -13,11 +13,36 @@ await runMutations({
 	suite: runNotesQuerySuite,
 	mutations: [
 		{
+			// 后果：**不可改写的位置进了"可修"集合** ⇒ 那个文件在「上传附件」里每次都被列为
+			// 待修、而改写器（正确地）每次改 0 处 ⇒ 永远修不好（用户只能手工改笔记）。
+			name: "★★ 属性区里的链接被算成「可修」（永远待修、永远改不动）",
+			from: "\t\tif (!span.inFrontmatter) rewritableTargets.push(span.raw);",
+			to: "\t\trewritableTargets.push(span.raw);",
+			expect: "不算可修",
+		},
+		{
+			// 后果：`rewritable` 直接别名到 `referenced` ⇒ 画布的 `file` 节点（只能指库内文件、
+			// 永远改不成 URL）也被当成"待修" ⇒ 每个摆在画布上的附件每轮都进「上传附件」的
+			// 待修清单、还要读一遍字节，而它们**根本改不了**（用户看到的是永远清不掉的清单）。
+			name: "★★ 可修集合别名到引用集合（画布 file 节点成了永远修不完的待办）",
+			from: "\tconst rewritable = new Set<string>();",
+			to: "\tconst rewritable = referenced as Set<string>;",
+			expect: "画布 file 节点永远不会被改成远端地址",
+		},
+		{
+			// 后果：画布**文本节点**里的链接不算"可修" ⇒ 它们与笔记同规则（改写器真的会改），
+			// 却被判成"修不了" ⇒ 那些附件永远不重进候选，用户重跑多少次都没用。
+			name: "★★ 画布文本节点的链接不算可修（它们其实改得掉）",
+			from: "\t\t\trewritable.add(path);",
+			to: "\t\t\t// 变异：画布文本不算可修",
+			expect: "画布**文本节点**里的链接与笔记同规则",
+		},
+		{
 			// 后果：云端地址里的文件名被错认成库里的同名文件 ⇒ 那份副本"永远清不掉"
 			// （验收里真的发生过：release-target 被这条误判挡住）。
 			name: "★ 不再排除带 scheme 的目标（别人的 URL 被当成库内引用）",
-			from: "\t\t\tif (hasScheme(span.raw)) continue;",
-			to: "\t\t\tif (false) continue;",
+			from: "\t\tif (hasScheme(span.raw)) continue;",
+			to: "\t\tif (false) continue;",
 			expect: "带 scheme 的目标不算本地引用",
 		},
 		{

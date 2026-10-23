@@ -12,13 +12,13 @@
 import assert from "node:assert/strict";
 
 export async function runMaintenanceSuite(mod) {
-	const { auditCache } = mod;
 	const {
 		findLinkSpans,
 		planLinkRewrites,
 		planCanvasRewrites,
 		canvasTextTargets,
 		resolveVaultTargets,
+		keysInCanvasText,
 		keysInText,
 		stillMentionsPath,
 	} = mod;
@@ -36,138 +36,18 @@ export async function runMaintenanceSuite(mod) {
 	});
 
 	// ============================================================
-	// 1. ⭐ 审计的三类对象（1.2.0 / D-17：口径从"扫缓存目录"换成"索引 + 存在性"）
+	// 1.（已删除）本地副本审计 `auditCache`
 	//
-	// 缓存目录取消之后 **"孤儿"这一类不存在了**：本地副本只有一种来源（我们登记过的那条），
-	// 而索引外的文件可能是**用户自己的附件**。所以这一层只遍历索引里的条目 ——
-	// 下面那条"塞一个索引外的文件进去，它必须被完全忽略"就是这条性质的钉子。
-	// ============================================================
-	const audit = auditCache({
-		entries: [
-			// ⚠️ 三条的 `size`（索引记的值）**故意与磁盘上的字节不同**：报告里的两个数字
-			// 都必须按磁盘算 —— 索引里的值可能过时（用户换过文件、同步中断过）。
-			entry("healthy.png", "attachments/healthy.png", 10),
-			entry("missing.png", "attachments/missing.png", 20),
-			entry("unused.png", "attachments/unused.png", 30),
-		],
-		copies: new Map([
-			["attachments/healthy.png", { path: "attachments/healthy.png", bytes: 11 }],
-			["attachments/unused.png", { path: "attachments/unused.png", bytes: 33 }],
-		]),
-		referencedKeys: new Set(["healthy.png"]),
-	});
-
-	assert.deepEqual(
-		audit.healthy.map((e) => e.key),
-		["healthy.png"],
-		"索引与磁盘一致、且仍被引用的才是正常副本"
-	);
-	assert.deepEqual(
-		audit.missingCopies.map((e) => e.key),
-		["missing.png"],
-		"索引有、磁盘没有 → 失效条目（自愈只改索引，不碰文件）"
-	);
-	assert.deepEqual(
-		audit.unused.map((e) => e.key),
-		["unused.png"],
-		"索引与磁盘都有、但没有笔记引用 → 可回收（具体动作见 R17 / 上限淘汰）"
-	);
-
-	// ⚠️ 字节一律取**磁盘上的真实大小**，不用索引里记的 `size`：
-	// 那个值可能过时（用户替换过文件、同步中断过），而这两个数字都要回答
-	// "占了多少 / 能腾多少"。上面三条 entry 的 size 故意与 bytes 不同来钉这一点。
-	assert.equal(audit.bytes.total, 44, "总字节按**磁盘**算（11 + 33），且失效的那条不计（它没有占用）");
-	assert.equal(audit.bytes.reclaimable, 33, "可回收 = 未引用副本在磁盘上的字节");
-
-	// ============================================================
-	// ⭐⭐ 结构性保证：`copies` 里就算塞了**索引外**的文件，也不会被任何一类认领 ——
-	// 因为这一层只遍历索引里的条目。索引外的文件可能是用户的附件，
-	// "扫出来删掉"是**永远不该做**的事（旧实现的"孤儿"类别正是这么干的）。
-	const withExtra = auditCache({
-		entries: [entry("a.png", "attachments/a.png", 1)],
-		copies: new Map([
-			["attachments/a.png", { path: "attachments/a.png", bytes: 1 }],
-			["attachments/user-photo.png", { path: "attachments/user-photo.png", bytes: 999 }],
-		]),
-		// ⚠️ 这里**必须**给引用集合：不给的话，这一条的判定会与"没扫描引用"那条变异纠缠在一起
-		//（那个变异会先把这一条打红，报出的原因就与"索引外的文件"这件事错位了）。
-		referencedKeys: new Set(["a.png"]),
-	});
-	assert.equal(withExtra.bytes.total, 1, "★ 索引外的文件不得计入占用（它可能是用户的附件）");
-	assert.deepEqual(
-		[withExtra.healthy.length, withExtra.unused.length, withExtra.missingCopies.length],
-		[1, 0, 0],
-		"★ 索引外的文件不得出现在任何一类里（这一层只认索引记过的路径）"
-	);
-
-	// ⭐ 没提供引用集合时**不产生**"未引用" —— 否则"只看占用"会把每一份都报成可回收
-	const withoutRefs = auditCache({
-		entries: [entry("a.png", "attachments/a.png"), entry("b.png", "attachments/b.png")],
-		copies: new Map([
-			["attachments/a.png", { path: "attachments/a.png", bytes: 1 }],
-			["attachments/b.png", { path: "attachments/b.png", bytes: 1 }],
-		]),
-	});
-	assert.deepEqual(withoutRefs.unused, [], "★ 没扫描引用时不该产生\"未引用副本\"（那是把全部判成可回收）");
-	assert.deepEqual(
-		withoutRefs.healthy.map((e) => e.key),
-		["a.png", "b.png"],
-		"没扫描引用时应按\"一致即正常\"处理"
-	);
-
-	// 1b. ⭐⭐「还有人用吗」是**两个问题**，两个都要问（2026-10-15 真机报的）
+	// 2026-10-22（D-75，用户：「取消掉那条单独的查看附件状态的命令」）：「查看本地副本占用」
+	// 那条命令退役 ⇒ `maintenance/audit.ts` 只服务它，随它一起删掉（连同 §1 / §1b 两组用例）。
 	//
-	// 用户真机报：一张 `.png` 被笔记用**库内相对路径**（`![](../企业微信截图_….png)`）引用着，
-	// 而占用报告说它「没有任何笔记引用」。原因：这一层只问了「有没有笔记提**云端那个地址**」
-	// （`referencedKeys`），没问「有没有笔记**直接指着这份本地文件**」。
-	//
-	// ⚠️ 两个问题的后果完全不同：
-	// - 指着云端地址 ⇒ 笔记从云端显示，本地这份只是缓存 ⇒ 删了笔记照样看得见；
-	// - 指着本地路径 ⇒ **那份文件就是笔记要显示的东西** ⇒ 删了笔记里那张图就没了。
-	// ⇒ 命中后者的一律不算"未引用"（它是**否决**，不是另一种"可回收"）。
+	// ⚠️ 这里**只留说明、不留用例**（同下面 §2 的写法）：死主题的断言永远绿，
+	// 还会让人以为那条命令还在。
+	// ⚠️ 它守的两件事没有跟着消失：
+	// · 「索引外的文件一个都不碰」—— 仍由 `release-space` / `eviction` 的套件钉着（同一份口径）；
+	// · 「引用是两半（云端地址 / 库内路径）」—— 由 `release-space-suite` 与 `eviction` 的
+	//   `referencedPaths` 否决规则钉着，说明写在 `release-space.ts` 的 `referencedPaths`。
 	// ============================================================
-	{
-		const referencedByPath = auditCache({
-			entries: [
-				entry("p1.png", "attachments/p1.png", 40),
-				entry("p2.png", "attachments/p2.png", 50),
-			],
-			copies: new Map([
-				["attachments/p1.png", { path: "attachments/p1.png", bytes: 40 }],
-				["attachments/p2.png", { path: "attachments/p2.png", bytes: 50 }],
-			]),
-			// 两篇笔记都**没有**提它们的云端地址
-			referencedKeys: new Set(),
-			// 但有一篇笔记直接指着 p1 这份文件（宿主解析出来的库内路径）
-			referencedPaths: new Set(["attachments/p1.png"]),
-		});
-
-		assert.deepEqual(
-			referencedByPath.unused.map((e) => e.key),
-			["p2.png"],
-			"★ 还有笔记直接指着这份本地文件 ⇒ 不许报「没有任何笔记引用」（真机报过）"
-		);
-		assert.deepEqual(
-			referencedByPath.healthy.map((e) => e.key),
-			["p1.png"],
-			"被本地链接指着的那一份算正常副本（留着）"
-		);
-		assert.equal(referencedByPath.bytes.reclaimable, 50, "可回收字节里不许含那一份（它是还在用的）");
-	}
-
-	// 路径写法差异不该造成误判（前导斜杠 / 反斜杠 / 重复斜杠）
-	const sloppy = auditCache({
-		entries: [entry("x.png", "/attachments//x.png")],
-		copies: new Map([["attachments/x.png", { path: "attachments/x.png", bytes: 5 }]]),
-	});
-	assert.equal(sloppy.missingCopies.length, 0, "路径写法差异不该被判成\"磁盘上没有\"");
-
-	// 同一路径只算一次占用（两条记录指着同一份是索引不该有的状态，但报告不该虚高）
-	const sharedPath = auditCache({
-		entries: [entry("dup-a.png", "attachments/shared.png", 40), entry("dup-b.png", "attachments/shared.png", 40)],
-		copies: new Map([["attachments/shared.png", { path: "attachments/shared.png", bytes: 40 }]]),
-	});
-	assert.equal(sharedPath.bytes.total, 40, "同一路径只计一次占用");
 
 	// ============================================================
 	// 2.（已删除）清理计划 `planCleanup`
@@ -517,6 +397,38 @@ export async function runMaintenanceSuite(mod) {
 		"查询串不该影响 key 识别"
 	);
 
+	// ⭐⭐ 2026-10-22（D-63）：**惰性区域里的地址不算"仍被引用"**。
+	// 这条与 `findLinkSpans` 是同一个语义（宿主不渲染 ⇒ 不是引用），但它是**另一条扫描**
+	// （`keysInText` 直接扫裸 URL），所以必须各自钉住：少钉这一条，"我们生成的地址长这样"
+	// 的样例就会把那个对象永久钉成"仍被引用"，云端清理永远不问它。
+	{
+		const URL = "https://img.example.com/stale.png";
+		for (const [label, text] of [
+			["围栏代码块", "```md\n![](https://img.example.com/stale.png)\n```\n"],
+			["行内代码", `返回的地址是 \`${URL}\` 这样\n`],
+			["HTML 注释", "<!-- ![](https://img.example.com/stale.png) -->\n"],
+			["行内数学", "$https://img.example.com/stale.png$\n"],
+		]) {
+			assert.deepEqual(
+				[...keysInText(text, keyOf)],
+				[],
+				`★★ 惰性区域里的地址不算引用（宿主不渲染）：${label}`
+			);
+		}
+		// ⚠️ 反向：正常正文里的照旧算
+		assert.deepEqual(
+			[...keysInText(`![](https://img.example.com/stale.png)\n`, keyOf)],
+			["stale.png"],
+			"★ 正文里的地址照旧算（别把整篇都当成代码）"
+		);
+		// ⚠️ 反向：代码块**之外**的同一份地址照旧算（区间不许吃掉后面的正文）
+		assert.deepEqual(
+			[...keysInText("```\n![](https://img.example.com/old.png)\n```\n\n![](https://img.example.com/stale.png)\n", keyOf)].sort(),
+			["stale.png"],
+			"★★ 代码块之后的内容照旧算引用"
+		);
+	}
+
 	// ============================================================
 	// 5b. ⭐ 画布（.canvas）改写 —— 两类节点、两套规则（需求 R16）
 	//
@@ -758,7 +670,7 @@ export async function runMaintenanceSuite(mod) {
 			{ path: "attachments/cached.png", extension: "png", stat: { size: 50 } },
 			{ path: "", extension: "png", stat: { size: 5 } },
 		],
-		{ settings, index, referencedPaths: referencedInUse }
+		{ settings, index, referencedPaths: referencedInUse, repairablePaths: new Set() }
 	);
 
 	// ⭐ 1.1.0 起候选是**排除制**（需求 R15）：除了"笔记/画布/数据库"这三种宿主自己的
@@ -779,31 +691,154 @@ export async function runMaintenanceSuite(mod) {
 		"非空、未处理过、且被引用的附件才进候选"
 	);
 
-	// ⭐ 只处理**被笔记引用着**的文件：命令成功后会把它移进缓存目录，
-	// 而没有任何引用的文件搬走之后没有任何东西会把用户引到它的新位置。
+	// ⭐⭐ 2026-10-22（D-68，用户明确要求）：**没有被任何引用的附件也要进候选**。
+	//
+	// 原来的口径是"只动被引用的那些"（`skipped` 里记一条"没有被任何笔记引用"）。
+	// 用户推翻了它：他要一条命令把库里该传的都传了，包括那些暂时没人引用的。
+	// ⚠️ 但三件事必须同时做到，否则这个改动会坑人：
+	// ① 单独标出来（`unreferencedPaths`）—— 清单据此**默认不勾**；
+	// ② 仍然如实计数（`unreferenced`）—— 确认框要说清"这些不会出现在任何笔记里"；
+	// ③ 它**不再是跳过原因** —— 留在 `skipped` 里会让诊断说反话（"跳过了"但其实传了）。
 	const unreferenced = selectUploadCandidates(
 		[
 			{ path: "attachments/used.png", extension: "png", stat: { size: 10 } },
 			{ path: "attachments/orphan.png", extension: "png", stat: { size: 10 } },
 		],
-		{ settings, index, referencedPaths: new Set(["attachments/used.png"]) }
+		{
+			settings,
+			index,
+			referencedPaths: new Set(["attachments/used.png"]),
+			repairablePaths: new Set(),
+			// ⭐ 只有**显式开口**的调用方（「上传附件」命令）才收未引用的
+			includeUnreferenced: true,
+		}
 	);
-	assert.deepEqual(unreferenced.paths, ["attachments/used.png"], "★ 只有被笔记引用的才处理");
+	assert.deepEqual(
+		unreferenced.paths,
+		["attachments/used.png", "attachments/orphan.png"],
+		"★★ 显式开口时，没有被引用的附件也要进候选（D-68）"
+	);
+
+	// ⚠️⚠️ **反向**：不开口时（默认）照旧不收 —— 自动接管那条路处理的是"链接还没写进笔记"
+	// 的文件，收它就会抢在链接之前搬走，留下死链（`attach-watch` 的套件里也钉着）。
+	{
+		const strict = selectUploadCandidates(
+			[
+				{ path: "attachments/used.png", extension: "png", stat: { size: 10 } },
+				{ path: "attachments/orphan.png", extension: "png", stat: { size: 10 } },
+			],
+			{ settings, index, referencedPaths: new Set(["attachments/used.png"]), repairablePaths: new Set() }
+		);
+		assert.deepEqual(strict.paths, ["attachments/used.png"], "★★ 默认**不**收未引用的（自动接管那条路靠它防死链）");
+		assert.deepEqual(strict.unreferencedPaths, [], "★ 默认也不会标出任何「未引用」（它根本没进候选）");
+		assert.equal(
+			Object.fromEntries(strict.skipped.map((row) => [row.reason, row.count]))["没有被任何笔记引用"],
+			1,
+			"★ 默认行为下它仍然是「跳过原因」（这条诊断不能丢）"
+		);
+	}
+	assert.deepEqual(
+		unreferenced.unreferencedPaths,
+		["attachments/orphan.png"],
+		"★★ 但要单独标出来（清单默认不勾、执行层不为它生成改写规则）"
+	);
 	const unrefReasons = Object.fromEntries(unreferenced.skipped.map((s) => [s.reason, s.count]));
 	assert.equal(
 		unrefReasons["没有被任何笔记引用"],
-		1,
-		"★ 没有被引用的文件要跳过**并如实计数**（否则用户看到的只是「传得少」）"
+		undefined,
+		"★★ 它不再是「跳过原因」（已经进候选了；留在 skipped 里会让诊断说反话）"
 	);
-	// ⭐ 结构化字段：确认框按它说「另有 N 个不会被处理」—— 不让界面去认那串中文文案
-	assert.equal(unreferenced.unreferenced, 1, "★ 未引用的个数要单独给出来（供确认框如实交代）");
+	assert.equal(unreferenced.unreferenced, 1, "★ 未引用的个数仍要单独给出来（确认框按它如实交代）");
 	assert.equal(selection.unreferenced, 0, "这一批每个都有人引用 ⇒ 未引用数应为 0");
 
-	// 没有 stat 的文件（宿主可能不给）不该被当成空文件
+	// ⭐⭐ 2026-10-22 审计：「**已经迁移好的**文件不许被说成『没有被任何笔记引用』」（D-59）。
+	//
+	// 现场：迁移完成的文件，正文里的引用已经被改写成**远端 URL** ⇒ 它当然不在
+	// `referencedPaths`（那只装本地路径）里。旧顺序先问"有没有被引用"，于是它撞上
+	// 「没有被任何笔记引用」，而**同一批文件**在「查看缓存占用」里是"在用"、
+	// 在「检查未引用的云端附件」里也不问 —— 三条命令对同一件事说了三种话
+	//（探针在演示库上实测：2 个文件被这么说反了）。
+	const migrated = selectUploadCandidates(
+		[
+			{ path: "attachments/migrated.png", extension: "png", stat: { size: 40 } },
+			{ path: "attachments/never-uploaded.png", extension: "png", stat: { size: 40 } },
+		],
+		{
+			settings,
+			index: new CacheIndex([entry("migrated.png", "attachments/migrated.png")]),
+			// 两个都**没有本地引用**（迁移好的那个只剩远端 URL）
+			referencedPaths: new Set(),
+			repairablePaths: new Set(),
+			includeUnreferenced: true,
+		}
+	);
+	// ⚠️ D-68 之后这两条**不再都是"不是候选"**：
+	// - `migrated.png` 已处理过 ⇒ 仍然跳过（这一条是 D-59 的核心，不能变）；
+	// - `never-uploaded.png` 真没人引用 ⇒ **进候选**（用户要求"没引用的也传"），只是被标出来。
+	assert.deepEqual(
+		migrated.paths,
+		["attachments/never-uploaded.png"],
+		"★★ 已迁移的仍跳过；真没人引用的那个**进候选**（D-68）"
+	);
+	assert.deepEqual(
+		migrated.unreferencedPaths,
+		["attachments/never-uploaded.png"],
+		"★★ 它要单独标出来（清单默认不勾）"
+	);
+	assert.equal(
+		Object.fromEntries(migrated.skipped.map((s) => [s.reason, s.count]))["已经在缓存索引里"],
+		1,
+		"★★ 已迁移的文件要说「已经在缓存索引里」，不许说「没有被任何笔记引用」（后者与占用报告矛盾）"
+	);
+	assert.equal(
+		migrated.unreferenced,
+		1,
+		"★ 而真正没人引用的那个照旧计数（确认框那句「另有 N 个…」现在只数真的算数的那一类）"
+	);
+
+	// ⭐⭐ 2026-10-21（D-56 的后续）：「**已经传过、而正文里那条链接还是本地的**」必须
+	// 重新进候选 —— 否则「重新上传附件」永远修不好它，用户唯一的出路是手工改笔记。
+	//
+	// 现场：对象早传上去了，而笔记里那条 `[…](assets/…4年(1).pdf)` 还是本地路径
+	//（改写没认出来）。用户的第一反应就是"再传一次"，而旧判据按"已在索引里"跳过它。
+	const repairable = selectUploadCandidates(
+		[
+			{ path: "attachments/stale.png", extension: "png", stat: { size: 30 } },
+			{ path: "attachments/done.png", extension: "png", stat: { size: 30 } },
+		],
+		{
+			settings,
+			index: new CacheIndex([
+				entry("stale.png", "attachments/stale.png"),
+				entry("done.png", "attachments/done.png"),
+			]),
+			referencedPaths: new Set(["attachments/stale.png", "attachments/done.png"]),
+			// 只有 stale 那一条"正文里还写着本地路径"
+			repairablePaths: new Set(["attachments/stale.png"]),
+		}
+	);
+	assert.deepEqual(
+		repairable.paths,
+		["attachments/stale.png"],
+		"★★ 已传过、但正文里还指着本地文件的必须重新进候选（否则重跑永远修不好它）"
+	);
+	assert.deepEqual(
+		repairable.repairPaths,
+		["attachments/stale.png"],
+		"★★ 其中「只差改链接」的那几份要**按路径**给出来（清单要在那一行标「只改链接」；D-71 之前只有一个数）"
+	);
+	assert.equal(
+		Object.fromEntries(repairable.skipped.map((s) => [s.reason, s.count]))["已经在缓存索引里"],
+		1,
+		"★ 反向：链接已经改好的那一个照旧跳过（稳态下不该每轮都被列出来）"
+	);
+
+
 	const noStat = selectUploadCandidates([{ path: "attachments/no-stat.png", extension: "png" }], {
 		settings,
 		index,
 		referencedPaths: new Set(["attachments/no-stat.png"]),
+		repairablePaths: new Set(),
 	});
 	assert.deepEqual(noStat.paths, ["attachments/no-stat.png"], "拿不到 size 时不该误判成空文件");
 
@@ -863,6 +898,7 @@ export async function runMaintenanceSuite(mod) {
 	assert.deepEqual(externalFileUrlsIn('<img src="https://x.test/b.jpg">'), ["https://x.test/b.jpg"], "行内 HTML 的 img 也要认");
 	assert.deepEqual(externalFileUrlsIn("![a](<https://x.test/c d.png>)"), ["https://x.test/c d.png"], "尖括号包住的地址要认得出来");
 	assert.deepEqual(externalFileUrlsIn('![a](https://x.test/d.png "标题")'), ["https://x.test/d.png"], "标题不该混进地址");
+
 	assert.deepEqual(externalFileUrlsIn("![](attachments/x.png)"), [], "库内相对路径不是外链");
 	assert.deepEqual(externalFileUrlsIn("[笔记](notes/other.md)"), [], "库内互链不是外链（相对路径）");
 	assert.deepEqual(externalFileUrlsIn('<a href="attachments/x.pdf">本地</a>'), [], "库内锚点也不是外链");
@@ -873,6 +909,30 @@ export async function runMaintenanceSuite(mod) {
 		"同一篇笔记里写两遍只算一次（改写时那两处会被一起换掉）"
 	);
 	assert.deepEqual(externalFileUrlsIn(""), [], "空文本安全返回空");
+
+	// ⭐⭐ 2026-10-22（D-62）：**代码块 / 行内代码 / `%%注释%%` 里的地址不是候选**。
+	// ⚠️ 这一侧尤其要紧：候选收进来就会**下载 + 上传**，而改写那一趟根本看不到这条
+	// （`findLinkSpans` 已经把它剔掉了）⇒ 笔记里那条链接永远改不掉，下一轮又收一次。
+	assert.deepEqual(
+		externalFileUrlsIn("```md\n![](https://x.test/a.png)\n```\n"),
+		[],
+		"★★ 围栏代码块里的地址不算候选（否则会传上去、而链接永远改不掉）"
+	);
+	assert.deepEqual(
+		externalFileUrlsIn("写法是 `![](https://x.test/a.png)` 这样\n"),
+		[],
+		"★★ 行内代码里的地址不算候选"
+	);
+	assert.deepEqual(
+		externalFileUrlsIn("%%![](https://x.test/a.png)%%\n"),
+		[],
+		"★★ `%%注释%%` 里的地址不算候选"
+	);
+	assert.deepEqual(
+		externalFileUrlsIn("![本机](file:///D:/a/x.png)\n```\n![本机](file:///D:/a/y.png)\n```\n"),
+		["file:///D:/a/x.png"],
+		"★★ 同一篇里代码块之外的那条照旧要收（别把整篇都当代码）"
+	);
 
 	// ── 2. 挑选：候选的判据是"能不能搬"，与功能开关和站点名单**都**无关 ──
 	{
@@ -1055,6 +1115,28 @@ export async function runMaintenanceSuite(mod) {
 			"站点顺序与笔记的读取顺序无关"
 		);
 
+		// ── 2b. ⭐ 范围过滤（「只看当前笔记」，2026-10-22）──
+		//
+		// ⚠️ 过滤必须**在判定层做**（`notePaths`），不能让调用方筛结果：`sites` 与跳过统计
+		// 也得按同一批笔记重算 —— 否则清单只有 2 行、摘要却说"来自 5 个站点"。
+		const scoped = selectExternalUploadCandidates(notes, { ...options, notePaths: new Set(["notes/two.md"]) });
+		assert.deepEqual(
+			scoped.candidates.map((c) => `${c.notePath} ${c.url}`),
+			["notes/two.md https://other.test/c.png", "notes/two.md https://third.test/d.png"],
+			"★★ 只看当前笔记时，只列这一篇里的地址（别的笔记那些不许出现）"
+		);
+		assert.deepEqual(
+			scoped.sites.map((s) => `${s.host}×${s.count}`),
+			["other.test×1", "third.test×1"],
+			"★★ 站点汇总必须按**同一批笔记**重算（否则摘要写着全库的站点数，与清单对不上）"
+		);
+		// 空集合 = 什么都不看（不是"看全部"）—— 反方向的默认值必须钉住。
+		assert.deepEqual(
+			selectExternalUploadCandidates(notes, { ...options, notePaths: new Set() }).candidates,
+			[],
+			"★ 显式给空集合时一个都不列（缺省 `undefined` 才是「全部」）"
+		);
+
 		// ── 3. ⭐ 反过来：把开关打开 —— 候选**一模一样**（它只约束自动那一路） ──
 		const open = selectExternalUploadCandidates(notes, {
 			...options,
@@ -1153,14 +1235,26 @@ export async function runMaintenanceSuite(mod) {
 		assert.deepEqual(localOnMobile.candidates, [], "★ 手机端不列本机文件（读不到）");
 		assert.equal(localOnMobile.localFiles, 0, "★ 也不该计入");
 
-		// 扩展名闸门在候选层同样生效（勾不中它，也就到不了执行器）
+		// ⭐⭐ 2026-10-22（D-60）：本机这一档**与库内同一条判据** —— 除笔记类之外全收。
+		// 早先这里只收"能嵌进笔记的四类"，于是 `docx` / `zip` / `txt` 从磁盘拖进来永远进不了清单。
 		assert.deepEqual(
 			selectExternalUploadCandidates(
-				[{ path: "notes/x.md", text: "![](file:///D:/a/secret.txt)" }],
+				[
+					{
+						path: "notes/x.md",
+						text:
+							"![](file:///D:/a/方案.docx)\n" +
+							"![](file:///D:/a/包.zip)\n" +
+							"![](file:///D:/a/照片.heic)\n" +
+							// 笔记类仍然不是附件（与库内同一份排除名单）
+							"![](file:///D:/a/笔记.md)\n" +
+							"![](file:///D:/a/板.canvas)\n",
+					},
+				],
 				desktopOptions
-			).candidates,
-			[],
-			"★★ 不是可嵌入的那几类 ⇒ 不进候选（不加目录白名单之后唯一站着的边界）"
+			).candidates.map((candidate) => candidate.url),
+			["file:///D:/a/方案.docx", "file:///D:/a/包.zip", "file:///D:/a/照片.heic"],
+			"★★ 本机文件与库内同一条判据：除笔记类全收（docx/zip/heic 都要进候选）"
 		);
 
 		// ── 6. 坏输入不该让整批失败 ──
@@ -1169,6 +1263,31 @@ export async function runMaintenanceSuite(mod) {
 				.candidates,
 			[],
 			"没有路径的笔记、没有正文的笔记都应安全跳过"
+		);
+
+		// ── 7. ⭐⭐ 安装包 / 镜像**不是笔记资料**（D-58，2026-10-21 用户实测报的）──
+		// 现场：他笔记里写着 `1. [下载地址](https://alist…/Cherry-Studio-0.9.19-setup.exe)`，
+		// 清单把这条 **84.6 MB** 的安装包列了出来（真机 HEAD：`application/octet-stream`）。
+		// ⚠️ 与上面那条**互为边界**：同一篇里的 `.pdf` 照旧是候选 —— 拦的只是程序分发。
+		const installers = selectExternalUploadCandidates(
+			[
+				{
+					path: "notes/软件.md",
+					text:
+						"1. [下载地址](https://alist.test/d/netdisk/cherry%20studio/Cherry-Studio-0.9.19-setup.exe)\n\n" +
+						"[资料](https://alist.test/d/资料.pdf)\n",
+				},
+			],
+			desktopOptions
+		);
+		assert.deepEqual(
+			installers.candidates.map((candidate) => candidate.url),
+			["https://alist.test/d/资料.pdf"],
+			"★★ 安装包不进「上传附件」的清单，同一篇笔记里的 pdf 照旧进（D-58：程序分发不是资料）"
+		);
+		assert.ok(
+			installers.skipped.some((entry) => entry.reason.includes("安装包")),
+			"★ 跳过的原因要能说出来（诊断里得有「安装包」这一档，否则用户无从解释）"
 		);
 	}
 	// 3b. ⭐⭐ 2026-10-15（D-32）：**所有引用写法**都要认（判据 + 改写一起）
@@ -1208,7 +1327,173 @@ export async function runMaintenanceSuite(mod) {
 			assert.equal(planLinkRewrites(text, RULE).text, expectedRewritten, `★★ 这种写法必须改得掉：${text}`);
 		}
 
+		// ⚠️⚠️ 目标里带**成对括号**：`… 4年(1).pdf` 这种名字是**下载来的文件**的常态
+		//（浏览器给重名文件加 `(1)`），而 Markdown 规范允许目标里出现成对括号。
+		// 「遇到第一个 `)` 就停」会截成 `… 4年(1` ⇒ ① 判据说没人指着它 ② 改写一处不改。
+		// 2026-10-21 用户实测报的就是这一条：文件**传上去了**、笔记里那条还是本地路径，
+		// 他看到的现象是「没有被上传」。
+		const PAREN = "assets/【FPGA工程师_长沙 11-19K】游立强 4年(1).pdf";
+		const PAREN_RULE = [{ from: PAREN, to: "https://cdn.example.com/x.pdf" }];
+		const PAREN_MATRIX = [
+			// 用户原样的那一行：相对前缀 + `%20` 编码 + `【】` + `(1)`
+			[
+				"[说明](../assets/【FPGA工程师_长沙%2011-19K】游立强%204年(1).pdf)",
+				"../assets/【FPGA工程师_长沙%2011-19K】游立强%204年(1).pdf",
+			],
+			// 未编码 + 库内路径
+			[`![x](${PAREN})`, PAREN],
+			// 尖括号形式：边界由 `>` 给，里面的括号不参与
+			[`![x](<${PAREN}>)`, PAREN],
+		];
+		for (const [text, expectedRaw] of PAREN_MATRIX) {
+			assert.deepEqual(findLinkSpans(text).map((span) => span.raw), [expectedRaw], `★ 目标里的成对括号不许截断路径段：${text}`);
+			assert.equal(stillMentionsPath(text, PAREN), true, `★★ 带括号的目标必须算「还指着它」：${text}`);
+			const parenPlan = planLinkRewrites(text, PAREN_RULE);
+			assert.equal(parenPlan.count, 1, `★★ 带括号的目标必须改得掉（文件传上去了、笔记里那条不能还是本地路径）：${text}`);
+			assert.equal(
+				parenPlan.text.includes("游立强%204年(1.pdf"),
+				false,
+				`★★ 改写后不许留下半截路径（那是截断的直接证据）：${text}`
+			);
+		}
+
+		// ⚠️ 显示文字里也带括号：路径段必须从 `](` 之后开始 ——
+		// 用 `body.indexOf("(")` 定起点会落进**标签**里那个括号（`[图 (1)](…)`），
+		// 后果与截断一样：判据与改写一起静默失效。
+		const parenLabel = `[图 (1)](${PAREN})`;
+		assert.deepEqual(
+			findLinkSpans(parenLabel).map((span) => span.raw),
+			[PAREN],
+			"★ 显示文字里的括号不许把路径段的起点带偏"
+		);
+		assert.equal(planLinkRewrites(parenLabel, PAREN_RULE).count, 1, "★ 同上：这条链接必须改得掉");
+
+		// ⚠️ 同一份位置判据（`markdownLinks`）还管着**站外 / 本机候选采集**那一侧：
+		// 那里只是切法不同（http 按空白切、本机允许空格），**边界**必须一致。
+		// 截断的后果比改写那侧更隐蔽：http 会拿半截地址去下载（404 或下到别的对象），
+		// 本机路径则被判成"文件不在了"，由 `dropMissingLocalCandidates` **静默摘掉**。
+		// ⚠️ 断言**放在这里**（3b 之后）是有意的：位置判据坏掉时两边会一起红，
+		// 而负责它的那条变异（`mutate-references`）必须"因自己的原因失败" ——
+		// 所以路径段那条断言要**先**说话，这几条排后面。
+		assert.deepEqual(
+			externalFileUrlsIn("[a](https://x.test/Foo_(bar).pdf)"),
+			["https://x.test/Foo_(bar).pdf"],
+			"★★ 站外地址里的成对括号不许截断（否则会拿半截地址去下载）"
+		);
+		assert.deepEqual(
+			externalFileUrlsIn("![a](file:///D:/tmp/报告(1).pdf)"),
+			["file:///D:/tmp/报告(1).pdf"],
+			"★★ 本机路径里的成对括号不许截断（否则被判成「文件不在了」而静默摘掉）"
+		);
+		assert.deepEqual(
+			externalFileUrlsIn('![](<https://x.test/Foo_(bar).pdf> "标题")'),
+			["https://x.test/Foo_(bar).pdf"],
+			"★ 尖括号 + 括号 + 标题：只被 `>` 与引号切，括号不参与"
+		);
+
+		// ⭐⭐ 2026-10-22（D-62，用户明确要求）：**代码块 / 行内代码 / `%%注释%%` 里的目标
+		// 不算引用** —— 连"认出来"都不该有。
+		//
+		// 依据不是口味，是**宿主的口径**：Obsidian 不渲染这些位置里的链接，
+		// `metadataCache.resolvedLinks` 里也没有它们。我们额外扫正文是为了补宿主的盲区
+		// （属性链接 / 行内 HTML / 引用式链接），而**代码块不是盲区** —— 多扫这一半
+		// 只会让"只在代码块里被提到"的文件进「上传附件」白传一次，并在清理流程里保它一命。
+		// ⚠️ 同一件事在四处都有后果（候选 / 报告 / 云端清理 / 删除前复核），所以
+		// 剔除做在**产出处**（`findLinkSpans`）；这里逐条钉住它。
+		for (const [label, text] of [
+			["围栏代码块", "```md\n![](attachments/图 1.png)\n```\n"],
+			["波浪号围栏", "~~~\n![](attachments/图 1.png)\n~~~\n"],
+			["未闭合围栏（宿主也把后面全当代码）", "```\n![](attachments/图 1.png)\n"],
+			["行内代码", "写法是 `![](attachments/图 1.png)` 这样\n"],
+			["Obsidian 注释", "%%![](attachments/图 1.png)%%\n"],
+			// ⚠️ 后三种走的是**另一条**产出路径（wikilink / 行内 HTML / 引用式定义），
+			// 它们不经过 `markdownLinks`，靠收尾那一次过滤 —— 少钉一条就会漏掉半个判据。
+			["围栏里的 wikilink", "```\n![[attachments/图 1.png]]\n```\n"],
+			["围栏里的行内 HTML", '```html\n<img src="attachments/图 1.png">\n```\n'],
+			["围栏里的引用式定义", "```\n[x]: attachments/图 1.png\n```\n"],
+			// ⭐⭐ 2026-10-22（D-63，用户原话「除了代码块,行内代码也不应该有引用附件,这和语义不符」）：
+			// 判据从"代码"扩成**所有不会被渲染的位置**。逐条列在这里，因为每一条都是
+			// 独立的一类写法，少一条就少一类证据。
+			["行内代码（双反引号）", "写法 ``![](attachments/图 1.png)`` 这样\n"],
+			["行内代码（内容里带单个反引号）", "``a ` ![](attachments/图 1.png) ``\n"],
+			["HTML 注释", "<!-- ![](attachments/图 1.png) -->\n"],
+			["行内数学 $…$", "$![](attachments/图 1.png)$\n"],
+			["块级数学 $$…$$", "$$\n![](attachments/图 1.png)\n$$\n"],
+			["转义的 Markdown 图片", "\\![](attachments/图 1.png)\n"],
+			["转义的 wikilink", "\\![[attachments/图 1.png]]\n"],
+			["行内 <code>", "<code>![](attachments/图 1.png)</code>\n"],
+			["<pre> 块", "<pre>\n![](attachments/图 1.png)\n</pre>\n"],
+		]) {
+			assert.deepEqual(
+				findLinkSpans(text).map((span) => span.raw),
+				[],
+				`★★ 这些位置里的目标**一条都不产出**（它们不是引用）：${label}`
+			);
+			assert.equal(
+				stillMentionsPath(text, PATH),
+				false,
+				`★★ 同上：不算「有人指着它」（否则只在代码块里被提到的文件会被白传一次）：${label}`
+			);
+			const frozen = planLinkRewrites(text, RULE);
+			assert.equal(frozen.count, 0, `★★ 当然也不改写：${label}`);
+			assert.equal(frozen.text, text, `★★ 原文要逐字节不变（那是用户的样例文本）：${label}`);
+		}
+		// ⚠️ 反向：**同一行里**代码之外的那条照旧要认、要改（别把整行都扔掉）
+		const mixedLine = "`![](attachments/图 1.png)` 与 ![](attachments/图 1.png)\n";
+		assert.equal(
+			planLinkRewrites(mixedLine, RULE).count,
+			1,
+			"★★ 行内代码只吃掉它自己那一段，同一行外面的链接照旧要改"
+		);
+		assert.ok(
+			planLinkRewrites(mixedLine, RULE).text.startsWith("`![](attachments/图 1.png)` 与 ![](https://"),
+			"★ 代码里那段原样、外面那段换成远端"
+		);
+		// ⚠️ 反向：正常正文里的照旧要认（别把整篇都当成代码）
+		assert.deepEqual(
+			findLinkSpans("![x](attachments/图 1.png)\n").map((span) => span.raw),
+			["attachments/图 1.png"],
+			"★ 普通正文里的引用不受影响"
+		);
+		// ⚠️⚠️ 反向的三条**误伤防线**（惰性区域最容易在这三处吃得过头）：
+		// ① 4 空格缩进的**列表续行**是正常正文（与缩进代码块在文本上无法区分 ⇒ 宁可算）
+		assert.deepEqual(
+			findLinkSpans("- 项目\n    ![](attachments/图 1.png)\n").map((span) => span.raw),
+			["attachments/图 1.png"],
+			"★★ 列表里的 4 空格续行必须算引用（别拿缩进当代码）"
+		);
+		// ② 两个金额之间的正文（`$` 不是公式定界符）
+		assert.deepEqual(
+			findLinkSpans("花费 $5，见图 ![](attachments/图 1.png)，共 $10\n").map((span) => span.raw),
+			["attachments/图 1.png"],
+			"★★ 两个 `$` 之间的正文照旧算引用（否则价格里的图全丢）"
+		);
+		// ③ 长得像标签的普通文字（`<premium>` 不是 `<pre>`）—— 放宽会把后面整段划进惰性区间
+		assert.deepEqual(
+			findLinkSpans("<premium>![](attachments/图 1.png)</premium>\n").map((span) => span.raw),
+			["attachments/图 1.png"],
+			"★★ `<premium>` 不许被当成 `<pre>`（标签名要卡边界）"
+		);
+		// ④ 块级公式**之后**的正文（`$$x$$` 的闭合符不许当成下一段的开头）
+		assert.deepEqual(
+			findLinkSpans("$$x$$\n\n![](attachments/图 1.png)\n").map((span) => span.raw),
+			["attachments/图 1.png"],
+			"★★ `$$…$$` 之后的内容照旧算引用（闭合符不许把后面整篇并进区间）"
+		);
+
+		// ⚠️ 反向：标题里那个括号**不配平**时，不许把整条链接吞掉（括号数不过来 ⇒
+		// 退回"第一个 `)`"的老行为，整条照旧能改）。这条不配平也是**常见写法**：
+		// 用户手写的标题里出现半个括号，比路径里出现半个括号常见得多。
+		const unbalancedTitle = '![a](attachments/图 1.png "见(注")';
+		assert.deepEqual(
+			findLinkSpans(unbalancedTitle).map((span) => span.raw),
+			["attachments/图 1.png"],
+			"★ 标题里的括号不配平时要退回「第一个 `)`」（否则整条链接从「能改」退化成「不认」）"
+		);
+		assert.equal(planLinkRewrites(unbalancedTitle, RULE).count, 1, "★ 同上：这种写法必须照旧改得掉");
+
 		// ⚠️ 属性区（frontmatter）里的一律**不碰**（理由见 `LinkSpan.inFrontmatter`）：
+
 		// 属性是结构化数据 —— 换成 Markdown 图片会把值写坏，只换路径又得到宿主不解析的 `[[https://…]]`。
 		// 而"不改"没有损失：文件仍在库里，那一处引用照常工作。
 		const front = '---\ncover: "[[图 1.png]]"\n---\n\n正文\n';
@@ -1225,4 +1510,22 @@ export async function runMaintenanceSuite(mod) {
 		);
 	}
 
+
+	// ⭐⭐ 2026-10-22 审计：**画布文本里的远端地址也算"被引用"**（`keysInCanvasText`）。
+	//
+	// 现场：占用报告（`scanReferences`）原来只扫笔记，而云端清理扫"笔记 ＋ 画布文本"
+	// ⇒ 一张只被画布卡片引用着的图，报告说"没有人引用 / 可回收"、清理命令却根本不会问它。
+	// 判据现在只有一份，两侧共用。
+	{
+		const canvas = JSON.stringify({
+			nodes: [
+				{ id: "1", type: "text", text: "![](https://img.example.com/abc.png)" },
+				{ id: "2", type: "file", file: "attachments/本地.png" },
+			],
+		});
+		const keys = keysInCanvasText(canvas, (url) => (url.includes("/abc.png") ? "abc.png" : null));
+		assert.deepEqual([...keys], ["abc.png"], "★ 画布**文本节点**里的远端地址要算进「仍被引用」");
+		assert.deepEqual([...keysInCanvasText("", () => "x")], [], "空文本不产出");
+		assert.deepEqual([...keysInCanvasText("{坏 JSON", () => "x")], [], "解不开的画布不该让整条命令失败");
+	}
 }

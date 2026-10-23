@@ -290,18 +290,22 @@ export function runExternalDecideSuite(mod) {
 	// 「如果是外部网站的文件下载链接，应该看做是附件才对」）——
 	// 那些闸门**绝不许**扩成"普通链接一律不收"：`[下载](…/setup.zip)` 这种写法
 	// 正是 R15 要覆盖的最常见场景（PDF / 压缩包 / 音频）。
-	// ⚠️ 这里刻意用**我们类型表里没有**的后缀（`exe` / `iso`）：判据按"这看起来是不是一个文件"判，
-	// **不按"我们认不认识这个后缀"** —— 后者（白名单）会把用户的真实文件静默拦在清单外。
 	// ⚠️ 这一组全按"**只被指向**"问（`embedded: false`），也就是最严的那一档。
+	// ⚠️ 2026-10-21（D-58）：`exe` / `iso` **已经从这里移走**（程序分发，见下一组）——
+	// 但"类型表外的真实资料照旧算候选"这条边界没变，由下一组的反向断言守着。
 	for (const [label, src] of [
 		["PDF", "https://third-party.example.net/report.pdf"],
 		["压缩包", "https://third-party.example.net/files/setup.zip"],
-		["Windows 安装包（类型表里没有的后缀）", "https://third-party.example.net/tools/installer.exe"],
-		["光盘映像（类型表里没有的后缀）", "https://third-party.example.net/os/ubuntu.iso"],
 		["音频", "https://third-party.example.net/track.mp3"],
 		["表格", "https://third-party.example.net/data.xlsx"],
 		// `7z` 也是"点后面带字母"的写法（防"后缀不许是数字开头"之类的顺手收严把它误伤）
 		["7z 压缩包", "https://third-party.example.net/backup.7z"],
+		// ⭐ 类型表里**没有**、但确实是一份资料的（D-58 的反向：黑名单不是白名单）
+		["PSD 工程文件（类型表外）", "https://third-party.example.net/design/封面.psd"],
+		["CAD 图纸（类型表外）", "https://third-party.example.net/drawings/bracket.dwg"],
+		// ⚠️ `.bin` **刻意不在黑名单里**：它同时是固件 / 裸数据（这个插件的作者就在做 FPGA），
+		// 拦掉会让真实资料静默消失 —— 而"多列一条"至少用户看得见、勾得掉。
+		["固件 / 裸数据（类型表外，且不是安装包）", "https://third-party.example.net/fw/bitstream.bin"],
 	]) {
 		assert.equal(
 			decide(src, { purpose: "manual", embedded: false }).action,
@@ -310,7 +314,54 @@ export function runExternalDecideSuite(mod) {
 		);
 	}
 
-	// ⚠️ **后缀不可信 ≠ 不是文件**：令牌形状的 URL（Bing 图片 CDN 那种
+	// ⭐⭐ 2026-10-21（D-58）**安装包 / 可执行程序 / 系统镜像不是笔记资料** —— 两路都拦。
+	//
+	// 现场：用户笔记里写着 `[下载地址](https://…/Cherry-Studio-0.9.19-setup.exe)`，
+	// 「上传附件」的清单把这条 **84.6 MB** 的安装包列了出来（真机 HEAD 实测：
+	// `application/octet-stream` + `Content-Disposition: attachment`）。确认后会下载 84 MB、
+	// 传进桶、库里留一份 84 MB 副本，并把「下载地址」改成桶地址。
+	// ⚠️ 判据是**黑名单**（`vault-files.ts::isProgramExtension`），只管程序分发 ——
+	// 上面那一组里 `.psd` / `.dwg` / `.bin` 照旧算候选，两边互为边界。
+	// ⚠️ **两路都拦**：笔记"显示"一个 `.exe` 同样没有意义（`![]` 渲染不出来），
+	// 所以这条判据不挂在 `embedded` 上（与那两道**形状**判据的区别就在这里：一个问"是不是资料"，
+	// 一个问"像不像文件"）。
+	for (const [label, src] of [
+		["Windows 安装包（括号里带编码的中文路径，就是用户那条的等价物）", "https://third-party.example.net/d/netdisk/04(%E8%BD%AF%E4%BB%B6)/setup.exe"],
+		["MSI 安装包", "https://third-party.example.net/tools/app.msi"],
+		["msix 安装包", "https://third-party.example.net/tools/app.msix"],
+		["macOS 磁盘映像", "https://third-party.example.net/tools/app.dmg"],
+		["macOS 安装包", "https://third-party.example.net/tools/app.pkg"],
+		["deb 包", "https://third-party.example.net/deb/app.deb"],
+		["rpm 包", "https://third-party.example.net/rpm/app.rpm"],
+		["Android 安装包", "https://third-party.example.net/android/app.apk"],
+		["AppImage", "https://third-party.example.net/linux/app.AppImage"],
+		["光盘映像", "https://third-party.example.net/os/ubuntu.iso"],
+		["磁盘映像", "https://third-party.example.net/img/disk.vhdx"],
+	]) {
+		for (const embedded of [false, true]) {
+			const d = decide(src, { purpose: "manual", embedded });
+			assert.equal(
+				d.action,
+				"ignore",
+				`★★ 安装包/镜像不许进候选（它不是笔记资料）：${label} · embedded=${embedded}`
+			);
+			assert.ok(
+				String(d.reason).includes("安装包"),
+				`★ 原因要说得出是安装包/镜像（${label}）：${d.reason}`
+			);
+		}
+	}
+	// ⚠️ 反向：**别把"可执行"这一条扩成"凡不认识的后缀皆拦"** —— 资料类照旧放行（见上面那一组），
+	// 而 `.bin`（固件/裸数据）与 `.jar` 刻意留在黑名单外。这条断言是那一侧的守门人。
+	for (const src of ["https://third-party.example.net/fw/bitstream.bin", "https://third-party.example.net/lib/app.jar"]) {
+		assert.equal(
+			decide(src, { purpose: "manual", embedded: false }).action,
+			"cache",
+			`★ 黑名单只收程序分发：固件 / 库文件照旧算候选（拦掉会让真实资料静默消失）：${src}`
+		);
+	}
+
+
 	// `…/th/id/OIP-C.sPb8lvTxu-zlEqgEmUgCTwAAAA?w=208&h=169`）**取不出扩展名**，
 	// 但它**确实是个文件**（而且是有专门落盘命名判据的一类：缓存副本必须仍叫 `…png`）。
 	//

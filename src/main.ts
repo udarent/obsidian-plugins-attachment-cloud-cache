@@ -35,24 +35,20 @@ import { createIndexStore, makeSerializer } from "./host/runtime";
 import type { HostContext } from "./host/runtime";
 import { createEditorHandlers } from "./host/editor-bridge";
 import { createAnnounceGate } from "./host/intercept";
-import { inspectLocalCopies, runBatchUpload, runEviction, scanReferences } from "./maintenance/run";
+import { runBatchUpload, runEviction, scanReferences } from "./maintenance/run";
 import type { MaintenanceDeps } from "./maintenance/run";
 import { createCacheRotator } from "./maintenance/rotation";
 import type { CacheRotator } from "./maintenance/rotation";
-import {
-	dropMissingLocalCandidates,
-	selectExternalUploadCandidates,
-} from "./maintenance/batch";
 import { createAttachWatcher, createSelfWriteLedger } from "./maintenance/attach-watch";
 import type { AttachWatcher } from "./maintenance/attach-watch";
 import { createAbsenceConfirmer, runSelfHeal } from "./maintenance/self-heal";
 import type { SelfHealResult } from "./maintenance/self-heal";
 
-import type { ExternalCandidate } from "./maintenance/batch";
 import { describeError } from "./error-text";
 import { ingestAttachment } from "./core/ingest";
 import { confirmWithModal } from "./ui/confirm-modal";
 import type { ConfirmOptions } from "./ui/confirm-modal";
+import type { FileCardOpenTarget } from "./ui/file-cards";
 import { planFileCards } from "./ui/file-cards";
 import type { FileCard, FileCardInput } from "./ui/file-cards";
 import type { S3Client } from "./s3/client";
@@ -75,8 +71,6 @@ import { utf8Bytes } from "./s3/hash";
 import { createLocalCopyEnsurer } from "./core/download";
 import {
 	keyOfUrl,
-	readActiveNoteText,
-	readAllNoteTexts,
 	referencedVaultPaths,
 	remoteUrlForKey,
 	resourceUrlFor,
@@ -107,15 +101,8 @@ import type { ExternalHook } from "./render/external-hook";
 import { createExternalLiveQueue } from "./render/external-live";
 import type { ExternalLiveQueue, OpenViewLike } from "./render/external-live";
 import { createExternalCacher } from "./core/external-cache";
-import { pickExternalImagesWithModal } from "./ui/external-picker-modal";
-import { pickKey } from "./ui/external-picker-logic";
-import { buildTaskLabels } from "./ui/task-list";
 import { askTaskList } from "./ui/task-list-modal";
 import type { TaskListOptions, TaskListResult } from "./ui/task-list-modal";
-import type { ExternalCandidateLoader, ExternalPickRunner } from "./ui/external-picker-modal";
-import type { ExternalPickItem, ExternalPickScope } from "./ui/external-picker-logic";
-
-
 
 /**
  * 导入一份凭据文件的结果。
@@ -326,33 +313,34 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 而现象只是"什么都没发生"，看不出是接缝没接上）。
 	 */
 	pickTasks: (options: TaskListOptions) => Promise<TaskListResult | null> = (options) =>
-		askTaskList(this.app, options);
+		askTaskList(this.app, {
+			...options,
+			// ⭐ 行尾「打开」（D-66）在装配点接上：判定（哪些行能打开、打开的是路径还是地址）
+			// 在 `ui/file-cards.ts::planFileCards`，真正的打开动作只有这里知道怎么问宿主。
+			onOpen: (target) => this.openCardTarget(target),
+		});
 
-	pickExternalImages: (
-		load: ExternalCandidateLoader,
-		run?: ExternalPickRunner
-	) => Promise<ExternalPickItem[] | null> = (load, run) =>
-		pickExternalImagesWithModal(
-			this.app,
-			load,
-			{
-				title: this.t("externalPickTitle"),
-				scopeName: this.t("externalPickScope"),
-				scopeNote: this.t("externalPickScopeNote"),
-				scopeVault: this.t("externalPickScopeVault"),
-				// ⭐ 库外文件那几行的缩略图候选（本机 `file:///…` 用宿主自己的本地前缀，
-				// 见 `localThumbUrls`）—— 界面层不碰宿主，所以从装配点注入。
-				localThumbUrls: (url) => this.localThumbUrls(url),
-				// "全选 / 全不选 / 取消"由共用那份给（同一句话只维护一处）；
-				// ⚠️ 空清单那句**按这条链覆盖**：它要说清"为什么可能是空的"（已缓存过 / 没配好）
-				// ⚠️ `this.t` 必须包一层箭头函数再传（eslint 的 unbound-method 在拦：摘下来的方法丢了 this）
-				labels: {
-					...buildTaskLabels((key, params) => this.t(key, params), "externalPickCta"),
-					empty: this.t("externalPickEmpty"),
-				},
-			},
-			run
-		);
+	/**
+	 * 打开清单里的一行（D-66）。
+	 *
+	 * - **库内文件**（`vault`）：交给宿主用它自己的视图打开（图片/PDF 都能开）。
+	 *   ⚠️ 用**新标签**打开：清单还开着，把它顶掉的话用户回不去（而他要接着勾）。
+	 *   ⚠️ 文件可能已经不在了（清单是几秒前算的，或用户刚在别处删掉）⇒ 明说，不静默。
+	 * - **库外地址**（`url`）：交给系统浏览器。⚠️ 只对 `http(s)` 有意义；
+	 *   本机 `file:///…` 那一类**根本不给打开**（在 `planFileCards` 里就没有目标）。
+	 */
+	private openCardTarget(target: FileCardOpenTarget): void {
+		if (target.kind === "url") {
+			window.open(target.value, "_blank");
+			return;
+		}
+		const file = this.app.vault.getAbstractFileByPath(target.value);
+		if (!(file instanceof TFile)) {
+			new Notice(this.t("fileCardOpenMissing", { path: target.value }));
+			return;
+		}
+		void this.app.workspace.getLeaf("tab").openFile(file);
+	}
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -440,7 +428,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				if (!(file instanceof TFile)) return null;
 				return { path: file.path, extension: file.extension, stat: { size: file.stat?.size ?? 0 } };
 			},
-			referencedPaths: () => referencedVaultPaths(this.app),
+			referencedPaths: () =>
+				referencedVaultPaths(this.app, { debug: this.settings.debugLogging }),
 			adopt: async (paths) => {
 				// 存储没就绪时**什么都不做**，只把"去哪配"说清楚 —— 与粘贴那条路的口径一致：
 				// 不拦用户、不假装成功，也绝不留下半个动作（文件原地不动、笔记一个字不改）。
@@ -463,7 +452,12 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				// ⭐ 这一趟的收尾还可能**删掉宿主撞名另落的重复副本**（链接改写成功后，
 				// 见 `dropRedundantCopies`）—— 提示不在这里发：这条路一次只处理一个文件、
 				// 且用户刚刚亲手插了那张图，多弹一条只会变噪音（命令那条路会报）。
-				return runBatchUpload(this.maintenanceDeps(), { referencedPaths: new Set(paths) });
+				// ⚠️ `repairablePaths` 留空：这条路只处理**刚进来的这一个文件**，
+				// 它不可能"已经传过、只差改链接"（那种是「上传附件」重修的对象）。
+				return runBatchUpload(this.maintenanceDeps(), {
+					referencedPaths: new Set(paths),
+					repairablePaths: new Set(),
+				});
 			},
 			notify: (message) => new Notice(message),
 			t: (key, params) => this.t(key, params),
@@ -545,7 +539,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			// 扫引用这条仍然复用维护功能那一份实现（只此一处）
 			scanReferencedKeys: async () => (await scanReferences(this.app, (url) => keyOfUrl(this.settings, url))).keys,
 			// ⭐ "还有人用吗"的另一半（笔记直接指着的库内路径）—— 与上面那半合起来才算完整
-			referencedPaths: () => referencedVaultPaths(this.app),
+			referencedPaths: () =>
+				referencedVaultPaths(this.app, { debug: this.settings.debugLogging }),
 			evict: (plan) => runEviction(this.maintenanceDeps(), plan),
 			notify: (message) => new Notice(message),
 			t: (key, params) => this.t(key, params),
@@ -708,12 +703,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 一条"确定要清理吗"等于让用户闭着眼睛按确认。
 	 */
 	private registerMaintenanceCommands(): void {
-		this.addCommand({
-			id: "audit-cache",
-			name: this.t("cmdAuditCache"),
-			callback: () => this.runCommand("audit-cache", () => this.reportCacheUsage()),
-		});
-
 		// ⭐⭐ **唯一**的清理入口（2026-10-16 合并了原来那条「清理云端未使用对象…」）。
 		//
 		// ## 为什么只留这一条
@@ -739,19 +728,9 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		this.addCommand({
 			id: "upload-attachments",
 			name: this.t("cmdUploadAttachments"),
-			callback: () => this.runCommand("upload-attachments", () => uploadExistingAttachments(this.flowContext())),
+			callback: () => this.runCommand("upload-attachments", () => this.runUploadAttachments()),
 		});
 
-		// ⭐ 逐张挑选要缓存的外链图。
-		//
-		// 与上面那条命令的分工：那条是"把还没搬的全搬"，这条是"我只要这几张"。
-		// 两者与设置里的默认行为**都不冲突** —— 显式动作用的是"能不能搬"那个判据，
-		// 不受"默认动不动手"影响（否则默认设成「什么都不做」之后这两个入口都会空转）。
-		this.addCommand({
-			id: "pick-external-images",
-			name: this.t("cmdPickExternal"),
-			callback: () => this.runCommand("pick-external-images", () => this.cachePickedExternalImages()),
-		});
 	}
 
 	private maintenanceDeps(): MaintenanceDeps {
@@ -795,7 +774,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			// ⭐⭐ "这份副本还有人在用吗"的**另一半**：笔记/画布**直接指着**的库内路径。
 			// ⚠️ 缺了它，笔记正在显示的那份副本会被报成"没有任何笔记引用"
 			//（占用报告会骗人）、后台淘汰还会把它排到最前面（见 `audit.ts` 的 `referencedPaths`）。
-			referencedPaths: (notes) => referencedVaultPaths(this.app, { notes }),
+			referencedPaths: (notes) =>
+				referencedVaultPaths(this.app, { notes, debug: this.settings.debugLogging }),
 			notify: (message) => new Notice(message),
 			t: (key, params) => this.t(key, params),
 		};
@@ -842,51 +822,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			remoteUrl: (key) => remoteUrlForKey(this.settings, key),
 		});
 	}
-
-	/**
-	 * 看一遍本地副本占用（只读，不动任何文件）。
-	 *
-	 * ⚠️ 1.2.0（D-17）起口径是**索引 + 存在性**：只统计"索引里记过的副本此刻还在不在"。
-	 * 从前那些"孤儿文件"（磁盘有、索引无）**不再可能出现** ——
-	 * 索引外的文件可能是用户自己的附件，扫出来也绝不能动（见 `audit.ts` 文件头）。
-	 */
-	private async reportCacheUsage(): Promise<void> {
-		const deps = this.maintenanceDeps();
-		const { audit } = await inspectLocalCopies(deps, (url) => keyOfUrl(this.settings, url));
-		const mb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1);
-
-		// 上限：0 = 不限制。用一句人话表示，而不是把 0 直接摆给用户看
-		// （"上限：0 MB" 会被读成"上限是零"，那是相反的意思）。
-		const limit = this.settings.cacheLimitMb > 0
-			? this.t("cacheLimitValue", { mb: this.settings.cacheLimitMb })
-			: this.t("cacheLimitNone");
-
-		new Notice(
-			this.t("maintainUsageReport", {
-				totalMb: mb(audit.bytes.total),
-				count: audit.healthy.length + audit.unused.length,
-				reclaimableMb: mb(audit.bytes.reclaimable),
-				unused: audit.unused.length,
-				missing: audit.missingCopies.length,
-				limit,
-			})
-		);
-
-		// ⚠️ 失效记录**要单独说清它会自己消失**：那行数字本身不带处置办法，
-		// 用户 2026-10-14 在 Android 上把它读成了"插件把索引弄坏了"（其实是"删掉本地副本"
-		// 的正常中间态：后台自检两轮确认后摘掉）。
-		// ⚠️ 2026-10-16 起**不再指路任何命令** ——「自检并修复本地副本索引」命令已退役，
-		// "立刻核一遍"的入口随之消失，只剩后台这一条线（文案也已同步去掉 `{command}`）。
-		// 只在真有失效时加这一句 —— 每次运行都写一遍会变成没人看的噪音。
-		if (audit.missingCopies.length > 0) {
-			new Notice(
-				this.t("maintainUsageMissingHint", {
-					count: audit.missingCopies.length,
-				})
-			);
-		}
-	}
-
 
 	/**
 	 * 设置页那个按钮的入口（F18 的**手动**入口）。
@@ -940,89 +875,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 
 
 
-	/**
-	 * 「选择要缓存的外链图片」：弹窗让用户勾，然后只搬他勾中的那些。
-	 *
-	 * ## 勾选**就是**授权
-	 *
-	 * 与那条批量命令一样，这里也不碰"默认行为"那一档：用户明确挑出来的东西，
-	 * 就是他此刻的意图（判定层只负责回答"这些地址**能不能**搬"）。
-	 *
-	 * ## 为什么逐张 `await` 而不是并发
-	 *
-	 * 用户勾的是个位数到几十张，而每一次都是一轮"下载 + 上传"。
-	 * 串行既不给对方站点压力，也让"正在处理第几张"这件事在失败时更好归因。
-	 *
-	 * ## 为什么最后还要给一句汇总
-	 *
-	 * 逐张的通知只说"这一张怎么样了"，而用户真正想知道的是
-	 * "我勾的那几张三张里成了几张"。两句都给：单张的细节 + 一句总账。
-	 */
-	async cachePickedExternalImages(): Promise<void> {
-		// ⚠️ 1.2.0 起这里**不再检查** `externalImageCache`：那个开关只管**自动**那一路，
-		// 而这里是用户**显式**挑出来的（勾选本身就是同意）。
-		// 唯一的真前提是"存储配好了" —— 没配好连候选都挑不出来，早退比弹个空清单清楚。
-		if (!this.buildClient()) {
-			new Notice(this.t("maintainNotConfigured"));
-			return;
-		}
-
-		let cached = 0;
-		let partial = 0;
-		let failed = 0;
-		// ⭐ 逐张处理**就在弹窗里跑**（用户能看着每一张的状态）
-		const picked = await this.pickExternalImages(
-			(scope) => this.externalCandidates(scope),
-			async (items, report) => {
-				for (const item of items) {
-					// ⚠️ 键必须与界面上那一行的 `id` 同一份（那里用的是 `pickKey`）
-					const key = pickKey({ url: item.url, notePath: item.notePath });
-					report(key, "running");
-					const outcome = await this.cacheExternalImage(item.url, item.notePath, true);
-					if (outcome.status === "cached") {
-						cached += 1;
-						report(key, "done");
-					} else {
-						if (outcome.status === "cached-no-rewrite") partial += 1;
-						else failed += 1;
-						report(key, "failed");
-					}
-				}
-			}
-		);
-		// `null` = 取消（含直接关掉弹窗）；空数组 = 看了但一张都没勾。两者都不做事。
-		if (!picked || picked.length === 0) {
-			new Notice(this.t("externalPickNothing"));
-			return;
-		}
-
-		new Notice(this.t("externalPickDone", { cached, partial, failed }));
-	}
-
-	/**
-	 * 某个范围下的外链候选。
-	 *
-	 * ⭐ 两个范围走**同一个**候选挑选（当前笔记只是"一篇笔记的清单"）——
-	 * 于是"功能关掉 / 自己的存储 / 回环地址 / 存储未就绪"这些过滤只有一份实现，
-	 * 界面看到的清单与命令要处理的东西永远一致。
-	 */
-	private async externalCandidates(scope: ExternalPickScope): Promise<ExternalCandidate[]> {
-		const notes = scope === "note" ? await readActiveNoteText(this.app) : await readAllNoteTexts(this.app);
-		const selection = selectExternalUploadCandidates(notes, {
-			settings: this.settings,
-			configured: connectionReadiness(this.app.secretStorage, this.settings).ready,
-			// ⭐ 平台判据（与 `flowContext().isDesktop` 同源）—— 本机文件只有桌面读得到
-			isDesktop: this.isDesktopHost(),
-		});
-		// ⭐⭐ 本机文件先问一句"还在不在"（只 `stat`、不读内容）—— 与批量命令那条链**同一个判据**
-		//（`dropMissingLocalCandidates`）：临时目录里的东西天天在消失，列出来就是"点了一定失败"。
-		// ⚠️ 这条链与批量命令的**分工**：这里没有"另有 N 个…"那种交代的地方，
-		// 摘掉就是摘掉（用户看到的是清单里没有它）。
-		const { kept } = await dropMissingLocalCandidates(selection.candidates, (path) =>
-			localFileExists(path)
-		);
-		return kept;
-	}
 
 
 
@@ -1131,6 +983,29 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	}
 
 	/** 当前索引（`load` 之后对象会换，所以要现取）。 */
+	/**
+	 * 本地副本的**索引口径**汇总（R10 / D-79：设置页那一行用）。
+	 *
+	 * ⚠️ 刻意**只读索引**、不逐个 `stat`：设置页是同步渲染的，几千份副本逐个问磁盘
+	 * 会让打开设置卡住；而这里要回答的是「大概占了多少」，不是「哪一份真的在」。
+	 * 界面上那句话也照实说「约」与「来自索引」。
+	 *
+	 * ⚠️ **不报"可回收"**：那要判断"还有没有人引用"，得读一遍全库正文（秒级）——
+	 * 而这正是 D-75 撤掉那条"占用报告"命令的原因（数字是估算，用户真正要做的决定
+	 * 是"清哪些"）。要看可回收的东西，跑「清理附件…」，那里逐行列着。
+	 */
+	localCopyUsage(): { count: number; bytes: number } {
+		let count = 0;
+		let bytes = 0;
+		for (const entry of this.currentIndex().toArray()) {
+			// 没有 `cachePath` 的条目不是副本（只有台账记录）
+			if (!entry.cachePath) continue;
+			count += 1;
+			bytes += entry.size;
+		}
+		return { count, bytes };
+	}
+
 	private currentIndex(): CacheIndex {
 		return this.indexStore?.index ?? new CacheIndex();
 	}
@@ -1689,6 +1564,17 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 缓存下来会拿到上一份（设置页改完立刻用到的那条路径就会用到旧值）。
 	 * 它只是一层转发，开销可忽略。
 	 */
+	/**
+	 * 「上传附件」——**唯一的**批量入口（D-68）。
+	 *
+	 * ⚠️ 它同时是命令面板那条命令与设置页那个按钮的实现：两处各写一遍就会出现
+	 * "命令里带未引用附件、按钮里不带"这类分叉。`public` 是为了让设置页能调
+	 * （`flowContext()` 本身仍是 private，装配细节不外泄）。
+	 */
+	async runUploadAttachments(): Promise<void> {
+		await uploadExistingAttachments(this.flowContext());
+	}
+
 	private flowContext(): PluginContext {
 		return {
 			app: this.app,

@@ -22,6 +22,17 @@ await runMutations({
 	suite: runExternalDecideSuite,
 	mutations: [
 		{
+			// 后果：**安装包 / 镜像又回到清单里**（D-58 之前的行为）：用户笔记里一条
+			// `[下载地址](…/Cherry-Studio-0.9.19-setup.exe)`（84.6 MB）会被下载、传进桶、
+			// 库里留一份 84 MB 副本，并把「下载地址」改成桶地址 —— 他要的是"资料跟着笔记走"，
+			// 不是"桶变成软件分发站"。⚠️ 这条判据是**黑名单**（只收程序分发），
+			// 别顺手扩成"认不认识这个后缀"（`.psd` / `.bin` 会被静默拦掉）。
+			name: "★★ 安装包/镜像不再被拦（84 MB 的安装包会进清单并被搬进桶）",
+			from: "\tif (isProgramExtension(extension)) {",
+			to: "\tif (false) {",
+			expect: "安装包/镜像不许进候选",
+		},
+		{
 			// 后果：用户**关掉了功能却仍在被自动处理** —— 关不掉的开关比没有开关更糟。
 			name: "★ 不看总开关（关掉功能仍会被自动处理）",
 			from: '\tif (input.purpose === "auto" && !input.settings.externalImageCache) {\n',

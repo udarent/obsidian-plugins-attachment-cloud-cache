@@ -331,5 +331,21 @@ export function runS3ErrorsSuite(mod) {
 	assert.ok(!withSecrets.message.includes(secret), "responseError 也要脱敏");
 	assert.ok(!withSecrets.body.includes(secret), "responseError 的错误体也要脱敏");
 
-	return { retryableCases: 4 + 8 * 4 + 3 };
+	// ============================================================
+	// 超时（D-78）：**不可重试**，而且要看得出等了多久
+	//
+	// 这一条在 `s3/client.ts` 那套件里也钉着（真发请求），这里从纯函数这侧再钉一次：
+	// 「不可重试」是**错误本身的属性**，不该只靠调用方的写法兜住。
+	// 判据写反的后果是"一次卡死 = 3 × 60 秒"（用户白等两分钟，结论不变），
+	// 以及下载层的去重槽要等三轮才释放。
+	// ============================================================
+	const timedOut = mod.timeoutError({ operation: "GET", key: "a.png", timeoutMs: 60_000, attempts: 1 });
+	assert.equal(timedOut.code, "Timeout", "超时要有自己的 code（日志里靠它分辨「卡住」与「拒绝连接」）");
+	assert.equal(timedOut.kind, "network", "超时仍属网络性质（建议文案照旧）");
+	assert.equal(timedOut.status, 0, "没有 HTTP 响应 ⇒ 状态码是 0");
+	assert.equal(timedOut.retryable, false, "★★ 超时**不可重试** —— 否则一次卡死会变成 3 × 60 秒");
+	assert.ok(timedOut.message.includes("秒"), `文案要说清等了多久：${timedOut.message}`);
+	assert.ok(!timedOut.message.includes("key"), "文案里不该出现密钥相关内容");
+
+	return { retryableCases: 4 + 8 * 4 + 3 + 1 };
 }

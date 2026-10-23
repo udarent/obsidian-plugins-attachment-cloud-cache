@@ -28,7 +28,7 @@ import type { DeletedObjectRecord } from "../maintenance/delete-log";
 import { deleteLogTargetPath, recordDeletions } from "../maintenance/delete-log";
 import { referencedKeysFromUrls } from "../maintenance/cloud-cleanup";
 import type { NoteKind } from "../maintenance/orphan-watch";
-import { canvasTextTargets, keysInText } from "../maintenance/references";
+import { keysInCanvasText, keysInText } from "../maintenance/references";
 import { keyFromUrl } from "../render/render-target";
 import type { PluginContext } from "./context";
 
@@ -93,13 +93,10 @@ export async function writeDeleteLog(
  */
 export function extractStoredKeys(ctx: PluginContext, kind: NoteKind, text: string): Set<string> {
 	const keyOf = (url: string): string | null => keyFromUrl(url, ctx.settings.s3);
+	// 画布那一半与 `scanReferences`**同一份**（`keysInCanvasText`）：两侧各写一遍就是这个
+	// "两条命令说法相反"的来源（见那个函数的说明）。
 	if (kind !== "canvas") return keysInText(text, keyOf);
-
-	const keys = new Set<string>();
-	for (const raw of canvasTextTargets(text)) {
-		for (const key of keysInText(raw, keyOf)) keys.add(key);
-	}
-	return keys;
+	return keysInCanvasText(text, keyOf);
 }
 
 /**

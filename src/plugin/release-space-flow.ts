@@ -71,7 +71,7 @@ async function localSpaceSelection(ctx: PluginContext, keepBytes: number): Promi
 	const referencedKeys = await cloudReferencedKeys(ctx);
 	// ⭐ "还有人用吗"的另一半：笔记**直接指着**哪些库内文件（判据见 `release-space.ts` 的
 	// `referencedPaths`）。少了它，一份正被笔记显示的副本会被当成可删的。
-	const referencedPaths = await referencedVaultPaths(ctx.app);
+	const referencedPaths = await referencedVaultPaths(ctx.app, { debug: ctx.settings.debugLogging });
 
 	return planReleaseSpace({
 		entries,

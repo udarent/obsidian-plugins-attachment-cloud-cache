@@ -37,6 +37,8 @@ await withLoadedTs(["src/s3/errors.ts", "src/i18n.ts"], (mod) => {
 	console.log(
 		`S3 error tests passed (only 2xx counts as success incl. 3xx rejected; ` +
 			`whitelist retry policy — all 4xx and 501 not retried over ${stats.retryableCases} cases; ` +
+			"a timeout says how long it waited and is never retried (one stuck request must not become " +
+			"3 x 60 s); " +
 			"XML/HTML error bodies parsed; credentials unconditionally redacted from message and body; " +
 			`all ${mod.HINT_KEYS.length} hint keys have user-facing copy in both languages).`
 	);

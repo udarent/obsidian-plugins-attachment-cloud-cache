@@ -92,7 +92,7 @@ export interface CacheRotationDeps {
 	 * ⚠️ "还有人用吗"的另一半，而且是**硬门槛**而不是排序偏好（见 `eviction.ts` 模块头）：
 	 * 少了它，一份"笔记里还写着本地路径"的副本会被淘汰掉 ⇒ 用户打开那篇笔记看到**破图**，
 	 * 且没有任何自动恢复的路径（回退下载只认属于本存储的 URL）。
-	 * 两个问题为什么都要问，见 `audit.ts` 的 `referencedPaths`。
+	 * 两个问题为什么都要问，见 `eviction.ts` 的 `referencedPaths`。
 	 */
 	referencedPaths: () => Promise<ReadonlySet<string>>;
 	/** 执行淘汰（接线层复用 `runEviction`）。 */

@@ -230,16 +230,60 @@
 	min-width: 0;
 }
 
+/* ⚠️ 主文本是**完整路径**（D-66，参照 File Cleaner Redux 的 `file.path`）⇒ 必须能换行：
+   单行 + 省略号会把路径**末尾的文件名**切掉，而路径的意义全在末尾。 */
 .acc-task-name {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	overflow-wrap: anywhere;
 }
 
 .acc-task-meta {
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 	overflow-wrap: anywhere;
+}
+
+/*
+ * 名字与行内标签的**同一行**（D-71）：`acc-task-text` 是纵向 flex（名字 / 副标题各一行），
+ * 所以标签必须再包一层横向容器才不会把名字挤成两行。
+ */
+.acc-task-head {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	min-width: 0;
+}
+
+.acc-task-head .acc-task-name {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+/* 行内小标签（「没有笔记引用」/「只改链接」）—— 与只读清单的 `acc-file-hint` 同一个观感 */
+.acc-task-hint {
+	flex: 0 0 auto;
+	padding: 0 4px;
+	border-radius: var(--radius-s);
+	background: var(--background-modifier-hover);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
+}
+
+/*
+ * 行内**图标**标记（D-71：失效的附件）。`hint` 只作 `title` / `aria-label`。
+ * ⚠️ 颜色用 `--text-warning`：同一条信息在别处（设置页的连接灯）也是这个语气，
+ * 而"文件已经不在了"确实是需要看一眼的事，但不是错误（它只是坏链）。
+ */
+.acc-task-hint-icon {
+	display: inline-flex;
+	flex: 0 0 auto;
+	align-items: center;
+	color: var(--text-warning);
+}
+
+.acc-task-hint-icon svg {
+	width: 14px;
+	height: 14px;
 }
 
 .acc-task-status {
@@ -280,6 +324,36 @@
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 	overflow-wrap: anywhere;
+}
+
+/* 行内小标签（D-68）：目前只有"没有被任何笔记引用"一种。
+   ⚠️ 它**不是**副标题：副标题说"它在哪"（长路径、可换行），这个说"它有什么特别"。
+   所以不换行、不省略 —— 它短，而且要一眼看到。 */
+.acc-file-hint {
+	flex: 0 0 auto;
+	padding: 0 4px;
+	border-radius: var(--radius-s);
+	background: var(--background-modifier-hover);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
+}
+
+/* 行尾的「打开」（D-66）：清单里的每份附件都能点开看原件。
+   ⚠️ 与「名字」分开一个可点区域：名字本身不带链接（名字要能选中复制），
+   而"能点"这件事由这个明确的词承担。颜色用主题强调色，不写死。 */
+.acc-task-open,
+.acc-file-open {
+	flex: 0 0 auto;
+	color: var(--text-accent);
+	font-size: var(--font-ui-smaller);
+	text-decoration: none;
+	white-space: nowrap;
+}
+
+.acc-task-open:hover,
+.acc-file-open:hover {
+	text-decoration: underline;
 }
 
 /*

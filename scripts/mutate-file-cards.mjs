@@ -25,7 +25,7 @@ await runMutations({
 			// 后果：名字被丢掉，一律显示 id ⇒ 回到"用户认不出这是哪张图"的原始问题，
 			// 而这是不可恢复的动作：清单是他唯一的核对依据。
 			name: "★ 丢掉原始文件名（清单变回一串 key）",
-			from: "\t\tconst label = name || id;",
+			from: "\t\tconst label = local || name || id;",
 			to: "\t\tconst label = id;",
 			expect: "原始文件名",
 		},
@@ -98,6 +98,70 @@ await runMutations({
 			from: "\treturn host || url;\n",
 			to: "\treturn host;\n",
 			expect: "本机文件（host 为空）要显示那条路径",
+		},
+		{
+			// 后果：**未引用的行看不出"为什么没勾"** —— 清单里一堆没勾的行，用户会以为插件漏勾了，
+			// 或者以为它们已经传过（D-68）。
+			name: "★★ 行内小标签不画（未引用的行看不出原因）",
+			from: "\t\tif (card.hint) {\n",
+			to: "\t\tif (false) {\n",
+			expect: "标签紧跟名字",
+		},
+		{
+			// 后果：调用方给的标签被丢掉 ⇒ 同上（症状一样，原因不同：这里是映射层丢的）
+			name: "★★ 标签在映射层被丢掉（未引用的行看不出原因）",
+			from: 'hint: typeof item.hint === "string" ? item.hint.trim() : "",',
+			to: 'hint: "",',
+			expect: "调用方给的标签要原样带上",
+		},
+		{
+			// ⚠️⚠️ 后果：**库内文件被当成"库外地址"打开** —— `kind: "url"` 那一支走的是
+			// `window.open`，于是点了「打开」得到的是一个打不开的地址（真正的文件根本没开）。
+			// 2026-10-22（D-66）加这一列时的锚点：种类判错不会报错，只会"点了没反应"。
+			name: "★★ 库内文件的打开目标被当成库外地址（点了打不开）",
+			from: '? { kind: "vault", value: local }',
+			to: '? { kind: "url", value: local }',
+			expect: "库内文件打开的是那条路径",
+		},
+		{
+			// 后果：**副标题从"完整路径"退化成"目录"**（D-66 第一版就是那样）⇒ 库根目录的文件与
+			// 「不留副本」档的行**第二行是空的**，用户看到的就是"没有路径"。
+			name: "★★ 主文本退回文件名（库内文件看不到完整路径）",
+			from: "\t\tconst label = local || name || id;",
+			to: "\t\tconst label = name || id;",
+			expect: "主文本要是**完整路径**",
+		},
+		{
+			// 后果：**没有目标的行走也画一个链接** ⇒ 用户点它什么都不会发生（本机 `file:///…`
+			// 那一类根本没有可打开的目标），而"点了没反应"会被读成插件坏了。
+			name: "★★ 没有打开目标的行走也画链接（点了没反应）",
+			from: "\tif (!target) return;\n",
+			to: "\tif (false) return;\n",
+			expect: "没有打开目标的行走不许画链接",
+		},
+		{
+			// 后果：**默认值反了** —— 只有显式 `true` 才可选。所有既有调用方都不传，
+			// 于是整个清单**一件都勾不动**（界面上只表现为"全都勾不上"）。
+			name: "★★ `selectable` 的默认值反了（清单里一件都勾不动）",
+			from: "\t\t\tselectable: item.selectable !== false,",
+			to: "\t\t\tselectable: item.selectable === true,",
+			expect: "不给 `selectable` 时默认可勾选",
+		},
+		{
+			// 后果：**行自己的链接文案被忽略** ⇒ 失效附件那一行点开的是**笔记**，
+			// 写的却是「打开」—— 用户以为是打开那个文件（而它已经不在了）。
+			name: "★★ 行自己的链接文案被忽略（打开笔记却写成「打开」）",
+			from: 'text: card.openLabel?.trim() || handlers.openLabel?.trim() || "↗",',
+			to: 'text: handlers.openLabel?.trim() || "↗",',
+			expect: "行自己的文案优先",
+		},
+		{
+			// 后果：**图标名在映射层被丢掉** ⇒ 失效那一行既没有图标、也没有文字（`hint` 只作
+			// 悬停说明）⇒ 用户看到一行"什么都没有"的文件，而它正是要修的那条坏链。
+			name: "★★ 图标名在映射层被丢掉（失效行什么都不显示）",
+			from: '\t\t\thintIcon: typeof item.hintIcon === "string" ? item.hintIcon.trim() : "",\n',
+			to: '\t\t\thintIcon: "",\n',
+			expect: "图标名要带上",
 		},
 	],
 });

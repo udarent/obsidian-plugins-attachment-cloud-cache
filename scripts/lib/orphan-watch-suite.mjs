@@ -19,7 +19,7 @@
 import assert from "node:assert/strict";
 
 export async function runOrphanWatchSuite(mod) {
-	const { createOrphanWatcher, planOrphanLocalRemoval, selectOrphanAsks } = mod;
+	const { createOrphanWatcher, dropLocallyReferenced, planOrphanLocalRemoval, selectOrphanAsks } = mod;
 
 	/**
 	 * 造一个可注入的监视器。
@@ -224,6 +224,39 @@ export async function runOrphanWatchSuite(mod) {
 				selectOrphanAsks(["no-local-copy.png"], ledgerOnly).asks,
 				["no-local-copy.png"],
 				"★ 台账里有它、索引里没有它（不留副本档）⇒ 仍然要问，不能静默跳过"
+			);
+		}
+
+		// ⭐⭐ 2026-10-22 审计：**本地副本还被正文直接指着的**不许当孤儿
+		// （同一个对象，占用报告说"在用"、这条命令却列成孤儿 ⇒ 用户可能删掉正文还在显示的图）。
+		//
+		// 现场三种形态都可达：改写失败（D-56）、用户把链接改回本地（D-50 的退出路径）、
+		// 先传文件后补本地链接。它们共同的形态是"正文里只有本地路径、没有 URL"。
+		{
+			const paths = new Set(["attachments/still-used.png", "assets/图 1.png"]);
+			const dropped = dropLocallyReferenced(["used.png", "Idle.png", "no-copy.png"], {
+				cachePathOf: (key) => ({ "used.png": "attachments/still-used.png", "Idle.png": "attachments/idle.png" })[key],
+				referencedPaths: paths,
+			});
+			assert.deepEqual(
+				dropped.kept,
+				["Idle.png", "no-copy.png"],
+				"★★ 正文还直接指着那份本地副本时，这个对象**不是孤儿**（不许列出来让用户删）"
+			);
+			assert.deepEqual(
+				dropped.skipped,
+				["used.png"],
+				"摘掉的那几个要能单独数出来（诊断/排查用）"
+			);
+			// ⚠️ 反向：没有索引条目（「不留副本」档）⇒ 映射不出路径 ⇒ 照旧当孤儿。
+			// 那种档位下本地根本没有副本，正文里指着它的本地路径只可能是死链。
+			assert.equal(
+				dropLocallyReferenced(["no-copy.png"], {
+					cachePathOf: () => undefined,
+					referencedPaths: new Set(["attachments/whatever.png"]),
+				}).kept.length,
+				1,
+				"★ 没有条目时映射不出路径 ⇒ 保持原行为（不替用户猜）"
 			);
 		}
 

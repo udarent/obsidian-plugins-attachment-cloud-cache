@@ -24,10 +24,22 @@
  *    **逐份勾选 + 清单里显示绝对路径**上。⚠️ 所以候选列表**必须显示完整路径**，
  *    只显示文件名就等于让用户在看不见风险的情况下点确认（界面那条纪律在 picker 那边）。
  *
- * ⚠️ 于是**扩展名闸门是唯一还站着的技术边界**，它被刻意收窄成"**能嵌进笔记的那几类**"
- * （`isEmbeddable`：图 / 音 / 视频 / PDF）。**不要**为了让某一种新格式能过而放宽它 ——
- * 那会把"用户勾中一张图"扩大成"用户勾中任意文件"，而这条路的两端（任意磁盘路径、
- * 可能是公开的桶）都没变。
+ * ## ⭐ 扩展名闸门：2026-10-22（D-60）起**与「库内」同一条判据**
+ *
+ * 早先这里是"只有**能嵌进笔记**的那几类"（图 / 音 / 视频 / PDF）。用户 2026-10-22 问
+ * 「命令是否涉及所有类型的附件」，量出来三条入口的类型面完全不同 —— 库内全收、站外按
+ * 形状/页面/安装包筛、而**本机这一档只有四类**：`docx` / `xlsx` / `zip` / `txt` / `psd`
+ * 从磁盘拖进来**永远不进清单**，连 `tiff` / `heic` 这种真图片也进不来（它们被"宿主能不能
+ * 嵌入"那张表误伤）—— 而"企业微信/邮件里的附件就在磁盘上"正是这条路最常见的用法。
+ * ⇒ 他选了**与库内完全一致**：除**宿主的文本文件**（`md` / `canvas` / `base`，判据
+ * `isNoteLikeExtension`）之外全收。
+ *
+ * ⚠️ **代价要如实记住**：能读到的文件面变宽了（`.zip` / `.exe` / 无扩展名也算）。
+ * 剩下的边界不是扩展名，而是这四条，且都不许单独拆掉：
+ * ① **只走显式入口**（下面第 1 条）；② 清单里**显示绝对路径**（第 2 条）；
+ * ③ **逐份勾选**（一次同意只覆盖勾中的那几份）；④ 单份 **32 MB** 上限（`MAX_EXTERNAL_BYTES`）。
+ * ⚠️ 笔记类排除与库内同源（`isNoteLikeExtension`）：把一篇 `.md` 当附件传上去，
+ * 它正文里的链接会被当成"要改写的引用"，而宿主仍按后缀把它当笔记。
  *
  * ## ⚠️ 只有桌面端能读得到
  *
@@ -69,7 +81,7 @@
  * 而"写在函数里"保住了手机端那条纪律）。
  */
 
-import { contentTypeForExtension, extensionOfName, isEmbeddable } from "./vault-files";
+import { NOTE_LIKE_REASON, contentTypeForExtension, extensionOfName, isNoteLikeExtension } from "./vault-files";
 
 /**
  * 拿本机 `fs/promises` —— 本模块唯一的加载入口（**桌面专有**）。
@@ -228,21 +240,19 @@ export function decideLocalFile(input: { src: unknown; isDesktop: boolean }): Lo
 	if (!input.isDesktop) return { action: "ignore", reason: "仅桌面端（手机拿不到本机绝对路径）" };
 
 	const name = baseNameOfLocalPath(path);
-	// ⚠️ 只用文件名取扩展名（本机路径没有 MIME 可用）—— `extensionOfName` 对"不像扩展名"的
-	// 名字返回空串（`id_rsa` 这种没有点的一律空），于是下面那道闸门对它们也照样拦得住。
-	// 刻意**不**再单独写一条"没有扩展名"的分支：`isEmbeddable("")` 已经是 false，
-	// 多写一条就是一段永远走不到、却要陪一条锚点的代码。
+	// ⚠️ 只用文件名取扩展名（本机路径没有 MIME 可用）—— `extensionOfName` 对"不像扩展名"的名字
+	// 返回空串（`id_rsa` 这种没有点的一律空）。**空扩展名照收**：库内那条路也收（宿主给的
+	// `file.extension` 同样是空串），两条路的答案必须一致（D-60）。
 	const ext = extensionOfName(name);
-	if (!isEmbeddable(ext)) {
-		// ⚠️ 这句 reason 是**诊断**（进 `skipped` 统计），用户能看到的分类文案在 i18n 里。
-		return { action: "ignore", reason: "扩展名不在可嵌入的那几类里（图/音/视频/PDF）" };
-	}
+	// ⭐ 与库内**同一份**排除名单（`isNoteLikeExtension`）：宿主的文本文件不是附件。
+	// ⚠️ 这句 reason 是**诊断**（进 `skipped` 统计），用户能看到的分类文案在 i18n 里。
+	if (isNoteLikeExtension(ext)) return { action: "ignore", reason: NOTE_LIKE_REASON };
 	return { action: "read", path, name, ext, contentType: contentTypeForExtension(ext) };
 }
 
 /**
  * 本机文件行的**缩略图候选**（按优先次序）—— **一处定义**，两条入口共用
- * （批量命令 `plugin/upload-existing-flow.ts` 与挑选弹窗 `ui/external-picker-modal.ts`）。
+ * （批量命令 `plugin/upload-existing-flow.ts`）。
  *
  * ## ⚠️ 为什么要给"候选"而不是一个地址（2026-10-16 用户第二次报同一件事之后定的）
  *

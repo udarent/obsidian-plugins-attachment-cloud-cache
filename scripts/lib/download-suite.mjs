@@ -145,7 +145,9 @@ async function harnessRoot() {
 				secretAccessKey: SECRET_ACCESS_KEY,
 				forcePathStyle: true,
 			},
-			{ transport, now: () => NOW, sleep: async () => {} }
+			// ⚠️ `clientDeps` 只给「卡住」那一条用例用（注入短超时 + 永不返回的传输）：
+			// 其余用例必须走**默认值**，否则测的就不是真实配置了。
+			{ transport, now: () => NOW, sleep: async () => {}, ...(options.clientDeps ?? {}) }
 		);
 
 		const settings = {
@@ -643,6 +645,60 @@ async function harnessRoot() {
 				h.index.get(key).size,
 				HOSTILE_BYTES.length,
 				"★ 索引要刷新成真实值（原来的 size:999 是过期数据）"
+			);
+		} finally {
+			await h.close();
+		}
+	}
+
+	// ============================================================
+	// 12. ⭐⭐ 卡住的那次必须**收尾**，同一个 key 下次还能重试（D-78）
+	//
+	// 这条守的是 `inflight` 的清理：去重表用 `.finally` 摘槽，而「永不完成的 Promise」
+	// 永远走不到 finally —— 于是那个 key 会被判成「正在下载」直到重启。
+	// 60 秒超时（见 `s3/client.ts`）就是让那条 Promise **一定会结算**的那只手。
+	//
+	// ⚠️ 断言必须**按顺序**：第一次失败 → 第二次成功。反过来（先成功）证明不了
+	// 槽有没有被清掉 —— 那时它本来就是空的。
+	// ============================================================
+	{
+		const real = nodeTransport();
+		let attempts = 0;
+		const h = await makeHarness({
+			clientDeps: {
+				// 第一次永不返回（模拟 requestUrl 卡住），之后正常 —— 这样第二次才有意义
+				transport: (request) => {
+					attempts += 1;
+					if (attempts === 1) return new Promise(() => {});
+					return real(request);
+				},
+				// 真实默认是 60 秒；用例把它压到 40 毫秒（这一项只为可测性存在）
+				timeouts: { GET: 40 },
+			},
+		});
+		try {
+			const key = "stuck.png";
+			h.putObject(key, HOSTILE_BYTES, "image/png");
+
+			const first = await h.ensure(key, h.urlFor(key));
+			assert.equal(
+				first.status,
+				"failed",
+				`★★ 卡住的那次必须**落到失败**（不是永远挂着）：${JSON.stringify(first)}`
+			);
+			assert.equal(first.error?.code, "Timeout", "★ 失败原因要说清是超时（否则用户会去查配置）");
+
+			const second = await h.ensure(key, h.urlFor(key));
+			assert.equal(
+				second.status,
+				"downloaded",
+				`★★★ 同一个 key 下一次**必须还能重试**（\`inflight\` 槽没被清掉的话这里会拿到同一条失败的 promise）：${JSON.stringify(second)}`
+			);
+			assert.equal(attempts, 2, "第二次要真的再发一次请求（复用旧 Promise 就不会增加）");
+			assert.deepEqual(
+				new Uint8Array(await readFile(join(h.root, second.localPath))),
+				HOSTILE_BYTES,
+				"重试成功之后字节仍要逐字节一致"
 			);
 		} finally {
 			await h.close();

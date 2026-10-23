@@ -175,7 +175,7 @@ await runMutations({
 			name: "★ 新命令没注册（功能写了但用户找不到）",
 			from: '\t\t\tid: "check-orphans",',
 			to: '\t\t\tid: "check-orphans-disabled",',
-			expect: "★ 四条维护命令都要注册",
+			expect: "★ 三条维护命令都要注册",
 		},
 		{
 			// 后果：淘汰那条链拿不到"笔记直接指着哪些库内文件" ⇒ 一份**笔记正在显示**的副本
@@ -189,12 +189,16 @@ await runMutations({
 			name: "★★ 淘汰那条链不扫「笔记直接指着的库内路径」（删掉笔记正在显示的文件）",
 			// ⚠️ 锚点必须带上下文：`referencedPaths: () => referencedVaultPaths(this.app),`
 			// 这个文件里有**两处**（维护依赖 / 轮换），只写它自己会打到第一处（静默改错地方）。
+			// ⚠️ 2026-10-22（D-67）：调用被拆成两行（多传了 `debug`）⇒ 锚点跟着走。
+			// 这条锚点**必须**带注释那一行：`referencedPaths: () =>` 在文件里有两处。
 			from:
 				'\t\t\t// ⭐ "还有人用吗"的另一半（笔记直接指着的库内路径）—— 与上面那半合起来才算完整\n' +
-				"\t\t\treferencedPaths: () => referencedVaultPaths(this.app),",
+				"\t\t\treferencedPaths: () =>\n" +
+				"\t\t\t\treferencedVaultPaths(this.app, { debug: this.settings.debugLogging }),",
 			to:
 				"\t\t\t// 变异：这一半不扫了\n" +
-				"\t\t\treferencedPaths: () => Promise.resolve(new Set()),",
+				"\t\t\treferencedPaths: () =>\n" +
+				"\t\t\t\tPromise.resolve(new Set()),",
 			expect: "不许淘汰",
 		},
 		{

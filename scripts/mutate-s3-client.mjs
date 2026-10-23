@@ -259,5 +259,13 @@ await runMutations({
 			to: "if (false) {",
 			expect: "服务端少存了字节 ⇒ 必须报错（不许静默成功）",
 		},
+		{
+			// 后果：**超时被包成普通 `network`** ⇒ `retryable` 又变回 true、`code` 丢失，
+			// 于是「卡住」与「拒绝连接」在日志里再也分不出来。
+			name: "★★ 超时被兜成普通网络错误（分不出「卡住」与「拒绝连接」）",
+			from: "\t\t\tif (error instanceof TransportTimeout) {",
+			to: "\t\t\tif (false) {",
+			expect: "卡住必须是超时",
+		},
 	],
 });

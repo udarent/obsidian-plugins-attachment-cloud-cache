@@ -479,6 +479,25 @@ export class ButtonComponent {
 
 /** 宿主语言。默认英文；测试可调 `setLanguage` 验证中英切换。 */
 let hostLanguage = "en";
+/**
+ * 宿主的 `setIcon(el, name, size?)`：把 lucide 图标画进元素。
+ *
+ * ## ⚠️ 替身只**记账**，不造 SVG
+ *
+ * 真机上的样子由宿主负责；而调用它的那一层（`ui/task-list-modal.ts`）本来就不进单测
+ * （宿主的 `Modal` 没有可编程 DOM —— 见那个文件的文件头）。所以这里能回答的只有一件事：
+ * **调用发生了、图标名对不对**（`setIconCalls`）。
+ *
+ * ⚠️ 缺了它，`import { setIcon } from "obsidian"` 会在**加载期**就报
+ * `does not provide an export named 'setIcon'` —— 整条链路连基线都跑不起来
+ * （2026-10-22 加图标时踩到：验收与变异全红，报错却完全看不出与图标有关）。
+ */
+export const setIconCalls = [];
+export function setIcon(el, name, size) {
+	setIconCalls.push({ el, name, size });
+	return el;
+}
+
 export function getLanguage() {
 	return hostLanguage;
 }

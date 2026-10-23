@@ -9,7 +9,6 @@ import { runMaintenanceSuite } from "./lib/maintenance-suite.mjs";
  */
 await withLoadedTs(
 	[
-		"src/maintenance/audit",
 		"src/maintenance/references",
 		"src/maintenance/batch",
 		"src/cache/index",
@@ -20,16 +19,19 @@ await withLoadedTs(
 	async (mod) => {
 		await runMaintenanceSuite(mod);
 		console.log(
-			"Maintenance planners passed (audit classes derived from the index alone — a file the index never " +
-				"recorded is ignored by every class and never counted, byte totals come from the disk rather than from " +
-				"the index, and an unreferenced copy is only reported when references were actually scanned; " +
-				"rewrites preserve aliases and never touch unrelated links, and an extension-less link still matches " +
-				"an extensioned rule; canvas rewriting touches only the two value kinds it owns (file nodes move to " +
+			"Maintenance planners passed (rewrites preserve aliases and never touch unrelated links, and an " +
+				"extensioned rule; a target containing balanced parentheses (`…(1).pdf`) is taken whole, in angle " +
+				"form and in link labels too, while an unbalanced one in the title falls back to the first `)`; " +
+				"canvas rewriting touches only the two value kinds it owns (file nodes move to " +
 				"the new in-vault path, text nodes get the same remote URLs as notes would), leaves indentation and " +
 				"key order byte-identical, counts what it had to skip, and refuses to guess on ambiguous short names; " +
-				"reference scan only counts our own storage; " +
-				"batch candidates skip note/canvas/database files, empty and already-indexed files and every file no " +
-				"note refers to (canvas references count the same as Markdown ones); off-site candidates cover " +
+				"reference scan only counts our own storage, and an address sitting in a position Obsidian never renders "
+			+ "(a code block, inline code, an HTML comment, math, `<code>`, or an escaped link) is not a reference at all, "
+			+ "while the same address in ordinary prose still is; " +
+				"batch candidates skip note/canvas/database files and empty or already-indexed ones, and they now " +
+				"**include** files no note refers to - flagged separately so the list leaves them unchecked and the " +
+				"executor never writes a rewrite rule for them (canvas references count the same as Markdown ones); " +
+				"off-site candidates cover " +
 				"embeds, plain links, img and anchor tags alike (a wiki page with no file-ish tail, a page " +
 				"whose extension says text/html or names a server-side page program such as .jsp/.php/.do, and " +
 				"an address whose suffix does not look like a file type at all — a repo branch or release " +
@@ -39,7 +41,8 @@ await withLoadedTs(
 				"by content type), they " +
 				"include the ones the default setting leaves alone — otherwise turning that default off would leave " +
 				"these explicit actions with an empty list — and they are never produced when the feature is off, the " +
-				"host is loopback, or the storage is not ready)."
+				"host is loopback, or the storage is not ready; and narrowing them to one note keeps the site summary " +
+				"honest, because the count is recomputed over that same slice rather than left at the vault-wide figure)."
 		);
 	}
 );

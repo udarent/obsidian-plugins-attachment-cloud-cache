@@ -15,13 +15,15 @@ console.log(
 		"a real paste went through: 1 PUT + cached copy byte-identical + link inserted, a second identical paste " +
 		"issued 0 PUT, and a clipboard that hands the same image over twice (once in `files`, once in `items`) still " +
 		"leaves exactly one link — one paste must not show the same picture twice; rendering rewrote the src to the local copy with **zero** requests in both reading view and " +
-		"live preview, while a third-party image was left alone; the usage report counts local copies" +
-		"by the index alone — a file it never recorded (possibly the user's own attachment) changes none of" +
-		"its numbers and is never touched, an unreferenced copy and a stale record each move exactly one" +
-		"number, and the report itself deletes nothing; " +
+		"live preview, while a third-party image was left alone; a stale index record (a path that is no longer on " +
+		"disk) is only dropped after two rounds of the background check, so a file that is merely still in transit " +
+		"is never mistaken for a missing one; " +
 		"cancelling touched nothing; batch upload rewrote both link forms, left the user's file exactly where it " +
-		"was (no cache folder is ever created — that file *is* the local copy) and left both the attachment no note " +
-		"refers to and any stray copy alone; " +
+		"was (no cache folder is ever created — that file *is* the local copy), and the attachment no note refers to " +
+		"is now *listed* with an inline tag but left unticked, so a plain confirm never uploads it, while any stray " +
+		"copy is left alone too; a file that was already uploaded but whose note still points " +
+		"at the local path (a name with spaces and a `(1)`) comes back as a repair: the link is rewritten, not one " +
+		"byte is uploaded again, and the dialog says so; " +
 		"an unconfigured paste is left to Obsidian; batch upload also picks up the images notes " +
 		"link to elsewhere, and its dialog names the sites it will visit (that confirmation is the authorisation) " +
 		"while cancelling downloads nothing; with the feature on such an image is downloaded, uploaded and its link " +
@@ -42,8 +44,9 @@ console.log(
 		"running it again deletes nothing and says so, including why; a note's off-site addresses are only " +
 		"offered when they really are files — a wiki page with no file-ish tail, a player.html page and a " +
 		"server-rendered pd.jsp are never even requested, while a real .pdf/.zip download link still is — and the " +
-		"local files a note points at outside the vault are listed only while they are actually still on disk " +
-		"(one that is gone is reported instead of offered, and never requested); and a command that throws " +
+		"local files a note points at outside the vault are listed while they are still on disk and tickable, " +
+		"while one that is gone is still listed - greyed out, with an \"Open note\" link to the note where that " +
+		"link lives - so it is never offered for upload yet is not a dead end either; and a command that throws " +
 		"half-way still tells the user what went wrong — an async command failure must never be silence, " +
 		"which is exactly what \"the command did nothing when I clicked it\" looked like))."
 );

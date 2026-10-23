@@ -48,6 +48,8 @@
 
 // 宿主启动 / 调试端口 / 挑主窗 / 等就绪 / vault 回读 —— 与真实存储回环脚本共用同一份。
 // 那些坑（GPU 崩溃、连错窗口、静默退回别的 vault）只写一遍，避免两边逐渐分叉。
+import { readFileSync } from "node:fs";
+
 import { evaluate, launchAndAttach } from "./lib/obsidian-host.mjs";
 
 const PORT = Number(
@@ -149,7 +151,7 @@ async function main() {
 		// 现在把期望值写进提示里，并且这个条件会出现在末尾的逐项清单中。
 		//
 		// ⭐ 2026-10-17 改成**精确集合**而不是"≥ 5"：
-		// ① 1.4.0 起命令面板**有意收敛到四条**（D-3x），"≥5"这条阈值从那天起就永远红；
+		// ① 命令面板**有意收敛**（D-3x 起就不再是"多就好"），"≥5"这条阈值从那天起就永远红；
 		// ② 阈值判不出方向：少一条（旧构建）与多一条（别人往这个 id 下挂了命令）都该报，
 		//    而"数量对了但换了一条"更该报 —— 那是接线被改过的直接证据。
 		// ③ 这正好对上本项目那条纪律：**能用"效果"判的别用阈值判**。
@@ -157,11 +159,12 @@ async function main() {
 			client,
 			`Object.keys(app.commands.commands).filter((id) => id.startsWith(${JSON.stringify(`${PLUGIN_ID}:`)}))`
 		);
+		// ⚠️ 2026-10-22（D-75）：这张表前一阵子**没跟上**命令面板（还挂着 D-68 已并掉的
+		// `pick-external-images`）—— 也就是说它那时跑起来必定假红；现在是两条。
+		// ⭐ 增删命令时**两处都要改**：这里 + 验收里那个精确集合断言。
 		const EXPECTED_COMMANDS = [
-			`${PLUGIN_ID}:audit-cache`,
 			`${PLUGIN_ID}:check-orphans`,
 			`${PLUGIN_ID}:upload-attachments`,
-			`${PLUGIN_ID}:pick-external-images`,
 		].sort();
 		const actualCommands = [...commands].sort();
 		const commandsOk =
@@ -273,8 +276,46 @@ async function main() {
 		);
 
 		const relevantErrors = client.consoleErrors.filter((line) => /attachment-cloud-cache|cloud-cache/i.test(line));
+
+		/**
+		 * **被 OS / 安全策略挡住的文件**不算本插件的报错。
+		 *
+		 * ⭐ 2026-10-22（D-82）：这台机器的演示库里有一个文件（`pages/资料管理实施方案.md`）
+		 * 被系统的安全策略挡住 —— **任何**进程都读不到（`EPERM`，Node 自己读也一样）。
+		 * 插件碰到它只是记一条日志然后继续（那是设计好的宽松路径），所以这条报错说明的是
+		 * **环境**，不是插件缺陷。
+		 *
+		 * ⚠️ 判据必须能自证：**脚本自己**试着读那个文件，读不到才豁免。
+		 * 只按 `EPERM` 字样豁免会让真正的权限 bug 也混过去。
+		 */
+		const excused = [];
+		const excusedFiles = new Set();
+		const stillErrors = [];
+		for (const line of relevantErrors) {
+			const match = /(?:EPERM|EACCES)[^']*'([^']+)'/.exec(line) ?? /open '([^']+)'/.exec(line);
+			const path = match?.[1];
+			let readable = true;
+			if (path) {
+				try {
+					readFileSync(path);
+				} catch {
+					readable = false;
+				}
+			}
+			if (path && !readable) {
+				excused.push(line);
+				excusedFiles.add(path);
+			} else {
+				stillErrors.push(line);
+			}
+		}
 		log();
 		log(`  控制台里与本插件相关的报错：${relevantErrors.length === 0 ? "无 ✓" : relevantErrors.join(" | ")}`);
+		if (excused.length > 0) {
+			log(`  ⚠️ 其中 ${excused.length} 条已豁免：这些文件**本脚本自己也读不到**（OS / 安全策略挡住）——`);
+			for (const path of excusedFiles) log(`      · ${path}`);
+			log("     插件只是记了一条日志然后继续（宽松路径），所以那是环境问题、不是插件缺陷。");
+		}
 		if (client.consoleErrors.length > 0) {
 			log(`  （控制台共 ${client.consoleErrors.length} 条报错，前 3 条：）`);
 			for (const line of client.consoleErrors.slice(0, 3)) log(`    - ${String(line).slice(0, 160)}`);
@@ -525,7 +566,7 @@ async function main() {
 			["编辑态站外图被交给编排层", liveOk],
 			["改完设置后重看当前打开的笔记", reprocessCount >= 1],
 			["秘密的值不在插件设置里", !credsProbe.hasSecretValue],
-			["控制台无本插件相关报错", relevantErrors.length === 0],
+			["控制台无本插件相关报错（读不到的文件已豁免）", stillErrors.length === 0],
 		];
 		const failed = verdict.filter(([, itemOk]) => !itemOk);
 

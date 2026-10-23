@@ -67,13 +67,15 @@ await runMutations({
 			expect: "手机端拿不到本机绝对路径",
 		},
 		{
-			// ⭐⭐ 后果：**唯一站着的技术边界没了** —— 用户勾中一张截图，插件却肯去读
-			// 同一目录下的任意文件（`.txt` / `.zip` / `id_rsa`），并把它传进用户的存储
-			// （而桶可能是公开读的）。这是本功能最重的一条。
-			name: "★★ 扩展名闸门放宽（勾中一张图 = 勾中任意文件）",
-			from: "\tif (!isEmbeddable(ext)) {",
-			to: "\tif (false) {",
-			expect: "不放行",
+			// ⭐⭐ 后果：**笔记类排除没了** —— 一篇 `.md` / `.canvas` / `.base` 被当成附件读到、
+			// 传进用户的存储，而它正文里的链接随后会被当成"要改写的引用"，宿主却仍按后缀
+			// 把那个对象当笔记（同一个后缀判据，两处必须一致；见 `vault-files.ts` 的说明）。
+			// ⚠️ 2026-10-22（D-60）起本机这条路**与库内同一份**判据：类型不再收窄，
+			// 唯一还站着的扩展名闸门就是这一条 —— 所以它必须被钉住。
+			name: "★★ 笔记类排除失效（把笔记当附件读到并传上去）",
+			from: "\tif (isNoteLikeExtension(ext)) return { action: \"ignore\", reason: NOTE_LIKE_REASON };",
+			to: "\tif (false) return { action: \"ignore\", reason: NOTE_LIKE_REASON };",
+			expect: "笔记类文件不是附件",
 		},
 		{
 			// 后果：先量大小这一步丢了 ⇒ 一份几 GB 的文件被整个读进内存（这个上限要防的正是它）。

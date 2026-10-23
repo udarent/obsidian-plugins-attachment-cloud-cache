@@ -46,7 +46,7 @@ import { decideExternalCache } from "../render/external-decide";
 import { decideLocalFile, localPathFromUrl } from "../local-file";
 import type { LocalFileProbe } from "../local-file";
 import { NOTE_LIKE_REASON, isNoteLikeExtension } from "../vault-files";
-import { EMBED_TAGS, htmlAttributeTargets, linkTargetForms, normalizeLinkTarget } from "./references";
+import { EMBED_TAGS, htmlAttributeTargets, markdownLinks } from "./references";
 
 /** 库内文件的最小形状。 */
 export interface VaultFileLike {
@@ -73,124 +73,60 @@ export interface CandidateOptions {
 	 * **漏判的代价是死链**，必须用宿主自己的解析结果。
 	 */
 	referencedPaths: ReadonlySet<string>;
-}
-
-/**
- * 从宿主的链接索引（`metadataCache.resolvedLinks`）里取出**被笔记引用着**的文件路径集合。
- *
- * ## 形状与来源（真机取证，2026-10-09）
- *
- * 实测（2026-10-09 真机探针）：它是
- * `{ 来源文件路径: { 目标文件路径: 引用次数(number) } }`；**刚起来时是空的**，
- * 约 2 秒内建好（21 个文件 / 5 个来源 / 1 个目标）；⚠️ 而且它**连画布里的引用也算**
- * （写一个指向附件的 `.canvas`，两秒后那条引用出现在索引里）。
- *
- * ## ⚠️ 为什么要按来源筛成「笔记」
- *
- * 这条命令会把**被引用**的文件的链接改写成远端地址，前提是那些引用**改得掉**。
- * 我们的改写器只认 Markdown 笔记里的链接
- * （`planLinkRewrites`）——**画布（`.canvas`）里的引用它不改**。
- * 所以画布引用**必须排除**：否则一个只被画布引用的附件会被搬走，
- * 而画布里的那条引用原地不动 ⇒ **死链**（画布上的图直接没了）。
- * 排除之后那种文件"不被处理"，是这里唯一安全的方向。
- *
- * ⚠️ 认不出的输入（`null`、数组、字段类型不对）一律当成"没有引用" —— 宁可这轮不处理，
- * 也不能把"没查清"当成"没有引用"的反面（那会把文件搬走）。
- */
-export function referencedPathsFrom(resolvedLinks: unknown): Set<string> {
-	const referenced = new Set<string>();
-	if (!resolvedLinks || typeof resolvedLinks !== "object") return referenced;
-
-	// ⚠️ 这一层的入参是**宿主的对象**（形状已知但类型上不可信），所以先收成
-	// `Record<string, unknown>` 再逐层收窄：不收窄的话 `Object.entries` 会给出 `any`，
-	// 而 eslint 的 `no-unsafe-argument` 会因此判红（本项目 lint 是门禁的一部分）。
-	const table = resolvedLinks as Record<string, unknown>;
-	for (const [sourcePath, targets] of Object.entries(table)) {
-		// ⭐ 来源**不筛**：Markdown 笔记与画布同等算数（需求 R16，2026-10-09 拍板）。
-		// 空的来源路径仍然跳过 —— 那不是宿主会给的形状。
-		if (!sourcePath) continue;
-		if (!targets || typeof targets !== "object") continue;
-		for (const targetPath of Object.keys(targets)) {
-			if (targetPath) referenced.add(targetPath);
-		}
-	}
-	return referenced;
-}
-
-/**
- * ⭐ 2026-10-16：判据与它的文案都挪进了 `vault-files.ts`（`isNoteLikeExtension`
- * 与 `NOTE_LIKE_REASON`）—— 因为**站外那一路也要用它**（`decideExternalCache`），
- * 而那个模块不能 import 这里（会成环）。判据仍然只有一份。
- */
-
-/**
- * 把"画布文本里写的链接目标"解析成库里**真实存在**的文件路径。
- *
- * ## 为什么需要它
- *
- * `referencedPathsFrom` 只读宿主的链接索引。而画布 `text` 节点里的 `![[x.png]]`
- * 是**文本内容**，宿主会不会把它算进索引没有保证（取证点 E-1c）——
- * 少了这一路，"只被画布文本引用的附件"会被判成"没人引用"而永远不被处理
- * （与需求 R16 冲突，且不报错）。
- *
- * ## 匹配规则：与改写器**同一套**（含同名歧义的处理）
- *
- * `normalizeLinkTarget` 剥掉任意"像扩展名"的后缀并小写，于是 `photo`、`photo.png`、
- * `attachments/photo.png` 都能对上真实路径。⚠️ **同名歧义时一个都不收**：
- * 两个不同目录下有同名文件时，"这条引用到底指哪个"无法判断，而我们的改写器在
- * 歧义时同样拒绝改写 —— 若这里把两个都算成"被引用"，命令就会**搬走**它们，
- * 而笔记里的链接一处都改不掉 ⇒ 死链。宁可少处理（不搬）。
- */
-export function resolveVaultTargets(
-	targets: readonly string[],
-	vaultPaths: readonly string[]
-): Set<string> {
-	const byPath = new Map<string, string>();
-	const byName = new Map<string, string[]>();
-
-	for (const path of vaultPaths) {
-		if (typeof path !== "string" || path === "") continue;
-		const full = normalizeLinkTarget(path);
-		if (!full) continue;
-		byPath.set(full, path);
-		const name = full.split("/").pop() ?? full;
-		const list = byName.get(name);
-		if (list) list.push(path);
-		else byName.set(name, [path]);
-	}
-
-	const out = new Set<string>();
-	for (const target of targets ?? []) {
-		const forms = linkTargetForms(target);
-		if (forms.length === 0) continue;
-		// ⭐ 与改写器**同一份归一**（含百分号解码那一形）。画布文本节点里写
-		// `![[Pasted%20image%201234.png]]` 完全可能（从别处复制来的），少认一形 =
-		// "只被画布文本引用的附件永远不被处理"（与需求 R16 冲突，且不报错）。
-		let exact: string | undefined;
-		for (const form of forms) {
-			exact = byPath.get(form);
-			if (exact) break;
-		}
-		if (exact) {
-			out.add(exact);
-			continue;
-		}
-		for (const form of forms) {
-			const name = form.split("/").pop() ?? form;
-			const candidates = byName.get(name);
-			// ⚠️ 歧义 ⇒ 不收（与改写器一致，见上面的说明）
-			if (candidates && candidates.length === 1) {
-				out.add(candidates[0]);
-				break;
-			}
-		}
-	}
-	return out;
+	/**
+	 * 要不要把**没有被任何引用的文件**也收进候选（`D-68`）。**默认 `false`**。
+	 *
+	 * ⚠️⚠️ 默认必须是 `false`，不是 `true`：这条路有两个调用方，方向相反 ——
+	 * - **「上传附件」命令**（`plugin/upload-existing-flow.ts`）传 `true`：用户在那里逐项勾选，
+	 *   而"没引用的也传"是他明确要的（D-68）；
+	 * - **自动接管**（`maintenance/attach-watch.ts`）**绝不传**：它处理的是"刚进库、链接还没写进笔记"
+	 *   的文件 —— 那一刻它当然"没有被任何引用"。收进来就会**抢在链接写进去之前上传并搬走**，
+	 *   而随后写进来的那条链接指向的是旧位置 ⇒ **死链**（这条在 `attach-watch` 的套件里钉着）。
+	 * ⇒ 谁要"连没引用的也传"，谁显式开口子；默认按旧行为走。
+	 */
+	includeUnreferenced?: boolean;
+	/**
+	 * 其中「笔记/画布文本里那条链接**还是本地的**」的那些（`referenceSnapshot().rewritable`）。
+	 *
+	 * ## ⭐ 它只有一个用途：让"已经传过的"能被**重修**
+	 *
+	 * ⚠️⚠️ 2026-10-21 用户实测报的：对象早就传上去了，而笔记里那条链接还是本地路径
+	 *（当时是改写没认出来 —— D-56 的括号截断）。他想到的修法就是**再跑一次「上传附件」**，
+	 * 而旧判据按"已经在缓存索引里"把那个文件跳过了 ⇒ **重跑永远修不好它**，
+	 * 用户唯一的出路是手工改笔记。所以这条输入就是为此加的：
+	 * 索引里**有**记录、而正文里**仍**写着本地路径 ⇒ 那不是"处理过了"，是"只做了一半"。
+	 *
+	 * ## 为什么不能直接用 `referencedPaths` 顶上
+	 *
+	 * 那是"有人指着它"，稳态下**永远为真**：画布的 `file` 节点只能指向库内文件
+	 *（宿主限制，永远不会被改成 URL）⇒ 拿它当"待修"，每个摆在画布上的附件每轮都会
+	 * 被列一遍、还要读一遍字节。而这个集合**只收能改写的写法**（笔记正文 + 画布文本节点），
+	 * 见 `notes-query.ts::ReferenceSnapshot.rewritable`。
+	 *
+	 * ⚠️ 必填而不是可选：可选会让"忘了传"变成"永远不修"（静默的方向），
+	 * 而这条判据的缺失症状正是用户已经报过一次的那个。
+	 */
+	repairablePaths: ReadonlySet<string>;
 }
 
 export interface CandidateSelection {
-	/** 要上传的文件路径。 */
+	/**
+	 * 要上传的文件路径（**全部**：被引用的 ＋ 没有被任何引用的）。
+	 *
+	 * ⚠️ 2026-10-22（D-68）：未引用的那些**也在这里** —— 它们同样要传，只是不会被改写
+	 *（没有链接可改）。`unreferencedPaths` 是它们的子集，用来区分"这一份传完就完事了"
+	 * 与"这一份传完还要改笔记"。
+	 */
 	paths: string[];
+	/**
+	 * 其中**没有被任何笔记 / 画布引用**的那些（D-68）。
+	 *
+	 * ⚠️ 单独列出来有三个用途，都不是"可选"的：
+	 * ① 清单里要标出来（默认**不勾**：传上去只是备份，不会出现在任何笔记里）；
+	 * ② 执行层**不许**为它们生成改写规则（会平白扫一遍全库，几百份就是几百遍）；
+	 * ③ 确认框要如实说清"这些没有任何笔记引用"。
+	 */
+	unreferencedPaths: string[];
 	/** 被跳过的原因统计（让用户看得见"为什么只传了 N 个"）。 */
 	skipped: { reason: string; count: number }[];
 	/**
@@ -201,13 +137,23 @@ export interface CandidateSelection {
 	 * 往往是"把没搬的全搬"，而它只动被引用着的那些）。
 	 */
 	unreferenced: number;
+	/**
+	 * 其中「**早就传过、只是笔记里那条链接还是本地的**」那些（D-57 的重修）。
+	 *
+	 * ⚠️ 2026-10-22（D-71）：从"只有个数"改成**路径集合** —— 这条信息从摘要**下沉到了行内**
+	 * （用户反馈"上部文案太长，信息改到列表上面/里面去"）：那几行的勾选框旁边要标「只改链接」，
+	 * 用户才不会以为命令在重传一遍。
+	 * ⚠️ 不给个数：个数就是 `repairPaths.length`，两个字段说同一件事迟早分叉。
+	 */
+	repairPaths: string[];
 }
 
 /** 挑出要批量上传的文件。 */
 export function selectUploadCandidates(files: readonly VaultFileLike[], options: CandidateOptions): CandidateSelection {
 	const paths: string[] = [];
+	const unreferencedPaths: string[] = [];
+	const repairPaths: string[] = [];
 	const reasons = new Map<string, number>();
-	let unreferenced = 0;
 	const bump = (reason: string) => reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
 
 	for (const file of files) {
@@ -222,25 +168,57 @@ export function selectUploadCandidates(files: readonly VaultFileLike[], options:
 			continue;
 		}
 
-		// ⭐ 只处理**被笔记引用着**的文件：命令成功后会改写指向它的那些链接，
-		// 而没有引用的文件传上去只是白占空间、还会让人以为丢东西（见 `referencedPaths`）。
-		if (!options.referencedPaths.has(file.path)) {
-			bump("没有被任何笔记引用");
-			unreferenced += 1;
+		// 索引里已经有指向这个路径的副本 ⇒ 它已经被处理过了。
+		//
+		// ⚠️⚠️ **除非**笔记里那条链接还是本地的（`repairablePaths`）：那说明上一次只做了一半
+		//（字节传上去了、链接没改 —— 2026-10-21 的 D-56 就是这么暴露的），
+		// 或者用户是先传后补的链接。这时必须让它重新进候选，否则「再跑一次」永远修不好它
+		// —— 而用户能想到的修法恰恰就是"重新上传附件"。
+		// ⚠️ 代价可控：只有"索引里有、正文里仍写着本地路径"的那些会再读一遍字节；
+		// 稳态下（链接都改过了）这个集合是空的。
+		//
+		// ⚠️⚠️ **这一步必须排在"有没有被引用"之前**（2026-10-22 审计修的）。
+		// 原来它在后面，于是**已经迁移好的**文件会先撞上"没有被任何笔记引用"：
+		// 那份文件的正文引用早就被改写成**远端 URL** 了，而 `referencedPaths` 只装
+		// **本地路径** ⇒ 它必然不在里面 ⇒ 用户看到「另有 N 个文件没有被任何笔记引用」，
+		// 而**同一批文件在「查看缓存占用」里是"在用"、在「检查未引用的云端附件」里也不问**
+		// —— 三条命令对同一件事说了三种话（探针实测 2 个文件就这么被说反了）。
+		// ⇒ 顺序换成"先问处理过没有，再问有没有引用"：前者的答案在任何阶段都成立，
+		// 后者只在"还没处理过"的文件上才有意义。
+		if (options.index.findByCachePath(file.path)) {
+			if (!options.repairablePaths.has(file.path)) {
+				bump("已经在缓存索引里");
+				continue;
+			}
+			paths.push(file.path);
+			repairPaths.push(file.path);
 			continue;
 		}
 
 		// 尺寸为 0：多半是同步中的占位文件。传上去会得到一个坏对象，
 		// 而"跳过它、等下次"没有任何损失。
+		// ⚠️ 这一关对**两类都**适用（被引用 / 没有被引用），所以放在引用判定**之前**。
 		if (typeof file.stat?.size === "number" && file.stat.size <= 0) {
 			bump("文件为空（可能是同步中的占位）");
 			continue;
 		}
 
-		// 索引里已经有指向这个路径的副本 ⇒ 它已经被处理过了。
-		if (options.index.findByCachePath(file.path)) {
-			bump("已经在缓存索引里");
-			continue;
+		// ⭐⭐ 2026-10-22（D-68，用户明确要求）：**没有被任何引用的附件也要处理**。
+		//
+		// 原来的口径是"只动被引用的那些"（理由：命令会改写链接，没引用的传上去只是白占空间）。
+		// 用户推翻了它 —— 他要的是"一条命令把库里该传的都传了"，包括那些暂时没人引用、但
+		// 他想一起备份上去的。⇒ 进候选，但**单独标出来**：
+		// - 清单里默认**不勾**（传上去不会出现在任何笔记里，得他自己决定）；
+		// - 执行层不为它们生成改写规则（没有链接可改，生成规则只会平白扫全库）。
+		// ⚠️ 这里的"引用"是**本地路径**那一半（远端 URL 引用意味着"已经处理过"，上面那一关就退出了）。
+		if (!options.referencedPaths.has(file.path)) {
+			// ⚠️ 默认**不收**（见 `includeUnreferenced` 的说明）：自动接管那条路处理的是
+			// "链接还没写进笔记"的文件，收它就会抢在链接之前搬走、留下死链。
+			if (options.includeUnreferenced !== true) {
+				bump("没有被任何笔记引用");
+				continue;
+			}
+			unreferencedPaths.push(file.path);
 		}
 
 		paths.push(file.path);
@@ -248,8 +226,10 @@ export function selectUploadCandidates(files: readonly VaultFileLike[], options:
 
 	return {
 		paths,
+		unreferencedPaths,
 		skipped: [...reasons].map(([reason, count]) => ({ reason, count })),
-		unreferenced,
+		unreferenced: unreferencedPaths.length,
+		repairPaths,
 	};
 }
 
@@ -297,6 +277,15 @@ export interface ExternalCandidateOptions {
 	 * 不 import 宿主、不看 `Platform`，于是"谁去问平台"全库只有一处。详见 `local-file.ts` 模块头。
 	 */
 	isDesktop: boolean;
+	/**
+	 * 只看**这些笔记**（范围过滤，2026-10-22）。缺省 = 全部笔记。
+	 *
+	 * ⚠️ 用途只有一个：「上传附件」的清单可以勾选「只看当前笔记」。
+	 * 过滤放在**这一层**而不是调用方去筛结果 —— 站点汇总（`sites`）与跳过统计都按
+	 * 同一批笔记重算，于是"另有 N 个文件托管在站外，来自 M 个站点"不会与清单对不上。
+	 * 调用方自己筛一遍的结果里，`sites` 仍然写着全库的数字（两句话各说各的）。
+	 */
+	notePaths?: ReadonlySet<string>;
 }
 
 export interface ExternalSelection {
@@ -421,14 +410,22 @@ export function externalUrlEntriesIn(text: string): ExternalUrlEntry[] {
 		if (seen === undefined || (embedded && !seen)) bucket.set(raw, embedded);
 	};
 
-	// Markdown：嵌入与普通链接都收 —— **不需要**写 `!?`：`![a](url)` 里的 `[a](url)`
-	// 本来就会被 `\[` 命中（锚点在 `[` 上，`!` 不属于匹配的一部分）。
-	// ⚠️ 正因为锚在 `[` 上，"上一格是不是 `!`"就足以判"这是显示还是指向"。
-	for (const match of text.matchAll(/\[[^\]\n]*\]\(\s*(<[^>)\n]*>|[^)\s\n]+)/g)) {
-		const raw = stripAngles(match[1]);
+	// Markdown：嵌入与普通链接都收 —— **不需要**判 `!?` 前缀两次：`markdownLinks`
+	// 已经给出 `embed`（`![a](url)` 与 `[a](url)` 都收）。
+	//
+	// ⚠️⚠️ **位置来自 `references.ts::markdownLinks`，不在这里另写正则**（2026-10-21）：
+	// 各写一份的代价是同一个缺陷修一处、另一处继续截断 —— 用户那条 `… 4年(1).pdf`
+	// 修好之后，站外/本机这一路照样按"第一个 `)`"截成 `… 4年(1`：
+	// `https://…/Foo_(bar).pdf` 会拿半截地址去下载（404 或者下到别的东西），
+	// 而 `file:///D:/tmp/报告(1).pdf` 更糟 —— `localFileExists` 说"不在"，
+	// `dropMissingLocalCandidates` 就把它**静默摘掉**，用户永远等不到这一条被处理。
+	//
+	// 分界**仍然分两路**（这是业务规则，不是位置）：http 地址里不可能有空格 ⇒ 按第一个空白切；
+	// 本机路径常带空格（`D:/My Documents/…`）⇒ 只在标题引号处切。
+	for (const link of markdownLinks(text)) {
+		const raw = httpTargetOf(text.slice(link.start, link.end));
 		if (!isHttpUrl(raw)) continue;
-		const at = match.index ?? 0;
-		add(http, raw, at > 0 && text[at - 1] === "!");
+		add(http, raw, link.embed);
 	}
 	// 行内 HTML：标签属性里的地址 —— ⚠️ 正则与解析层**共用一份**（`references.ts` 的
 	// `HTML_ATTRIBUTE`）：各写一遍迟早分叉成"改写认得、候选不认得"（而且不报错）。
@@ -439,15 +436,14 @@ export function externalUrlEntriesIn(text: string): ExternalUrlEntry[] {
 	}
 
 	// ⭐ 本机文件（`file:///D:/…`）—— 与上面两段**刻意分开**，因为分界规则不同：
-	// 本机路径**常带空格**（`D:/My Documents/…`），而上面那句 `[^)\s\n]+` 会在空格处截断
+	// 本机路径**常带空格**（`D:/My Documents/…`），而 http 那一路按第一个空白切
 	//（截断出来的路径指向**另一样东西** —— 与 D-25「含空格的 Markdown 目标被截断」同一类坑）。
-	// 所以这一路允许空格，只在 `)` 处收尾，并顺手切掉 Markdown 的标题尾巴。
-	for (const match of text.matchAll(/\[[^\]\n]*\]\(\s*(<[^>)\n]*>|[^)\n]*)/g)) {
-		const raw = stripMarkdownTitle(stripAngles(match[1]));
+	// 所以这一路允许空格，只切掉 Markdown 的标题尾巴。位置同样来自 `markdownLinks`。
+	for (const link of markdownLinks(text)) {
+		const raw = localTargetOf(text.slice(link.start, link.end));
 		// 只认 `file:`（http 那一路由上面的规则管，两边的分界规则不同，不能混着用）
 		if (!/^file:/i.test(raw)) continue;
-		const at = match.index ?? 0;
-		add(local, raw, at > 0 && text[at - 1] === "!");
+		add(local, raw, link.embed);
 	}
 	// 行内 HTML 里的本机路径：`<img src="file:///D:/…">`（引号形状本就允许空格，与上面共用一条规则）
 	for (const { value, tag } of htmlAttributeTargets(text)) {
@@ -469,7 +465,7 @@ export function externalFileUrlsIn(text: string): string[] {
 /**
  * 切掉 Markdown 链接的标题尾巴（`path "标题"` / `path '标题'`）。
  *
- * ⚠️ 只给本机路径那一路用：http 那一路的分界规则天然在空格处停下（`[^)\s\n]+`），
+ * ⚠️ 只给本机路径那一路用：http 那一路的分界规则天然在空格处停下（见 `httpTargetOf`），
  * 而本机路径允许带空格 ⇒ 标题就得自己切。
  */
 function stripMarkdownTitle(value: string): string {
@@ -478,9 +474,35 @@ function stripMarkdownTitle(value: string): string {
 	return (at >= 0 ? trimmed.slice(0, at) : trimmed).trim();
 }
 
-function stripAngles(value: string): string {
-	const trimmed = String(value ?? "").trim();
-	return trimmed.startsWith("<") && trimmed.endsWith(">") ? trimmed.slice(1, -1).trim() : trimmed;
+/**
+ * Markdown 目标的**两路切法**（业务规则，位置由 `references.ts::markdownLinks` 给）。
+ *
+ * - {@link httpTargetOf}：http 地址里不可能有空格 ⇒ 到第一个空白为止，
+ *   但**尖括号形式**（`<https://…/c d.png>`）整段算目标 —— 那种写法就是为了装空格；
+ * - {@link localTargetOf}：本机路径允许空格 ⇒ 只切标题（`"…"` / `'…'`）。
+ *
+ * ⚠️ 尖括号都按 `>` 切，**不是** `stripAngles` 那种"两端都得是尖括号"：
+ * 带标题的写法 `<x> "标题"` 里，后者会原样返回（于是 `file:` 前缀判定落在 `<` 上 ⇒ 整条漏掉）。
+ */
+function httpTargetOf(body: string): string {
+	const angle = angleValueOf(body);
+	if (angle !== null) return angle;
+	const trimmed = body.trim();
+	return trimmed.split(/\s/)[0] ?? "";
+}
+
+function localTargetOf(body: string): string {
+	const angle = angleValueOf(body);
+	if (angle !== null) return angle;
+	return stripMarkdownTitle(body);
+}
+
+/** 尖括号形式里的那段（`<…>`）；不是尖括号形式返回 `null`。 */
+function angleValueOf(body: string): string | null {
+	const trimmed = String(body ?? "").trim();
+	if (!trimmed.startsWith("<")) return null;
+	const close = trimmed.indexOf(">");
+	return close > 0 ? trimmed.slice(1, close) : null;
 }
 
 function isHttpUrl(value: string): boolean {
@@ -526,6 +548,10 @@ export function selectExternalUploadCandidates(
 	for (const note of notes ?? []) {
 		const path = typeof note?.path === "string" ? note.path.trim() : "";
 		if (!path) continue;
+		// ⭐ 范围过滤（见 `ExternalCandidateOptions.notePaths`）：只扫点名的那些笔记。
+		// ⚠️ 放在这里而不是循环外先 `filter` 一遍：调用方递进来的就是全库正文（那份要复用），
+		// 这里只跳过不看的，不额外造一份数组。
+		if (options.notePaths && !options.notePaths.has(path)) continue;
 
 		// 同一篇笔记里同一个地址写两遍只产生一个候选 —— 去重**在 `externalUrlEntriesIn` 里**已经做了
 		//（它按地址去重）。这里曾经还有一层"按笔记 + 地址"的去重，**变异验证证明它永远走不到**：

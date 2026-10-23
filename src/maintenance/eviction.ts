@@ -171,7 +171,7 @@ export interface CandidateInput {
 	referencedKeys?: ReadonlySet<string>;
 	/**
 	 * 笔记 / 画布**直接指着**的 vault 路径集合（= `referencedKeys` 的**另一半**，
-	 * 两个问题为什么都要问见 `audit.ts` 的同一段）。
+	 * 两个问题为什么都要问见 `release-space.ts` 的 `referencedPaths`）。
 	 *
 	 * ⛔ **命中的副本不进候选**（不是"排后面"，是"不能删"）：笔记里那条链接指着的是
 	 * **这份文件本身**，删了它没有任何兜底（回退下载只认属于本存储的 URL）⇒ 破图。

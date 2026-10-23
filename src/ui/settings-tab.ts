@@ -643,7 +643,7 @@ export class SettingsTab extends PluginSettingTab {
 				// 这条**已废弃**的语义；R18 之后候选照旧列得出来。少了这一行，"合并成一个开关"
 				// 会把设置页这个入口一起关掉，而命令 `pick-external-images` 还开着 —— 两个入口
 				// 行为不一致，且文案承诺的"始终可用"就成了空话。）
-				render: (setting) => this.renderExternalPicker(setting),
+				render: (setting) => this.renderUploadAll(setting),
 			},
 		];
 	}
@@ -691,6 +691,18 @@ export class SettingsTab extends PluginSettingTab {
 				aliases: ["limit", "quota", "size", "rotate", "上限", "轮换", "容量", "空间"],
 				visible: () => shouldShowCacheLimit(this.plugin.settings.localCopy),
 				control: { type: "text", key: "cacheLimitMb", placeholder: this.t("cacheLimitPlaceholder") },
+			},
+			{
+				// ⭐ 2026-10-22（D-79 / 评审 1-4）：**占用可见性**。
+				// 从前设了上限却看不到当前占用，而 D-75 把那条
+				// 「查看本地副本占用」命令撤了之后，连近似数都没了 ——
+				// 而那些数字本来就在索引里，一眼看得到比什么都省事。
+				// ⚠️ 跟上限一起隐藏（同一个判据）：不会产生副本的档位里谈占用是无效信息。
+				name: this.t("localUsageName"),
+				desc: this.t("localUsageDesc"),
+				aliases: ["usage", "size", "occupied", "space", "占用", "多大", "空间", "容量"],
+				visible: () => shouldShowCacheLimit(this.plugin.settings.localCopy),
+				render: (setting) => this.renderLocalUsage(setting),
 			},
 			{
 				name: this.t("fallbackDownload"),
@@ -743,6 +755,15 @@ export class SettingsTab extends PluginSettingTab {
 						button.setButtonText(this.t("deleteLogButton")).onClick(() => void this.showDeleteLog());
 					});
 				},
+			},
+			{
+				// ⭐ 排障开关放在「清理」组末尾：**结果不对**的用户最先回来看的地方。
+				// ⚠️ 它只写控制台（`debug-log.ts`），所以不需要任何"作用范围"说明 ——
+				// 文案里那句"不改变任何行为"就是它的全部边界。
+				name: this.t("debugLogging"),
+				desc: this.t("debugLoggingDesc"),
+				aliases: ["debug", "log", "console", "troubleshoot", "诊断", "日志", "控制台", "排障"],
+				control: { type: "toggle", key: "debugLogging" },
 			},
 		];
 	}
@@ -815,13 +836,14 @@ export class SettingsTab extends PluginSettingTab {
 	 * ⚠️ 1.2.0 起它**不要求**先打开上面那个开关（候选判定走 `purpose: "manual"`）——
 	 * 关掉自动处理的人，照样能到这里手动挑。
 	 */
-	private renderExternalPicker(setting: Setting): void {
+	private renderUploadAll(setting: Setting): void {
 		setting.addButton((button) =>
 			button
 				.setButtonText(this.t("externalPickButton"))
 				.setCta()
 				.onClick(() => {
-					void this.plugin.cachePickedExternalImages();
+					// ⭐ 与命令面板那条**同一个实现**（D-68）：清单、勾选、执行都只有一份。
+					void this.plugin.runUploadAttachments();
 				})
 		);
 	}
@@ -845,6 +867,22 @@ export class SettingsTab extends PluginSettingTab {
 				void this.plugin.revertLinksToLocal();
 			})
 		);
+	}
+
+	/**
+	 * 「当前占用」那一行（D-79）。
+	 *
+	 * ⚠️ 数字来自**索引**（`localCopyUsage`），不逐个核对磁盘 ——
+	 * 设置页是同步渲染的，几千份副本逐个 `stat` 会让打开设置卡住。
+	 * 所以文案写的是「约」与「来自索引」，而不是把一个估算值当成磁盘事实。
+	 */
+	private renderLocalUsage(setting: Setting): void {
+		const usage = this.plugin.localCopyUsage();
+		const text =
+			usage.count > 0
+				? this.t("localUsageValue", { count: usage.count, mb: (usage.bytes / (1024 * 1024)).toFixed(1) })
+				: this.t("localUsageEmpty");
+		setting.descEl.createDiv({ cls: "acc-local-usage", text });
 	}
 
 	private renderReleaseSpace(setting: Setting): void {

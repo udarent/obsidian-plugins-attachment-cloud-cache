@@ -60,6 +60,22 @@ await runMutations({
 			expect: "未知扩展名应兜底",
 		},
 		{
+			// ⚠️⚠️ 后果：**浏览器会执行那份用户上传的文件**。桶可能是公开读的，
+			// `text/javascript` 会让 `https://桶/xxx.js` 成为一个可执行脚本（同一台域名下）。
+			// 2026-10-22（D-64）补全类型表时定的纪律：源码一律 `text/plain`。
+			name: "★★ 源码被声明成可执行类型（公开桶里的 .js 会被浏览器执行）",
+			from: '\tjs: "text/plain",',
+			to: '\tjs: "text/javascript",',
+			expect: "源码声明成纯文本",
+		},
+		{
+			// 后果：整类真图片点开变成**下载**（与 1.1.0 那次"PDF 变成下载框"同一个病）。
+			name: "★ `.tif` 又掉回兜底（真图片点开变下载）",
+			from: '\ttif: "image/tiff",\n',
+			to: "",
+			expect: "要声明真实类型",
+		},
+		{
 			name: "父目录不再归一化首尾斜杠（尾斜杠会被当成分隔符切出一段残渣）",
 			from: 'const clean = path.replace(/\\\\/g, "/").replace(/^\\/+|\\/+$/g, "");',
 			to: 'const clean = path.replace(/\\\\/g, "/");',

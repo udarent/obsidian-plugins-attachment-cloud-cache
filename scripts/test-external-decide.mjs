@@ -13,6 +13,9 @@ await withLoadedTs(["src/render/external-decide"], (mod) => {
 		"External-decide tests passed (every input lands in the right bucket: our own endpoint and public prefix are not " +
 			"'external', host matching normalises case and keeps the port, loopback is refused even when an allow list names it, " +
 			"LAN hosts still count as cacheable, the site list only constrains the automatic path while the explicit tools " +
-			"(picking / batch) always pass through, and an unconfigured plugin neither acts nor lists anything)."
+			"(picking / batch) always pass through, an unconfigured plugin neither acts nor lists anything, and the " +
+			"shape gates stay a 'does it look like a file' question (installers and disk images are the one exception: " +
+			"a narrow blacklist for program distribution, so a note's 84 MB setup.exe link is never offered, while " +
+			"types we simply do not know — .psd, .dwg, .bin — still are)."
 	);
 });

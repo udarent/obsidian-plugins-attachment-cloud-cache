@@ -11,14 +11,16 @@ import { runMaintenanceSuite } from "./lib/maintenance-suite.mjs";
  * - **选出太少**（同一篇文章里的图被漏掉一半）——
  *   表现为"迁移完了，可有些图还指着原来的地方"。
  *
- * ⚠️ 库内文件那部分的判定由 `mutate-maintenance-audit.mjs` 覆盖（它用同一套套件）。
+ * ⚠️ 库内文件那部分（`selectUploadCandidates` 自己那一半）由本文件覆盖；
+ * 2026-10-22（D-75）之前它挂在 `mutate-maintenance-audit.mjs` 上 —— 那个脚本守的是
+ * `audit.ts`（「查看本地副本占用」命令），命令退役后一起删了，它那条链没有别的入口。
+ *
  * 这里只加**外链**这一类 —— `runMutations` 一个文件只能调一次，
  * 所以新的一类判定就该有新的一份变异文件。
  */
 await runMutations({
 	source: "src/maintenance/batch.ts",
 	entries: [
-		"src/maintenance/audit",
 		"src/maintenance/references",
 		"src/maintenance/batch",
 		"src/cache/index",
@@ -28,6 +30,47 @@ await runMutations({
 	],
 	suite: runMaintenanceSuite,
 	mutations: [
+		{
+			// 后果：站外地址里带成对括号（`…/Foo_(bar).pdf`）时被截成 `…/Foo_(bar` ⇒
+			// 拿半截地址去下载：404，或者下到一个**别的东西**而用户不知道。
+			// 2026-10-21 把位置判据收进 `references.ts::markdownLinks` 之后，这里只留切法 ——
+			// 这条锚点守的就是"别在切法里又把 `)` 当分隔符"。
+			name: "★★ 站外地址按第一个 `)` 切（括号被截断，下载到半截地址或别的东西）",
+			// ⚠️ 只改**切法**里的分隔符（不动尖括号那一支）：否则变异会先撞上
+			// "尖括号包住的地址要认得出来"，报错原因就不再指向这里了（实测踩过）。
+			from: "\treturn trimmed.split(/\\s/)[0] ?? \"\";",
+			to: "\treturn trimmed.split(/[)\\s]/)[0] ?? \"\";",
+			expect: "站外地址里的成对括号不许截断",
+		},
+		{
+			// 后果：本机路径里带成对括号（`file:///D:/tmp/报告(1).pdf`）时被截断 ⇒
+			// `localFileExists` 说"不在" ⇒ `dropMissingLocalCandidates` 把它**静默摘掉**，
+			// 用户永远等不到这一条被处理（同 D-56 的用户可见现象）。
+			name: "★★ 本机路径按第一个 `)` 切（文件被判成「不在了」而静默摘掉）",
+			// ⚠️ 只在本机那条切法里加一个 `)` 分隔符（标题照旧要切）——
+			// 换掉整句的话，变异会先撞上"四条都要收全"里那条带标题的用例，原因就不再指向括号了。
+			from: "\tif (angle !== null) return angle;\n\treturn stripMarkdownTitle(body);",
+			to: '\tif (angle !== null) return angle;\n\treturn stripMarkdownTitle(body.split(")")[0]);',
+			expect: "本机路径里的成对括号不许截断",
+		},
+		{
+			// 后果：**顺序退回**（先问"有没有被引用"、再问"处理过没有"）⇒ 已经迁移好的文件
+			// 正文里只剩远端 URL，于是它撞上「没有被任何笔记引用」—— 而同一批文件在
+			// 「查看缓存占用」里是"在用"、在「检查未引用的云端附件」里也不问 ⇒
+			// 三条命令对同一件事说三种话（2026-10-22 审计在演示库上实测到 2 个）。
+			name: "★★ 先问引用再问已索引（已迁移的文件被说成「没有被任何笔记引用」）",
+			from: "\t\tif (options.index.findByCachePath(file.path)) {",
+			to: "\t\tif (options.referencedPaths.has(file.path) && options.index.findByCachePath(file.path)) {",
+			expect: "已迁移的仍跳过",
+		},
+		{
+			// 后果：已经传过、而正文里那条链接还是本地的文件被当成"处理过了"跳过 ⇒
+			// 「重新上传附件」永远修不好它（用户 2026-10-21 报的正是这个：他以为再传一次就好了）。
+			name: "★★ 已索引的文件一律跳过（「重新上传」再也修不好一条没改掉的链接）",
+			from: "\t\t\tif (!options.repairablePaths.has(file.path)) {",
+			to: "\t\t\tif (true) {",
+			expect: "已传过、但正文里还指着本地文件的必须重新进候选",
+		},
 		{
 			// ⚠️ 2026-10-15（D-32）：行内 HTML 的正则搬成了**共用一份**（`references.ts` 的
 			// `HTML_ATTRIBUTE`）—— 原来这里自己写了一串，于是「改写认得、候选不认得」迟早分叉。
@@ -54,36 +97,25 @@ await runMutations({
 			// 后果：**没有任何笔记引用**的文件也被当成候选 ⇒ 命令会把它们
 			// 上传、移进缓存目录并改名。而它们没有任何链接会把用户引到新位置，
 			// 用户看到的只是"我放在附件目录里的东西被搬走了"。
-			name: "★ 未引用的文件也进候选（把用户放在附件目录里的东西搬走）",
+			// 后果：引用判据失效 ⇒ **没被引用的文件被当成"被引用"**，自动接管那条路会抢在链接写入之前
+			// 搬走它（死链），而用户只是把文件放进了附件目录（D-68 之后这类文件默认不该进候选）。
+			name: "★ 未引用的文件被当成被引用（绕过引用判据）",
 			from: '\t\tif (!options.referencedPaths.has(file.path)) {\n',
 			to: "\t\tif (false) {\n",
-			expect: "只有被笔记引用的才处理",
-		},
-		{
-			// 后果：同名歧义时"两个都算被引用" ⇒ 命令把 a/dup.png 与 b/dup.png 都搬进缓存，
-			// 而改写器在歧义时**拒绝改写**（它分不清 `![[dup.png]]` 指哪个）⇒ 两处链接
-			// 全成死链。宁可少处理。
-			name: "★ 画布引用的同名歧义被当成「都算引用」（搬走却改不掉 ⇒ 死链）",
-			from:
-				"\t\t\tif (candidates && candidates.length === 1) {\n" +
-				"\t\t\t\tout.add(candidates[0]);\n" +
-				"\t\t\t\tbreak;\n" +
-				"\t\t\t}",
-			to: "\t\t\tfor (const hit of candidates ?? []) out.add(hit);",
-			expect: "同名歧义一个都不收",
-		},
-		{
-			// 后果：**画布里的引用被丢掉** ⇒ 只被画布引用的附件永远进不了候选
-			//（用户把图摆在画布里是最常见的用法之一，而需求 R16 明确要求"同等算数"）。
-			// ⚠️ 方向与 1.1.0 之前相反：那时是"画布必须排除"（画布里的引用改不了），
-			// 现在改写器会改画布，所以"漏掉画布"才是缺陷。
-			name: "★ 画布里的引用被丢掉（只被画布引用的附件永远不被处理）",
-			from: "\t\t// \u2b50 来源**不筛**：Markdown 笔记与画布同等算数（需求 R16，2026-10-09 拍板）。\n\t\t// 空的来源路径仍然跳过 —— 那不是宿主会给的形状。\n\t\tif (!sourcePath) continue;",
-			to: "\t\tif (!/\\.md$/i.test(sourcePath)) continue;\n\t\tif (!sourcePath) continue;",
-			expect: "画布里的引用**算数**",
+			expect: "默认**不**收未引用的",
 		},
 
 		// ── ⭐ 本机文件（`file:///D:/…`，2026-10-15 用户要的"与站外同一套"）──
+		{
+			// 后果：**范围过滤失效** ⇒ 勾了「只看当前笔记」，清单里仍然列着全库的地址
+			//（用户以为在处理这一篇，实际把别的笔记指向的附件也勾上一起传了）。
+			// ⚠️ 这一条守的是"过滤真的发生在判定层"：如果只在调用方筛结果，
+			// 站点汇总（`sites`）与跳过统计仍是全库的数字 —— 摘要会说谎。
+			name: "★★ 范围过滤失效（「只看当前笔记」时仍列出全库的地址）",
+			from: "\t\tif (options.notePaths && !options.notePaths.has(path)) continue;",
+			to: "\t\tif (false) continue;",
+			expect: "只看当前笔记时，只列这一篇里的地址",
+		},
 		{
 			// 后果：**手机端也去列本机文件** —— 那些路径在移动端不存在，用户勾了也读不到，
 			// 只会换来一串"文件不在了"。平台判据的意义就是让它们**根本不出现**。
@@ -96,8 +128,8 @@ await runMutations({
 			// 后果：Markdown 的标题尾巴没切掉 ⇒ 候选里出现 `file:///D:/a/图.png "标题"`，
 			// 而按它去读磁盘**一定读不到**（那是另一串字符）。
 			name: "★ Markdown 标题尾巴没切（带标题的那条一定读不到）",
-			from: "\t\tconst raw = stripMarkdownTitle(stripAngles(match[1]));",
-			to: "\t\tconst raw = stripAngles(match[1]);",
+			from: "\treturn stripMarkdownTitle(body);",
+			to: "\treturn body;",
 			expect: "四条都要收全",
 		},
 		{
@@ -127,16 +159,6 @@ await runMutations({
 			expect: "本机文件要标出来",
 		},
 		{
-			// 后果：画布文本节点里的**编码写法**解析不到真实文件 ⇒ "只被画布文本引用的附件"
-			// 永远不被处理（与需求 R16 冲突），而且不报错。
-			// ⚠️ 与改写器共用同一份归一（`linkTargetForms`）：两边各写一遍的话，
-			// 就是"正文里认得出、画布里认不出"（或反过来）那类静默分叉。
-			name: "★ 画布文本里的编码写法解析不到文件（只被画布引用的附件永远不被处理）",
-			from: "\t\tconst forms = linkTargetForms(target);",
-			to: "\t\tconst forms = linkTargetForms(target).slice(0, 1);",
-			expect: "画布文本里的编码写法也要解析到真实文件",
-		},
-		{
 			// ⚠️ 2026-10-16：判据本身住在 `vault-files.ts`（站外那一路也要用它），
 			// 所以这里锚的是**调用**（与 `mutate-vault-files` 那条一起才覆盖完整通路）。
 			// 后果：**笔记被当附件上传** —— 它正文里的链接会被改写成远端地址，
@@ -162,7 +184,7 @@ await runMutations({
 			// ⚠️ 这一条锚在**采集层**（`!` 前缀那一格）：判据住在判定层，
 			// 而"这条地址是不是被显示"这个**输入**是从这里喂过去的 —— 喂错了，判据再对也没用。
 			name: "★★ 采集层不看「是显示还是指向」（普通链接绕开形状判据）",
-			from: '\t\tadd(http, raw, at > 0 && text[at - 1] === "!");\n',
+			from: "\t\tadd(http, raw, link.embed);\n",
 			to: "\t\tadd(http, raw, true);\n",
 			expect: "都不算候选",
 		},

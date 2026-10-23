@@ -93,6 +93,18 @@ await runMutations({
 			expect: "外链图被下载、上传，笔记里的链接被改写",
 		},
 
+		{
+			// 后果：确认框把「没有被任何笔记引用的附件」列了出来（D-68），而执行层**重新算候选**
+			// 时不带这个口子 ⇒ 它们被"没有被任何笔记引用"跳过：用户勾了、点了确认，
+			// 那一行**永远停在等待**，既不是失败也不是跳过（`onItem` 只对真正处理到的上报）。
+			// ⚠️ 窗口在**验收 §8j**：纯判定层的 `includeUnreferenced` 早就钉过了，
+			// 漏的正是"确认框那半与执行层那半是不是同一个口径"。
+			name: "★★ 执行层不收未引用的候选（勾了它、确认了，那一行永远停在等待）",
+			from: "\t\tincludeUnreferenced: options.includeUnreferenced === true,",
+			to: "\t\tincludeUnreferenced: false,",
+			expect: "勾上「没有被任何笔记引用」的附件之后必须**真的**上传",
+		},
+
 		// ── ⭐ 收尾删"宿主撞名另落的重复副本"（D-24 ④，2026-10-14 用户要求）──
 		{
 			// 后果：这一步整个不跑 ⇒ 同一张图插第二次之后，本地永远留两份
@@ -140,8 +152,9 @@ await runMutations({
 			// ⇒ 宿主撞名另落的重复副本会把序号留在链接文字里（`![dup 1.png](…/dup-<哈希>.png)`），
 			// 而地址里是主干名字。用户 2026-10-14 报的第五件事：同一个链接两个名字。
 			name: "★ 改写规则不带显示名（链接文字里留着宿主的「 1」）",
-			from: "\t\trules.push({ from: path, to: ingestResult.remoteUrl, display: ingestResult.displayName });",
-			to: "\t\trules.push({ from: path, to: ingestResult.remoteUrl });",
+			// ⚠️ 2026-10-22（D-68）：这一行前面多了 `if (rewritable)`（未引用的不生成规则）⇒ 锚点带上它。
+			from: "\t\tif (rewritable) rules.push({ from: path, to: ingestResult.remoteUrl, display: ingestResult.displayName });",
+			to: "\t\tif (rewritable) rules.push({ from: path, to: ingestResult.remoteUrl });",
 			expect: "★ 显示名必须用主干名字（宿主的「 1」不许出现在链接文字里）",
 		},
 		// ⚠️ 这里原本还有一条**完全重复**的锚点（"后台淘汰绕过删除原语"），锚的是同一行 ——

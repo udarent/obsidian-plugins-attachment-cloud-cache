@@ -53,6 +53,14 @@ export interface S3ErrorInit {
 	secrets?: string[];
 	/** 原始响应体，仅供排查（已脱敏）。 */
 	body?: string;
+	/**
+	 * 覆盖"该不该重试"的默认判定（不传就按 `isRetryable` 推）。
+	 *
+	 * ⭐ 2026-10-22（D-78）：只有**超时**用它，而且只能往「不重试」那一侧覆盖。
+	 * 理由：`network` 一律可重试是对的（连接被重置往往是瞬时的），但**超时不是** ——
+	 * 60 秒都拿不下来的请求，再来两次只会让用户多等 2 分钟，而结论一样。
+	 */
+	retryable?: boolean;
 }
 
 export class S3Error extends Error {
@@ -88,7 +96,7 @@ export class S3Error extends Error {
 		this.status = init.status;
 		this.code = init.code;
 		this.requestId = init.requestId;
-		this.retryable = isRetryable(init.kind, init.status, init.code);
+		this.retryable = init.retryable ?? isRetryable(init.kind, init.status, init.code);
 		this.operation = init.operation;
 		this.key = init.key;
 		this.attempts = init.attempts;
@@ -298,6 +306,44 @@ export function networkError(init: {
 		key: init.key,
 		attempts: init.attempts,
 		secrets: init.secrets,
+	});
+}
+
+/**
+ * 一次请求**等到超时**都没拿到响应（D-78）。
+ *
+ * ## 为什么它必须与普通网络错误分开
+ *
+ * 1. **不可重试**：`network` 默认可重试（连接被重置常常是瞬时的），但超时不是 ——
+ *    60 秒都没响应，再等两轮只是让用户多等 2 分钟，而结论一样。
+ * 2. **文案要说清「等了多久」**：用户看到「连接失败」会去查配置，看到「超过 60 秒」
+ *    才知道该怀疑网络 / 代理 / 服务端卡住。
+ * 3. **可被断言**：`code === "Timeout"` 是测试与日志里唯一能分辨"卡住"与"拒绝连接"的线索。
+ *
+ * ⚠️ 它**不是**"请求被取消了"：`requestUrl` 没有中断能力（见 `client.ts` 的
+ * `raceWithTimeout`），这里只是**不再等**。底层请求会在宿主网络栈里自己收尾，
+ * 我们丢掉它的结果 —— 所以调用方看到的是"这次没拿到"，而不是"服务端没处理"。
+ */
+export function timeoutError(init: {
+	operation: string;
+	key: string;
+	timeoutMs: number;
+	attempts: number;
+	secrets?: string[];
+}): S3Error {
+	const seconds = Math.round(init.timeoutMs / 100) / 10;
+	return new S3Error({
+		kind: "network",
+		status: 0,
+		code: "Timeout",
+		message: `超过 ${seconds} 秒没有响应（已放弃等待）`,
+		requestId: "",
+		operation: init.operation,
+		key: init.key,
+		attempts: init.attempts,
+		secrets: init.secrets,
+		// ⭐ 承重：见上面第 1 条。少了它，一次超时会变成 3 × 60 秒。
+		retryable: false,
 	});
 }
 

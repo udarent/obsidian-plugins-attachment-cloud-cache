@@ -13,7 +13,7 @@
  *    详见 `runEviction` 的说明。
  * 2. **改笔记前先把原文取到手。** `vault.modify` 是**整文件覆盖**：若写入的是空串
  *    （例如读取失败却继续往下走），用户的笔记就没了。所以读失败一律跳过该文件。
- * 3. **判定与执行分开。** "该动哪些"由纯函数决定（`audit.ts` / `eviction.ts`），
+ * 3. **判定与执行分开。** "该动哪些"由纯函数决定（`eviction.ts` / `release-space.ts` / `batch.ts`），
  *    这一层只负责"照着清单做"，并把每一步的失败如实记进结果。
  */
 
@@ -24,12 +24,22 @@ import type { CacheIndex } from "../cache/index";
 import type { ExternalCandidate, NoteTextLike } from "./batch";
 import type { LocalFileProbe } from "../local-file";
 import type { PluginSettings } from "../types";
-import { auditCache } from "./audit";
-import type { CacheAudit, DiskFile } from "./audit";
+/**
+ * 磁盘上的一份副本（只由调用方按**索引里的路径**查出来，绝不来自扫目录）。
+ *
+ * ⚠️ 从 `audit.ts` 搬来这里（2026-10-22 / D-75：「查看本地副本占用」命令退役，
+ * 那个模块随它一起删掉）—— 现在只有 `readCopies` 用它。
+ */
+export interface DiskFile {
+	/** vault 相对路径。 */
+	path: string;
+	/** 字节数（磁盘上的真实值）。 */
+	bytes: number;
+}
 import { removeCacheFile } from "./remove";
 import type { EvictionOutcome, EvictionPlan } from "./eviction";
 import type { ReleaseSpaceSelection } from "./release-space";
-import { canvasStillMentionsPath, keysInText, stillMentionsPath, planCanvasRewrites, planLinkRewrites } from "./references";
+import { canvasStillMentionsPath, keysInCanvasText, keysInText, stillMentionsPath, planCanvasRewrites, planLinkRewrites } from "./references";
 import type { RewriteRule } from "./references";
 import { selectUploadCandidates } from "./batch";
 import type { ExternalSelection, VaultFileLike } from "./batch";
@@ -69,7 +79,7 @@ export interface MaintenanceDeps {
 	 * ⭐⭐ 笔记 / 画布的链接**直接指着的** vault 路径集合（= `referencedVaultPaths` 那一份）。
 	 *
 	 * ⚠️ 它与 `scanReferencedKeys` 合起来才回答得了"这份副本还有人在用吗"，而两个问题的
-	 * 后果相反（见 `audit.ts` 的 `referencedPaths`）：那一半问"笔记还写着**云端地址**吗"，
+	 * 后果相反（见 `release-space.ts` 的 `referencedPaths`）：那一半问"笔记还写着**云端地址**吗"，
 	 * 这一半问"笔记**直接指着这份文件**吗"。
 	 *
 	 * ⚠️ **必填**（编译期保证）：缺了它，一份笔记正在显示的图会被报成"没有任何笔记引用"，
@@ -97,7 +107,7 @@ export interface MaintenanceDeps {
  *
  * ⚠️ 输入是**索引里记过的路径**，不是"某个目录下的所有文件"。
  * 1.2.0（D-17）之前这里列的是缓存目录，那个做法随那条目录一起没了：
- * 现在**索引外的文件可能是用户自己的附件**，扫出来也绝不能动（见 `audit.ts` 文件头）。
+ * 现在**索引外的文件可能是用户自己的附件**，扫出来也绝不能动。
  * B3 的迁移命令要枚举**老缓存目录**，那份枚举由它自己实现 ——
  * 别把"扫目录"重新接回这里，否则"删索引外的文件"会跟着回来。
  *
@@ -131,7 +141,6 @@ export async function scanReferences(
 	app: App,
 	keyFromUrl: (url: string) => string | null
 ): Promise<{ keys: Set<string>; byPath: Map<string, string> }> {
-	const keys = new Set<string>();
 	const byPath = new Map<string, string>();
 
 	for (const file of app.vault.getMarkdownFiles()) {
@@ -142,44 +151,46 @@ export async function scanReferences(
 			continue; // 读不了就跳过：这条命令不该因为一个坏文件整体失败
 		}
 		byPath.set(file.path, text);
-		for (const key of keysInText(text, keyFromUrl)) keys.add(key);
 	}
+
+	// ⭐ 2026-10-22（D-81）：“算”那一半抽成 `keysInTextsAndCanvases` —— 
+	// 清理命令那条链已经**为了别的事读过一遍正文**，再调本函数就是读第二遍
+	//（几千篇笔记的库上是秒级 × 2）。拆开之后“什么算引用”仍然只有一份实现。
+	const keys = await keysInTextsAndCanvases(app, byPath.values(), keyFromUrl);
 	return { keys, byPath };
 }
 
-export interface LocalCopyInspection {
-	audit: CacheAudit;
-}
-
 /**
- * 看一遍本地副本现在的状况（只读，不动任何东西）。
+ * 「这些正文里出现了哪些对象 key」—— `scanReferences` 的**算**那一半（D-81）。
  *
- * 它是「查看缓存占用」那条命令的全部数据来源，也是判定层与磁盘之间**唯一**的接缝：
- * 这里把"索引里的路径"变成"磁盘上的实际样子"，交给纯函数 `auditCache` 去分类。
- *
- * ⚠️ 只查**索引里出现过的**路径（每条一次 `stat`）：不再扫目录，也就不会再有
- * "索引外的文件"进到判定里 —— 那是不可逆错误唯一的入口。
+ * ⚠️ **画布由本函数自己读**（而不是让调用方传）：画布文件的数量与笔记不在同一个量级（常常一个都没有），
+ * 而“谁去读画布”只能有一处 —— 两处各读一遍就会出现“一边算了画布、一边没算”。
  */
-export async function inspectLocalCopies(
-	deps: MaintenanceDeps,
+export async function keysInTextsAndCanvases(
+	app: App,
+	texts: Iterable<string>,
 	keyFromUrl: (url: string) => string | null
-): Promise<LocalCopyInspection> {
-	const entries = deps.index().toArray();
-	const copies = await readCopies(
-		deps.app,
-		entries.map((entry) => entry.cachePath)
-	);
-	const { keys, byPath } = await scanReferences(deps.app, keyFromUrl);
-	// ⭐ "还有人用吗"的另一半：笔记**直接指着**哪些库内文件（见 `MaintenanceDeps.referencedPaths`）。
-	// 少了它，一份正被显示的图会被报成"没有任何笔记引用"。
-	// ⚠️ 把**刚读到的正文**递过去：同一个命令里别把全库笔记读两遍。
-	const referencedPaths = await deps.referencedPaths(
-		[...byPath].map(([path, text]) => ({ path, text }))
-	);
+): Promise<Set<string>> {
+	const keys = new Set<string>();
+	for (const text of texts) {
+		for (const key of keysInText(text, keyFromUrl)) keys.add(key);
+	}
 
-	return {
-		audit: auditCache({ entries, copies, referencedKeys: keys, referencedPaths }),
-	};
+	// ⚠️⚠️ **画布也算数**（2026-10-22 审计：这条链原来只扫笔记）。
+	// 云端清理（`cloudReferencedKeys`）扫的是「笔记 ＋ 画布文本」，这里只扫笔记
+	// ⇒ 一张只被画布卡片引用着的图，会被说成「没有人引用」，而清理命令根本不问它。
+	// 判据抽在 `references.ts::keysInCanvasText`，两侧共用。
+	for (const file of app.vault.getFiles()) {
+		if (file.extension !== "canvas") continue;
+		let text: string;
+		try {
+			text = await app.vault.read(file);
+		} catch {
+			continue; // 同上：读不到就跳过这一份
+		}
+		for (const key of keysInCanvasText(text, keyFromUrl)) keys.add(key);
+	}
+	return keys;
 }
 
 /**
@@ -387,10 +398,18 @@ export interface BatchOptions {
 	 */
 	referencedPaths: ReadonlySet<string>;
 	/**
+	 * 其中「正文里那条链接**还是本地的**」的那些（`referenceSnapshot().rewritable`）——
+	 * 让"已经传过、只差改链接"的文件重新进候选（见 `CandidateOptions.repairablePaths`）。
+	 *
+	 * ⚠️ 与 `referencedPaths` 同一条纪律：**必须与确认框那份是同一个快照**。
+	 * 少了它，"重新上传附件"就永远修不好一条没改掉的链接（用户 2026-10-21 报的那条）。
+	 */
+	repairablePaths: ReadonlySet<string>;
+	/**
 	 * 逐个候选**处理完**时上报（界面据此画进度）。
 	 *
 	 * ⚠️ 报的是**领域对象本身**（候选 / 路径），不是界面那一行的键 ——
-	 * "哪一行"是界面的事（映射在 `plugin/*` 那一层做，见 `ui/external-picker-logic.ts::pickKey`）。
+	 * "哪一行"是界面的事（映射在 `plugin/*` 那一层做，见 `ui/selection-logic.ts::pickKey`）。
 	 * 让这一层去算界面键，就得让 `maintenance/` 反过来认识 `ui/`，方向是错的。
 	 *
 	 * ⚠️ **只在"这一个候选真的被处理了"时上报**（成功 / 失败 / 跳过）。
@@ -410,6 +429,20 @@ export interface BatchOptions {
 	 * （安全判据在那儿），这里只做**用户的取舍**。两者相乘 = 真正要上传的那些。
 	 */
 	onlyPaths?: ReadonlySet<string>;
+	/**
+	 * 要不要把**没有被任何笔记引用的文件**也当候选（`D-68`）。默认 `false`。
+	 *
+	 * ## ⚠️ 这个口子**必须**从调用方传进来（2026-10-22 补的接线缺口）
+	 *
+	 * 确认框那边（`plugin/upload-existing-flow.ts`）用 `includeUnreferenced: true` 算出了
+	 * "未引用的附件也进清单"，而这里**重新算一遍候选**（安全判据在这一层）——
+	 * 少了这个字段，未引用的那些会在这一层被"没有被任何笔记引用"跳过：
+	 * 用户勾了、点了确认、清单上那一行**永远停在等待**，一个字都不报
+	 *（既不是失败也不是跳过 —— `onItem` 只对真正处理到的那些上报）。
+	 *
+	 * ⇒ **清单与执行必须是同一份口径**（与 `referencedPaths` / `repairablePaths` 同一条纪律）。
+	 */
+	includeUnreferenced?: boolean;
 }
 
 /**
@@ -430,7 +463,8 @@ export interface BatchOptions {
  *
  * 命令的语义是"把已有的附件传上去、把笔记里的链接改指云端"，**不改变文件的位置**：
  *
- * 1. **候选只收被笔记引用着的文件**（`options.referencedPaths`，取自宿主的链接索引）。
+ * 1. **候选 = 被笔记引用着的 ＋ 没有任何引用的**（D-68）。前者传完要改写链接，后者只传字节；
+ *    `options.referencedPaths` 决定"哪些要改"，`CandidateSelection.unreferencedPaths` 标出后者。
  *    没有任何笔记引用的文件一概不碰 —— 那种文件多半是废弃的旧图，动了只会让人
  *    以为丢东西。
  * 2. 上传成功后，`ingest` 按 `localCopy` 处置那个文件：**唯一的保留形态就是原地留着**
@@ -535,6 +569,11 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 		settings,
 		index: deps.index(),
 		referencedPaths: options.referencedPaths,
+		// ⚠️ 同一个快照的两个视角（见 `BatchOptions.repairablePaths`）：候选与确认框必须一致
+		repairablePaths: options.repairablePaths,
+		// ⚠️ **必须跟着调用方走**（见 `BatchOptions.includeUnreferenced`）：确认框里有未引用的行，
+		// 这里不开口子就会被静默跳过（勾了、确认了、那一行停在等待）。
+		includeUnreferenced: options.includeUnreferenced === true,
 	});
 	// ⭐ 用户**勾掉**的那些不进这一趟：候选（安全判据）与取舍（勾选）是两件事。
 	// 判据用的是 `selection.paths` 的顺序 —— 界面上的清单也是这个顺序，于是
@@ -562,6 +601,8 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 	const fileRules: RewriteRule[] = [];
 
 	for (const path of chosenPaths) {
+		/** 这一份传完还要不要改笔记（= 被引用着）。未引用的只传字节（D-68）。 */
+		const rewritable = options.referencedPaths.has(path);
 		/** 这一份没成 ⇒ 计数 + 让界面那一行变红（两件事必须成对，见 `BatchOptions.onItem`）。 */
 		const failed = (): void => {
 			result.failed += 1;
@@ -610,7 +651,10 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 		else result.uploaded += 1;
 		options.onItem?.({ kind: "vault", path, status: "done" });
 
-		rules.push({ from: path, to: ingestResult.remoteUrl, display: ingestResult.displayName });
+		// ⭐ 只有**被引用着**的才需要一条改写规则（D-68）：没有引用的那份传完就完事了。
+		// ⚠️ 这不只是省事：每条规则都要扫一遍全库正文，而未引用附件可能有几百份
+		//（用户特意要求"把没引用的也传了"）⇒ 少了这一道，命令会慢到不可用。
+		if (rewritable) rules.push({ from: path, to: ingestResult.remoteUrl, display: ingestResult.displayName });
 
 		// ⚠️⚠️ **移动会让宿主自己顺手改笔记**（2026-10-09 真机实测）：
 		// `fileManager.renameFile` 不只是改名，它还会把**别的笔记里指向这个文件的链接**
@@ -620,7 +664,7 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 		// 一处都找不到 ⇒ 笔记里留下的是**本地副本**的链接（本机看着没事，换台设备
 		// 就看不到图，而且笔记不再指向存储 —— 这条命令的承诺没兑现）。
 		// ⇒ 把"搬完之后的新路径"也当成一条改写规则：谁先谁后都会收敛到远端地址。
-		if (ingestResult.localPath && ingestResult.localPath !== path) {
+		if (rewritable && ingestResult.localPath && ingestResult.localPath !== path) {
 			rules.push({ from: ingestResult.localPath, to: ingestResult.remoteUrl, display: ingestResult.displayName });
 		}
 
@@ -631,7 +675,8 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 		// 所以画布必须改指向**留下来的主干那一份**（内容逐字节相同）——
 		// 否则画布上会留下一个指向已被删除文件的节点（用户看到的就是"画布上这张图没了"）。
 		// 两个 rule 只登记**一条**：同一个 `from` 上挂两条互相矛盾的规则，谁生效取决于顺序。
-		if (ingestResult.localPath) {
+		// 画布 `file` 节点只可能指向**被引用着**的文件（不引用就不在画布上），所以同样跟着 `rewritable`。
+		if (rewritable && ingestResult.localPath) {
 			fileRules.push({
 				from: path,
 				to: ingestResult.redundantDuplicateOf ?? ingestResult.localPath,

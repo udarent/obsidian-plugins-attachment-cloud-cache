@@ -93,26 +93,45 @@ export async function runLocalFileSuite(mod) {
 		assert.equal(ok.ext, "png", "扩展名");
 		assert.equal(ok.contentType, "image/png", "内容类型按扩展名给（上传要用）");
 
-		// 能嵌进笔记的四类都放行（另加一条反例：PDF 也算附件）
+		// ⭐⭐ 2026-10-22（D-60）：**所有类型都放行**（与「库内」同一条判据）。
+		//
+		// 早先这里只收"能嵌进笔记的四类"（图/音/视频/PDF）。用户问「命令是否涉及所有类型的
+		// 附件」之后量出来：`docx` / `zip` / `txt` / `psd` 从磁盘拖进来永远不进清单，
+		// 连 `tiff` / `heic` 这种**真图片**也进不来（被"宿主能不能嵌入"那张表误伤）——
+		// 而"企业微信/邮件里的附件就在磁盘上"正是这条路最常见的用法。
+		// 他选了与库内完全一致 ⇒ 除**宿主的文本文件**之外全收。
 		for (const [src, ext] of [
 			["file:///D:/a/歌.mp3", "mp3"],
 			["file:///D:/a/片.mp4", "mp4"],
 			["file:///D:/a/文.pdf", "pdf"],
+			["file:///D:/a/方案.docx", "docx"],
+			["file:///D:/a/表.xlsx", "xlsx"],
+			["file:///D:/a/包.zip", "zip"],
+			["file:///D:/a/说明.txt", "txt"],
+			["file:///D:/a/稿.psd", "psd"],
+			["file:///D:/a/照片.heic", "heic"],
+			["file:///D:/a/程序.exe", "exe"],
 		]) {
 			const decision = decideLocalFile({ src, isDesktop: true });
-			assert.equal(decision.action, "read", `${ext} 属于可嵌入的那几类`);
+			assert.equal(decision.action, "read", `★★ 所有类型都放行（与库内一致）：${src}`);
 			assert.equal(decision.ext, ext, `${ext} 的扩展名要如实取到`);
 		}
 
-		// ⭐ 闸门：不在那几类里的一律不放行
-		for (const src of [
-			"file:///D:/a/secret.txt",
-			"file:///D:/a/包.zip",
-			"file:///D:/a/程序.exe",
-			"file:///D:/a/id_rsa",
-		]) {
+		// ⚠️ 没有扩展名也照收（库内那条路同样收：宿主给的 `file.extension` 也是空串）
+		assert.equal(
+			decideLocalFile({ src: "file:///D:/a/id_rsa", isDesktop: true }).action,
+			"read",
+			"★ 空扩展名与库内同一答案（两条路的判据必须是同一份）"
+		);
+
+		// ⭐ 唯一还站着的扩展名闸门：**宿主的文本文件**（与库内同一份 `isNoteLikeExtension`）
+		for (const src of ["file:///D:/a/笔记.md", "file:///D:/a/板.canvas", "file:///D:/a/库.base"]) {
 			const decision = decideLocalFile({ src, isDesktop: true });
-			assert.equal(decision.action, "ignore", `★★ 不放行：${src}（扩展名是唯一站着的边界）`);
+			assert.equal(decision.action, "ignore", `★★ 笔记类文件不是附件（与库内同一条判据）：${src}`);
+			assert.ok(
+				decision.reason.includes("笔记"),
+				`★ 原因要指向「笔记类」（诊断要能解释为什么跳过）：${decision.reason}`
+			);
 		}
 
 		// ⚠️ 平台：非桌面一律不读（这是本项目第一次做平台判断）
