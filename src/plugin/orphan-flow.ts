@@ -621,7 +621,7 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 			const initial = buildView({ cloud: true, local: true });
 
 			const answer = await ctx.pickTasks({
-				// ⭐ 2026-10-22（D-76）：标题 = **命令名去省略号**（与「上传附件」同一条规则；
+				// ⭐ 2026-10-22（D-76）：标题 = **命令名**（2026-10-23 起命令名不带省略号）（与「上传附件」同一条规则；
 				// 疑问句留给**自动**那条询问：那次打扰确实是一个问题）。
 				title: ctx.t("orphanListTitle"),
 				lines: initial.lines,

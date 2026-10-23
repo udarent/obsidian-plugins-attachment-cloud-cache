@@ -992,7 +992,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 *
 	 * ⚠️ **不报"可回收"**：那要判断"还有没有人引用"，得读一遍全库正文（秒级）——
 	 * 而这正是 D-75 撤掉那条"占用报告"命令的原因（数字是估算，用户真正要做的决定
-	 * 是"清哪些"）。要看可回收的东西，跑「清理附件…」，那里逐行列着。
+	 * 是"清哪些"）。要看可回收的东西，跑「清理附件」，那里逐行列着。
 	 */
 	localCopyUsage(): { count: number; bytes: number } {
 		let count = 0;

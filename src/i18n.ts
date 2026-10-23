@@ -166,7 +166,7 @@ export const I18N: Record<string, Locale> = {
 		// ⚠️ 2026-10-22（D-77）：命令名去掉了限定词（原来是“no note links to”）。
 		// 清单现在是**三类**：没人引用的云端对象 / 没有引用的本地文件 / 站外缓存副本
 		// —— 都是「可以清理的附件」，名字只说那一类就是错的（D-73 同一条教训）。
-		cmdCheckOrphans: "Clean up attachments…",
+		cmdCheckOrphans: "Clean up attachments",
 		cloudCleanupDeviceBlindSpot:
 			"Only this device's references can be seen. Other devices (or another vault sharing this storage) may still be using some of these files — deleting cannot be undone.",
 		cloudCleanupPersistFailed: "Could not save the local-copy index: {error}",
@@ -233,7 +233,7 @@ export const I18N: Record<string, Locale> = {
 		orphanMore: "…and {count} more.",
 		orphanLocalNote:
 			"Deleting a local copy only frees space in your vault - linking it again downloads it back. Deleting from your storage cannot be undone.",
-		// ⭐ 2026-10-22（D-76）：清单弹窗的标题（与另一条命令同一个规则：**就是命令名去省略号**）。
+		// ⭐ 2026-10-22（D-76）：清单弹窗的标题（与另一条命令同一个规则：**就是命令名本身**（2026-10-23 起命令名不再带省略号，两侧字面相同））。
 		// ⚠️ 自动那条询问仍然用 `orphanTitle`（它是**问句**：那是一次没人要求的打扰）。
 		orphanListTitle: "Clean up attachments",
 		// ⭐⭐ 2026-10-22（D-76）：清单顶部是**一句固定说明**（与「上传附件」同一个规则）：
@@ -258,7 +258,7 @@ export const I18N: Record<string, Locale> = {
 		orphanNoneToCheck:
 			"No attachments to clean up — whatever is left is either still linked from a note or canvas, or was uploaded from another device (this one cannot see what links to those).",
 		cloudDeleteFailed: "Could not delete the object: {error}",
-		cmdUploadAttachments: "Upload attachments…",
+		cmdUploadAttachments: "Upload attachments",
 		// ⭐ 命令**失败**时必须有人说话（2026-10-16 用户实测："点击命令没有反应"）。
 		// 以前异步命令抛错只留一条控制台记录，界面上什么都不发生 —— 那是最坏的失败形态。
 		// ⚠️ 不写命令名：用户刚点过它，而 `{error}` 才是他要看的东西（命令 id 进控制台日志）。
@@ -512,7 +512,7 @@ export const I18N: Record<string, Locale> = {
 		// ⚠️ 2026-10-22（D-77）：命令名去掉了限定词（原来是「没有笔记引用的」）。
 		// 清单现在是**三类**：没人引用的云端对象 / 没有引用的本地文件 / 站外缓存副本
 		// —— 都是「可以清理的附件」，名字只说那一类就是错的（D-73 同一条教训）。
-		cmdCheckOrphans: "清理附件…",
+		cmdCheckOrphans: "清理附件",
 		cloudCleanupDeviceBlindSpot:
 			"只能看到本设备的引用情况。其他设备（或共用这个存储的另一个库）可能还在用其中一些文件 —— 删除后无法恢复。",
 		cloudCleanupPersistFailed: "本地副本索引保存失败：{error}",
@@ -573,7 +573,7 @@ export const I18N: Record<string, Locale> = {
 		orphanMore: "……还有 {count} 个。",
 		orphanLocalNote:
 			"只删本地副本只是腾出库里的空间 —— 以后笔记里再引用它，会自动重新下载；从存储里删掉就找不回来了。",
-		// ⭐ 2026-10-22（D-76）：清单弹窗的标题（与另一条命令同一个规则：**就是命令名去省略号**）。
+		// ⭐ 2026-10-22（D-76）：清单弹窗的标题（与另一条命令同一个规则：**就是命令名本身**（2026-10-23 起命令名不再带省略号，两侧字面相同））。
 		// ⚠️ 自动那条询问仍然用 `orphanTitle`（它是**问句**：那是一次没人要求的打扰）。
 		orphanListTitle: "清理附件",
 		// ⭐⭐ 2026-10-22（D-76）：清单顶部是**一句固定说明**（与「上传附件」同一个规则）：
@@ -595,7 +595,7 @@ export const I18N: Record<string, Locale> = {
 		orphanNoneToCheck:
 			"没有需要清理的附件 —— 剩下的要么还有笔记或画布在引用，要么是别的设备上传的（这台设备看不见谁在引用它们）。",
 		cloudDeleteFailed: "删除对象失败：{error}",
-		cmdUploadAttachments: "上传附件…",
+		cmdUploadAttachments: "上传附件",
 		// ⭐ 命令**失败**时必须有人说话（2026-10-16 用户实测："点击命令没有反应"）。
 		// 以前异步命令抛错只留一条控制台记录，界面上什么都不发生 —— 那是最坏的失败形态。
 		// ⚠️ 不写命令名：用户刚点过它，而 `{error}` 才是他要看的东西（命令 id 进控制台日志）。
@@ -609,7 +609,7 @@ export const I18N: Record<string, Locale> = {
 			"设置改版：「遇到站外文件链接时」那一档已并入上面的开关「站外文件也上传到云端」，你原来的选择已折算进去 —— {state}。",
 		legacyExternalKeptOn: "自动处理保持开启",
 		legacyExternalKeptOff:
-			"自动处理保持关闭（你原本选的是「什么都不做」）；「上传附件…」仍然随时可用",
+			"自动处理保持关闭（你原本选的是「什么都不做」）；「上传附件」仍然随时可用",
 		maintainMoreItems: "……还有 {count} 个",
 		maintainCancelled: "已取消，没有改动任何内容。",
 		// ── 清单类弹窗（缩略图 + 勾选 + 进度）：上传附件 / 清理没有笔记引用的云端附件共用 ──
@@ -706,7 +706,7 @@ export const I18N: Record<string, Locale> = {
 		localUsageName: "占用空间",
 		localUsageDesc:
 			"这个数字来自索引，不逐个核对磁盘。想看哪些可以清，"
-			+ "跑「清理附件…」，那里逐行列着。",
+			+ "跑「清理附件」，那里逐行列着。",
 		localUsageValue: "{count} 份本地副本，约 {mb} MB。",
 		localUsageEmpty: "还没有本地副本。",
 		// 缓存清理只有一种方式（直接删除），所以通知只有一条。

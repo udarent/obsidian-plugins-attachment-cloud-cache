@@ -40,6 +40,8 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { countObsidianProcesses, evaluate, launchAndAttach } from "./lib/obsidian-host.mjs";
+// ⚠️ 页面内的选择器与弹窗操作统一在 `lib/verify-dom.mjs`：两份探针共用，类名就不会分叉。
+import { DOM_HELPERS, closeDialog, dialogSnapshot, runCommand, waitForDialog } from "./lib/verify-dom.mjs";
 
 const PORT = Number(
 	process.argv.includes("--port")
@@ -112,130 +114,6 @@ function check(name, ok, detail = "") {
 function skip(name, reason) {
 	results.push({ name, ok: true, skipped: true, detail: reason });
 	log(`  ~ ${name} —— 跳过：${reason}`);
-}
-
-/**
- * 页面里的公共小工具（拼进每次 evaluate 的前面）。
- *
- * ⚠️ 只读 DOM，不点"确认"类按钮 —— 这个脚本的目的是**看清单长什么样**，不是执行动作。
- */
-const DOM_HELPERS = `
-	const modal = () => document.querySelector(".modal-container .modal");
-	const rows = () => Array.from(modal()?.querySelectorAll(".acc-task-row") ?? []);
-	const rowInfo = (row) => {
-		const box = row.querySelector("input.acc-task-check");
-		const open = row.querySelector("a.acc-task-open");
-		const icon = row.querySelector(".acc-task-hint-icon");
-		return {
-			name: row.querySelector(".acc-task-name")?.textContent ?? "",
-			hint: row.querySelector(".acc-task-hint")?.textContent ?? "",
-			hasIcon: Boolean(icon),
-			iconSvg: Boolean(icon?.querySelector("svg")),
-			iconTitle: icon?.getAttribute("title") ?? "",
-			meta: row.querySelector(".acc-task-meta")?.textContent ?? "",
-			checked: Box => (Box ? Box.checked : null),
-			disabled: true,
-			boxChecked: box ? box.checked : null,
-			boxDisabled: box ? box.disabled : null,
-			aria: box ? box.getAttribute("aria-label") : null,
-			openText: open?.textContent ?? "",
-			openTitle: open?.getAttribute("title") ?? "",
-		};
-	};
-	const toggleFor = (label) => {
-		for (const item of Array.from(modal()?.querySelectorAll(".setting-item") ?? [])) {
-			const name = item.querySelector(".setting-item-name")?.textContent ?? "";
-			if (!name.includes(label)) continue;
-			const box = item.querySelector(".checkbox-container");
-			if (box) return box;
-		}
-		return null;
-	};
-	const clickButton = (label) => {
-		for (const button of Array.from(modal()?.querySelectorAll("button") ?? [])) {
-			if ((button.textContent ?? "").trim() === label) {
-				button.click();
-				return true;
-			}
-		}
-		return false;
-	};
-`;
-
-/** 等弹窗出现（最多 `ms`）。⚠️ 必须轮询：命令是异步的，`executeCommandById` 立刻返回。 */
-async function waitForDialog(client, ms = 9000) {
-	const deadline = Date.now() + ms;
-	/**
-	 * 轮询期间见到的 Notice —— 有些结局（「没有可处理的」/「先去配置」）
-	 * **只会出现一瞬**（5 秒后自己消失）。收着它们，失败时才知道“它到底说了什么”。
-	 */
-	const notices = new Set();
-	while (Date.now() < deadline) {
-		// ⚠️ `DOM_HELPERS` 是一串 `const …`，只能待在块里 —— 塞进 `Boolean(...)` 会直接语法错
-		const ready = await evaluate(
-			client,
-			`(() => { ${DOM_HELPERS} return Boolean(modal() && modal().querySelector(".acc-task-list")); })()`
-		).catch(() => false);
-		const seen = await evaluate(
-			client,
-			`Array.from(document.querySelectorAll(".notice")).map((el) => el.textContent)`
-		).catch(() => []);
-		for (const text of seen ?? []) notices.add(text);
-		if (ready) return { appeared: true, notices: [...notices] };
-		await delay(150);
-	}
-	return { appeared: false, notices: [...notices] };
-}
-
-async function dialogSnapshot(client) {
-	return evaluate(
-		client,
-		`(() => {
-			${DOM_HELPERS}
-			const root = modal();
-			if (!root) return null;
-			const filters = Array.from(root.querySelectorAll(".setting-item")).map((item) => ({
-				name: item.querySelector(".setting-item-name")?.textContent ?? "",
-				hasToggle: Boolean(item.querySelector(".checkbox-container")),
-			}));
-			return {
-				title: root.querySelector(".modal-title")?.textContent ?? "",
-				lines: Array.from(root.querySelectorAll(".acc-task-lines > div")).map((el) => el.textContent ?? ""),
-				rows: rows().map(rowInfo),
-				filters: filters.filter((item) => item.hasToggle),
-				buttons: Array.from(root.querySelectorAll("button")).map((b) => (b.textContent ?? "").trim()).filter(Boolean),
-			};
-		})()`
-	);
-}
-
-async function runCommand(client, id) {
-	return evaluate(
-		client,
-		`(async () => {
-			await app.commands.executeCommandById(${JSON.stringify(`${PLUGIN_ID}:${id}`)});
-			return true;
-		})()`
-	);
-}
-
-/** 关掉弹窗，并等它真的消失（否则下一条命令会读到上一个 DOM）。 */
-async function closeDialog(client) {
-	await evaluate(
-		client,
-		`(() => {
-			${DOM_HELPERS}
-			if (!clickButton("取消")) clickButton("关闭");
-			return true;
-		})()`
-	);
-	const deadline = Date.now() + 4000;
-	while (Date.now() < deadline) {
-		const gone = await evaluate(client, "Boolean(!document.querySelector('.modal-container .modal'))");
-		if (gone) return true;
-		await delay(120);
-	}
-	return false;
 }
 
 async function main() {
@@ -407,9 +285,9 @@ async function main() {
 		);
 
 		// ── 3) 上传附件：标题 / 顶部一段 / 行内标签 / 失效行图标 / 只看当前笔记 ──
-		await runCommand(client, "upload-attachments");
+		await runCommand(client, PLUGIN_ID, "upload-attachments");
 		const { appeared, notices: seen1 } = await waitForDialog(client);
-		check("「上传附件…」弹出清单", appeared);
+		check("「上传附件」弹出清单", appeared);
 		if (!appeared) {
 			const hint = await evaluate(
 				client,
@@ -430,7 +308,7 @@ async function main() {
 
 		const upload = await dialogSnapshot(client);
 		check(
-			"标题＝命令名去「…」",
+			"标题＝命令名",
 			upload.title.trim() === "上传附件",
 			`实际：${JSON.stringify(upload.title)}`
 		);
@@ -493,12 +371,12 @@ async function main() {
 		check("上传弹窗能取消（取消按钮存在且点了关窗）", await closeDialog(client));
 
 		// ── 4) 清理附件：两类行 / 两个开关 / 站外缓存标签 ──
-		await runCommand(client, "check-orphans");
+		await runCommand(client, PLUGIN_ID, "check-orphans");
 		const { appeared: appeared2, notices: seen2 } = await waitForDialog(client);
 		// ⭐ 这一种"没出现"是**对的**：库里有一个文件读不到 ⇒ 清理命令按设计取消整次
 		//（判据：绝不能把「不知道」当成「没有引用」）。这时跳过，不判红。
 		const unreadable = seen2.find((text) => text.includes("读不到") || text.includes("取消了这次清理"));
-		if (!unreadable) check("「清理附件…」弹出清单", appeared2);
+		if (!unreadable) check("「清理附件」弹出清单", appeared2);
 		if (!appeared2) {
 			if (unreadable) {
 				skip("清理弹窗（两类行 / 两个开关 / 站外缓存标签）", `这个库里有一个文件读不到，命令按设计取消了清理：${unreadable}`);
@@ -521,7 +399,7 @@ async function main() {
 		}
 
 		const cleanup = await dialogSnapshot(client);
-		check("清理标题＝命令名去「…」", cleanup.title.trim() === "清理附件", `实际：${JSON.stringify(cleanup.title)}`);
+		check("清理标题＝命令名", cleanup.title.trim() === "清理附件", `实际：${JSON.stringify(cleanup.title)}`);
 		check(
 			"清理顶部只有一段，且不含数字",
 			cleanup.lines.length === 1 && !/\d/.test(cleanup.lines.join(" ")),
