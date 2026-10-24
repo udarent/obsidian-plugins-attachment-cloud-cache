@@ -135,15 +135,7 @@ export interface TaskListAction {
 }
 
 export interface TaskListOptions {
-	title: string;
-	/**
-	 * 清单**自己**那一行标题（画在清单正上方，与「全选 / 全不选」同一行）。
-	 *
-	 * ⚠️ 弹窗**不要**传：宿主 `Modal` 已经把 `title` 画在窗口顶上了，再来一行就是重复。
-	 * 常驻视图没有这一层（标签页标题在别处、而且是固定不变的）⇒ 由它传。
-	 */
-	listHeading?: string;
-	/** 正文行（背景、风险、代价）—— 逐行画在清单上方。给了 `filter` 时它是**初始**那批。 */
+	title: string;	/** 正文行（背景、风险、代价）—— 逐行画在清单上方。给了 `filter` 时它是**初始**那批。 */
 	lines?: readonly string[];
 	cards: readonly FileCard[];
 	/** 范围 / 类别过滤开关（可多个，各自一个勾选框）。⚠️ 多个开关**只调一次**重算回调。 */
@@ -261,7 +253,8 @@ interface RowRef {
  * 过滤开关（可选）  .acc-task-filters     ← 只在给了 `filters` 时存在
  * 进度              .acc-task-progress
  * ┌ 清单 .acc-task-list ────────────────────────────┐
- * │ ☑ 附件清单                      已选 3 / 18     │  .acc-task-headrow（粘在顶部）
+ * │ 附件清单（共用）                已选 3 / 18     │  .acc-task-headrow ┐ 粘在顶部
+ * │ ☑ 名称   位置    状态  引用  大小  操作          │  .acc-task-headcols┘
  * │ ☐ 行…                                           │  .acc-task-row
  * └─────────────────────────────────────────────────┘
  * 空清单说明        .acc-task-empty
@@ -275,6 +268,10 @@ interface RowRef {
  *
  * ⚠️ 全选是**一个三态复选框**（2026-10-23 用户要求），不是两颗按钮：
  * 全勾 / 半选（`indeterminate`）/ 全不勾都落在同一个控件上，与行的勾选框同一列、同一个读法。
+ *
+ * ⚠️ 它长在**列标题那一行的首格**（2026-10-24 用户要求「全选控件应改到列表的标题栏中」）。
+ * 之前它在"附件清单"那一行最左 —— 那一行是**清单标题**，不是表格表头，于是它和下面的
+ * 勾选框列错开一格，"全选"看起来像浮在标题旁边的独立控件。
  */
 export function mountTaskListShell(
 	container: HTMLElement,
@@ -484,57 +481,87 @@ export function mountTaskListShell(
 	 * ⚠️ 多列模式下这里画**两行**：标题行（含全选与计数）＋ 列标题行，两行共用一个粘顶容器 ——
 	 * 各自 `sticky` 的话第二行会先滚走，露出后面滚过去的行。
 	 */
+	/**
+	 * 造一颗**三态全选**并接线（`currentTarget` 决定它长在哪）。
+	 *
+	 * ⚠️ 位置由 `paintHead` 决定，这里只管"造 + 接线"：
+	 * - **多列模式**（附件管理）⇒ 进**列标题那一行的首格**，与每一行的勾选框同一列；
+	 * - **两行式**（上传 / 清理弹窗，没有列标题）⇒ 留在标题行最左。
+	 */
+	const paintSelectAll = (parent: HTMLElement): void => {
+		const box = parent.createEl?.("input", {
+			// ⚠️ **不复用** `acc-task-check`：`.acc-task-check` 在界面与脚本里的意思是
+			// "**行**的勾选框"（"勾了几行""全选能勾的"都按它数）。表头这颗也算进去的话，
+			// 任何一处 `querySelectorAll(".acc-task-check")` 都会把"全选"当成第一行 ——
+			// 实测就撞过：脚本点 `boxes[0]` 想勾一行，结果点的是全选，断言因别的原因变红。
+			cls: "acc-task-check-all",
+			attr: {
+				type: "checkbox",
+				// 读屏念"全选"；三态里的半选由 `indeterminate` 自己表达（aria 会念成 mixed）
+				"aria-label": options.labels.selectAll,
+			},
+		}) as
+			| {
+					checked?: boolean;
+					indeterminate?: boolean;
+					disabled?: boolean;
+					title?: string;
+					addEventListener?: (type: string, handler: () => void) => void;
+			  }
+			| undefined;
+		if (!box) return;
+		box.addEventListener?.("change", () => {
+			if (phase === "run") return;
+			// ⚠️ 读 `checked`（浏览器已经把 indeterminate 清掉并翻成 true/false）：
+			// 勾上 ⇒ 全选**能勾的**（D-70：不可选的行不进 `selected`）；取消 ⇒ 清空。
+			selected = box.checked ? selectEverything(keysOf(selectableRows(cards))) : new Set<string>();
+			syncChecks();
+			updateControls();
+		});
+		headCheck = box;
+	};
+
+	/**
+	 * 画**表头**（清单的第一个子节点，`position: sticky` ⇒ 滚到哪儿都在）。
+	 *
+	 * ## ⚠️ 两行，但**全选属于第二行**（2026-10-24 用户要求）
+	 *
+	 * 第一行是**清单标题**（「附件清单」＋「已选 N / 共 M」），第二行是**列标题**
+	 * （名称 / 位置 / 状态 / 引用 / 大小 / 操作）。用户的原话是「全选控件应改到**列表的
+	 * 标题栏**中」—— 他要的是表格表头的读法：**全选 = 列标题行最上面那一格**，
+	 * 与每一行的勾选框同一列，而不是浮在标题旁边的一颗独立控件。
+	 *
+	 * ⚠️ 两行**共用一个粘顶容器**：各自 `sticky` 的话第二行会先滚走，露出后面滚过去的行。
+	 *
+	 * ⚠️ 非多列模式（上传 / 清理两条链的弹窗）**没有列标题行** ⇒ 全选只能留在标题行最左。
+	 * 那里没有"列"可言，也就无所谓对齐。
+	 */
 	const paintHead = (): void => {
 		headCheck = null;
-		headCount = null;
+		// ⚠️ **不清 `headCount`**：多列模式下它住在动作区（`renderFooter` 建的），
+		// 每次重画表头都清掉就等于把那个句柄丢了（计数会停在打开时的样子）。
 		if (!listEl) return;
 		const wrap = listEl.createDiv?.({ cls: "acc-task-headwrap" });
 		if (!wrap) return;
-		const head = wrap.createDiv?.({ cls: "acc-task-headrow" });
 
-		if (head) {
-			const box = head.createEl?.("input", {
-				// ⚠️ **不复用** `acc-task-check`：`.acc-task-check` 在界面与脚本里的意思是
-				// "**行**的勾选框"（"勾了几行""全选能勾的"都按它数）。表头这颗也算进去的话，
-				// 任何一处 `querySelectorAll(".acc-task-check")` 都会把"全选"当成第一行 ——
-				// 实测就撞过：脚本点 `boxes[0]` 想勾一行，结果点的是全选，断言因别的原因变红。
-				cls: "acc-task-check-all",
-				attr: {
-					type: "checkbox",
-					// 读屏念"全选"；三态里的半选由 `indeterminate` 自己表达（aria 会念成 mixed）
-					"aria-label": options.labels.selectAll,
-				},
-			}) as
-				| {
-						checked?: boolean;
-						indeterminate?: boolean;
-						disabled?: boolean;
-						title?: string;
-						addEventListener?: (type: string, handler: () => void) => void;
-				  }
-				| undefined;
-			if (box) {
-				box.addEventListener?.("change", () => {
-					if (phase === "run") return;
-					// ⚠️ 读 `checked`（浏览器已经把 indeterminate 清掉并翻成 true/false）：
-					// 勾上 ⇒ 全选**能勾的**（D-70：不可选的行不进 `selected`）；取消 ⇒ 清空。
-					selected = box.checked ? selectEverything(keysOf(selectableRows(cards))) : new Set<string>();
-					syncChecks();
-					updateControls();
-				});
-				headCheck = box;
+		// ⚠️ **多列模式没有"标题行"**（2026-10-24 用户要求精简）：那一行只放
+		// 「附件清单」四个字与计数，而弹窗标题已经写着「附件管理」——
+		// 同一个东西说两遍。计数搬去动作区（见 `renderFooter`）。
+		if (tabular) {
+			const cols = wrap.createDiv?.({ cls: "acc-task-headcols" });
+			const firstCell = cols?.createDiv?.({ cls: "acc-col acc-col-spacer" });
+			if (firstCell) paintSelectAll(firstCell);
+			for (const column of columns) {
+				cols?.createDiv?.({ cls: `acc-col acc-col-${column.key}`, text: column.label });
 			}
-
-			if (options.listHeading) head.createDiv?.({ cls: "acc-task-heading", text: options.listHeading });
-			headCount = head.createDiv?.({ cls: "acc-task-count" }) ?? null;
+			return;
 		}
 
-		if (!tabular) return;
-		// 列标题行：第一格是勾选框那列的**占位**（什么都不写），其余按定义
-		const cols = wrap.createDiv?.({ cls: "acc-task-headcols" });
-		cols?.createDiv?.({ cls: "acc-col acc-col-spacer" });
-		for (const column of columns) {
-			cols?.createDiv?.({ cls: `acc-col acc-col-${column.key}`, text: column.label });
+		// 两行式（上传 / 清理弹窗）：没有列标题行 ⇒ 全选与计数只能在这一行
+		const head = wrap.createDiv?.({ cls: "acc-task-headrow" });
+		if (head) {
+			paintSelectAll(head);
+			headCount = head.createDiv?.({ cls: "acc-task-count" }) ?? null;
 		}
 	};
 
@@ -805,6 +832,21 @@ export function mountTaskListShell(
 		if (!footerEl) return;
 		if (options.actions && options.actions.length > 0) {
 			const row = new Setting(footerEl);
+			/**
+			 * ⭐ 多列模式的「已选 N / 共 M」住这里（2026-10-24）。
+			 *
+			 * 它原先在清单标题那一行 —— 而那行已被取消（只写着"附件清单"，与弹窗标题重复）。
+			 * 搬到动作区的好处是**离按钮近**：它回答的正是"我勾了 3 个，按钮上为什么是 1 个"
+			 * （不可选的行不算在内）。⚠️ 别删：那是这两个数字之间唯一的解释。
+			 */
+			if (tabular) {
+				row.nameEl?.addClass?.("acc-task-count");
+				headCount = {
+					setText: (text: string) => {
+						row.nameEl.textContent = text;
+					},
+				};
+			}
 			for (const action of options.actions) {
 				row.addButton((button) => {
 					actionButtons.push({ action, button });

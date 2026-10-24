@@ -432,7 +432,9 @@ async function main() {
 				const attachments = app.vault
 					.getFiles()
 					.filter((f) => !["md", "canvas", "base"].includes(String(f.extension || "").toLowerCase()));
-				const head = root.querySelector(".acc-task-headrow");
+				// ⚠️ 粘顶容器是 headwrap，**不是** headrow：多列模式下没有标题行
+				// （headrow 不存在），拿它去判"在清单里 / 是不是第一个"会永远为 false。
+				const wrapEl = root.querySelector(".acc-task-headwrap");
 				const list = root.querySelector(".acc-task-list");
 				// ⚠️ 按**结构化**字段读，不按中文文案读：文案改一次，断言就假红一次。
 				const label = (el) => ((el && el.textContent) || "").trim();
@@ -446,24 +448,34 @@ async function main() {
 						pressed: el.getAttribute("aria-pressed") === "true",
 						activeClass: el.classList.contains("is-active"),
 					})),
-					// 标题栏：在清单**里面**、是清单的第一个子节点
-					heading: label(root.querySelector(".acc-task-headrow .acc-task-heading")),
-					// 粘顶容器（headwrap）在清单里且是第一个子节点；列标题行与标题行都在它里面
-					headInsideList: Boolean(head && list && head.closest(".acc-task-list") === list),
-					headIsFirst: (() => {
-						const wrap = head && head.closest(".acc-task-headwrap");
-						return Boolean(wrap && list && wrap.parentElement === list && wrap === list.firstElementChild);
-					})(),
+					// ⭐ 2026-10-24：多列模式下**没有「附件清单」那种标题行**了（用户要求精简界面）
+					// ⇒ 表头只剩列标题那一行。这里数一下"标题行"还有几条，应当为 0。
+					headingRows: root.querySelectorAll(".acc-task-headrow").length,
+					// 粘顶容器（headwrap）在清单里且是第一个子节点
+					headInsideList: Boolean(wrapEl && list && wrapEl.closest(".acc-task-list") === list),
+					headIsFirst: Boolean(wrapEl && list && wrapEl.parentElement === list && wrapEl === list.firstElementChild),
 					headCheck: (() => {
 						const box = root.querySelector(".acc-task-check-all");
 						if (!box) return null;
+						// ⭐ 2026-10-24（用户要求「全选控件应改到列表的标题栏中」）：全选现在长在
+						// **列标题那一行的首格**，并且必须与每一行的勾选框**同一列** ——
+						// 所以除了"在哪"，还要量两者的左侧坐标（差 ≤ 2px 算对齐，取整误差允许）。
+						const firstRowBox = root.querySelector(".acc-task-row .acc-task-check");
+						const leftOf = (el) => Math.round(el.getBoundingClientRect().left);
 						return {
 							checked: box.checked === true,
 							indeterminate: box.indeterminate === true,
 							ariaLabel: box.getAttribute("aria-label") || "",
+							inCols: Boolean(box.closest(".acc-task-headcols")),
+							// null = 量不到（清单是空的）
+							columnGap: firstRowBox ? Math.abs(leftOf(box) - leftOf(firstRowBox)) : null,
 						};
 					})(),
 					headCount: label(root.querySelector(".acc-task-count")),
+					// ⭐ 2026-10-24：清单标题那一行取消后，计数搬进**动作区**（按钮左边）
+					countInFooter: Boolean(
+						(root.querySelector(".acc-task-count") || { closest: () => null }).closest(".acc-task-actions")
+					),
 					// 动作区里不该再出现全选（它曾经被排到动作按钮下面）
 					buttonsInHead: root.querySelectorAll(".acc-task-headrow button").length,
 					names: Array.from(root.querySelectorAll(".acc-task-row .acc-task-name")).map((el) => el.textContent || ""),
@@ -508,23 +520,36 @@ async function main() {
 			(gallery?.filters ?? []).map((f) => `${f.label}${f.pressed ? " [按下]" : ""}${f.activeClass ? " *" : ""}`).join(" / ")
 		);
 		check(
-			"标题栏在**清单里面**、是第一个子节点，且带一行标题（附件清单）",
-			gallery?.heading === "附件清单" && gallery?.headInsideList === true && gallery?.headIsFirst === true,
-			`heading=${JSON.stringify(gallery?.heading)} inList=${gallery?.headInsideList} first=${gallery?.headIsFirst}`
+			"表头在**清单里面**、是第一个子节点，且**只有列标题那一行**（「附件清单」那种标题行已取消）",
+			gallery?.headingRows === 0 && gallery?.headInsideList === true && gallery?.headIsFirst === true,
+			`headingRows=${gallery?.headingRows} inList=${gallery?.headInsideList} first=${gallery?.headIsFirst}`
 		);
 		check(
-			"标题栏里放的是**全选复选框**（不是文字按钮），初始未勾、读屏名是「全选」",
+			"全选是**列标题栏首格**里的三态复选框（不是文字按钮，也不浮在清单标题旁边）",
 			Boolean(gallery?.headCheck) &&
 				gallery.headCheck.checked === false &&
 				gallery.headCheck.indeterminate === false &&
 				gallery.headCheck.ariaLabel === "全选" &&
+				gallery.headCheck.inCols === true &&
 				gallery?.buttonsInHead === 0,
 			JSON.stringify({ check: gallery?.headCheck, buttons: gallery?.buttonsInHead })
+		);
+		check(
+			"全选与每一行的勾选框**同一列**（左侧坐标差 ≤ 2px）",
+			// ⚠️ 清单为空时量不到坐标 ⇒ 这一条不适用（别让"空库"假红）
+			(gallery?.rows ?? 0) === 0 ||
+				(gallery?.headCheck?.columnGap !== null && gallery.headCheck.columnGap <= 2),
+			`rows=${gallery?.rows} columnGap=${JSON.stringify(gallery?.headCheck?.columnGap)}`
 		);
 		// ⚠️ 用**解析出来的两个数字**比，不用 endsWith：`已选 0 / 18` 与 rows=8 会被 endsWith 骗过。
 		const headCountMatch = /^已选 (\d+) \/ (\d+)$/.exec(gallery?.headCount ?? "");
 		check(
-			"标题栏右侧报「已选 0 / 共 N」，N＝清单行数",
+			"「已选 N / 共 M」在**动作区**里（清单标题行取消后它就住那儿，紧挨着按钮）",
+			gallery?.countInFooter === true,
+			`countInFooter=${gallery?.countInFooter} text=${JSON.stringify(gallery?.headCount)}`
+		);
+		check(
+			"报告「已选 0 / 共 N」，N＝清单行数",
 			Boolean(headCountMatch) && headCountMatch[1] === "0" && Number(headCountMatch[2]) === gallery?.rows,
 			JSON.stringify({ text: gallery?.headCount, rows: gallery?.rows })
 		);

@@ -273,6 +273,21 @@
 	font-size: var(--font-ui-smaller);
 }
 
+/*
+ * 表头**首格**：只放那颗三态全选（2026-10-24 用户要求「全选控件应改到列表的标题栏中」）。
+ *
+ * ⚠️ 它和每一行的 `.acc-task-check` 落在**同一列**（`--acc-cols` 的第一轨，20px）——
+ * 读法是"表头那一格"，不是标题旁边的一颗独立按钮。
+ * ⚠️ `overflow: visible`：`.acc-col` 默认裁溢出（给省略号用的），那会把 checkbox 的
+ * 焦点环切掉一半。
+ */
+.acc-task-headcols .acc-col-spacer {
+	display: flex;
+	align-items: center;
+	justify-content: flex-start;
+	overflow: visible;
+}
+
 /* 表头格子与数据格子：单行省略（宽窄都别把列撑开） */
 .acc-col,
 .acc-cell {
@@ -316,19 +331,27 @@
 	color: var(--color-blue, var(--text-accent));
 }
 
-.acc-task-heading {
-	font-size: var(--font-ui-small);
-	font-weight: 600;
-	color: var(--text-normal);
-}
-
-/* 已选计数：等宽数字，勾来勾去时不会左右抖 */
+/*
+ * 已选计数：等宽数字，勾来勾去时不会左右抖。
+ *
+ * ⚠️ 两处都可能长它：两行式表头（标题行最右，`margin-left: auto` 推过去）、
+ * 以及多列模式的**动作区**（2026-10-24 起 —— 清单标题那一行取消了，
+ * 计数搬到按钮左边，`setting-item-name` 那一格本来就是左对齐的）。
+ */
 .acc-task-count {
 	margin-left: auto;
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 	font-variant-numeric: tabular-nums;
 	white-space: nowrap;
+}
+
+/* 动作区里的那一份：宿主会给 `setting-item-name` 一套标题样式，覆盖回"辅助文字" */
+.setting-item .acc-task-count {
+	font-size: var(--font-ui-smaller);
+	font-weight: normal;
+	color: var(--text-muted);
+	line-height: 1.2;
 }
 
 .acc-task-list {

@@ -311,8 +311,6 @@ export class GalleryModal extends Modal {
 			listHost,
 			{
 				title: this.ctx.t("galleryTitle"),
-				// 清单自己的那一行标题（弹窗标题在窗口顶上，清单里再来一行才说得清"这段是什么"）
-				listHeading: this.ctx.t("galleryListHeading"),
 				lines: [this.ctx.t("galleryRuleLine")],
 				cards,
 				labels: this.labels(),
