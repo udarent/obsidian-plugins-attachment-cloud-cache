@@ -66,26 +66,6 @@ function selectableRows(rows: readonly FileCard[]): FileCard[] {
 }
 
 /**
- * 清单上方的**范围过滤**（一个勾选框）。现在只有一处用途：「只看当前笔记」。
- *
- * ## ⚠️ 它**重新算**清单与正文，不是把行藏起来
- *
- * 只藏行就不知道"看到的是不是全部"—— 摘要说 12 个而清单只有 3 行，用户会按一份
- * 自相矛盾的清单点确认。所以 `apply` 交出**新的清单与新的正文**。
- *
- * ⚠️ 切换范围会**重置勾选**（按新范围的默认值重算）—— 不清的话，上一批看不见的行
- * 仍然勾着、仍会被处理（显示 A、提交 B）。
- */
-export interface TaskListFilter {
-	/** 稳定键：`onFiltersChange` 收到的状态按它索引。 */
-	key: string;
-	/** 勾选框的文案。 */
-	name: string;
-	/** 打开时是否勾上。 */
-	value: boolean;
-}
-
-/**
  * **多列模式**的一列（2026-10-23，附件管理改成表格时加的）。
  *
  * ⚠️ 列的定义在**调用方**（`ui/gallery-modal.ts` 从 i18n 取标题），壳只负责"画格子"。
@@ -135,15 +115,10 @@ export interface TaskListAction {
 }
 
 export interface TaskListOptions {
-	title: string;	/** 正文行（背景、风险、代价）—— 逐行画在清单上方。给了 `filter` 时它是**初始**那批。 */
+	title: string;
+	/** 正文行（背景、风险、代价）—— 逐行画在清单上方。 */
 	lines?: readonly string[];
 	cards: readonly FileCard[];
-	/** 范围 / 类别过滤开关（可多个，各自一个勾选框）。⚠️ 多个开关**只调一次**重算回调。 */
-	filters?: readonly TaskListFilter[];
-	/** 任一开关变化时重算清单与正文。不给 = 只改状态、清单不动。 */
-	onFiltersChange?: (
-		state: Readonly<Record<string, boolean>>
-	) => Promise<{ cards: readonly FileCard[]; lines?: readonly string[] }>;
 	labels: TaskListLabels;
 	/**
 	 * **多列模式**的列定义（不给 = 原来的两行式行）。见 {@link TaskListColumn}。
@@ -218,13 +193,8 @@ export interface TaskListShellHost {
 	settle: (result: TaskListResult | null) => void;
 }
 
-/** 壳交出去的句柄（容器在卸载 / 外部换清单时用）。 */
+/** 壳交出去的句柄。 */
 export interface TaskListShell {
-	/**
-	 * 外部换一份清单（视图切筛选时用；弹窗里由 {@link TaskListOptions.filters} 驱动）。
-	 * 与过滤开关走**同一套**重置逻辑（勾选、状态、分块位置都按新清单重算）。
-	 */
-	replaceCards: (cards: readonly FileCard[], lines?: readonly string[]) => void;
 	/** 当前勾选（按清单顺序）。 */
 	selection: () => string[];
 	/**
@@ -250,7 +220,6 @@ interface RowRef {
  *
  * ```
  * 固定说明段        .acc-task-lines
- * 过滤开关（可选）  .acc-task-filters     ← 只在给了 `filters` 时存在
  * 进度              .acc-task-progress
  * ┌ 清单 .acc-task-list ────────────────────────────┐
  * │ 附件清单（共用）                已选 3 / 18     │  .acc-task-headrow ┐ 粘在顶部
@@ -296,7 +265,7 @@ export function mountTaskListShell(
 		host.requestClose();
 	};
 
-	/** 正文行整块重画（换范围时数字必须与清单对得上）。 */
+	/** 正文行整块重画（换一批行时数字必须与清单对得上）。 */
 	const linesEl = container.createDiv?.({ cls: "acc-task-lines" });
 	const paintLines = (lines: readonly string[]): void => {
 		linesEl?.empty?.();
@@ -304,17 +273,7 @@ export function mountTaskListShell(
 	};
 	paintLines(options.lines ?? []);
 
-	/**
-	 * 过滤开关（`Setting` 行）的容器。**建在这里是为了版面顺序**（在清单上方）；
-	 * 里面那几行在函数末尾统一挂（它们要用 `filterState` 与 `applyFilters`）。
-	 * 没有开关时**不建**这个容器 —— 否则会留一个空 div 撑出一点间距。
-	 */
-	const filtersEl = (options.filters?.length ?? 0) > 0 ? container.createDiv?.({ cls: "acc-task-filters" }) : null;
-
 	let cards: FileCard[] = [...(options.cards ?? [])];
-	/** 过滤开关的当前状态（`key` → 勾没勾）。⚠️ 只有这一份。 */
-	const filterState: Record<string, boolean> = {};
-	for (const item of options.filters ?? []) filterState[item.key] = item.value;
 
 	/** 默认勾选（首次打开与换范围共用**一份**判据）。⚠️ 只从**能勾的**行里取。 */
 	const initialSelection = (rows: readonly FileCard[]): Set<string> => {
@@ -719,40 +678,11 @@ export function mountTaskListShell(
 		}
 	};
 
-	/** 重置到"刚打开"的样子（首次与换清单共用）。 */
+	/** 重置到"刚打开"的样子。 */
 	const resetRows = (): void => {
 		drawn = Math.min(cards.length, ROW_DRAW_CHUNK);
 		paintRows();
 		updateControls();
-	};
-
-	/** 换一份清单（外部换 / 过滤开关触发）：勾选与状态都按新清单重算。 */
-	const replaceCards = (nextCards: readonly FileCard[], lines?: readonly string[]): void => {
-		if (phase === "run") return;
-		if (lines) paintLines(lines);
-		cards = [...nextCards];
-		statuses = new Map<string, TaskStatus>();
-		selected = initialSelection(cards);
-		resetRows();
-	};
-
-	/**
-	 * 任一过滤开关变化：**清掉勾选与状态**（上一批的键不属于这一批）。
-	 * ⚠️ 多个开关共用这一个入口 —— 每个开关各调一次重算会互相覆盖。
-	 */
-	const applyFilters = async (): Promise<void> => {
-		if (phase === "run") return;
-		const handler = options.onFiltersChange;
-		if (!handler) return;
-		let next: { cards: readonly FileCard[]; lines?: readonly string[] } = { cards: [] };
-		try {
-			next = await handler({ ...filterState });
-		} catch {
-			// 取数失败（笔记读不到 / 目录读不了）→ 当作空清单。
-			// 绝不能抛出：那会让界面停在没有结果的中间态，点了确认也没反应。
-			next = { cards: [] };
-		}
-		replaceCards(next.cards, next.lines);
 	};
 
 	/** 点按钮：先确认勾选，再（如果给了 `run`）就地开跑。 */
@@ -918,26 +848,10 @@ export function mountTaskListShell(
 		});
 	};
 
-	// ⭐ 范围过滤（勾选项）：勾上 = 只看当前笔记。
-	// ⚠️ 用 `addToggle` 而不是下拉：只有两个范围，勾选框一眼看得懂"我在看哪一份"。
-	// ⚠️ 挂在 `filtersEl`（清单**上方**那个容器）上，不是 `container` —— 见函数头那张版面表。
-	for (const item of options.filters ?? []) {
-		if (!filtersEl) break;
-		new Setting(filtersEl)
-			.setName(item.name)
-			.addToggle((toggle) =>
-				toggle.setValue(item.value).onChange((on) => {
-					filterState[item.key] = on;
-					void applyFilters();
-				})
-			);
-	}
-
 	renderFooter();
 	resetRows();
 
 	return {
-		replaceCards,
 		selection: () => selectionInOrder(cards, selected),
 		/**
 		 * 容器被外部关掉（ESC / 点背景 / 视图卸载）。

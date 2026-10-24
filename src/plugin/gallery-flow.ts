@@ -73,7 +73,8 @@ function cellsFor(item: GalleryItem, t: PluginContext["t"]): Record<string, File
 					? t("galleryStateUnverified")
 					: t("galleryStateNotUploaded");
 	// ⭐ D-77：站外缓存下来的那份要**标出来** —— 删它只是清缓存（下次显示重新下载），
-	// 与“用户自己的附件”不是一回事。弹窗那条链用 `orphanRowCached` 标，这里同一口径。
+	// 与“用户自己的附件”不是一回事。⚠️ 2026-10-24：口径只剩这一处（`origin === "external"`），
+	// 孤儿清单那半退役时一并删掉了 `orphanRowCached` —— 别再加第二处标记。
 	const stateText = item.origin === "external" ? `${stateLabel} · ${t("galleryStateCached")}` : stateLabel;
 	// 位置：云端有本地无的行**没有**库内路径 ⇒ 给一个明确的"没有"，不留空格
 	//（空格会被读成"这一行缺了东西"，与"云端那份没有本地副本"不是一回事）。

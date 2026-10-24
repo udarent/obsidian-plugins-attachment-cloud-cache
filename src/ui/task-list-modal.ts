@@ -28,7 +28,6 @@ import type { TaskListOptions, TaskListResult } from "./task-list-shell";
 
 export type {
 	TaskListAction,
-	TaskListFilter,
 	TaskListOptions,
 	TaskListResult,
 } from "./task-list-shell";

@@ -211,12 +211,6 @@
 	line-height: 1.45;
 }
 
-/* 范围 / 类别开关（`Setting` 行）的容器。只有给了 `filters` 时才存在（见壳的版面表）。 */
-.acc-task-filters .setting-item {
-	border: none;
-	padding: 0.2em 0;
-}
-
 /*
  * ⚠️ 类名是 `acc-task-headwrap`，**不是** `acc-task-head`：后者是"名字 ＋ 行内标签"
  * 那一层（D-71，`display: flex`）。撞名的后果是表头被压成内容宽度、网格列全塌，

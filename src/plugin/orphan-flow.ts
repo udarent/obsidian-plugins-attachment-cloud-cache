@@ -37,15 +37,25 @@
  *
  * 而且默认是**保留**（主按钮），删除是破坏性样式 —— 这个弹窗会自动出现，
  * 顺手按回车的代价在两个方向上并不对等。
+ *
+ * ## ⚠️ 只有**自动**这一条路（2026-10-24，随设置页重排一起清掉的那半）
+ *
+ * 从前这里还有一条**命令**路：`presentOrphans(keys, true)` 会列一份"云端对象 ＋ 没有任何引用的
+ * 本地文件"的清单，带两个类别开关与三个动作档。命令面板收敛成「附件管理」之后
+ * **再没有调用方**（`bypassCooldown` 恒为 `false`），于是整条路连同它的清单壳 `filters` 能力一起删掉了。
+ *
+ * ⚠️ 那条路上的两件事**没有丢**：
+ * - 「本地孤立文件」仍由附件管理的「待清理」筛选列出 —— 判据是同一个 `selectLocalOrphans`；
+ * - 三档删除（只删本地 / 连云端一起删 / 保留）仍是这里的 `askOrphanCloudDelete` ＋ `applyChoice`。
+ *
+ * ⇒ 想再给一个"手动清单"入口，别把这半接回来：附件管理已经是那个入口，两处做同一件事
+ * 必然有一天只有一处被改。
  */
 
 import { Notice, TFile } from "obsidian";
 import { debugTimed } from "../debug-log";
 import { describeError } from "../error-text";
 import { externalKeysOf, runCloudCleanup } from "../maintenance/cloud-cleanup";
-import { selectLocalOrphans } from "../maintenance/local-orphans";
-import type { CacheIndex } from "../cache/index";
-import { keysInTextsAndCanvases } from "../maintenance/run";
 import type { CloudCleanupResult } from "../maintenance/cloud-cleanup";
 import type { DeletedObjectRecord } from "../maintenance/delete-log";
 import {
@@ -58,21 +68,9 @@ import type { NoteKind, OrphanLocalTarget } from "../maintenance/orphan-watch";
 import { removeOrphanCopies as removeCopies } from "../maintenance/orphan-removal";
 import { displayNameForKey } from "../object-key";
 import { askOrphanCloudDelete } from "../ui/cloud-delete-modal";
-import { buildTaskLabels } from "../ui/task-list";
-import type { TaskReporter } from "../ui/task-list";
 import type { PluginContext } from "./context";
-
-/**
- * 清单里两类候选的 id 前缀（D-74：同一屏混排）。
- *
- * ⚠️ 必须分开：云端对象的键是 `<名字>-<哈希>.<扩展名>`，本地文件是 `attachments/x.png`，
- * 两者**没有共同形状**，靠前缀才能在执行层分流（`applyChoice`）。
- * ⚠️ 自动那条询问传的是**裸 key**（它没有界面），所以执行层三种形状都要认。
- */
-const CLOUD_ID = "cloud:";
-const VAULT_ID = "vault:";
 import { extractStoredKeys, writeDeleteLog } from "./shared-flows";
-import { keyOfUrl, localReferencePass, UnreadableNoteError } from "./notes-query";
+import { localReferencePass, UnreadableNoteError } from "./notes-query";
 
 /** 引用重算的防抖窗口。编辑途中宿主的自动保存会反复触发 `modify`。 */
 const CHECK_DEBOUNCE_MS = 1500;
@@ -136,99 +134,6 @@ export interface OrphanFlow {
 	warmUp(): Promise<void>;
 	/** 清掉两个防抖定时器、丢掉快照（卸载时）。 */
 	dispose(): void;
-}
-
-/**
- * 算出「**没有任何引用的本地文件**」—— 清理命令的第二类候选（D-74）。
- *
- * ## 「还有人在用」是两份集合的并集（与其它三条命令同一份口径）
- *
- * 1. **本地引用**：正文里直接指着这条路径（`locallyReferencedPaths`，调用方已经算好递进来）；
- * 2. **远端引用**：笔记里写着我们存储的 URL，而那个对象**落在这条路径上**。
- *    ⚠️ 少了第 2 条，"已经迁到云端、链接也改好了"的附件会被当成孤立 ⇒ 一清就删掉
- *    正在显示的图（那份副本没了就得重新下载，离线直接看不到）。
- *
- * ## ⚠️ 代价：这一趟要**再读一遍全库正文**（`scanReferences`）
- *
- * `locallyReferencedPaths` 已经读过一遍（在 `presentOrphans` 里，为了"本地还引用着"那一半）。
- * 两次读库是刻意的取舍：合并需要把"严格口径（读不到就抛）"与"宽松口径（跳过）"揉在一起，
- * 而那条边界在 `UnreadableNoteError` 的注释里写着"绝不能把不知道当成没有引用"。
- * 这是一条**用户显式触发**的命令，几十毫秒换一条不含糊的边界，值得。
- *
- * ## 失败时**不列**（而不是把全部本地文件当孤立）
- *
- * 远端引用统计不出来 ⇒ 我们**不知道**哪些还在用 ⇒ 这一趟本地孤立文件一律不列。
- * 方向是"少列"：那条方向的后果是"这次没清干净"，反方向是"删了正在用的图"。
- */
-async function collectLocalOrphans(
-	ctx: PluginContext,
-	index: CacheIndex,
-	cloudKeys: readonly string[],
-	locallyReferenced: ReadonlySet<string>,
-	/**
-	 * 已经读好的全库正文（D-81）。
-	 *
-	 * ⚠️ **必幅必送**：这里不再自己读库 —— 调用方已经为了「本地引用」读过一遍，
-	 * 再读一遍就是几千篇笔记的库上多花一个秒级。
-	 */
-	notes: readonly { text: string }[]
-): Promise<{
-	/** 用户自己的、没有任何引用的本地文件。 */
-	targets: { path: string; key: string }[];
-	/** 站外缓存下来的本地副本（D-77）—— 删了下次显示重新下载。 */
-	cached: { path: string; key: string }[];
-	skipped: { reason: string; count: number }[];
-}> {
-	const pathOfKey = new Map<string, string>();
-	const keyOfPath = new Map<string, string>();
-	const externalPaths = new Set<string>();
-	for (const entry of index.toArray()) {
-		if (!entry.cachePath) continue;
-		pathOfKey.set(entry.key, entry.cachePath);
-		keyOfPath.set(entry.cachePath, entry.key);
-		if (entry.origin === "external") externalPaths.add(entry.cachePath);
-	}
-
-	const used = new Set<string>(locallyReferenced);
-	try {
-		// ⚠️ 用**已经读好的正文**算远端 key（D-81）：「什么算引用」仍然只有一份实现
-		//（`keysInTextsAndCanvases`，连画布也在里面），只是不再读第二遍库。
-		const keys = await keysInTextsAndCanvases(
-			ctx.app,
-			notes.map((note) => note.text),
-			(url) => keyOfUrl(ctx.settings, url)
-		);
-		for (const key of keys) {
-			const path = pathOfKey.get(key);
-			if (path) used.add(path);
-		}
-	} catch (error) {
-		console.error("[attachment-cloud-cache] 统计远端引用失败，这一趟不列本地孤立文件", error);
-		return { targets: [], cached: [], skipped: [{ reason: "远端引用统计失败", count: 0 }] };
-	}
-
-	/** 云端对象那条清单已经覆盖的路径 —— 同一个文件不列两行（否则两行各删一次）。 */
-	const coveredPaths = new Set<string>();
-	for (const key of cloudKeys) {
-		const path = pathOfKey.get(key);
-		if (path) coveredPaths.add(path);
-	}
-
-	// ⚠️ 宿主自己的目录：**配置目录名是用户可配的**（`Vault#configDir`，不一定叫 `.obsidian`），
-	// 所以由这里把**当前**那个名字递进去 —— 只靠「顶层目录以点开头」会漏掉 `myconfig/` 这种。
-	const configDir = String(ctx.app.vault.configDir ?? "").replace(/\/+$/, "");
-	const excludedPrefixes = configDir ? [`${configDir}/`, ".trash/"] : [".trash/"];
-	const selection = selectLocalOrphans(ctx.app.vault.getFiles(), {
-		usedPaths: used,
-		coveredPaths,
-		externalPaths,
-		excludedPrefixes,
-	});
-	return {
-		targets: selection.paths.map((path) => ({ path, key: keyOfPath.get(path) ?? "" })),
-		cached: selection.cachedPaths.map((path) => ({ path, key: keyOfPath.get(path) ?? "" })),
-		skipped: selection.skipped,
-	};
 }
 
 export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
@@ -325,7 +230,7 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 	}
 
 	/**
-	 * 把一批候选摆到用户面前 —— **自动与命令共用的唯一实现**。
+	 * 把一批候选摆到用户面前（**自动**那一路，唯一入口）。
 	 *
 	 * ## ⭐ 一个孤儿占**两份**资源，所以询问是三档而不是"删 / 不删"
 	 *
@@ -334,22 +239,19 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 	 * "让库小一点，但别动我的源文件"。
 	 *
 	 * @param keys 候选 key（调用方只该传"我们上传过、且本库此刻看不见引用"的）
-	 * @param bypassCooldown 命令那条路传 `true`：**冷却只管自动那一侧**
-	 *（它存在的理由是"别反复打扰"，而用户主动跑命令不属于打扰）。
-	 *⚠️ 但**记还是照记** —— 记下来的是"这个问题已经问过他了"，下一次自动触发不该再冒出来。
 	 */
-	async function presentOrphans(keys: readonly string[], bypassCooldown: boolean): Promise<void> {
+	async function presentOrphans(keys: readonly string[]): Promise<void> {
 		// ⭐ 排障（D-67）：这条路只在"真的攒出候选"时才跑，所以日志量很小；
 		// 而它最需要日志 —— 删掉的东西不可恢复，"为什么它被当成孤儿"要能一眼看清。
 		const startedAt = Date.now();
 		const debug = ctx.settings.debugLogging;
 		const index = ctx.currentIndex();
 		// ⚠️ 站外缓存的 key 集合**在循环外算一次**：放进 `isExternal` 里逐个查索引
-		// 会让这一遍变成 O(n²)（清单可能几百行）。
+		// 会让这一遍变成 O(n²)（候选可能几百个）。
 		const external = externalKeysOf(index);
 
 		// ⚠️⚠️ 先摘掉"**本地副本还被正文直接指着**"的那些（2026-10-22 审计查出的冲突：
-		// 同一个对象，引用快照说"在用"、这条命令却把它列成孤儿 ⇒ 用户可能删掉正文
+		// 同一个对象，引用快照说"在用"、这条链却把它列成孤儿 ⇒ 用户可能删掉正文
 		// 还在显示的东西）。判据在 `orphan-watch.ts::dropLocallyReferenced`，
 		// 路径那一侧与其它命令**同一份**（`notes-query.ts::locallyReferencedPaths`）。
 		// ⚠️ 读不到某篇笔记 ⇒ **这次什么都不问**（这一侧是"删"的方向，不能把"不知道"
@@ -358,17 +260,9 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 		// **真的攒出了候选**时跑（前面的防抖与差分已经把绝大多数拍挡掉了），而这个判据
 		// 决定的是一次**不可恢复的删除** —— 这个代价换得起。
 		let locallyReferenced: ReadonlySet<string>;
-		/**
-		 * ⭐⭐ 2026-10-22（D-81）：这一遍读库同时留下正文。
-		 *
-		 * 清理命令需要两份答案（本地引用 / 远端 key），原料是同一批正文；
-		 * 从前各读一遍，而“读不到就抛”那个严格口径更不该写两次。
-		 */
-		let notes: { text: string }[] = [];
 		try {
 			const pass = await localReferencePass(ctx.app, { debug });
 			locallyReferenced = pass.referenced;
-			notes = pass.notes;
 		} catch (error) {
 			new Notice(
 				error instanceof UnreadableNoteError
@@ -395,27 +289,11 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 			// ⇒ 问条目会在那一档对**所有**对象答"不是我们的"，这个询问于是永不出现
 			// （N11，与 P8 同一形状）。台账不看副本，三档都答得对。
 			isOurs: (key) => index.wasUploaded(key),
-			// ⭐ 站外缓存一律不问（判据的完整理由在 `selectOrphanAsks` 的 `isExternal`）——
-			// 2026-10-16 从退役的「清理云端未使用对象…」继承来，**两条路共用这一处**。
+			// ⭐ 站外缓存一律不问（判据的完整理由在 `selectOrphanAsks` 的 `isExternal`）。
 			isExternal: (key) => external.has(key),
-			hasAsked: (key) => (bypassCooldown ? false : asked.has(key)),
+			hasAsked: (key) => asked.has(key),
 		});
-		// ⭐⭐ 命令路的本地候选（D-74 / D-77）：**没有任何引用的本地文件**
-		// ＋ **站外缓存下来的副本**。
-		// ⚠️ 必须在"云端候选为空就早退"**之前**算 —— 台账空不等于没事可清，
-		// 本地文件与台账毫无关系（从来没有上传过的那些根本没有 key）。
-		const localOrphans = bypassCooldown
-			? await collectLocalOrphans(ctx, index, selection.asks, locallyReferenced, notes)
-			: null;
-		// ⚠️ **三部分**都要算：D-77 之后「只有站外缓存副本」也是一种"有东西可清"。
-		const localCount = (localOrphans?.targets.length ?? 0) + (localOrphans?.cached.length ?? 0);
-		if (selection.asks.length === 0 && localCount === 0) {
-			// ⚠️ **命令那条路必须出声**（2026-10-16 加）：用户特地按了它，静默会被读成"命令坏了"
-			//（D-43 的同一形状）。而"候选被筛空"从此有了新的来路 —— 站外缓存的对象会被
-			// `isExternal` 挡掉，所以"台账里明明有一堆已上传对象却一个都不问"是**正常可达**的。
-			if (bypassCooldown) new Notice(ctx.t("orphanNoneToCheck"));
-			return;
-		}
+		if (selection.asks.length === 0) return;
 
 		// ⭐ 问过就记住，**无论用户怎么回答** —— 这是"不打扰"的底线
 		//（他可能还在整理笔记，同一条引用被删掉的原因有很多种）
@@ -423,13 +301,11 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 
 		const mode = ctx.settings.orphanAsk;
 
-		// ⭐ `notice` 档：不弹窗，只给一条**不阻塞**的通知（并指路到命令）。
+		// ⭐ `notice` 档：不弹窗，只给一条**不阻塞**的通知（并指路到附件管理）。
 		// 它同样吃冷却 —— 通知反复冒出来，与弹窗一样烦人。
-		// ⚠️ 指路指向的是**新命令**（"检查未引用的云端附件…"）：它按同一批判据再列一次，
+		// ⚠️ 指路指向的是**附件管理**（路径从 i18n 取）：它按同一批判据再列一次，
 		// 正是"想再处理一次"时该去的地方（`cleanup-cloud` 走列桶，是另一件事）。
-		// ⚠️ `selection.asks.length > 0`：本地孤立文件不走这一档（那句通知说的是"已上传的附件"），
-		// 少了这个条件，台账空但本地有孤立文件时会说"有 0 个已上传的附件…"。
-		if (mode === "notice" && selection.asks.length > 0) {
+		if (mode === "notice") {
 			new Notice(
 				ctx.t("orphanNotice", {
 					count: selection.asks.length,
@@ -440,11 +316,10 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 		}
 
 		// 存储没配好就**不问了**：这个弹窗的三个选项里有两个以"云端"为前提，
-		// 而只有一个能成立时，问法本身是误导（"只删本地副本"那一档由 R17 的询问
-		// 与 `cleanup-cloud` 承担，跟这里的三选一不是一件事）。
+		// 而只有一个能成立时，问法本身是误导（"只删本地副本"那一档由 F18 的清理承担，
+		// 跟这里的三选一不是一件事）。
 		const client = ctx.buildClient();
-		// ⚠️ 只在**真有云端候选**时拦：删本地孤立文件不需要存储连接（D-74）。
-		if (!client && selection.asks.length > 0) return;
+		if (!client) return;
 
 		// ⭐ 清单给的是**图 + 名字**，不是一串 key：老 key 是 `<sha256>.<扩展名>`，
 		// 用户看它认不出是哪张图，而这是不可恢复动作前**唯一能核对**的东西。
@@ -461,68 +336,26 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 			};
 		});
 
-		/** 三档都要说清的两句（**可恢复性**与**多设备盲区**），自动与命令共用同一份措辞。 */
+		/** 三档都要说清的两句（**可恢复性**与**多设备盲区**）。 */
 		const lines = [ctx.t("orphanLocalNote"), ctx.t("cloudCleanupDeviceBlindSpot")];
 
 		/**
-		 * 把用户选的那一档落到**他勾中的那些**上 —— 自动与命令两条路**共用这一份**。
+		 * 把用户选的那一档落到**他勾中的那些**上。
 		 *
-		 * ⚠️ `report` 只有命令那条路给（它有进度界面）：自动那条只有一两个孤儿，
-		 * 弹窗自己已经把话说完了。
+		 * ⚠️ 入参是**裸 key**：这条链只有一个没有界面的三选一弹窗（清单那条路 2026-10-24 已删），
+		 * 所以这里不再需要"从清单行的 id 反解 key"那一层，也没有进度可上报。
 		 */
-		const applyChoice = async (
-			choice: "local" | "both",
-			chosen: readonly string[],
-			report?: TaskReporter
-		): Promise<void> => {
-			// ⭐ 清单里混了两类（D-74）：云端对象（`cloud:<key>`）与本地孤立文件（`vault:<path>`）。
-			// 自动那条询问传的是**裸 key**（它没有界面）⇒ 三种形状都认。
-			const cloudKeys: string[] = [];
-			const vaultPaths: string[] = [];
-			/** `kind|值` → 清单行的 id：进度要按**界面上的那一行**上报（键与 id 不是同一个东西）。 */
-			const idOf = new Map<string, string>();
-			for (const id of chosen) {
-				if (id.startsWith(VAULT_ID)) {
-					const path = id.slice(VAULT_ID.length);
-					vaultPaths.push(path);
-					idOf.set(`vault|${path}`, id);
-					continue;
-				}
-				const key = id.startsWith(CLOUD_ID) ? id.slice(CLOUD_ID.length) : id;
-				cloudKeys.push(key);
-				idOf.set(`cloud|${key}`, id);
-			}
-
+		const applyChoice = async (choice: "local" | "both", chosen: readonly string[]): Promise<void> => {
 			const index = ctx.currentIndex();
-			/** 路径 → key（索引里记着的那条）。用来在删完之后**摘掉记录**。 */
-			const keyOfPath = new Map<string, string>();
-			for (const entry of index.toArray()) {
-				if (entry.cachePath) keyOfPath.set(entry.cachePath, entry.key);
-			}
-			const localTargets: OrphanLocalTarget[] = [
-				// 云端对象：删的是它在本地的那份副本（索引记的落点）
-				...planOrphanLocalRemoval(cloudKeys, { cachePathOf: (key) => index.get(key)?.cachePath }),
-				// 本地孤立文件（D-74）：**它自己就是待删的那一份**（没有云端对象可依）。
-				// ⚠️ 若它在索引里（上传过、只是引用没了），把 key 带上 —— 删完要摘记录，
-				// 否则渲染层会以为副本还在、去加载一个已经不存在的文件。
-				// ⚠️ 不在索引里的（从来没上传过）key 留空：`forget("")` 是安全的 no-op。
-				...vaultPaths.map((path) => ({ key: keyOfPath.get(path) ?? "", path })),
-			];
-			const failed = new Set<string>();
-			const markAll = (status: "running" | "done"): void => {
-				for (const key of chosen) {
-					if (status === "done" && failed.has(key)) continue;
-					report?.(key, status);
-				}
-			};
-			markAll("running");
+			// 云端对象：删的是它在本地的那份副本（索引记的落点）
+			const localTargets = planOrphanLocalRemoval(chosen, {
+				cachePathOf: (key) => index.get(key)?.cachePath,
+			});
 
 			// 先删云端（不可恢复的那一半先做：失败时下面那句提示会如实说明"云端对象未动"）
 			let cloud: CloudCleanupResult | null = null;
 			const logRecords: DeletedObjectRecord[] = [];
-			// ⚠️ `cloudKeys.length > 0`：清单里可能**只有**本地孤立文件（D-74），
-			// 那时"连云端一起删"对它就是"删本地那份"，没有云端可调。
-			if (choice === "both" && cloudKeys.length > 0 && client) {
+			if (choice === "both" && chosen.length > 0 && client) {
 				try {
 					cloud = await runCloudCleanup(
 						{
@@ -532,16 +365,8 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 							notify: (message) => new Notice(message),
 							t: ctx.t,
 							onRemoved: (record) => logRecords.push({ ...record, scope: "orphan" }),
-							// 进度：把执行层的事件接到界面上（键与清单行的 `id` 同一份）
-							onItem: (event) => {
-								// ⚠️ 执行层报的是**裸 key**，界面那一行的 id 带 `cloud:` 前缀 ⇒ 映射回去，
-								// 否则进度会挂不上（那一行永远停在等待）。
-								const id = idOf.get(`cloud|${event.key}`) ?? event.key;
-								if (event.status === "failed") failed.add(id);
-								report?.(id, event.status);
-							},
 						},
-						cloudKeys
+						chosen
 					);
 				} catch (error) {
 					new Notice(ctx.t("cloudDeleteFailed", { error: describeError(error) }));
@@ -551,9 +376,6 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 			await writeDeleteLog(ctx, logRecords);
 
 			const removed = await removeLocalCopies(localTargets);
-			// 本地那一步做完 = 这一件真的走完了。⚠️ 云端删失败的那几件**保持失败**
-			// （下一行只给没失败的那些收尾）—— 否则界面会替用户说"都成功了"。
-			markAll("done");
 
 			new Notice(
 				cloud
@@ -566,90 +388,6 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 					: ctx.t("orphanLocalDeleted", { removed })
 			);
 		};
-
-		// ⭐ 命令那条路：**清单式弹窗**（缩略图 + 勾选 + 进度，与另外三条链同一个壳）。
-		// 它列的是**全部**候选（不截断：要逐项勾选），并在勾选之后就地把三档之一跑完。
-		// ⚠️ `bypassCooldown === true` 就是**命令**那条路（冷却只管自动那一侧，见函数头）。
-		if (bypassCooldown) {
-			// ⭐⭐ 第二类候选：**没有任何引用的本地文件**（D-74）。
-			//
-			// ⚠️ 只在这条**命令**路算：自动那条询问的语义是"这些云端对象你还留着吗"
-			// （`orphanAsk` 的开关），把用户的本地文件塞进去等于"我没做任何事，它却弹窗
-			// 问我要不要删我自己的文件"。
-
-			// ⚠️ 云端那一批的 `id` 原来是裸 key（自动那条路还用着）⇒ 这里**只加前缀**，
-			// 不动 `inputs` 本身：两条路共用同一份输入，改一处会把自动路也带歪。
-			const cloudInputs = inputs.map((input) => ({ ...input, id: CLOUD_ID + input.id, hint: ctx.t("orphanRowCloud") }));
-			// ⚠️ `localOrphans` 在上面的早退判断之前就算好了（台账空也可能有它）
-			// ⭐ 2026-10-22（D-77）：两类都是「本地那一份」（删法一样 ⇒ 同一个 `vault:` 前缀），
-			// 但**标签不同**：一个是用户自己的文件（可能是唯一一份），
-			// 另一个是站外缓存下来的副本（删了下次显示重新下载）。
-			const toRow = (target: { path: string }, hint: string) => ({
-				id: VAULT_ID + target.path,
-				name: target.path.split("/").pop() ?? target.path,
-				localPath: target.path,
-				hint,
-			});
-			const vaultInputs = [
-				...(localOrphans?.targets ?? []).map((target) => toRow(target, ctx.t("orphanRowLocal"))),
-				...(localOrphans?.cached ?? []).map((target) => toRow(target, ctx.t("orphanRowCached"))),
-			];
-			/**
-			 * 按过滤开关重算清单与正文。
-			 * ⚠️ 正文里的数字跟着变 —— 它与清单必须是**同一批**（§7.3.4 那条纪律），
-			 * 否则"共 N 个"与下面几行对不上，而用户是按那句话判断要不要动手的。
-			 */
-			const buildView = (state: Readonly<Record<string, boolean>>) => {
-				const showCloud = state.cloud !== false;
-				const showLocal = state.local !== false;
-				const shown = [...(showCloud ? cloudInputs : []), ...(showLocal ? vaultInputs : [])];
-				return {
-					cards: ctx.fileCards(shown, shown.length),
-					// ⭐⭐ 2026-10-22（D-76）：正文是**一句固定说明**（与「上传附件」同一个规则）——
-					// 不随内容 / 随过滤变，也不含数量：数量在**两个删除档的按钮上**。
-					// ⚠️ 所以这里**不交 `lines`**（交了就是“换个过滤器顶部变一次”）。
-					lines: [ctx.t("orphanListBody")],
-				};
-			};
-			const initial = buildView({ cloud: true, local: true });
-
-			const answer = await ctx.pickTasks({
-				// ⭐ 2026-10-22（D-76）：标题 = **命令名**（2026-10-23 起命令名不带省略号）（与「上传附件」同一条规则；
-				// 疑问句留给**自动**那条询问：那次打扰确实是一个问题）。
-				title: ctx.t("orphanListTitle"),
-				lines: initial.lines,
-				cards: initial.cards,
-				// ⭐ 默认只勾**云端对象**：本地孤立文件从来没上传过，删了**没有云端可依**
-				//（会进回收站，但那是用户设置说了算的事）。要清它们得自己勾 ——
-				// 与「上传附件」里"没有任何笔记引用的那些默认不勾"同一条纪律。
-				initiallySelected: cloudInputs.map((input) => input.id),
-				// ⭐ 两个类别开关（2026-10-22 用户要求：「加过滤选项，可以不勾本地，也可以不勾云端」）。
-				filters: [
-					{ key: "cloud", name: ctx.t("orphanFilterCloud"), value: true },
-					{ key: "local", name: ctx.t("orphanFilterLocal"), value: true },
-				],
-				onFiltersChange: (state) => Promise.resolve(buildView(state)),
-				// ⚠️ 三档动作由 `actions` 给，这套 `labels` 只用到「全选 / 全不选 / 取消」与行尾「打开」那几句；
-				// `cta` 那一句用不到（没有单一主按钮），传一个**已被别处用着**的键，别造死键。
-				labels: buildTaskLabels(ctx.t, "orphanKeep"),
-				actions: [
-					// ⭐ 保守那一档是**主按钮**：顺手按回车的代价在两个方向上不对等
-					// （误删云端不可恢复，"保留"最多是下次再清一次）。理由见 `cloud-delete-modal.ts`。
-					{ key: "keep", label: () => ctx.t("orphanKeep"), primary: true, idle: true },
-					// ⭐ D-76：两个删除档都带数量（与「上传附件」的主按钮同一个读法：
-					// “这一下动几个”写在要按的那个按钮上）。「保留」不动任何东西 ⇒ 不带。
-					{ key: "local", label: (count) => ctx.t("orphanLocalOnly", { count }) },
-					{ key: "both", label: (count) => ctx.t("orphanBoth", { count }), destructive: true },
-				],
-				run: async (chosen, report, action) => {
-					// `keep` 那一档是 `idle` ⇒ 根本不会走到这里（由弹窗直接收口）
-					if (action === "both" || action === "local") await applyChoice(action, chosen, report);
-				},
-			});
-			// `null` = 取消 / 直接关掉 ⇒ 如实说一句（这一条以前是"点边上就不见了"的场景）
-			if (!answer) new Notice(ctx.t("maintainCancelled"));
-			return;
-		}
 
 		// ⭐ 自动那条路：保持**三选一弹窗**（主按钮是保守项）。它通常只摆一两个孤儿，
 		// 不是"清单"场景；而它出现时用户多半没在期待它 ⇒ 措辞与按钮顺序都按那个前提设计的
@@ -713,7 +451,7 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 	 * 把攒下的孤儿筛一遍、问用户一次（**自动**那一侧）。
 	 *
 	 * ⚠️ 它只做两件事：把 `pending` 拿走、过滤掉"别主动告诉我"那一档 ——
-	 * 剩下的全在 {@link presentOrphans} 里（命令那条路走的是同一个函数）。
+	 * 剩下的全在 {@link presentOrphans} 里。
 	 */
 	async function askAboutOrphans(): Promise<void> {
 		const batch = [...pending];
@@ -721,12 +459,11 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 		if (batch.length === 0) return;
 
 		// ⭐ 用户可以直接说"别主动告诉我"。这一档在**筛选之前**就返回：
-		// 连扫一遍都省了，而且**没有任何信息丢失** —— 「检查未引用的云端附件…」那条命令
+		// 连扫一遍都省了，而且**没有任何信息丢失** —— 附件管理的「待清理」筛选
 		// 按同一批判据随时能再列一次（它算的也是"台账里有、本库看不见引用"）。
-		// ⚠️ 这一档**只管自动这一侧**：命令是用户主动要的，不吃它（见 {@link checkNow}）。
 		if (ctx.settings.orphanAsk === "never") return;
 
-		await presentOrphans(batch, false);
+		await presentOrphans(batch);
 	}
 
 	return {

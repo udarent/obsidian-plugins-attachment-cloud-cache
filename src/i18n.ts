@@ -220,29 +220,14 @@ export const I18N: Record<string, Locale> = {
 		releaseSpaceUnlinkedLeft:
 			"Also about {mb} MB of local copies are linked from no note — those are not part of this cleanup: they may need removing from your storage as well, so run “{command}” for them.",
 		orphanTitle: "Clean up these attachments no note links to?",
-		// ⚠️ 2026-10-22（D-74）：不再说"you uploaded" —— 清单里有从来没上传过的本地文件。
+		// ⚠️ 2026-10-22（D-74）：不再说"you uploaded" —— 本地副本也可能被这条询问清掉（「只删本地文件」那一档）。
 		orphanBody: "{count} attachment(s) are no longer linked from any note or canvas.",
-		// ⭐ 行内小标签：两类候选混在一屏，靠它区分（过滤开关也叫这两个名字）
-		orphanRowCloud: "cloud",
-		orphanRowLocal: "local",
-		// ⭐ 2026-10-22（D-77）：站外缓存下来的本地副本（删了下次显示重新下载）
-		orphanRowCached: "cached",
-		orphanFilterCloud: "Cloud objects",
-		orphanFilterLocal: "Local files",
 		orphanMore: "…and {count} more.",
 		orphanLocalNote:
 			"Deleting a local copy only frees space in your vault - linking it again downloads it back. Deleting from your storage cannot be undone.",
-		// ⭐ 2026-10-22（D-76）：清单弹窗的标题（与另一条命令同一个规则：**就是命令名本身**（2026-10-23 起命令名不再带省略号，两侧字面相同））。
-		// ⚠️ 自动那条询问仍然用 `orphanTitle`（它是**问句**：那是一次没人要求的打扰）。
-		orphanListTitle: "Clean up attachments",
-		// ⭐⭐ 2026-10-22（D-76）：清单顶部是**一句固定说明**（与「上传附件」同一个规则）：
-		// 不含数量、不随内容变。数量在**两个删除档的按钮上**。
-		// 原来这里是 3~4 段（带 count 的一句 + 条件出现的「从没上传过」+
-		// `orphanLocalNote` + `cloudCleanupDeviceBlindSpot`），而上传那边只有一句 ⇒ 两屏看起来不是一个产品。
-		orphanListBody:
-			"Ticked attachments are handled however you choose below: deleting the local file only frees space in your vault - if the cloud copy is still there, linking it again downloads it back, while deleting from storage cannot be undone. A file tagged “local” that was never uploaded has no cloud copy to fall back on. A file tagged “cached” was downloaded from another site: removing it touches neither your storage nor your notes, it is simply downloaded again the next time it is shown. Only references this vault can see are counted, so objects uploaded from another device are not listed.",
 		orphanKeep: "Keep them",
-		// ⚠️ 改叫"files"而不是"copies"（D-74）：那些从来没上传过的是**唯一一份**，不是副本。
+		// ⚠️ 改叫"files"而不是"copies"（D-74）：删的是**文件本身**（不是"一份缓存"），措辞要能同时覆盖
+		// 用户自己的附件与站外缓存下来的副本。
 		// ⭐ D-76：带 `{count}` —— 两个删除档都要说清“这一下动几个”。
 		orphanLocalOnly: "Delete local files only ({count})",
 		orphanBoth: "Delete locally and from storage ({count})",
@@ -253,9 +238,6 @@ export const I18N: Record<string, Locale> = {
 			"{count} uploaded attachment(s) are no longer linked from any note or canvas. Open “{command}” and pick the “To clean up” filter to review them.",
 		orphanDismissed:
 			"Nothing was deleted. To ask again, open “{command}” and pick the “To clean up” filter.",
-		// ⚠️ 2026-10-22（D-77）：原来写着「站外缓存不在这里处理」—— 现在它们的**本地副本**就在这里处理。
-		orphanNoneToCheck:
-			"No attachments to clean up — whatever is left is either still linked from a note or canvas, or was uploaded from another device (this one cannot see what links to those).",
 		cloudDeleteFailed: "Could not delete the object: {error}",
 		cmdManageAttachments: "Attachment manager",
 		galleryTitle: "Attachment manager",
@@ -621,27 +603,14 @@ export const I18N: Record<string, Locale> = {
 		releaseSpaceUnlinkedLeft:
 			"另有约 {mb} MB 是「没有任何笔记引用」的本地副本 —— 那不属于这次清理：它们可能需要连云端对象一起处理，请用「{command}」。",
 		orphanTitle: "要清理这些没有笔记引用的附件吗？",
-		// ⚠️ 2026-10-22（D-74）：不再说"你上传过的" —— 清单里有从来没上传过的本地文件。
+		// ⚠️ 2026-10-22（D-74）：不再说"你上传过的" —— 本地副本也可能被这条询问清掉（「只删本地文件」那一档）。
 		orphanBody: "下列 {count} 个附件已经不再被任何笔记或画布引用了。",
-		// ⭐ 行内小标签：两类候选混在一屏，靠它区分（过滤开关也叫这两个名字）
-		orphanRowCloud: "云端",
-		orphanRowLocal: "本地",
-		// ⭐ 2026-10-22（D-77）：站外缓存下来的本地副本（删了下次显示重新下载）
-		orphanRowCached: "站外缓存",
-		orphanFilterCloud: "云端对象",
-		orphanFilterLocal: "本地文件",
 		orphanMore: "……还有 {count} 个。",
 		orphanLocalNote:
 			"只删本地副本只是腾出库里的空间 —— 以后笔记里再引用它，会自动重新下载；从存储里删掉就找不回来了。",
-		// ⭐ 2026-10-22（D-76）：清单弹窗的标题（与另一条命令同一个规则：**就是命令名本身**（2026-10-23 起命令名不再带省略号，两侧字面相同））。
-		// ⚠️ 自动那条询问仍然用 `orphanTitle`（它是**问句**：那是一次没人要求的打扰）。
-		orphanListTitle: "清理附件",
-		// ⭐⭐ 2026-10-22（D-76）：清单顶部是**一句固定说明**（与「上传附件」同一个规则）：
-		// 不含数量、不随内容变。数量在**两个删除档的按钮上**。
-		orphanListBody:
-			"勾中的附件按下面选的方式处理：只删本地文件只是腾出库里的空间 —— 云端还在的话，以后笔记里再引用它会自动重新下载；从存储里删掉就找不回来了。标着「本地」、从来没上传过的那些没有云端可依。标着「站外缓存」的是从别的网站下载的副本：删掉不碰云端、也不改笔记，只是下次显示时要重新联网下载。这个清单只算本库看得见的引用，别的设备上传的对象不在这里。",
 		orphanKeep: "保留",
-		// ⚠️ 改叫"本地文件"而不是"本地副本"（D-74）：那些从来没上传过的是**唯一一份**，不是副本。
+		// ⚠️ 改叫"本地文件"而不是"本地副本"（D-74）：删的是**文件本身**（不是"一份缓存"），措辞要能同时覆盖
+		// 用户自己的附件与站外缓存下来的副本。
 		// ⭐ D-76：带 `{count}` —— 两个删除档都要说清“这一下动几个”。
 		orphanLocalOnly: "只删本地文件 ({count})",
 		orphanBoth: "云端和本地一起删 ({count})",
@@ -651,9 +620,6 @@ export const I18N: Record<string, Locale> = {
 		orphanNotice: "有 {count} 个已上传的附件不再被任何笔记或画布引用。打开「{command}」，切到「待清理」筛选查看并处理。",
 		orphanDismissed:
 			"什么都没删。想再问一次：打开「{command}」，切到「待清理」筛选。",
-		// ⚠️ 2026-10-22（D-77）：原来写着「站外缓存不在这里处理」—— 现在它们的**本地副本**就在这里处理。
-		orphanNoneToCheck:
-			"没有需要清理的附件 —— 剩下的要么还有笔记或画布在引用，要么是别的设备上传的（这台设备看不见谁在引用它们）。",
 		cloudDeleteFailed: "删除对象失败：{error}",
 		cmdManageAttachments: "附件管理",
 		galleryTitle: "附件管理",

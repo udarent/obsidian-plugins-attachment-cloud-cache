@@ -29,8 +29,8 @@ await withLoadedTs(["src/ui/settings-logic", "src/ui/settings-bindings", "src/s3
 			"credentials distinguish 'never chosen' from 'the chosen secret no longer exists', " +
 			"an imported credentials file maps onto the right fields while the secret alone " +
 			"travels to the keychain (never into the settings patch), " +
-			"and the page order follows the business chain (group order, actions at the end of their own group, " +
-			"and the derived address after the switch that shapes it')."
+			"and the page order follows the business chain (group order, the two opposite actions sitting side by side at the end of the upload group, " +
+			"a parameter-only offline group, and the derived address after the switch that shapes it')."
 	);
 });
 
@@ -342,7 +342,8 @@ assert.ok(
 // | 组顺序 | 连接 → 上传 → 副本 → 清理 → 排障 | 用户在"还没有连接"的一页里读到上传策略 |
 // | 「存储连接」组尾 | 必须是「测试连接」 | 校验项夹在中间，用户填一半就去点 |
 // | 「兼容模式」在「公开链接地址」之前 | 后者留空时的提示地址由前者推导（`objectBaseFor` 读 `forcePathStyle`）| 先看到推导结果、后看到决定它形状的开关 |
-// | 两个动作项各在自己组的**末尾** | 上传全部 / 改回本地路径 | 按钮把同一串参数切成两段（「改回本地路径」从前正卡在档位与上限之间）|
+// | 两颗反向按钮**相邻收「上传」组尾** | 上传全部 → 改回本地（最后两项） | 两个方向的批量迁移被拆到两个组里，各自读成孤立的一条命令（2026-10-24 用户定的口径）|
+// | 「离线与本地副本」组**没有动作** | 末项必须是只读的「占用空间」 | 参数串里又冒出一颗按钮，把同一串策略问题切成两段 |
 // | 站外的两个子项不插在两个兄弟开关**之间** | `externalSiteMode` 夹在 `externalImageCache` 与 `uploadLocalFiles` 之间 | 「同时上传本机文件」被读成站外那一组的第三个子项 |
 //
 // ⚠️ 判据只取**设置项的键名**（`name: this.t("…")`），不看文案 —— 文案两种语言各一份。
@@ -381,15 +382,17 @@ assert.ok(
 		storage.indexOf("forcePathStyle") < storage.indexOf("s3PublicUrlBase"),
 		"★ 「兼容模式」必须排在「公开链接地址」之前 —— 后者的留空提示（`objectBaseFor`）读的就是它"
 	);
-	assert.equal(
-		upload.at(-1),
-		"uploadAllName",
-		"★ 「上传全部附件」必须在「上传」组末尾：它是动作，不能夹在参数之间"
+	assert.deepEqual(
+		upload.slice(-2),
+		["uploadAllName", "revertName"],
+		"★ 两颗互为反向的按钮必须**相邻**、并在「上传」组尾（上传全部 → 改回本地）；" +
+			"拆到两个组里，用户就看不出这是同一件事的两个方向"
 	);
 	assert.equal(
 		offline.at(-1),
-		"revertName",
-		"★ 「把链接改回本地路径」必须在「离线与本地副本」组末尾：它是动作，而且与上面那颗互为反向"
+		"localUsageName",
+		"★ 「离线与本地副本」组只放参数（末项是只读的「占用空间」）—— " +
+			"动作项一律去「上传」组尾，别再让一颗按钮把这一串策略问题切成两段"
 	);
 	assert.ok(
 		upload.indexOf("externalSiteMode") > upload.indexOf("externalImageCache") &&
