@@ -66,7 +66,7 @@ const APP_DIR = process.env.APPDATA ? join(process.env.APPDATA, "obsidian") : nu
 const OBSIDIAN_JSON = APP_DIR ? join(APP_DIR, "obsidian.json") : null;
 
 /** 每帧间隔（毫秒）。120ms ≈ 8.3fps，合成时再按"到下一帧的真实间隔"重算时长。 */
-const FRAME_MS = 120;
+const FRAME_MS = 150;
 /** 想要的窗口尺寸（写进宿主按库保存的窗口状态：不写它，宿主会给一个随机的默认尺寸）。 */
 // ⚠️ 窗口别开太宽：附件管理那个弹窗是 `min(880px, 92vw)`，**宽度上限就是 880**
 // ⇒ 窗口越宽，弹窗在画面里占比越小、字越小（合成时还要缩到 900）。1024×800 时
@@ -401,9 +401,18 @@ async function main() {
 			if (open) break;
 			await delay(120);
 		}
-		// ⚠️ mark 放在**弹窗已经画出来之后**：节点存在 ≠ 已经看得见（它还淡入 ~200ms）。
-		// 400ms 太久（字幕比弹窗晚 0.6s，读起来像"说晚了"）⇒ 200ms 刚好落在淡入结束那一下。
-		await delay(200);
+		// ⚠️ mark 要等**淡入真的结束**：节点存在 ≠ 看得见，弹窗还有一段 opacity 过渡。
+		// 靠"等 N 毫秒"只能猜（录制采样间隔一改就错位：实测字幕抢在弹窗前整整一帧）。
+		// ⇒ 直接问到 `opacity` 到 1 为止，再打点。
+		for (let i = 0; i < 40; i += 1) {
+			const opacity = await evaluate(
+				client,
+				`(() => { const el = document.querySelector(".acc-gallery"); return el ? Number(getComputedStyle(el).opacity) : 0; })()`
+			);
+			if (typeof opacity === "number" && opacity > 0.98) break;
+			await delay(60);
+		}
+		await delay(60);
 		mark("Attachment manager: every file, its state and usage");
 		await delay(2200);
 		// ⚠️ 弹窗根节点是 `.acc-gallery`（挂在 body 下），不是 `.acc-gallery-modal` ——
