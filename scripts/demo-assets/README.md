@@ -19,14 +19,17 @@ README 演示动图（`docs/demo.gif`）里粘进笔记的三件东西，全部�
 
 ## ⚠️ 为什么第三件不是音频（旧版用的是 `.wav`）
 
-1.8.0 那版用的是 `voice-memo.wav`。这次换掉了，**不是产品坏了，是截不到**：
+1.8.0 那版用的是 `voice-memo.wav`。这次换掉了，原因**不是"截不到音频"**（那只猜错了一半）：
 
-| 实测 | 结果 |
+| 场景 | 结果 |
 |---|---|
-| `<audio>` 元素 | 在，`readyState=4`、`duration=1`、高 42px、`src` 已是本地 `app://` |
-| `Page.captureScreenshot` 截出来 | **一片空白**（原生控件不进 CDP 截图） |
+| 笔记里直嵌本地文件（`![[voice-memo.wav]]`） | 播放器**正常截图**（三种截法都试过：默认 / `fromSurface:false` / `captureBeyondViewport`） |
+| 走**粘贴 → 上传 → 改写链接**（`![](https://cdn.example.com/…wav)`） | 元素在、`readyState=4`、`duration=1`、高 42px、`src` 已是本地 `app://`，**画面一片空白** |
 
-⇒ 观众会以为播放器坏了。换成第二张图最稳：渲染完全由页面自己画，截得到。
+⇒ 差别不在截图能力，而在**这个状态**。看起来是"远端地址被换成副本之后，原生播放器控件不再绘制"，
+像产品侧的问题（**未确认、未修**）。演示不能带着一块空白，所以换成第二张图。
+
+想复现：把 `PASTE_FILES` 里换成 `voice-memo.wav`（16bit PCM）再跑一遍 `capture-demo.mjs`。
 
 ## 之前换过哪些照片（都废弃了）
 
