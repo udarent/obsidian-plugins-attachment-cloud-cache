@@ -105,7 +105,7 @@ function assTime(ms) {
 	return `${h}:${pad(m)}:${pad(s)}.${pad(cs)}`;
 }
 
-function writeCaptions(marks, size) {
+function writeCaptions(marks, size, endedAt) {
 	const lines = [
 		"[Script Info]",
 		"ScriptType: v4.00+",
@@ -134,7 +134,8 @@ function writeCaptions(marks, size) {
 		"Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
 	];
 	// 最后一句挂到片尾之后（少给了会出现"末尾一帧没字幕"的闪一下）
-	const lastEnd = marks[marks.length - 1].at + 6000;
+	// 字幕尾巴：优先用录制端记的真实结束时刻（末尾静止段被去重后，marks 推不出总长）
+	const lastEnd = Math.max(marks[marks.length - 1].at + 3000, (endedAt ?? 0) + 1500);
 	for (const [index, mark] of marks.entries()) {
 		// 第一句从 0 开始：录制脚本打第一个点之前还有几百毫秒（切模式、定位光标），
 		// 留白会让人以为"开头没字幕"。
@@ -160,11 +161,11 @@ function writeCaptions(marks, size) {
  * 看上去像"开头没有字幕"）。所以按 mark 的时刻把那一帧**复制成两段**（同一张图），
  * 字幕于是正好卡在帧边界上。
  */
-function writeConcatList(frames, cuts) {
+function writeConcatList(frames, cuts, endedAt) {
 	const edges = frames.map((frame, index) => ({
 		file: frame.file,
 		start: frame.at,
-		end: index + 1 < frames.length ? frames[index + 1].at : frame.at + 1200,
+		end: index + 1 < frames.length ? frames[index + 1].at : Math.max(frame.at + 1200, endedAt ?? 0),
 	}));
 	const segments = [];
 	for (const edge of edges) {
@@ -190,7 +191,7 @@ function writeConcatList(frames, cuts) {
 }
 
 const timeline = JSON.parse(readFileSync(TIMELINE, "utf8"));
-const { frames, marks, width, height } = timeline;
+const { frames, marks, width, height, endedAt } = timeline;
 if (!frames?.length) throw new Error("没有帧 —— 先跑 scripts/capture-demo.mjs");
 if (!marks?.length) throw new Error("没有字幕分段");
 if (marks.some((mark) => typeof mark.label !== "string" || mark.label === "")) {
@@ -219,9 +220,10 @@ if (missing.length > 0) {
 
 const listPath = writeConcatList(
 	kept,
-	marks.map((mark) => mark.at)
+	marks.map((mark) => mark.at),
+	endedAt
 );
-const assPath = writeCaptions(marks, { width, height });
+const assPath = writeCaptions(marks, { width, height }, endedAt);
 const ffmpeg = resolveFfmpeg();
 
 mkdirSync(dirname(OUT), { recursive: true });

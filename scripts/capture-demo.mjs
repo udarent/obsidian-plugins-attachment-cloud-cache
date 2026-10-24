@@ -348,7 +348,12 @@ async function main() {
 						// ⚠️ 光标闪烁是**录制噪声**：它每 500ms 变一次 ⇒ 每一帧都与上一帧不同，
 						// 去重失效、GIF 白胖一倍（实测 148 帧只去重到 36）。观众不需要看见它。
 						".cm-cursor,.cm-cursorLayer,.cm-dropCursor{display:none!important}" +
-						"*{caret-color:transparent!important}";
+						"*{caret-color:transparent!important}" +
+						// ⚠️ 只关浮层的过渡（弹窗淡入、命令面板、通知）。110ms 采样下这些动画
+						// 只会产出半透明中间帧，既不好看又多几帧整屏变化。
+						// ⚠️ 别用「全局关 transition」：实测会把 PDF 嵌入的高度计算一起弄坏
+						// （PDF bottom 从 620 变成 1291）—— 那个容器的尺寸是过渡结束时才定下来的。
+						".modal,.prompt,.notice,.menu{transition:none!important;animation:none!important}";
 					document.head.appendChild(st);
 				}
 				return Boolean(editor);
@@ -644,13 +649,12 @@ async function main() {
 			throw new Error(`弹窗关不掉（试过 ${closedBy}）—— 最后一幕会被挡住`);
 		}
 		await delay(400);
-		mark("Step 6 · Your storage is now unreachable", "第 6 步 · 现在把你的存储整个停掉");
-		await delay(500);
-		await closeMock();
-		log("· mock 存储已停掉");
-		await delay(1100);
 
-		// ── 第 7 步：切回实时预览 ⇒ 三件照常渲染（渲染读的是库里那几份本地副本）──
+		// ⭐⭐ **顺序有讲究**（2026-10-24 重排）：先在**存储还活着时**切回预览、等三件真的画出来，
+		// 再让存储下线。反过来（先停存储、再切视图）会在"存储下线"那句字幕上露出一帧
+		// **PDF 破图 ＋ 半张照片**（切视图时 PDF 要重新加载、图片要重新解码，约 0.5s）——
+		// 观众会读成"停存储把附件弄坏了"，而下一句又说"三者照常显示"。
+		// 现在切视图那一下落在**上一句**（"勾两行"）的尾巴上，语义是"关窗后回到笔记"，读得通。
 		await evaluate(
 			client,
 			`(() => {
@@ -660,16 +664,46 @@ async function main() {
 			})()`
 		);
 		await toggleSource();
-		// 视图沿用原来的滚动位置（光标在末尾 ⇒ 停在 PDF 那一屏）⇒ 拉回顶部。
-		// ⚠️ 实时预览的滚动容器是 CodeMirror 的 `.cm-scroller`（不是阅读视图的
-		// `.markdown-preview-view`）：两处都试一下，谁在就滚谁。
-		// ⚠️⚠️ 判据不能取 `scrollTop === 0`：实测它会报 0 而画面仍停在柱状图中段
-		//（实时预览的滚动由 CodeMirror 自己的 DOM 管，`scrollTo` 有时被随后的渲染冲掉）。
-		// ⇒ 直接问**画面**：第一张图在视野上部、PDF 底部也在视野里 —— 那才叫"三件都看得见"。
-		// ⚠️ 图必须限定在**正文容器**里找：正文之外也有 img（侧栏图标、文件树缩略图），
-		// 裸的 querySelector 取 DOM 里第一个 —— 实测拿到一个 top=300 的侧栏图标，于是误判"没取好景"。
-		// ⚠️ 图必须限定在**正文容器**里找：正文之外也有 img（侧栏图标、文件树缩略图），
-		// 裸的 querySelector 取 DOM 里第一个 —— 实测拿到一个 top=300 的侧栏图标，于是误判"没取好景"。
+
+		// ⚠️ **先滚一次顶部**再等 PDF：切视图时沿用编辑器的滚动位置（光标在末尾 ⇒ 停在 PDF 那一屏），
+		// 不等就对，那半秒会停在"柱状图中段 + PDF 工具栏"（实测落到了上一句字幕下，很突兀）。
+		// 这里只求"尽快把画面带到顶部"，校验留给下面那次（PDF 高度会变，位置还要再对一次）。
+		await evaluate(
+			client,
+			`(() => {
+				app.workspace.activeEditor?.editor?.scrollIntoView?.({ from: { line: 0, ch: 0 }, to: { line: 0, ch: 0 } }, true);
+				for (const el of document.querySelectorAll(".cm-scroller, .markdown-preview-view, .markdown-reading-view")) {
+					el.scrollTo?.({ top: 0 });
+				}
+				return true;
+			})()`
+		);
+		await delay(150);
+
+		// 等 PDF **真的画出来**（里面出现了 canvas/iframe，且高度正常）：
+		// ⚠️ 只看高度会误判 —— 破图/占位时的盒子也可能很高。
+		let pdfDrawn = false;
+		for (let i = 0; i < 40; i += 1) {
+			const height = await evaluate(
+				client,
+				`(() => {
+					const pdf = document.querySelector(".pdf-embed");
+					if (!pdf) return 0;
+					const painted = pdf.querySelector("canvas, iframe, .pdf-container canvas") !== null;
+					return painted ? Math.round(pdf.getBoundingClientRect().height) : 0;
+				})()`
+			);
+			if (typeof height === "number" && height > 100) {
+				pdfDrawn = true;
+				break;
+			}
+			await delay(100);
+		}
+		if (!pdfDrawn) throw new Error("PDF 一直没画出来 —— 最后一幕会露破图");
+
+		// 滚到顶部，**问到画面为止**（`scrollTop === 0` 会骗人：报 0 而画面停在柱状图中段）。
+		// 判据：第一张图落在视口上部、PDF 底边也在视口内 —— 那才叫"三件都看得见"。
+		// ⚠️ 图必须限定在**正文容器**里找：正文之外也有 img（侧栏图标、文件树缩略图）。
 		let framed = false;
 		let lastBox = null;
 		for (let i = 0; i < 30; i += 1) {
@@ -692,10 +726,8 @@ async function main() {
 				})()`
 			);
 			lastBox = box;
-			lastBox = box;
-			// 判据：PDF 底边在视口内（这是"三件同屏"真正的锚）+ 第一张图落在视口上半部。
-			// ⚠️ imgTop 在**滚动进行中**测到的值会偏大（实测同一帧先报 300、下一轮就正常），
-			// 所以它只当粗筛；画面到底对不对，最终靠人看那一帧 + `pdfBottom < view` 兜底。
+			// ⚠️ imgTop 在滚动进行中会偏大（实测同一帧先报 300、下一轮就正常），只当粗筛；
+			// 真正的锚是 `pdfBottom < view`（三件同屏）＋ 人看那一帧。
 			if (box && box.imgTop >= 0 && box.imgTop < 420 && (box.pdfBottom ?? 0) > 0 && box.pdfBottom < box.view) {
 				framed = true;
 				log(`· 最后一幕取景：图 top=${box.imgTop}｜PDF bottom=${box.pdfBottom}/${box.view}`);
@@ -703,10 +735,26 @@ async function main() {
 			}
 			await delay(120);
 		}
-		if (!framed) throw new Error(`最后一幕没把三件同时框进视野（照片会被切掉）：${JSON.stringify(lastBox)}`);
-		// ⚠️ 换字幕放在**滚到顶部之后**：否则 Step 6 末尾会有一小段停在"页面中部"
-		//（切到预览时沿用编辑器的滚动位置），看着像卡了一下（实测 0.6s）。
-		mark("Step 7 · All three still render — with no network", "第 7 步 · 三者照常显示，零网络请求");
+		if (!framed) throw new Error(`最后一幕没把三件同时框进视野：${JSON.stringify(lastBox)}`);
+
+		// 让画面稳住再换字幕（这一段还在上一句字幕下，观众看到的是"关窗后回到笔记"）
+		await delay(800);
+
+		// ── 第 6 步：存储下线 —— 画面此刻已是三件，之后**纹丝不动** ──
+		// ⭐ 措辞用 **offline / 离线**，不用 "unreachable"（太技术），也不硬说"断网"：
+		// 录制时做的确实是"把那台存储关掉"（`closeAllConnections()` + `close()` ⇒ 客户端连接被拒），
+		// 对插件来说与断网**没有区别**，但整机网络并没有断 —— 说"我把你的网断了"就是假话。
+		mark("Step 6 · Your storage goes offline", "第 6 步 · 把存储下线 —— 就当断网了");
+		await delay(700);
+		await closeMock();
+		log("· mock 存储已停掉");
+		await delay(1300);
+
+		// ── 第 7 步：画面没动过 —— 因为渲染读的是库里那几份副本 ──
+		mark(
+			"Step 7 · All three still render — from the copies in your vault",
+			"第 7 步 · 三者照常显示 —— 读的是库里的副本"
+		);
 		await delay(300);
 		// 排障用的一行：三件到底渲染出几个（音频最容易静默缺席）
 		const rendered = await evaluate(
@@ -723,7 +771,7 @@ async function main() {
 			throw new Error(`第 7 步没把三件都画出来：${JSON.stringify(rendered)}`);
 		}
 		log(`· 第 7 步渲染齐全：${JSON.stringify(rendered.embeds)}`);
-		await delay(2300);
+		await delay(1600);
 
 		recording = false;
 		await recorder;
@@ -731,7 +779,13 @@ async function main() {
 		const view = await evaluate(client, `({ w: window.innerWidth, h: window.innerHeight })`);
 		writeFileSync(
 			join(OUT, "timeline.json"),
-			JSON.stringify({ width: view?.w ?? 0, height: view?.h ?? 0, frameMs: FRAME_MS, marks, frames }, null, "\t")
+			// ⚠️ `endedAt` 必须有：末尾那段"画面不动"的帧会被去重合并，
+			// 合成端如果没有真正的结束时刻，就只能按"最后一帧 +1.2s"收尾 ⇒ **最后一句字幕整段被截掉**（实测）。
+			JSON.stringify(
+				{ width: view?.w ?? 0, height: view?.h ?? 0, frameMs: FRAME_MS, marks, frames, endedAt: Date.now() - t0 },
+				null,
+				"\t"
+			)
 		);
 		log(`· 共 ${frames.length} 帧（${view?.w}×${view?.h}）→ ${OUT}`);
 	} finally {

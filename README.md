@@ -18,9 +18,9 @@ and the file itself stays in your vault as the local copy. **Rendering reads tha
 
 **Contents** · [Quick start](#quick-start) · [Why](#why-use-it) · [Features](#features) · [Requirements](#requirements) · [Installation](#installation) · [Settings](#settings) · [Commands](#commands) · [Good to know](#good-to-know) · [Privacy](#privacy--security) · [Verification](#how-far-it-is-verified) · [Help](#getting-help) · [License](#license)
 
-![Paste a photo, a chart and a PDF into a note: each one uploads to your own storage and the note keeps a link; one command opens the attachment manager, where chips carry their own counts and ticking rows turns on the batch actions; then the storage is switched off and all three still render](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
+![Paste a photo, a chart and a PDF into a note: each one uploads to your own storage and the note keeps a link; one command opens the attachment manager, where chips carry their own counts and ticking rows turns on the batch actions; then the storage goes offline and all three still render](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
 
-*Paste a photo, a chart and a PDF — each one uploads and the link in the note is rewritten. The file itself stays in your vault (that **is** the local copy). One command then opens the **attachment manager**: one table for every attachment, chips that carry their own counts, and batch actions whose labels state how many of the ticked rows they can actually act on. With the storage switched off, all three still render with no network. The vault in the recording is a throwaway one and the storage is a local mock.*
+*Paste a photo, a chart and a PDF — each one uploads and the link in the note is rewritten. The file itself stays in your vault (that **is** the local copy). One command then opens the **attachment manager**: one table for every attachment, chips that carry their own counts, and batch actions whose labels state how many of the ticked rows they can actually act on. With the storage offline, all three still render — what renders are the copies in your vault. The vault in the recording is a throwaway one and the storage is a local mock.*
 
 ## Quick start
 
@@ -226,7 +226,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 
 ![演示：往笔记里粘贴一张照片、一张图表和一个 PDF —— 各自上传到你的存储，笔记里各留一条链接；一条命令打开附件管理，筛选胶囊自带件数，勾上几行按钮就说明能作用于几件；随后把存储整个停掉，三件照常显示](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
 
-*粘贴照片、图表和 PDF —— 各自上传，笔记里的链接被改写成远端地址；文件本身留在库里（**它就是本地副本**）。接着用**一条命令**打开「附件管理」：一张表管全库附件，筛选胶囊上就是件数，勾几行、按钮上的数字就是真正能作用于几件。把存储整个停掉之后，三件照常显示，一个网络请求都没有。演示用的是临时库和本机 mock 存储。*
+*粘贴照片、图表和 PDF —— 各自上传，笔记里的链接被改写成远端地址；文件本身留在库里（**它就是本地副本**）。接着用**一条命令**打开「附件管理」：一张表管全库附件，筛选胶囊上就是件数，勾几行、按钮上的数字就是真正能作用于几件。把存储下线（就当断网）之后，三件照常显示 —— 画面上就是库里那几份副本。演示用的是临时库和本机 mock 存储。*
 
 ## 快速开始
 
