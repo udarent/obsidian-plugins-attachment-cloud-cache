@@ -104,12 +104,40 @@ export class SettingsTab extends PluginSettingTab {
 
 	// ─────────────────────── 定义 ───────────────────────
 
+	/**
+	 * 整个页面 = **一条业务链**，从上往下就是用户实际要走的顺序：
+	 *
+	 * | 组 | 回答的问题 | 什么时候需要 |
+	 * |---|---|---|
+	 * | 存储连接 | 东西传到哪儿去？通不通？ | 装好之后第一件事 |
+	 * | 上传 | 什么进来时自动传？站外 / 本机算不算？ | 日常调 |
+	 * | 离线与本地副本 | 传完之后本地那一份怎么管？ | 日常调 |
+	 * | 云端清理 | 没人引用的云端对象怎么办？ | 偶尔 |
+	 * | 记录与排障 | 出问题了看哪儿？ | 出事时 |
+	 *
+	 * ## 三条组内顺序纪律
+	 *
+	 * 1. **先决策、后展示**：能改的开关在前，只读的结果（占用、状态灯）紧随其后 ——
+	 *    顺序反了，用户会先看到一个数字、再往下才看到决定这个数字的那个设置。
+	 * 2. **父项在前、子项紧跟**：条件显示的项（站点名单、上限、占用）紧接在决定它显隐的那一项之后，
+	 *    **不许**插在两个兄弟项中间 —— 那会被读成"它属于下面那一项"。
+	 * 3. **动作项在组尾**：一颗按钮（上传全部 / 改回本地路径）不夹在参数之间，
+	 *    否则会把它上面的参数与下面的参数切成两段（2026-10-24 修正：「改回本地路径」从前正卡在
+	 *    「本地副本策略」与「上限」之间）。两颗互为反向的按钮——上传全部、改回本地路径——
+	 *    因此**各自落在自己那一组的末尾**，形状对称。
+	 *    ⚠️ 唯一例外是「记录与排障」：那一组只有"只读记录（带一颗按钮）"与"排障开关"两项，
+	 *    按钮排第一不切段任何参数，而**用户要看的那一项排在前面**（排障开关是给开发者用的）。
+	 *
+	 * ⚠️ 不只是好看：设置项会进 Obsidian 的**设置搜索**，而搜索结果按定义顺序排列 ——
+	 * 顺序乱了，搜出来的一组相关项也会是散的。
+	 */
 	getSettingDefinitions(): SettingDefinitionItem[] {
 		return [
 			{ type: "group", heading: this.t("sectionStorage"), items: this.storageItems() },
 			{ type: "group", heading: this.t("sectionUpload"), items: this.uploadItems() },
 			{ type: "group", heading: this.t("sectionOffline"), items: this.offlineItems() },
 			{ type: "group", heading: this.t("sectionCleanup"), items: this.cleanupItems() },
+			{ type: "group", heading: this.t("sectionDiagnostics"), items: this.diagnosticsItems() },
 		];
 	}
 
@@ -181,6 +209,22 @@ export class SettingsTab extends PluginSettingTab {
 			},
 
 			{
+				// ⭐ 2026-10-18 从「高级」组移上来：它填的是**连接方式**（地址怎么拼），
+				// 而连接失败时用户正在这一组里找原因 —— 把一个可能要改的开关放在别的组，
+				// 等于让他先猜"这是连接问题还是高级选项问题"。
+				// R2 / MinIO 与多数自建服务要**开**；只有服务商要求桶名做子域时才关。
+				//
+				// ⭐ 2026-10-24：**再往前挪一位**，放到「公开链接地址」之前。判据是数据依赖：
+				// 下一项留空时用的那个地址由 `objectBaseFor()` 推导，而它**读的就是这一项**
+				// （`forcePathStyle === false` ⇒ 桶名进子域）。顺序倒过来，用户会先看到一个
+				// 推导出来的地址、后看到决定这个地址形状的开关。
+				name: this.t("forcePathStyle"),
+				desc: this.t("forcePathStyleDesc"),
+				aliases: ["path-style", "virtual-host", "兼容", "寻址"],
+				control: { type: "toggle", key: "s3.forcePathStyle" },
+			},
+
+			{
 				name: this.t("s3PublicUrlBase"),
 				desc: this.t("s3PublicUrlBaseDesc"),
 				aliases: ["CDN", "domain", "public url", "公开地址", "公开链接", "前缀", "域名"],
@@ -195,17 +239,6 @@ export class SettingsTab extends PluginSettingTab {
 					key: "s3.publicUrlBase",
 					placeholder: objectBaseFor(this.plugin.settings.s3) || undefined,
 				},
-			},
-
-			{
-				// ⭐ 2026-10-18 从「高级」组移上来：它填的是**连接方式**（地址怎么拼），
-				// 而连接失败时用户正在这一组里找原因 —— 把一个可能要改的开关放在别的组，
-				// 等于让他先猜"这是连接问题还是高级选项问题"。
-				// R2 / MinIO 与多数自建服务要**开**；只有服务商要求桶名做子域时才关。
-				name: this.t("forcePathStyle"),
-				desc: this.t("forcePathStyleDesc"),
-				aliases: ["path-style", "virtual-host", "兼容", "寻址"],
-				control: { type: "toggle", key: "s3.forcePathStyle" },
 			},
 
 			{
@@ -591,6 +624,17 @@ export class SettingsTab extends PluginSettingTab {
 
 	// ─────────────────────── 上传 ───────────────────────
 
+	/**
+	 * 「上传」组：**自动那一路 → 它管到哪儿（站外 / 本机）→ 手动一次性那一路**。
+	 *
+	 * 三层顺序是有意的（2026-10-24 整理）：
+	 * 1. **主开关**（新附件自动上传）—— 先回答"要不要自动传"；
+	 * 2. **两个来源开关 ＋ 站外的两个子项** —— 再回答"自动传的时候算上谁"。
+	 *    ⚠️ 子项（哪些站点 / 名单）必须紧跟它所属的那个开关，且**不插在两个兄弟开关之间**：
+	 *    插进去会让"同时上传本机文件"看起来像是站外那一组的第三个子项；
+	 * 3. **「上传全部附件」在组尾** —— 它是一次性动作，不是参数；放在末尾，"是否受上面开关约束"
+	 *    一眼就能按"上面那几个开关"去读（说明里也这么写，见 `uploadAllDesc`）。
+	 */
 	private uploadItems(): SettingGroupItem[] {
 		return [
 			{
@@ -660,8 +704,17 @@ export class SettingsTab extends PluginSettingTab {
 
 	// ─────────────────────── 离线与本地副本 ───────────────────────
 
+	/**
+	 * 「离线与本地副本」组：**留不留 → 缺了补不补 → 最多占多少 → 现在占多少 → 动作**。
+	 *
+	 * ⚠️ 2026-10-24 把「把链接改回本地路径」从**第二位挪到组尾**。它原先正卡在
+	 * 「上传后如何处理本地副本」与「本地副本上限」之间，把同一串策略问题切成两段 ——
+	 * 用户读到上限那一项时，已经忘了上面那个档位讲的是什么。
+	 * 它是这个组的**收尾动作**（把所有远端链接改回库内文件 = 彻底回到本地），
+	 * 放在组尾既符合"动作项在组尾"，也与上一组末尾的「上传全部附件」形成对称（互为反向）。
+	 */
 	private offlineItems(): SettingGroupItem[] {
-		const items: SettingGroupItem[] = [
+		return [
 			{
 				name: this.t("localCopy"),
 				desc: this.t("localCopyDesc"),
@@ -674,10 +727,17 @@ export class SettingsTab extends PluginSettingTab {
 				},
 			},
 			{
-				name: this.t("revertName"),
-				desc: this.t("revertDesc"),
-				aliases: ["revert", "export", "local", "undo", "回退", "导出", "本地", "退出"], 
-				render: (setting) => this.renderRevertLinks(setting),
+				// ⚠️ 紧跟档位：它回答的是"副本缺了怎么办"，与上一项"留不留副本"是同一个问题的两半
+				// （留了 ⇒ 换设备时靠它补回来）。中间隔一个上限，读起来像是"限额顺带管下载"。
+				name: this.t("fallbackDownload"),
+				desc: this.t("fallbackDownloadDesc"),
+				aliases: ["download", "sync", "下载", "同步", "缺失", "副本"],
+				// ⚠️ 选「不留副本」时那一档等于关闭缓存，这一项永远不会动手 ——
+				// 显示一个不起作用的开关比不显示更糟。
+				// ⚠️ 但「留在附件目录」时它**仍然有用**（副本在附件目录，换设备要它补回来），
+				// 所以只能按"缓存是否被关掉"判，不能复用下面那个"会不会产生副本"。
+				visible: () => shouldShowFallbackDownload(this.plugin.settings.localCopy),
+				control: { type: "toggle", key: "fallbackDownload" },
 			},
 			{
 				name: this.t("cacheLimit"),
@@ -695,6 +755,7 @@ export class SettingsTab extends PluginSettingTab {
 				// 「查看本地副本占用」命令撤了之后，连近似数都没了 ——
 				// 而那些数字本来就在索引里，一眼看得到比什么都省事。
 				// ⚠️ 跟上限一起隐藏（同一个判据）：不会产生副本的档位里谈占用是无效信息。
+				// ⚠️ 它是**只读展示**，所以排在上限之后：先设上限、再在下面看到现在离上限多远。
 				name: this.t("localUsageName"),
 				desc: this.t("localUsageDesc"),
 				aliases: ["usage", "size", "occupied", "space", "占用", "多大", "空间", "容量"],
@@ -702,19 +763,13 @@ export class SettingsTab extends PluginSettingTab {
 				render: (setting) => this.renderLocalUsage(setting),
 			},
 			{
-				name: this.t("fallbackDownload"),
-				desc: this.t("fallbackDownloadDesc"),
-				aliases: ["download", "sync", "下载", "同步", "缺失", "副本"],
-				// ⚠️ 选「不留副本」时那一档等于关闭缓存，这一项永远不会动手 ——
-				// 显示一个不起作用的开关比不显示更糟。
-				// ⚠️ 但「留在附件目录」时它**仍然有用**（副本在附件目录，换设备要它补回来），
-				// 所以只能按"缓存是否被关掉"判，不能复用上面那个"会不会产生副本"。
-				visible: () => shouldShowFallbackDownload(this.plugin.settings.localCopy),
-				control: { type: "toggle", key: "fallbackDownload" },
+				// ⭐ 组尾的动作项（见本方法头注释）：退出路径，把远端链接改回库内文件。
+				name: this.t("revertName"),
+				desc: this.t("revertDesc"),
+				aliases: ["revert", "export", "local", "undo", "回退", "导出", "本地", "退出"],
+				render: (setting) => this.renderRevertLinks(setting),
 			},
 		];
-
-		return items;
 	}
 
 	// ─────────────────────── 云端清理 ───────────────────────
@@ -725,6 +780,10 @@ export class SettingsTab extends PluginSettingTab {
 	 * 现在只有一项，但仍然**单独成组**而不是塞进「离线副本」：
 	 * 它管的是**云端对象**（删了找不回来），与"本地副本"是两件风险等级不同的事 ——
 	 * 混在一组里会让人以为它们是同一类开关。
+	 *
+	 * ⚠️ 2026-10-24：这一组**只剩这一项**（「删除记录」「调试日志」搬去了「记录与排障」）。
+	 * 仍然不撤组的理由有两个：① 它问的是一个**云端**决定，与"本地副本"不同风险等级；
+	 * ② R25 的「统一云端对象名」落地也归这里 —— 那也是"对云端对象做什么"。
 	 */
 	private cleanupItems(): SettingGroupItem[] {
 		return [
@@ -741,6 +800,21 @@ export class SettingsTab extends PluginSettingTab {
 					options: orphanAskOptions((value) => this.t(`orphanAsk_${value}`)),
 				},
 			},
+		];
+	}
+
+	// ─────────────────────── 记录与排障 ───────────────────────
+
+	/**
+	 * 「记录与排障」组：**事后能查的两样东西**（2026-10-24 新开这一组）。
+	 *
+	 * 从前这两项都挂在「云端清理」组里，但那组讲的是"删不删云端对象"这个**决定** ——
+	 * 而这两项都不是决定：一样是**已经发生的事**（谁被删了），一样是**给排障用的开关**。
+	 * 把它们单列，理由是它们服务的是同一个场景：**事情已经不对了，回来看发生了什么**。
+	 * 放在页面最末（组本身也排最后）：这个位置正好是用户出问题时会滚到的地方。
+	 */
+	private diagnosticsItems(): SettingGroupItem[] {
+		return [
 			{
 				// ⭐ 留痕的价值全在"事后能查"，而它是插件目录里**点开头**的文件 ——
 				// 宿主的文件索引不含它，用户没有别的入口（U8，2026-10-18）。
@@ -754,7 +828,6 @@ export class SettingsTab extends PluginSettingTab {
 				},
 			},
 			{
-				// ⭐ 排障开关放在「清理」组末尾：**结果不对**的用户最先回来看的地方。
 				// ⚠️ 它只写控制台（`debug-log.ts`），所以不需要任何"作用范围"说明 ——
 				// 文案里那句"不改变任何行为"就是它的全部边界。
 				name: this.t("debugLogging"),

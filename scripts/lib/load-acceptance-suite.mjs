@@ -1866,6 +1866,21 @@ export async function runLoadAcceptance(options = {}) {
 			plugin.settings.fallbackDownload = false;
 			plugin.settings.externalImageCache = false;
 			await plugin.saveSettings();
+			// ⚠️⚠️ 清空通知之前必须等**切档那一轮**的清理把结论说完（2026-10-24 修竞态）。
+			//
+			// 那一轮是异步的，而上面等的「targetKey 摘掉索引」发生在它循环的**中途**：
+			// 前几节留下的副本同样是候选（索引里有、已上传、笔记还引用着），它们排在后面。
+			// 于是它的结论会落在下面那次清空**之后**，被下面当成"这一趟"的结果
+			// —— 实测红的就是这一条：报「删了 5 个」而不是「删了 0 个」。
+			// ⚠️ 判据用**模板的固定开头**（`{占位}` 之前那段）认它，不写死文案：两种语言各一份。
+			const templateHead = (key) => plugin.t(key).split("{")[0].trim();
+			const releaseResultSpoken = () =>
+				mockObsidian.Notice.instances.some((notice) =>
+					["releaseSpaceDone", "releaseSpaceNothing", "releaseSpaceNothingDeleted"]
+						.map(templateHead)
+						.some((head) => head !== "" && notice.message.includes(head))
+				);
+			await waitFor(releaseResultSpoken, "切档那一轮的清理已经给出结论", 10000, diagnose);
 			mockObsidian.Notice.instances.length = 0;
 			const deletesAfterFirst = harness.calls.delete.length;
 			// ⚠️ 2026-10-24：设置页那个「释放本地空间」按钮**取消了**（用户要求：上传时按档位

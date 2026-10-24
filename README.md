@@ -74,19 +74,23 @@ This does both: the file goes to your bucket, and the copy that renders stays in
 
 In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#attachment-cloud-cache附件云端缓存) below):
 
-| Setting | What it does |
-| --- | --- |
-| **Endpoint · Bucket · Region** | Where your storage lives. The bucket name is case-sensitive; self-hosted services usually take `us-east-1`. |
-| **Access key ID · Secret access key** | The secret goes into the OS keychain, never `data.json`; **Import from a credentials file** fills these in from MinIO's JSON. |
-| **Public link address (optional)** | Empty means `endpoint/bucket/key`; fill it in for a CDN or your own domain. |
-| **Test connection** | A **status light** (*checking* / *public* / *private* / *unreachable*) plus a button that re-checks upload, read-back, delete and external reach — without keeping anything or rewriting a link. |
-| **Upload new attachments automatically** | On by default; off leaves new files local only. |
-| **What happens to the local copy** | **Keep it** (default, offline works) or **delete it after uploading** (saves space; no offline, and PDFs need a copy). With delete mode, “Upload all” also removes the local copies of files that were already uploaded, once it finishes. |
-| **Local copy limit (MB) · Download missing local copies automatically** | `0` = no limit; least-recently-used copies go first, and only after the object is confirmed in your storage. Auto-download is skipped in delete mode — except for a private bucket, where it always runs. |
-| **Revert links to local paths** | Points note links back at the files in your vault. **Nothing is deleted**; files with no copy keep pointing at your storage. |
-| **Upload files from other sites** | Off by default; the site list narrows the **automatic** path only, and picking by hand is never restricted. |
-| **When an attachment is no longer linked** | Ask (default) / notify / do nothing. Cleanup always asks. |
-| **Compatibility mode** | Keep it on for Cloudflare R2, MinIO and most self-hosted services. |
+| Group | Setting | What it does |
+| --- | --- | --- |
+| **Storage connection** | **Endpoint · Bucket · Region** | Where your storage lives. The bucket name is case-sensitive; self-hosted services usually take `us-east-1`. |
+| | **Access key ID · Secret access key** | The secret goes into the OS keychain, never `data.json`; **Import from a credentials file** fills these in from MinIO's JSON. |
+| | **Compatibility mode** | Keep it on for Cloudflare R2, MinIO and most self-hosted services. |
+| | **Public link address (optional)** | Empty means `endpoint/bucket/key`; fill it in for a CDN or your own domain. |
+| | **Test connection** | A **status light** (*checking* / *public* / *private* / *unreachable*) plus a button that re-checks upload, read-back, delete and external reach — without keeping anything or rewriting a link. |
+| **Upload** | **Upload new attachments automatically** | On by default; off leaves new files local only. |
+| | **Upload files from other sites** | Off by default; the site list narrows the **automatic** path only, and picking by hand is never restricted. |
+| | **Also upload files on this computer** | Off by default, desktop only: lets “Upload all” follow `file:///` paths written in your notes. |
+| | **Upload all attachments** | The reverse of *Revert links to local paths*: one confirmation, no list to tick. |
+| **Offline and local copies** | **What happens to the local copy** | **Keep it** (default, offline works) or **delete it after uploading** (saves space; no offline, and PDFs need a copy). With delete mode, “Upload all” also removes the local copies of files that were already uploaded, once it finishes. |
+| | **Download missing local copies automatically** | Fetches files the current device does not have yet. Auto-download is skipped in delete mode — except for a private bucket, where it always runs. |
+| | **Local copy limit (MB) · Space used** | `0` = no limit; least-recently-used copies go first, and only after the object is confirmed in your storage. The line under it shows what the copies take up right now. |
+| | **Revert links to local paths** | Points note links back at the files in your vault. **Nothing is deleted**; files with no copy keep pointing at your storage. |
+| **Cloud cleanup** | **When an attachment is no longer linked** | Ask (default) / notify / do nothing. Cleanup always asks. |
+| **Logs and troubleshooting** | **Deletion log · Debug logging** | Every permanent cloud delete is recorded (that log is the only record left); debug logging prints each stage to the console and changes nothing. |
 
 ## Commands
 
@@ -266,19 +270,23 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 
 在 **设置 → Attachment Cloud Cache** 里（英文名见本文英文半）：
 
-| 设置项 | 说明 |
-| --- | --- |
-| **服务地址 · 存储桶 · 区域** | 你的存储在哪。存储桶名区分大小写；自建服务一般填 `us-east-1` 之类的占位值。 |
-| **访问密钥 ID · 秘密访问密钥** | 秘密密钥进系统钥匙串，绝不写进 `data.json`；**从凭据文件导入**会用 MinIO 的 JSON 填好这几栏。 |
-| **公开链接地址（可选）** | 留空就用 `服务地址/存储桶/键`；用 CDN 或自己的域名时填这里。 |
-| **测试连接** | 一盏**状态灯**（检测中 / 公开 / 私有 / 无法访问）＋一个按钮：重测上传、读回、删除与「链接对外」，什么都不留，也**绝不改写**任何一条链接。 |
-| **新附件自动上传** | 默认开启；关闭后新文件只存在本地。 |
-| **上传后如何处理本地副本** | **保留**（默认，可离线查看）或**上传后删掉**（省空间；离线看不到，PDF 也需要副本）。选「上传后删掉」时，「上传全部附件」会在传完后把已上传文件的本地副本一并清掉。 |
-| **本地副本上限（MB）· 自动下载缺失的本地副本** | `0` 表示不限制；超限时先删最久没用过的，且确认存储里还有那个对象才删。选「不留副本」时不自动下载 —— 但桶不公开时始终会取回。 |
-| **把链接改回本地路径** | 把笔记里的链接改回指向库里的文件。**什么都不删**；没有副本的那些继续指向你的存储。 |
-| **站外文件也上传到云端** | 默认关闭；站点名单只筛**自动**那一路，手动挑选不受限制。 |
-| **附件不再被引用时** | 弹窗让我选（默认）/ 只给一条通知 / 什么都不做。清理永远需要你确认。 |
-| **兼容模式** | Cloudflare R2、MinIO 与多数自建服务都要开着。 |
+| 分组 | 设置项 | 说明 |
+| --- | --- | --- |
+| **存储连接** | **服务地址 · 存储桶 · 区域** | 你的存储在哪。存储桶名区分大小写；自建服务一般填 `us-east-1` 之类的占位值。 |
+| | **访问密钥 ID · 秘密访问密钥** | 秘密密钥进系统钥匙串，绝不写进 `data.json`；**从凭据文件导入**会用 MinIO 的 JSON 填好这几栏。 |
+| | **兼容模式** | Cloudflare R2、MinIO 与多数自建服务都要开着。 |
+| | **公开链接地址（可选）** | 留空就用 `服务地址/存储桶/键`；用 CDN 或自己的域名时填这里。 |
+| | **测试连接** | 一盏**状态灯**（检测中 / 公开 / 私有 / 无法访问）＋一个按钮：重测上传、读回、删除与「链接对外」，什么都不留，也**绝不改写**任何一条链接。 |
+| **上传** | **新附件自动上传** | 默认开启；关闭后新文件只存在本地。 |
+| | **站外文件也上传到云端** | 默认关闭；站点名单只筛**自动**那一路，手动挑选不受限制。 |
+| | **同时上传本机文件** | 默认关闭、仅桌面：「上传全部附件」会按笔记里写的 `file:///` 路径去读这台电脑上的文件。 |
+| | **上传全部附件** | 「把链接改回本地路径」的**反向**：一次确认，没有清单、不用勾选。 |
+| **离线与本地副本** | **上传后如何处理本地副本** | **保留**（默认，可离线查看）或**上传后删掉**（省空间；离线看不到，PDF 也需要副本）。选「上传后删掉」时，「上传全部附件」会在传完后把已上传文件的本地副本一并清掉。 |
+| | **自动下载缺失的本地副本** | 这台设备上还没有的云端文件会自动取回。选「不留副本」时不自动下载 —— 但桶不公开时始终会取回。 |
+| | **本地副本上限（MB）· 占用空间** | `0` 表示不限制；超限时先删最久没用过的，且确认存储里还有那个对象才删。下面一行显示副本现在占了多少。 |
+| | **把链接改回本地路径** | 把笔记里的链接改回指向库里的文件。**什么都不删**；没有副本的那些继续指向你的存储。 |
+| **云端清理** | **附件不再被引用时** | 弹窗让我选（默认）/ 只给一条通知 / 什么都不做。清理永远需要你确认。 |
+| **记录与排障** | **删除记录 · 排障日志** | 每次永久删除云端对象都会记一笔（那是事后唯一的记录）；排障日志把每个阶段的计数与耗时打进控制台，不改变任何行为。 |
 
 ## 命令
 

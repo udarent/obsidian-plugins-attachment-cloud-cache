@@ -22,6 +22,7 @@ export const I18N: Record<string, Locale> = {
 		sectionUpload: "Upload",
 		sectionOffline: "Offline and local copies",
 		sectionCleanup: "Cloud cleanup",
+		sectionDiagnostics: "Logs and troubleshooting",
 
 		// ── 存储连接 ──
 		s3Endpoint: "Endpoint",
@@ -385,7 +386,7 @@ export const I18N: Record<string, Locale> = {
 		// ⭐ 2026-10-24：范围不再是"只有库内" —— 站外图与本机文件由设置里那两个开关决定。
 		// 描述 ≤3 句（设置页纪律），只讲"做什么 + 关键影响"。
 		uploadAllDesc:
-			"Send the attachments in your vault to your storage and rewrite the links in your notes to point at them, with one confirmation and no list to tick. Off-site images and files on this computer join in only if the settings below allow them; files that no note links to are not part of this. Files stay where they are and are not renamed.",
+			"Send the attachments in your vault to your storage and rewrite the links in your notes to point at them, with one confirmation and no list to tick. Off-site images and files on this computer join in only when their own switch allows it; files that no note links to are not part of this. Files stay where they are and are not renamed.",
 		uploadAllButton: "Upload all",
 		uploadAllTitle: "Upload to your storage",
 		uploadAllSummary: "Upload {count} attachment(s) and rewrite the links in your notes to the remote address.",
@@ -464,6 +465,7 @@ export const I18N: Record<string, Locale> = {
 		sectionUpload: "上传",
 		sectionOffline: "离线与本地副本",
 		sectionCleanup: "云端清理",
+		sectionDiagnostics: "记录与排障",
 
 		s3Endpoint: "服务地址",
 		s3EndpointDesc: "你的 S3 兼容服务地址，例如 https://<account>.r2.cloudflarestorage.com。填好下面几栏后点「测试连接」，再在笔记里粘一张图确认链接已指向你的存储。",
@@ -777,7 +779,7 @@ export const I18N: Record<string, Locale> = {
 		uploadAllName: "上传全部附件",
 		// ⭐ 2026-10-24：范围不再是"只有库内" —— 站外图与本机文件由设置里那两个开关决定。
 		uploadAllDesc:
-			"把库里的附件传到你的存储，并把笔记里指向它们的链接改成远端地址，只需确认一次、不用逐项勾选。站外图与本机文件只在你于下方允许时才一起传；没有任何笔记引用的附件不在范围内。文件留在原处，不改名。",
+			"把库里的附件传到你的存储，并把笔记里指向它们的链接改成远端地址，只需确认一次、不用逐项勾选。站外图与本机文件只在各自的开关允许时才一起传；没有任何笔记引用的附件不在范围内。文件留在原处，不改名。",
 		uploadAllButton: "上传全部",
 		uploadAllTitle: "上传到云端",
 		uploadAllSummary: "将上传 {count} 个附件，并把笔记里指向它们的链接改成远端地址。",
