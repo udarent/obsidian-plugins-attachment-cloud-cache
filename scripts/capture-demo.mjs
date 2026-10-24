@@ -1,91 +1,155 @@
 /**
- * 重建 README 的演示动图（`docs/demo.gif` 的原材料）。
+ * 录制 README 演示动图的**素材**（`demo-frames/` 下的 PNG 序列 ＋ `timeline.json`）。
+ * 动图本身由 `capture-demo-gif.mjs` 用 ffmpeg 合成（叠英文字幕 ＋ 调色板优化）。
  *
- * ## 它做什么
+ * ## 为什么用一个**一次性的空库**，而不是现成的演示库
  *
- * 在**真实 Obsidian**（演示库）里走一遍主流程，**连续截图**，把每帧的时间戳与字幕分段写进
- * `demo-frames/timeline.json`；动图本身由 `capture-demo-gif.py` 合成（叠字幕 ＋ 调色板优化）。
+ * 2026-10-24 之前是在 `../ObsidianVault` 上录的 —— 那个库里有**用户自己的附件**
+ * （专利号、产品资料…），而「附件管理」那张表会把库里所有文件列出来 ⇒ 动图一放到
+ * 公开 README 上，等于把这些文件名连同大小一起发出去了。
  *
- * 流程（约 13 秒）：
- * 1. 打开一篇笔记，光标停在末尾；
- * 2. 粘贴一张图片 ⇒ 走**宿主**的 `editor-paste`（不是 DOM 事件，理由见 `verify-real-storage.mjs`）；
- * 3. 光标停在那一行 ⇒ 实时预览会把 markdown 源码摊开，能看见链接**从本地路径变成远端地址**；
- * 4. 光标下移，图片渲染出来；
- * 5. 打开「附件管理」，看一眼表格里的状态与引用；
- * 6. **把 mock 存储停掉**，重建视图 ⇒ 图片照常显示（渲染读的是本地副本）。
+ * 而且那个库还有别的插件、几十篇笔记、残留布局，每一样都要靠"临时改配置/临时挪文件"
+ * 去压住。⇒ 现在的做法：**开一个空库，只放这次要演的东西**，跑完整个删掉。
  *
- * ## 为什么用 mock S3 而不是真桶
+ * ## 它动的都是"临时"的东西（跑完全部还原）
  *
- * 演示动图要展示"传上去了"，而真桶会把演示图留在用户自己的存储里。mock 是本机 HTTP 服务，
- * 上传真的发生（PUT 有字节），但不出这台机器 ⇒ 可以放心跑，也可以反复跑。
+ * | 位置 | 改什么 | 怎么还原 |
+ * |---|---|---|
+ * | `%TEMP%/acc-demo-vault/` | 整个库（`.obsidian` ＋ 演示笔记 ＋ 附件） | 删掉 |
+ * | `%APPDATA%/obsidian/obsidian.json` | 加一条库登记（不登记就打不开） | 备份后写回 |
+ * | `%APPDATA%/obsidian/<appId>.json` | 窗口大小 | 删掉（本来就没有） |
+ * | 宿主 localStorage | `language=en`（全局）、`enable-plugin-<appId>=true`（本库） | 语言写回 `zh`，插件开关删掉 |
  *
- * ## 会动什么
+ * ⚠️ `language` 是**全局**的（同一个 Obsidian 装的所有库共用）。录完必须写回中文，
+ * 否则用户下次打开 Obsidian 会变成英文界面 —— 这是本脚本唯一会碰到库外状态的地方。
  *
- * - 只碰演示库（默认 `E:/svn/obsidian-plugins/ObsidianVault`，`ACC_DEMO_VAULT_DIR` 可改）里的
- *   `demo/` 目录：跑完删掉；`data.json` / `.cache-index.json` **先备份后写回**；
- * - 设置只在**内存**里改（`plugin.settings.s3` 指向 mock），不落盘。
+ * ## 英文界面怎么来的
+ *
+ * 宿主没有"设置语言"的公开 API，语言落在 `localStorage.language`，改完要**重载**才生效
+ *（`app.vault.setConfig` 改不动它）。社区插件另有一道闸：`localStorage["enable-plugin-"+app.appId]
+ * = "true"`，否则空库里插件根本不加载（表里那些 `enable-plugin-<16位>` 就是这个键）。
+ *
+ * ## 流程（约 15 秒）
+ *
+ * 1. 笔记已在**源码模式**（实时预览会把图渲染出来，就看不见"链接被改写"了）；
+ * 2. 粘贴一张图 ⇒ 走**宿主**的 `editor-paste`（不是 DOM 事件，理由见 `verify-real-storage.mjs`）；
+ * 3. 笔记里那行 `![](attachments/diagram.png)` 当场变成 `![](https://files.example.com/…png)`；
+ * 4. 切回实时预览 ⇒ 图渲染出来；
+ * 5. 打开「Attachment manager」看一眼表格；
+ * 6. **把 mock 存储停掉**，重建视图 ⇒ 图照常显示（渲染读的是库里那份本地副本）。
+ *
+ * ## 为什么用 mock 存储
+ *
+ * 上传真的发生（PUT 有字节），但不出这台机器 ⇒ 可以反复跑，也不会把演示图留在谁的桶里。
  *
  * 用法：`node scripts/capture-demo.mjs [--port 9225]`
- * 之后：`<隔离 venv>/python scripts/capture-demo-gif.py`
+ * 之后：`node scripts/capture-demo-gif.mjs`
  */
 
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
 
 import { createMockS3 } from "./lib/mock-s3.mjs";
 import { connect, evaluate, launchAndAttach } from "./lib/obsidian-host.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..");
-const VAULT_DIR = process.env.ACC_DEMO_VAULT_DIR ?? "E:/svn/obsidian-plugins/ObsidianVault";
+const VAULT_NAME = "acc-demo-vault";
+const VAULT_DIR = process.env.ACC_DEMO_VAULT_DIR ?? join(tmpdir(), VAULT_NAME);
 const OBSIDIAN = process.env.OBSIDIAN_EXE ?? "C:/Program Files/Obsidian/Obsidian.exe";
 const PORT = Number(
 	process.argv.includes("--port") ? process.argv[process.argv.indexOf("--port") + 1] : 9225
 );
+const APP_DIR = process.env.APPDATA ? join(process.env.APPDATA, "obsidian") : null;
+const OBSIDIAN_JSON = APP_DIR ? join(APP_DIR, "obsidian.json") : null;
 
-/** 截图尺寸：与动图一致（不改窗口，只覆盖渲染区尺寸）。 */
-const SHOT_W = 1080;
-const SHOT_H = 648;
-/** 每帧间隔（毫秒）。120ms ≈ 8.3fps，与旧动图（110 帧 / 12s）同档。 */
+/** 每帧间隔（毫秒）。120ms ≈ 8.3fps，合成时再按"到下一帧的真实间隔"重算时长。 */
 const FRAME_MS = 120;
+/** 想要的窗口尺寸（写进宿主按库保存的窗口状态：不写它，宿主会给一个随机的默认尺寸）。 */
+// ⚠️ 窗口别开太宽：附件管理那个弹窗是 `min(880px, 92vw)`，**宽度上限就是 880**
+// ⇒ 窗口越宽，弹窗在画面里占比越小、字越小（合成时还要缩到 900）。1024×800 时
+// 弹窗占满约 86% 宽，读起来刚刚好。
+const WINDOW = { x: 60, y: 40, width: 1024, height: 800 };
 
-const DEMO_DIR = "demo";
-const NOTE = `${DEMO_DIR}/演示.md`;
+const DEMO_DIR = "attachments";
+/** 写进笔记的链接前缀（上传仍走 mock 端点；这个只决定链接长什么样）。 */
+const PUBLIC_BASE = "https://files.example.com";
+const NOTE = "Paste an image.md";
 const OUT = join(REPO, "demo-frames");
 
 const log = (line = "") => console.log(line);
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** 造一个空库：只有 `.obsidian` 里的最小配置 ＋ 三个发布资产（不装别的插件）。 */
+function prepareVault() {
+	rmSync(VAULT_DIR, { recursive: true, force: true });
+	const pluginDir = join(VAULT_DIR, ".obsidian/plugins/attachment-cloud-cache");
+	mkdirSync(pluginDir, { recursive: true });
+	writeFileSync(
+		join(VAULT_DIR, ".obsidian/app.json"),
+		JSON.stringify(
+			{
+				// 「附件管理」的「位置」列要有个可读的目录名，别显示成根目录
+				attachmentFolderPath: DEMO_DIR,
+				// 文件名与 H1 不叠成两行大标题
+				showInlineTitle: false,
+				livePreview: true,
+				useMarkdownLinks: true,
+			},
+			null,
+			2
+		)
+	);
+	// 固定浅色主题：动图要在 GitHub 的深色/浅色两套皮肤下都好看，浅色更好认表格线
+	writeFileSync(join(VAULT_DIR, ".obsidian/appearance.json"), JSON.stringify({ theme: "moonstone" }, null, 2));
+	writeFileSync(join(VAULT_DIR, ".obsidian/community-plugins.json"), JSON.stringify(["attachment-cloud-cache"]));
+	writeFileSync(join(VAULT_DIR, ".obsidian/core-plugins.json"), JSON.stringify(["file-explorer", "global-search"]));
+	for (const name of ["main.js", "manifest.json", "styles.css"]) {
+		const from = join(REPO, name);
+		if (!existsSync(from)) throw new Error(`缺少构建产物 ${name} —— 先跑 npm run build`);
+		copyFileSync(from, join(pluginDir, name));
+	}
+	log(`· 空库已就绪：${VAULT_DIR}`);
+}
+
+/** 把库登记进 `obsidian.json`（`obsidian://open?vault=` 只认登记过的库）。 */
+function registerVault() {
+	if (!OBSIDIAN_JSON || !existsSync(OBSIDIAN_JSON)) throw new Error("找不到 obsidian.json（APPDATA 未设置？）");
+	const backup = `${OBSIDIAN_JSON}.demo-bak`;
+	copyFileSync(OBSIDIAN_JSON, backup);
+	const config = JSON.parse(readFileSync(OBSIDIAN_JSON, "utf8"));
+	config.vaults = config.vaults ?? {};
+	config.vaults[VAULT_NAME] = { path: VAULT_DIR.replace(/\//g, "\\"), ts: Date.now() };
+	writeFileSync(OBSIDIAN_JSON, JSON.stringify(config));
+	log("· 已登记临时库（obsidian.json 已备份）");
+	return backup;
+}
+
 async function main() {
 	if (!existsSync(OBSIDIAN)) throw new Error(`找不到 Obsidian：${OBSIDIAN}`);
-	if (!existsSync(join(VAULT_DIR, ".obsidian"))) throw new Error(`不是库：${VAULT_DIR}`);
+	// ⚠️ 宿主是单实例的：还开着一个的话，新实例把参数交出去就退出了，调试端口**永远**等不到
+	//（`launchAndAttach` 会按进程数把这两种原因分开报，不用在这里预判）。
 
-	const dataJson = join(VAULT_DIR, ".obsidian/plugins/attachment-cloud-cache/data.json");
-	const indexJson = join(VAULT_DIR, ".obsidian/plugins/attachment-cloud-cache/.cache-index.json");
-	const backups = [
-		[dataJson, `${dataJson}.demo-bak`],
-		[indexJson, `${indexJson}.demo-bak`],
-	];
-	for (const [from, to] of backups) if (existsSync(from)) copyFileSync(from, to);
+	prepareVault();
+	const obsidianBackup = registerVault();
 
-	// ⚠️ 演示库的**布局**（分屏、一堆标签）全在 `workspace.json` 里，而它不归插件管 ——
-	// 录制时删掉它让宿主重建默认布局（单编辑区、侧栏收起），跑完再把备份写回去。
-	const layoutJson = join(VAULT_DIR, ".obsidian/workspace.json");
-	const layoutBackup = `${layoutJson}.demo-bak`;
-	const layoutExisted = existsSync(layoutJson);
-	if (layoutExisted) copyFileSync(layoutJson, layoutBackup);
-
+	// 帧目录每次重来（旧帧留着会让"这一轮到底录了几帧"说不清）
 	rmSync(OUT, { recursive: true, force: true });
 	mkdirSync(OUT, { recursive: true });
 
+	// 窗口大小：宿主按库把窗口状态存在 `%APPDATA%/obsidian/<appId>.json`
+	const windowState = APP_DIR ? join(APP_DIR, `${VAULT_NAME}.json`) : null;
+	if (windowState) writeFileSync(windowState, JSON.stringify({ ...WINDOW, isMaximized: false, devTools: false, zoom: 0 }));
+
 	const mock = createMockS3({
-		accessKeyId: "acc-demo-key",
-		secretAccessKey: "acc-demo-secret",
-		bucket: "acc-demo-bucket",
+		accessKeyId: "demo-key",
+		secretAccessKey: "demo-secret",
+		bucket: "my-notes",
 	});
 	const endpoint = await mock.start();
-	/** `close()` 只能关一次（Node 的 server.close 第二次会给错误回调）；演示流程中途要"停存储"，所以包一层。 */
+	/** `close()` 只能关一次（Node 的 server.close 第二次会给错误回调）；流程中途要"停存储"，所以包一层。 */
 	let mockClosed = false;
 	const closeMock = async () => {
 		if (mockClosed) return;
@@ -97,25 +161,56 @@ async function main() {
 	let child = null;
 	let client = null;
 	const frames = [];
+	let languageWas = null;
+	let appId = VAULT_NAME;
 
 	try {
-		if (layoutExisted) rmSync(layoutJson, { force: true });
-
 		({ child } = await launchAndAttach({
 			exe: OBSIDIAN,
 			port: PORT,
-			vault: "ObsidianVault",
-			path: VAULT_DIR,
+			vault: VAULT_NAME,
 			waitSeconds: 90,
 			log,
 		}));
 		client = await connect(PORT, { tries: 25, gapMs: 1000 });
-		await client.send("Page.enable");
-		// ⚠️ **不要**用 `Emulation.setDeviceMetricsOverride`：把渲染区设成 1080×648 而真实窗口是
-		// 1024×800 时，宿主的布局按窗口算、截图按覆盖尺寸取 ⇒ 正文被挤在左半屏（实测）。
-		// ⇒ 直接按**真实窗口**截，尺寸在合成动图那一步再统一缩放。
 
-		// ── 准备：存储指向 mock（只在内存里）＋ 关掉会抢戏的开关 ──
+		// ── 1) 英文界面 ＋ 让这个库的社区插件真的加载（都要重载才生效）──
+		const ids = await evaluate(
+			client,
+			`({ appId: app.appId, lang: localStorage.getItem("language") })`
+		);
+		appId = ids?.appId ?? VAULT_NAME;
+		languageWas = ids?.lang ?? null;
+		log(`· appId=${appId}｜原语言=${JSON.stringify(languageWas)}`);
+		await evaluate(
+			client,
+			`(() => {
+				localStorage.setItem("enable-plugin-" + app.appId, "true");
+				localStorage.setItem("language", "en");
+				return true;
+			})()`
+		);
+		await evaluate(client, `(() => { location.reload(); return true; })()`).catch(() => {});
+		// 重载会销毁执行上下文 ⇒ 头几秒的求值可能报错，重试到插件真的加载为止
+		let english = false;
+		for (let i = 0; i < 30; i += 1) {
+			await delay(700);
+			try {
+				english = await evaluate(
+					client,
+					`Boolean(app.plugins.plugins["attachment-cloud-cache"]) && /Attachment manager/.test(
+						app.commands.commands["attachment-cloud-cache:manage-attachments"]?.name ?? ""
+					)`
+				);
+			} catch {
+				english = false;
+			}
+			if (english) break;
+		}
+		if (!english) throw new Error("界面没切到英文或插件没加载（先看 localStorage 的两把闸）");
+		log("· 英文界面 ＋ 插件已加载");
+
+		// ── 2) 存储指向 mock（只在内存里；这个库是临时的，落盘也无所谓）──
 		const ready = await evaluate(
 			client,
 			`(() => {
@@ -124,13 +219,17 @@ async function main() {
 				plugin.settings.s3 = {
 					endpoint: ${JSON.stringify(endpoint)},
 					region: "auto",
-					bucket: "acc-demo-bucket",
-					accessKeyId: "acc-demo-key",
+					bucket: "my-notes",
+					accessKeyId: "demo-key",
 					secretAccessKeyRef: "acc-demo-secret-ref",
-					publicUrlBase: "",
+					// ⭐ 写成 https://files.example.com：动图里那条链接要像"你自己的存储"，
+					// 而不是 127.0.0.1:49210（README 上会像本地测试）。上传仍走 mock 端点 ——
+					// publicUrlBase 只决定**链接长什么样**；渲染判定按这个前缀命中索引 ⇒ 用本地副本，
+					// 不会真的去解析这个域名（离线那段因此仍然成立）。
+					publicUrlBase: ${JSON.stringify(PUBLIC_BASE)},
 					forcePathStyle: true,
 				};
-				try { app.secretStorage?.setSecret?.("acc-demo-secret-ref", "acc-demo-secret"); } catch {}
+				try { app.secretStorage?.setSecret?.("acc-demo-secret-ref", "demo-secret"); } catch {}
 				plugin.settings.autoUpload = true;
 				plugin.settings.localCopy = "keep";
 				plugin.settings.externalImageCache = false;
@@ -140,48 +239,29 @@ async function main() {
 		);
 		if (ready?.error) throw new Error(ready.error);
 
-		// 关掉 inline title：文件名与 H1 会叠出两行大标题（画面脏），这不改内容、只改呈现
-		const inlineTitleWas = await evaluate(client, `app.vault.getConfig("showInlineTitle")`);
-		if (inlineTitleWas !== false) {
-			await evaluate(
-				client,
-				`(() => { app.vault.setConfig("showInlineTitle", false); app.workspace.updateOptions?.(); return true; })()`
-			);
-		}
-
-		// ── 造一篇干净的笔记并打开 ──
+		// ── 3) 备好笔记并打开（内容全英文、只有这一篇）──
 		const noteBody = [
-			"# 附件存在你自己的存储里",
+			"# Your attachments, on your own storage",
 			"",
-			"往笔记里粘贴一个文件 —— 它上传到**你自己的**存储，链接换掉，文件留在库里。",
+			"Paste a file into any note. It goes to your bucket, the link is rewritten, and a copy stays here.",
 			"",
 			"",
 		].join("\n");
 		await evaluate(
 			client,
 			`(async () => {
-				const dir = ${JSON.stringify(DEMO_DIR)};
-				if (!app.vault.getAbstractFileByPath(dir)) await app.vault.createFolder(dir).catch(() => {});
 				const path = ${JSON.stringify(NOTE)};
 				const body = ${JSON.stringify(noteBody)};
 				const existing = app.vault.getAbstractFileByPath(path);
 				if (existing) await app.vault.modify(existing, body);
 				else await app.vault.create(path, body);
 				await app.workspace.getLeaf(true).openFile(app.vault.getAbstractFileByPath(path));
-				// ⚠️ 演示库里可能留着上次的分屏与一堆标签 —— 只留这一篇（否则画面右边是一块空白面板）
-				const keep = path;
-				app.workspace.iterateAllLeaves((leaf) => {
-					const viewPath = leaf.view?.file?.path;
-					const type = leaf.view?.getViewType?.();
-					if (viewPath === keep) return;
-					if (type === "markdown" || type === "empty" || type === "canvas") leaf.detach();
-				});
 				return true;
 			})()`
 		);
-		await delay(1600);
+		await delay(1500);
 
-		// 光标落到末尾（粘贴点）；同时收起左侧栏，让画面只剩正文
+		// 光标落到末尾（粘贴点）＋ 收掉两侧边栏（演示只要正文；宿主自己会蹦出来，所以用样式钉住）
 		await evaluate(
 			client,
 			`(() => {
@@ -191,17 +271,13 @@ async function main() {
 					editor.setCursor({ line, ch: editor.getLine(line).length });
 					editor.focus?.();
 				}
-				app.workspace.leftSplit?.collapse?.();
-				app.workspace.rightSplit?.collapse?.();
-				// ⚠️ collapse() 在布局重建后会被覆盖回来（实测右栏仍占 ~400px；本行注释**不许**写反引号，
-				// 它在模板串里会提前闭合字符串 —— 本项目第五次踩这个坑）。
-				// 演示只要正文 —— 用一行样式把两侧收掉（纯呈现，不改任何数据）。
 				if (!document.getElementById("acc-demo-clean")) {
 					const st = document.createElement("style");
 					st.id = "acc-demo-clean";
 					st.textContent =
 						".workspace-split.mod-left-split{display:none!important}" +
-						".workspace-split.mod-right-split{display:none!important}";
+						".workspace-split.mod-right-split{display:none!important}" +
+						".status-bar .status-bar-item.mod-clickable{display:none!important}";
 					document.head.appendChild(st);
 				}
 				return Boolean(editor);
@@ -209,14 +285,11 @@ async function main() {
 		);
 		await delay(900);
 
-		// 等库里的加载失败提示自己消失（演示库里还装着别的插件，会弹两条红通知）
-		for (let i = 0; i < 40; i += 1) {
-			const busy = await evaluate(
-				client,
-				`document.querySelectorAll(".notice-container .notice").length > 0`
-			);
+		// 等宿主的通知自己消失（空库里只有"受限模式已关闭"之类的一两条）
+		for (let i = 0; i < 20; i += 1) {
+			const busy = await evaluate(client, `document.querySelectorAll(".notice-container .notice").length > 0`);
 			if (!busy) break;
-			await delay(500);
+			await delay(400);
 		}
 
 		// ── 开录 ──
@@ -242,25 +315,20 @@ async function main() {
 		})();
 		const mark = (label) => marks.push({ at: Date.now() - t0, label });
 
-		// ⭐ 先切到**源码模式**：实时预览会把嵌入渲染成图，观众看不到"链接被换掉"这件事。
-		// 源码模式下 `![](attachments/diagram.png)` 会当场变成 `![](https://…/key.png)`。
-		// ⚠️ 不能用 `app.vault.setConfig("livePreview", false)` —— 值确实变了，但**编辑器不重渲染**
-		//（实测：改完画面还是实时预览）。走命令 `editor:toggle-source`。
-		const livePreviewWas = await evaluate(client, `app.vault.getConfig("livePreview")`);
+		// ⭐ 先切到**源码模式**：实时预览会把嵌入渲染成图，观众看不到"链接被改写"这件事。
+		// ⚠️ 不能用 `app.vault.setConfig("livePreview", false)` —— 值确实变了，但编辑器**不重渲染**。
 		const toggleSource = async () => {
-			await evaluate(
-				client,
-				`(() => { app.commands.executeCommandById("editor:toggle-source"); return true; })()`
-			);
+			await evaluate(client, `(() => { app.commands.executeCommandById("editor:toggle-source"); return true; })()`);
 			await delay(700);
 		};
-		if (livePreviewWas !== false) await toggleSource();
+		await toggleSource();
 
-		mark("一篇普通笔记");
-		await delay(400);
-		mark("粘贴一张图 —— 自动上传，链接换成你自己的存储地址");
+		mark("Paste a picture into any note");
+		await delay(500);
+		mark("Paste — it goes straight to your bucket");
+		await delay(300);
 
-		// ⚠️ `rebuildView()` 之后光标回到文件开头 ⇒ 粘贴前必须重新落到末尾
+		// ⚠️ 切模式之后光标回到文件开头 ⇒ 粘贴前必须重新落到末尾
 		await evaluate(
 			client,
 			`(() => {
@@ -272,7 +340,7 @@ async function main() {
 				return true;
 			})()`
 		);
-		await delay(250);
+		await delay(200);
 
 		// ── 粘贴（走宿主事件；DOM 的合成 paste 载荷是空的）──
 		await evaluate(
@@ -280,7 +348,7 @@ async function main() {
 			`(() => {
 				const editor = app.workspace.activeEditor?.editor;
 				const info = app.workspace.activeEditor;
-				// 画一张 640×360 的图（渐变 + 两个几何块），不读用户任何文件
+				// 画一张 640×360 的图（渐变 ＋ 几个色块），不读任何文件
 				const c = document.createElement("canvas");
 				c.width = 640; c.height = 360;
 				const g = c.getContext("2d");
@@ -304,7 +372,7 @@ async function main() {
 			})()`
 		);
 
-		// ── 等上传完成（笔记里出现远端地址），期间光标停在那一行 ⇒ 能看到链接变化 ──
+		// ── 等上传完成（笔记里出现远端地址），期间光标停在那一行 ⇒ 能看见链接变化 ──
 		let uploaded = false;
 		for (let i = 0; i < 90; i += 1) {
 			const text = await evaluate(
@@ -314,21 +382,22 @@ async function main() {
 					return f ? await app.vault.read(f) : "";
 				})()`
 			);
-			if (typeof text === "string" && text.includes("/acc-demo-bucket/")) {
+			// ⭐ 判据取**公开前缀**（链接长什么样就是它），不是桶名 —— 改域名时这里跟着走
+			if (typeof text === "string" && text.includes(PUBLIC_BASE)) {
 				uploaded = true;
 				break;
 			}
 			await delay(200);
 		}
 		log(uploaded ? "· 上传完成（笔记里已是远端地址）" : "⚠️ 等上传超时，动图里这一段会是本地链接");
-		await delay(800);
+		mark("The link is rewritten to point there");
+		await delay(1200);
 
 		// ── 切回实时预览：图片渲染出来 ──
 		await toggleSource();
-		await delay(500);
-		mark("文件留在库里，所以显示不联网");
-		await delay(1000);
-		mark("「附件管理」：状态与引用一目了然");
+		await delay(400);
+		mark("A local copy stays in your vault, so it renders offline");
+		await delay(1300);
 
 		// ── 打开附件管理 ──
 		await evaluate(client, `(() => { app.commands.executeCommandById("attachment-cloud-cache:manage-attachments"); return true; })()`);
@@ -337,47 +406,37 @@ async function main() {
 			if (open) break;
 			await delay(200);
 		}
-		await delay(900);
-		// 切到「已上传」：演示库里有几十个文件，不筛的话刚传的那一行根本不在前几行
-		await evaluate(
-			client,
-			`(() => {
-				const pills = Array.from(document.querySelectorAll(".acc-gallery-filter"));
-				const hit = pills.find((el) => (el.textContent ?? "").includes("已上传"));
-				hit?.click?.();
-				return Boolean(hit);
-			})()`
-		);
-		await delay(1600);
+		// ⚠️ mark 放在**弹窗已经出现之后**：放前面的话字幕会先跳出来、弹窗晚半拍才淡入，
+		// 那一瞬间"字幕说的东西还没出现"（实测差一帧）
+		mark("Attachment manager: every file, its state and usage");
+		await delay(2200);
 		// ⚠️ 弹窗根节点是 `.acc-gallery`（挂在 body 下），不是 `.acc-gallery-modal` ——
-		// 按那个类名找关闭按钮会**静默失败**，于是最后一段"离线仍显示"被弹窗挡住（实测）。
+		// 按那个类名找关闭按钮会**静默失败**，于是最后一段被弹窗挡住（实测踩过）。
 		const closed = await evaluate(
 			client,
 			`(() => {
-				const byClass = document.querySelector(".modal-close-button");
+				const byClass = document.querySelector(".acc-gallery .modal-close-button") ?? document.querySelector(".modal-close-button");
 				if (byClass) { byClass.click(); return "close-button"; }
-				const byText = Array.from(document.querySelectorAll("button")).find(
-					(b) => (b.textContent ?? "").trim() === "关闭"
-				);
+				const byText = Array.from(document.querySelectorAll("button")).find((b) => /^(Close|关闭)$/.test((b.textContent ?? "").trim()));
 				if (byText) { byText.click(); return "text"; }
 				return "none";
 			})()`
 		);
 		log(`· 关闭弹窗：${closed}`);
 		await delay(600);
-		const stillOpen = await evaluate(client, `Boolean(document.querySelector(".acc-gallery"))`);
-		if (stillOpen) throw new Error("弹窗没关掉（录制会拍到一半弹窗，先修这个）");
-		await delay(700);
+		if (await evaluate(client, `Boolean(document.querySelector(".acc-gallery"))`)) {
+			throw new Error("弹窗没关掉（录制会拍到一半弹窗，先修这个）");
+		}
+		await delay(500);
 
 		// ── 停掉存储，然后重建视图：图照常显示 ──
-		mark("把存储停掉 —— 图片照常显示（渲染读本地副本）");
+		mark("Storage stopped — the image still renders");
 		await closeMock();
 		log("· mock 存储已停掉");
 		await evaluate(
 			client,
 			`(async () => {
-				// ⚠️ 用**当前** leaf 重开（getLeaf(false)）：传 true 会新开一个标签，
-				// 画面上于是出现两个同名标签（实测）。重建视图同样能证明"图不靠网络"。
+				// ⚠️ 用**当前** leaf 重开（传 true 会新开一个标签，画面上出现两个同名标签）
 				await app.workspace.getLeaf(false).openFile(app.vault.getAbstractFileByPath(${JSON.stringify(NOTE)}));
 				return true;
 			})()`
@@ -387,57 +446,53 @@ async function main() {
 		recording = false;
 		await recorder;
 
-		if (inlineTitleWas !== false) {
-			await evaluate(
-				client,
-				`(() => { app.vault.setConfig("showInlineTitle", true); app.workspace.updateOptions?.(); return true; })()`
-			).catch(() => {});
-		}
-		// 收尾：切回实时预览（源码模式是**视图状态**，跑完要还原，否则演示库下次打开是源码模式）
-		if (livePreviewWas !== false) {
-			await evaluate(client, `(() => { app.commands.executeCommandById("editor:toggle-source"); return true; })()`).catch(() => {});
-		}
-
 		const view = await evaluate(client, `({ w: window.innerWidth, h: window.innerHeight })`);
 		writeFileSync(
 			join(OUT, "timeline.json"),
-			JSON.stringify({ width: view?.w ?? SHOT_W, height: view?.h ?? SHOT_H, frameMs: FRAME_MS, marks, frames }, null, "\t")
+			JSON.stringify({ width: view?.w ?? 0, height: view?.h ?? 0, frameMs: FRAME_MS, marks, frames }, null, "\t")
 		);
-		log(`· 共 ${frames.length} 帧 → ${OUT}`);
+		log(`· 共 ${frames.length} 帧（${view?.w}×${view?.h}）→ ${OUT}`);
 	} finally {
 		try {
 			client?.close?.();
 		} catch {}
+		// 收尾顺序有讲究：先还原"库外"的状态（语言/登记/窗口），再删库
+		try {
+			if (client) {
+				await evaluate(
+					client,
+					`(() => {
+						localStorage.setItem("language", ${JSON.stringify(languageWas ?? "zh")});
+						localStorage.removeItem("enable-plugin-" + ${JSON.stringify(appId)});
+						return true;
+					})()`
+				).catch(() => {});
+			}
+		} catch {}
 		try {
 			child?.kill();
 		} catch {}
-		// 收尾：删掉演示笔记目录，还原两个状态文件
-		try {
-			rmSync(join(VAULT_DIR, DEMO_DIR), { recursive: true, force: true });
-		} catch {}
-		// ⚠️ 粘贴的图会落在库的附件目录里（宿主按自己的设置取名 `diagram.png` / `diagram 3.png`…），
-		// 只删 `demo/` 会留下一堆 —— 每录一次多一张，演示库会越来越脏。
-		try {
-			const attachments = join(VAULT_DIR, "attachments");
-			if (existsSync(attachments)) {
-				for (const name of readdirSync(attachments)) {
-					if (/^diagram( \d+)?\.png$/i.test(name)) rmSync(join(attachments, name), { force: true });
-				}
-			}
-		} catch {}
-		try {
-			if (layoutExisted && existsSync(layoutBackup)) {
-				copyFileSync(layoutBackup, layoutJson);
-				rmSync(layoutBackup, { force: true });
-			}
-		} catch {}
-		for (const [from, to] of backups) {
-			if (existsSync(to)) {
-				copyFileSync(to, from);
-				rmSync(to, { force: true });
-			}
-		}
 		await closeMock();
+		// ⚠️ 只删**我们那一行**，不回滚整个文件：回滚会把中间这段时间宿主自己写的
+		// 变更一起抹掉；而且上一轮崩在半路时，备份里可能已经带着这条登记（越回滚越脏）。
+		if (OBSIDIAN_JSON && existsSync(OBSIDIAN_JSON)) {
+			try {
+				const config = JSON.parse(readFileSync(OBSIDIAN_JSON, "utf8"));
+				if (config.vaults?.[VAULT_NAME]) {
+					delete config.vaults[VAULT_NAME];
+					writeFileSync(OBSIDIAN_JSON, JSON.stringify(config));
+				}
+				if (obsidianBackup && existsSync(obsidianBackup)) rmSync(obsidianBackup, { force: true });
+				log("· 临时库的登记已删掉");
+			} catch {}
+		}
+		try {
+			if (windowState) rmSync(windowState, { force: true });
+		} catch {}
+		try {
+			rmSync(VAULT_DIR, { recursive: true, force: true });
+			log("· 临时库已删除");
+		} catch {}
 	}
 }
 

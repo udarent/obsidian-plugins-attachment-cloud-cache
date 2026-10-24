@@ -351,7 +351,9 @@ export class GalleryModal extends Modal {
 			{ key: "state", label: t("galleryColState"), width: "120px" },
 			{ key: "ref", label: t("galleryColRef"), width: "84px" },
 			{ key: "size", label: t("galleryColSize"), width: "68px" },
-			{ key: "open", label: t("galleryColOpen"), kind: "open", width: "40px" },
+			// ⚠️ 40px 会把表头截成「Actio…」（英文「Actions」比中文「操作」宽一倍）；
+			// 行里那颗「Open」只要 ~30px，多出来的宽度给表头。2026-10-24 演示动图里看得一清二楚。
+			{ key: "open", label: t("galleryColOpen"), kind: "open", width: "64px" },
 		];
 	}
 
