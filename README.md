@@ -18,9 +18,9 @@ and the file itself stays in your vault as the local copy. **Rendering reads tha
 
 **Contents** · [Quick start](#quick-start) · [Why](#why-use-it) · [Features](#features) · [Requirements](#requirements) · [Installation](#installation) · [Settings](#settings) · [Commands](#commands) · [Good to know](#good-to-know) · [Privacy](#privacy--security) · [Verification](#how-far-it-is-verified) · [Help](#getting-help) · [License](#license)
 
-![Paste an image, a PDF and an audio clip into a note: each one uploads to your own storage, a copy of each stays in your vault, and all three still render after the storage goes offline](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
+![演示：往笔记里粘贴一张图片 —— 笔记里的链接当场变成你自己存储上的地址，文件仍留在库中；「附件管理」里显示它已上传、有引用；随后把存储整个停掉，图片照常显示](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
 
-*Paste an image, a PDF and an audio clip → each uploads → the note keeps a link, each file stays as its own local copy. Then the storage is stopped, and all three still work.*
+*刻意用**源码模式**拍：粘贴一张图，看着 `![](...)` 变成**你自己存储上**的地址。接着在「附件管理」里看到它「已上传 / 有引用」——然后把存储整个停掉，图片照常显示（渲染读的是库里的副本）。*
 
 ## Quick start
 
@@ -44,6 +44,9 @@ This does both: the file goes to your bucket, and the copy that renders stays in
 
 - **Any S3-compatible storage, any attachment type** — images, audio, video, PDF, archives, documents, files
   without an extension. What Obsidian can preview becomes an embed; everything else a clickable link.
+- **Attachment manager** — one dialog for every attachment in the vault: a six-column table (name, folder, state,
+  whether any note links to it, size, open), filter chips that carry their own counts, and batch actions on the
+  selection (upload, delete local, use the local file, delete from cloud). Rename works on a single row.
 - **Any way in** — pasted, dropped, from your phone's gallery or camera, shared into Obsidian, or copied into the vault.
 - **It tells you what your bucket allows** — a status light next to **Test connection** (*public* / *private* /
   *unreachable*), re-checked on demand; no link is rewritten for it.
@@ -143,13 +146,18 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 - **Automated:** signing, key and path derivation, settings, the index, the upload chain (byte-identical, one PUT,
   zero GETs), paste/drop decisions, canvas rewriting and every connection state — then a **mutation check** that
   breaks each rule on purpose and requires the suite to fail for that rule's own reason.
-- **Real Obsidian 1.14.4 (Windows) against real MinIO:** a format matrix (images, audio, video, PDF, archives)
-  checked down to the uploaded bytes; both canvas node kinds; offline audio/video/PDF; both cleanup entry points;
-  a round trip whose link opens **anonymously**; and with the bucket **private, then public**, the status light
-  settling on *Private* / *Public* — 12 checks each way, five rounds of **Test connection** giving the same answer
-  and leaving nothing behind in the bucket, plus a signed URL that returns 200 while the same address without a
-  signature returns 403.
-- **Phones:** Android, verified up to 1.1.2.
+- **Real Obsidian 1.14.5 (Windows) against real MinIO:** a format matrix (images, audio, video, PDF, archives)
+  checked down to the uploaded bytes; both canvas node kinds; offline audio/video/PDF; a round trip whose link
+  opens **anonymously**; and with the bucket **private, then public**, the status light settling on *Private* /
+  *Public* — 12 checks each way, five rounds of **Test connection** giving the same answer and leaving nothing
+  behind in the bucket, plus a signed URL that returns 200 while the same address without a signature returns 403.
+- **In-app scripts:** a CDP script drives **real Obsidian** (build fixtures → open the dialog → read the real DOM →
+  assert → clean up). It checks 38 things (one command, chip counts equal the rows they open, a single header row
+  with select-all in its first cell, tri-state select, six columns, button counts equal applicable items, the
+  icon and grey tick on a dead row, the window closing itself when a run ends), and 18 more **after a real
+  upload** (a bracketed file name, a repair run with zero PUTs, "already there" reported apart from "uploaded").
+  It never confirms anything, so your vault and your bucket are untouched.
+- **Phones:** Android, verified up to 1.1.2 — ⚠️ **no mobile regression since then**; try it on a small scale first.
 
 Reproduce the storage checks with `npm run verify:real-storage`, and the connection probe with
 `node scripts/verify-connection-probe.mjs`.
@@ -242,6 +250,8 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 
 - **任何 S3 兼容存储，任何类型的附件** —— 图片、音频、视频、PDF、压缩包、文档、没有扩展名的文件。
   Obsidian 能预览的插入为嵌入，其余插入为可点开的普通链接。
+- **附件管理（一个弹窗管全库）** —— 六列表格（名称 / 位置 / 状态 / 引用 / 大小 / 操作）＋ 带件数的筛选胶囊
+  ＋ 勾选后批量处理（上传 / 删除本地 / 改为本地引用 / 删除云端）；重命名只对单条生效。
 - **附件怎么进来都行** —— 粘贴、拖入、手机相册或相机、分享到 Obsidian、从别处拷进库。
 - **它会告诉你桶到底允许什么** —— 「测试连接」旁边一盏状态灯（公开 / 私有 / 连不上），可随时重测；
   不会为这件事改写任何一条链接。
@@ -335,11 +345,15 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 - **自动化：** 覆盖签名、key 与路径推导、设置、本地副本索引、上传链路（字节一致、恰好 1 次 PUT、0 次 GET）、
   粘贴/拖放判定、画布改写，以及每一个连接状态 —— 之后还有一道**变异验证**：把每条规则故意改坏，
   并要求套件因**那条规则自己的原因**失败。
-- **真实 Obsidian 1.14.4（Windows）、真实 MinIO：** 格式矩阵（图片、音频、视频、PDF、压缩包）逐项核对到上传字节；
-  画布两类节点；离线预览；云端清理两条入口；一次完整回环 —— 链接**匿名**能打开。把桶**先私有、再公开**各验一遍
+- **真实 Obsidian 1.14.5（Windows）、真实 MinIO：** 格式矩阵（图片、音频、视频、PDF、压缩包）逐项核对到上传字节；
+  画布两类节点；离线预览；一次完整回环 —— 链接**匿名**能打开。把桶**先私有、再公开**各验一遍
   （每边 12 项）：状态灯分别落在「私有访问」/「公开访问」、连点五次「测试连接」结论一致且桶里不留东西；
   另外签名地址回 200 而同一地址不带签名回 403。
-- **手机：** Android，验证到 1.1.2。
+- **真机界面脚本：** 一个 CDP 脚本驱动**真实 Obsidian**：造数据 → 开弹窗 → 读真实 DOM → 逐条断言 → 删数据还原。
+  它验 38 项（命令只有一条、筛选胶囊的件数＝点开后的行数、表头一行且全选在首格、三态全选、六列、按钮数字＝
+  能作用的件数、失效行的图标与灰勾、跑完自动收窗），另有 18 项在**真上传**之后核对（括号文件名、重修零上传、
+  「已存在」与「已上传」分开报）。它**不点确认**，所以不会动你的库或你的桶。
+- **手机：** Android，验证到 1.1.2 —— ⚠️ **移动端此后没有再做真机回归**，请在手机上先小范围试。
 
 存储侧的检查可用 `npm run verify:real-storage` 复现，连接探测用
 `node scripts/verify-connection-probe.mjs`。
