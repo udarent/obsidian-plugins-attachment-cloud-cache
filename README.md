@@ -172,12 +172,14 @@ your storage, and can other people open my links?" without changing anything.
 
 - **1.2.0 moved where copies live**: the old cache folder is gone; a copy is simply the file in your attachments
   folder. Nothing to migrate — the first render registers it.
-- **Commands were merged**: `Upload files your notes link to…`, `Upload off-site or local files…` and
-  `Pick files to cache…` are now one command, **`Upload attachments`** (a single confirmation — it no longer lists
-  each file, and it only covers attachments inside your vault). The cleanup command is now
-  **`Clean up attachments`** (it also lists local files and off-site cache copies), and `Show local copy usage` was
-  removed — the numbers are on the settings page, the per-file list is in the cleanup dialog.
-- **Hotkeys are bound to command ids**, not names — they keep working across these renames.
+- **The command panel is down to one command**: the older `Upload files your notes link to…`, `Upload off-site or
+  local files…`, `Pick files to cache…`, `Upload attachments` and `Clean up attachments` are all gone.
+  **Attachment manager** is now the only command: uploading and cleaning are filters plus batch actions inside its
+  table, and the per-file list lives there (the “To clean up” filter holds what the cleanup command used to list).
+  Uploading the whole vault in one go is the settings-page action **“Upload all attachments”** (one confirmation,
+  no list).
+- ⚠️ **Hotkeys are bound to command ids**, and this time the ids changed — shortcuts bound to the old commands stop
+  working and have to be bound again to **Attachment manager**.
 - Settings are additive: new keys get defaults, and unknown keys from older versions are ignored.
 
 ## Getting help
@@ -359,10 +361,11 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 ## 升级 / 迁移
 
 - **1.2.0 改了副本的位置**：不再有「缓存目录」，副本就是附件目录里那份文件。不需要迁移 —— 第一次显示时会登记。
-- **命令合并过**：`上传笔记引用的文件…`、`上传站外或本机文件…`、`挑选要缓存的外链…` 现在是同一条
-  **`上传附件`**；清理那条叫 **`清理附件`**（也会列出本地文件与站外缓存副本）；`查看本地副本占用` 已去掉 ——
-  数字在设置页，逐行清单在清理弹窗里。
-- **快捷键绑的是命令 id**，不是名字 —— 上面的改名不影响已绑的快捷键。
+- **命令面板只剩一条**：`上传笔记引用的文件…`、`上传站外或本机文件…`、`挑选要缓存的外链…`、`上传附件`、
+  `清理附件` 都不在了。现在只有 **「附件管理」**：上传与清理是它那张表里的筛选与批量动作，逐行清单也在那里
+  （「待清理」筛选给的就是过去清理命令列的那批候选）。想把整个库一次传上去，用设置页的
+  **「上传全部附件」**（一次确认，没有清单）。
+- ⚠️ **快捷键绑的是命令 id**，而这次 id 变了 —— 绑在旧命令上的快捷键会失效，需要重绑到「附件管理」。
 - 设置只增不减：新键有默认值，旧版本留下的未知键会被忽略。
 
 ## 遇到问题
