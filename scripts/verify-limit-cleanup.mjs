@@ -202,7 +202,7 @@ async function main() {
 		log(`  三份副本：${before.count} 个 / ${(before.bytes / MB).toFixed(2)} MB`);
 		check("三份大副本都已登记（总量 > 1 MB）", before.count === 3 && before.bytes > MB, `${before.bytes} 字节`);
 
-		// 只设上限（保留副本档），然后按一次「清理本地副本…」
+		// 只设上限（保留副本档），然后跑一次「上传全部附件」（它的收尾会按上限清）
 		await evaluate(
 			client,
 			`(async () => {
@@ -220,7 +220,10 @@ async function main() {
 				}
 				await plugin.saveSettings();
 				window.__accErr = null;
-				void plugin.freeUpLocalSpace().catch((error) => { window.__accErr = String(error?.message ?? error); });
+				// ⚠️ 2026-10-24：设置页那个「释放本地空间」按钮取消了 ⇒ 清理现在挂在
+				// 「上传全部附件」的收尾上（判据 planLocalCleanup 与切档询问同一份）。
+				// 这一格量的是"上限档停在上限"，入口换了但判据没换。
+				void plugin.runUploadAttachments().catch((error) => { window.__accErr = String(error?.message ?? error); });
 				return true;
 			})()`
 		);
@@ -236,7 +239,9 @@ async function main() {
 			client,
 			`(() => {
 				const buttons = Array.from(document.querySelectorAll(".modal-container .modal-button-container button, .modal .modal-button-container button"));
-				const target = buttons.find((button) => /永久删除|Delete permanently/i.test(button.textContent ?? ""));
+				// ⚠️ 两种文案都要认：这一趟可能走"只清理"（永久删除）也可能走"传完再清"
+				// （上传 N 个）—— 取决于库里此刻有没有待上传的附件。
+				const target = buttons.find((button) => /永久删除|Delete permanently|上传|Upload/i.test(button.textContent ?? ""));
 				if (!target) return { clicked: false, texts: buttons.map((button) => button.textContent) };
 				target.click();
 				return { clicked: true };

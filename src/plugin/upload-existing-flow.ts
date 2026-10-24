@@ -55,10 +55,12 @@ import {
 	selectExternalUploadCandidates,
 	selectUploadCandidates,
 } from "../maintenance/batch";
-import { runBatchUpload } from "../maintenance/run";
+import { formatMegabytes } from "../maintenance/eviction";
+import { runBatchUpload, runReleaseSpace } from "../maintenance/run";
 import type { BatchResult } from "../maintenance/run";
 import { connectionReadiness } from "../s3/credentials";
 import { readAllNoteTexts, referenceSnapshot } from "./notes-query";
+import { planLocalCleanup } from "./release-space-flow";
 import type { PluginContext } from "./context";
 
 /** 确认框里最多列几个站点 / 几条本机路径；再多只报个数（一行文字装得下的量）。 */
@@ -148,7 +150,35 @@ export async function uploadExistingAttachments(ctx: PluginContext): Promise<voi
 		跳过: Object.fromEntries(external.skipped.map((row) => [row.reason, row.count])),
 	});
 
-	if (total === 0) {
+	/**
+	 * ⭐⭐ 本地副本按**档位**顺手清（2026-10-24 用户要求）。
+	 *
+	 * 原话：「设置中的删除本地副本按钮可以取消,因为上传全部按钮的时候可以根据是否
+	 * 保留附件的选项来决定是否顺便删除本地副本。」⇒ 那个独立按钮取消，能力**搬到这里**：
+	 * 档位是「不保留」就全清，是「保留 + 上限」就清到上限以内。
+	 *
+	 * ⚠️ **判据不在这里写第二份**：走 `planLocalCleanup`（与切档询问同一个函数）——
+	 * 这是删文件的判据，"两处各算一遍"迟早给出两种答案，而代价不是难看，是丢东西。
+	 * ⚠️ 它可能抛（有笔记读不到）⇒ **跳过清理、继续上传**：上传不删任何东西，
+	 * 不该被一个"算不清能不能删"的问题挡住；而清理那一步必须什么都不做（读不到就可能多删）。
+	 */
+	let cleanup: Awaited<ReturnType<typeof planLocalCleanup>> = null;
+	let cleanupFailure = "";
+	try {
+		cleanup = await planLocalCleanup(ctx);
+	} catch (error) {
+		cleanupFailure = describeError(error);
+	}
+	const cleanupCount = cleanup?.selection.candidates.length ?? 0;
+
+	debugTimed(debug, "本地副本清理计划", startedAt, {
+		档位: ctx.settings.localCopy,
+		上限: ctx.settings.cacheLimitMb,
+		可清: cleanupCount,
+		...(cleanupFailure ? { 算不出来: cleanupFailure } : {}),
+	});
+
+	if (total === 0 && cleanupCount === 0) {
 		new Notice(ctx.t("maintainBatchNothing"));
 		return;
 	}
@@ -163,7 +193,12 @@ export async function uploadExistingAttachments(ctx: PluginContext): Promise<voi
 	 * 3. **会不会读这台电脑上的文件**（本机那几条路径的**样本**）；
 	 * 4. **文件留在原处、云端不删**（这次动作的边界，与 `revertKeepsEverything` 对称）。
 	 */
-	const lines: string[] = [ctx.t("uploadAllSummary", { count: total })];
+	const lines: string[] = [];
+	// ⚠️ 只有真有东西要传时才说"要传几件"：`total === 0` 那一支是**纯清理**
+	//（档位是"不保留"、而这一趟没有新附件可传）—— 那时候说"上传 0 个"只会让人困惑。
+	if (total > 0) {
+		lines.push(ctx.t("uploadAllSummary", { count: total }));
+	}
 	if (remoteCount > 0) {
 		lines.push(ctx.t("uploadAllExternal", { count: remoteCount, sites: siteSummary(ctx, external.sites) }));
 	}
@@ -179,14 +214,51 @@ export async function uploadExistingAttachments(ctx: PluginContext): Promise<voi
 	if (selection.repairPaths.length > 0) {
 		lines.push(ctx.t("uploadAllRepairOnly", { count: selection.repairPaths.length }));
 	}
-	lines.push(ctx.t("uploadAllKeeps"));
-	const confirmed = await ctx.confirmMaintenance({
-		title: ctx.t("uploadAllTitle"),
-		lines,
-		cta: ctx.t("uploadAllCta", { count: total }),
-		// 它不改文件名、不删东西，只是把链接换成远端地址 ⇒ 不是破坏性动作
-		destructive: false,
-	});
+	if (total > 0) lines.push(ctx.t("uploadAllKeeps"));
+
+	/**
+	 * ⭐⭐ 清理那一段（档位决定，见前面 `planLocalCleanup` 的说明）。
+	 *
+	 * ⚠️ 措辞里必须带**"永久删除"**那层意思：`releaseSpaceCannotUndo` 是这一步唯一的
+	 * 安全信息，而顺手清理最容易被读成"顺手挪一下"。两档各一句（清到底 / 清到上限）。
+	 */
+	if (cleanup && cleanupCount > 0) {
+		const mb = formatMegabytes(cleanup.selection.bytes);
+		lines.push(
+			cleanup.target.kind === "limit"
+				? ctx.t("uploadAllCleanupToLimit", {
+						count: cleanupCount,
+						mb,
+						limit: ctx.t("cacheLimitValue", { mb: cleanup.target.mb }),
+					})
+				: ctx.t("uploadAllCleanupAll", { count: cleanupCount, mb })
+		);
+		lines.push(ctx.t("releaseSpaceCannotUndo"));
+	}
+
+	/**
+	 * 确认框分两支（2026-10-24）：
+	 * - **有东西要传** ⇒ 上传那套标题 ＋ 按钮（清理写成附加的一段）；
+	 * - **只有清理** ⇒ 用清理那套标题 ＋ "永久删除"按钮 —— 那时叫「上传 0 个」是假话。
+	 *
+	 * ⚠️ `destructive` 跟着**会不会删文件**走：只要含清理就是 `true`（按钮变危险色），
+	 * 否则 `false`（只改链接、不删东西）。
+	 */
+	const confirmed = await ctx.confirmMaintenance(
+		total > 0
+			? {
+					title: ctx.t("uploadAllTitle"),
+					lines,
+					cta: ctx.t("uploadAllCta", { count: total }),
+					destructive: cleanupCount > 0,
+				}
+			: {
+					title: ctx.t("releaseSpaceTitle"),
+					lines,
+					cta: ctx.t("releaseSpaceCta"),
+					destructive: true,
+				}
+	);
 	if (!confirmed) {
 		new Notice(ctx.t("maintainCancelled"));
 		return;
@@ -194,57 +266,91 @@ export async function uploadExistingAttachments(ctx: PluginContext): Promise<voi
 
 	const state: { summary: BatchResult | null } = { summary: null };
 	let failure = "";
-	try {
-		state.summary = await runBatchUpload(deps, {
-			// ⭐ 库外那批整份交给执行层（它自己按 `cacheExternal` 决定怎么下载/读）
-			external: { ...external, candidates: kept },
-			// ⚠️ 传**全库**快照：执行层用它判断"传完要不要改链接"，而"有没有人引用"
-			// 是全库的事实（别的笔记里也可能指着它）。
-			referencedPaths: snapshot.referenced,
-			repairablePaths: snapshot.rewritable,
-			// ⚠️ **不传 `includeUnreferenced`**：它默认就是 `false`，而"收不收未引用"
-			// 只在**选候选**那一处判一次。写两遍的后果是"改一个不生效"（实测：变异只打开
-			// 执行层那个开关时，行为一点没变 —— 候选里本来就没有未引用的文件）。
-			// ⭐ 范围就是**上面算出来的那一批**：没有清单，也就没有"用户的取舍"这一层。
-			onlyPaths: new Set(selection.paths),
-			// 没有清单也就没有行，没有逐项进度可言 ⇒ 不给 `onItem`
-		});
-	} catch (error) {
-		// 执行层内部逐件兜了错，走到这里说明是意料之外的（如实说出，不静默）
-		failure = describeError(error);
+	// ⚠️ 只在这一趟**真有东西要传**时才跑上传：`total === 0` 那一支是纯清理。
+	if (total > 0) {
+		try {
+			state.summary = await runBatchUpload(deps, {
+				// ⭐ 库外那批整份交给执行层（它自己按 `cacheExternal` 决定怎么下载/读）
+				external: { ...external, candidates: kept },
+				// ⚠️ 传**全库**快照：执行层用它判断"传完要不要改链接"，而"有没有人引用"
+				// 是全库的事实（别的笔记里也可能指着它）。
+				referencedPaths: snapshot.referenced,
+				repairablePaths: snapshot.rewritable,
+				// ⚠️ **不传 `includeUnreferenced`**：它默认就是 `false`，而"收不收未引用"
+				// 只在**选候选**那一处判一次。写两遍的后果是"改一个不生效"（实测：变异只打开
+				// 执行层那个开关时，行为一点没变 —— 候选里本来就没有未引用的文件）。
+				// ⭐ 范围就是**上面算出来的那一批**：没有清单，也就没有"用户的取舍"这一层。
+				onlyPaths: new Set(selection.paths),
+				// 没有清单也就没有行，没有逐项进度可言 ⇒ 不给 `onItem`
+			});
+		} catch (error) {
+			// 执行层内部逐件兜了错，走到这里说明是意料之外的（如实说出，不静默）
+			failure = describeError(error);
+		}
+		if (failure) {
+			// ⚠️ 上传失败就**不再往下清**：此刻用户要看的是这条错误，
+			// 而不是"顺手又删掉一批本地副本"（那会让现场更难收拾）。
+			new Notice(failure);
+			return;
+		}
 	}
-	if (failure) {
-		new Notice(failure);
-		return;
-	}
-	if (!state.summary) return;
 
-	const outcome: BatchResult = state.summary;
 	/**
-	 * ⭐⭐ 一次上传只发**一条**通知（D-80，评审 3-2）：三条会叠成一摞，
-	 * 而只有第一条是结论，其余是同一次操作的补充事实。
+	 * 一条通知说完这一趟（D-80：多条会叠成一摞，而只有第一条是结论）。
+	 *
+	 * ⚠️ 清理排在**上传之后**：`runReleaseSpace` 会逐个 HEAD 复核"云端现在确实还有它"，
+	 * 所以顺序反过来就会有一批因为"刚传的还没确认上"而被跳过。
 	 */
-	const parts = [
-		ctx.t("maintainBatchDone", {
-			uploaded: outcome.uploaded,
-			reused: outcome.reused,
-			failed: outcome.failed,
-			notes: outcome.notesChanged,
-			links: outcome.linksRewritten,
-		}),
-	];
-	// ⚠️ 画布里"没敢动"的值要**说出来**：它不属于失败，但用户必须知道某一处引用
-	// 可能还指着旧位置（否则他会以为全改好了）。
-	if (outcome.canvasSkipped > 0) {
-		parts.push(ctx.t("maintainBatchCanvasSkipped", { count: outcome.canvasSkipped }));
+	const parts: string[] = [];
+	const outcome: BatchResult | null = state.summary;
+	if (outcome) {
+		parts.push(
+			ctx.t("maintainBatchDone", {
+				uploaded: outcome.uploaded,
+				reused: outcome.reused,
+				failed: outcome.failed,
+				notes: outcome.notesChanged,
+				links: outcome.linksRewritten,
+			})
+		);
+		// ⚠️ 画布里"没敢动"的值要**说出来**：它不属于失败，但用户必须知道某一处引用
+		// 可能还指着旧位置（否则他会以为全改好了）。
+		if (outcome.canvasSkipped > 0) {
+			parts.push(ctx.t("maintainBatchCanvasSkipped", { count: outcome.canvasSkipped }));
+		}
+		// ⭐ 删掉重复副本也要说一句：一个附件只该留一份，多余的清掉不是"少了一个"。
+		if (outcome.redundantRemoved > 0) {
+			parts.push(ctx.t("maintainBatchDuplicatesRemoved", { count: outcome.redundantRemoved }));
+		}
 	}
-	// ⭐ 删掉重复副本也要说一句：一个附件只该留一份，多余的清掉不是"少了一个"。
-	if (outcome.redundantRemoved > 0) {
-		parts.push(ctx.t("maintainBatchDuplicatesRemoved", { count: outcome.redundantRemoved }));
+
+	if (cleanup && cleanupCount > 0) {
+		try {
+			const released = await runReleaseSpace(deps, cleanup.selection);
+			parts.push(
+				ctx.t("releaseSpaceDone", {
+					deleted: released.evicted,
+					mb: formatMegabytes(released.freed),
+					skipped: released.skipped.length,
+				})
+			);
+			// ⚠️ "一个都没删"必须解释 —— 用户刚看到"会删除 N 份"，结果一份没删、
+			// 只说"跳过 N 个"，他只会以为功能坏了（真实原因永远是"云端确认不上"）。
+			if (released.evicted === 0 && released.skipped.length > 0) {
+				parts.push(ctx.t("releaseSpaceNothingDeleted", { skipped: released.skipped.length }));
+			}
+		} catch (error) {
+			// 清理失败不该淹没上传结果 ⇒ 追加一句，而不是替换 parts
+			parts.push(describeError(error));
+		}
 	}
+
 	// ⚠️ 分隔符用空格而不是中文标点：文案本身已经以句号结尾，且这一层不许写死标点
 	//（`check:notice-i18n` 的判据）。
-	new Notice(parts.join(" "));
+	if (parts.length > 0) new Notice(parts.join(" "));
+	// ⚠️ 清理算不出来（有笔记读不到）时**明说**：否则用户切到"不保留"、跑了这一趟，
+	// 发现本地副本一份没少，会以为是这个开关坏了。
+	if (cleanupFailure) new Notice(ctx.t("uploadAllCleanupSkipped", { reason: cleanupFailure }));
 }
 
 /**

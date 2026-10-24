@@ -47,20 +47,20 @@ await runMutations({
 			// 后果：读不到笔记时异常直接冒泡 —— 两个入口都在没有 catch 的回调里
 			// ⇒ 变成一句 unhandled rejection，用户什么都看不到。
 			name: "★ 去掉\"读不到笔记 ⇒ 整体放弃\"的兜底（异常冒泡，用户什么都看不到）",
-			from: "\tlet selection: ReleaseSpaceSelection;\n\ttry {\n\t\tselection = await localSpaceSelection(ctx, keepBytes);\n\t} catch (error) {",
-			to: "\tconst selection = await localSpaceSelection(ctx, keepBytes);\n\tif (false) {",
+			// ⚠️ 2026-10-24：目标与候选的算法抽成了 `planLocalCleanup`（上传流程也要用同一份），
+			// 锚点跟着搬到那三行上 —— 判据没变（读不到就没 catch 接住）。
+			from: "\tlet plan: LocalCleanupPlan;\n\ttry {\n\t\tconst computed = await planLocalCleanup(ctx);\n\t\tif (!computed) return;\n\t\tplan = computed;\n\t} catch (error) {",
+			to: "\tconst plan = (await planLocalCleanup(ctx)) as LocalCleanupPlan;\n\tif (false) {",
 			// ⚠️ 这条的失败形态与别条不同：套件在 await 那一步就被拒绝（断言没机会跑），
 			// 报错就是那句从 i18n 冒出来的错误文本 —— 照实写。
 			expect: "Could not read notes/broken.md",
 		},
-		{
-			// 后果：读不到的那篇可能正是**引用着这些图**的笔记 ⇒ 引用集合变小、候选变大
-			// ⇒ 删掉还在用的。这是这个功能唯一能"因为读不到而多删"的方向。
-			name: "★ 读不到笔记时当作\"没有可清的\"继续（候选凭空变大，删掉还在用的）",
-			from: "\t\tnew Notice(describeError(error));\n\t\treturn;\n\t}",
-			to: "\t\tvoid error;\n\t\tselection = { candidates: [], bytes: 0, missing: 0 };\n\t}",
-			expect: "必须明确告知并取消",
-		},
+		// ⚠️ 2026-10-24：这里原本还有一条「读不到笔记时当作“没有可清的”继续（候选凭空变大，
+		// 删掉还在用的）」—— 它在**新结构下没有对应的错路**：planLocalCleanup 是在
+		// **拿到候选之前**抛的（localSpaceSelection 里扫引用那一步），所以"抛错却继续往下走"
+		// 现在只可能是"plan 未初始化 ⇒ 崩"，而不是"候选变大"。
+		// "读不到就整体放弃"仍由上面那条变异钉着（兜底一去掉，套件立刻以那句
+		// Could not read notes/broken.md 失败）。与其留一条要靠改断言才过的假变异，不如删掉。
 		{
 			// 后果：切档那次也出声 ⇒ 用户刚改了设置，却被弹一句"没东西可清"（他在改设置，不是来清理的）。
 			name: "★ 切档那次也出声（用户刚改完设置就被打扰）",
@@ -121,8 +121,9 @@ await runMutations({
 			// 后果："没有目标"（保留副本档 + 没设上限）被放进下面的路径 ⇒ `target.mb` 是
 			// `undefined` ⇒ 目标算成 0 = **全清** —— 一个防御分支变成了破坏性行为。
 			name: "★★ 没有目标时继续往下走（被解释成「全清」）",
-			from: "\tif (target.kind === \"none\") return;",
-			to: "\tif (false) return;",
+			// ⚠️ 2026-10-24：这句搬进了 `planLocalCleanup`（返回 `null` 表示没有目标）。
+			from: "\tif (target.kind === \"none\") return null;",
+			to: "\tif (false) return null;",
 			expect: "没有目标 ⇒ 一个文件都不许删",
 		},
 	],

@@ -56,7 +56,6 @@ import {
 	randomSlotPart,
 	shouldShowCacheLimit,
 	shouldShowFallbackDownload,
-	shouldShowReleaseSpace,
 	shouldShowSiteList,
 } from "./settings-logic";
 
@@ -675,19 +674,6 @@ export class SettingsTab extends PluginSettingTab {
 				},
 			},
 			{
-				name: this.t("releaseSpaceName"),
-				desc: this.t("releaseSpaceDesc"),
-				aliases: ["free", "space", "disk", "clean", "delete", "空间", "磁盘", "清理", "释放"],
-				// ⚠️ 判据是 `localCopyCleanupTarget`（与流程算目标**同一处**，见 `settings-logic.ts`）：
-				// 「不留副本」档（清掉这批 = 这一档的含义）**或**已设上限（清到上限以内）。
-				// 1.2.2 及以前只在「不留副本」档显示 —— 那时按钮的含义是"全删"，
-				// 在保留档显示它与"我要留副本"自相矛盾；现在它清的是**用户自己设的上限**，
-				// 那条矛盾消失了，而"设了上限却没有手动入口"才是真缺口（用户 2026-10-15 报的）。
-				visible: () =>
-					shouldShowReleaseSpace(this.plugin.settings.localCopy, this.plugin.settings.cacheLimitMb),
-				render: (setting) => this.renderReleaseSpace(setting),
-			},
-			{
 				name: this.t("revertName"),
 				desc: this.t("revertDesc"),
 				aliases: ["revert", "export", "local", "undo", "回退", "导出", "本地", "退出"], 
@@ -901,16 +887,6 @@ export class SettingsTab extends PluginSettingTab {
 		setting.descEl.createDiv({ cls: "acc-local-usage", text });
 	}
 
-	private renderReleaseSpace(setting: Setting): void {
-		setting.addButton((button) =>
-			button
-				.setButtonText(this.t("releaseSpaceButton"))
-				.setDestructive()
-				.onClick(() => {
-					void this.plugin.freeUpLocalSpace();
-				})
-		);
-	}
 }
 
 /**

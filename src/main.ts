@@ -851,20 +851,10 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	}
 
 	/**
-	 * 设置页那个按钮的入口（F18 的**手动**入口）。
-	 *
-	 * ⚠️ 与"切档时的那次询问"共用同一个流程（`releaseLocalSpace`），
-	 * 差别只在"没有可清项时要不要出声"：手动入口必须说一声（他是特地来的）。
-	 */
-	async freeUpLocalSpace(): Promise<void> {
-		await releaseLocalSpace(this.flowContext(), "notice");
-	}
-
-	/**
 	 * 「把链接改回本地路径」（**退出路径**）：不删云端、不删本地，只把笔记里的 URL 换回库内路径。
 	 *
-	 * ⚠️ 与 `freeUpLocalSpace` 方向**正好相反**，两者名字必须能一眼分开：
-	 * 那个删本地副本腾空间，这个把笔记改回指着本地那份、一个文件都不删。
+	 * ⚠️ 与「上传全部附件」方向**正好相反**，两者名字必须能一眼分开：
+	 * 那个传上去并把链接指向云端，这个改回指着本地那份、一个文件都不删。
 	 */
 	async revertLinksToLocal(): Promise<void> {
 		await revertLocalLinks(this.flowContext());

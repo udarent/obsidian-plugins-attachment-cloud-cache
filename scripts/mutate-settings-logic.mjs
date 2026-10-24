@@ -55,23 +55,20 @@ await runMutations({
 			to: 'export function shouldShowCacheLimit(action: unknown): boolean {\n\treturn action === "cache";\n}',
 			expect: "原地保留档**也要显示**",
 		},
-		{
-			// 后果：又退回 1.2.2 的旧口径（只在「不留副本」档显示）⇒ **设了上限的用户找不到手动入口**，
-			// 只能干等后台那一轮（它每 10 分钟才看一次、还带 60 s 节流与 10 分钟宽限）。
-			// ⭐ 这正是用户 2026-10-15 报的那个缺口："设置上限 500，想清理，却发现没有入口"。
-			name: "★ 又只认「不留副本」档（设了上限却没有手动入口）",
-			from: '\treturn localCopyCleanupTarget(action, cacheLimitMb).kind !== "none";',
-			to: '\treturn isCacheDisabled(action);',
-			expect: "保留副本档设了上限也要显示",
-		},
+		// ⚠️ 2026-10-24：原先这里有一条「又只认“不留副本”档（设了上限却没有手动入口）」的变异，
+		// 打的是 shouldShowReleaseSpace —— 那个谓词**随设置页那个按钮一起删掉了**
+		//（用户要求：上传时按档位顺手清，不再给独立按钮）。判据本身（localCopyCleanupTarget）
+		// 仍被下一条变异钉着，而"上限档也要清"由 release-space-flow 套件与验收的纯清理那一支覆盖。
 		{
 			// 后果（与上一条相反的错向）：没有目标也把按钮摆出来 —— 用户按下去，
 			// 流程那一侧会**什么都不做**（`kind === "none"` 直接返回），
 			// 界面上表现成"按钮点了没动静"，与"功能坏了"完全一样。
-			name: "★ 没有目标也显示（按钮点了没动静）",
+			// 后果：不限量也给出一个"目标" ⇒ 命令/上传收尾会按 0 字节去清 = **全清**，
+			// 而用户从没说过要删本地副本。（旧文案是"按钮点了没动静"，按钮取消后换成目标的口径。）
+			name: "★ 没有目标也给出目标（上限 0 被当成「清空」）",
 			from: '\treturn mb > 0 ? { kind: "limit", mb } : { kind: "none" };',
 			to: '\treturn { kind: "limit", mb };',
-			expect: "不限量时不该显示",
+			expect: "不限量 ⇒ 没有目标",
 		},
 		{
 			// 后果：坏上限（无穷大 / 非数）被当成"有目标" ⇒ 目标变成一个够不着的数，
@@ -88,7 +85,8 @@ await runMutations({
 			name: "★ 目标不按档位给（「不留副本」档误用遗留的上限数字）",
 			from: '\tif (isCacheDisabled(action)) return { kind: "all" };\n',
 			to: "",
-			expect: "不留副本档要显示",
+			// ⚠️ 2026-10-24：断言从"显隐"搬到"目标"（谓词随按钮取消），消息也跟着换了。
+			expect: "不留副本档：上限",
 		},
 
 		// ── 选项生成 ──

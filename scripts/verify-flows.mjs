@@ -325,6 +325,11 @@ async function main() {
 				plugin.__accLocalFiles = plugin.settings.uploadLocalFiles;
 				plugin.settings.externalImageCache = false;
 				plugin.settings.uploadLocalFiles = false;
+				// ⚠️ 档位也要隔离：演示库里是「不保留」，那会让确认框多出"顺手删本地副本"
+				// 那一段（2026-10-24 起「上传全部附件」的收尾按档位清）。这一节只读不跑，
+				// 但留着 trash 档等于给后面任何一次手滑准备好一次真删。
+				plugin.__accLocalCopy = plugin.settings.localCopy;
+				plugin.settings.localCopy = "keep";
 				const folder = app.vault.getAbstractFileByPath("acc-verify");
 				if (!folder) await app.vault.createFolder("acc-verify").catch(() => {});
 				const bytes = new Uint8Array(${JSON.stringify(PNG)});
@@ -391,6 +396,7 @@ async function main() {
 				if (typeof plugin.__accAutoUpload === "boolean") plugin.settings.autoUpload = plugin.__accAutoUpload;
 				if (typeof plugin.__accExternal === "boolean") plugin.settings.externalImageCache = plugin.__accExternal;
 				if (typeof plugin.__accLocalFiles === "boolean") plugin.settings.uploadLocalFiles = plugin.__accLocalFiles;
+				if (typeof plugin.__accLocalCopy === "string") plugin.settings.localCopy = plugin.__accLocalCopy;
 				return true;
 			})()`
 		);

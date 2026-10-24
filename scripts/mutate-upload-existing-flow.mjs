@@ -79,8 +79,10 @@ await runMutations({
 			// 后果：确认框**不再说"文件留在原处、云端不删"** —— 用户跑完发现文件还在，
 			// 会以为没生效（或反过来以为文件被搬走了）。
 			name: "★★ 确认框不再说清文件留在原地（用户以为没生效或以为文件被搬走）",
-			from: '\tlines.push(ctx.t("uploadAllKeeps"));',
-			to: '\tlines.push(ctx.t("uploadAllSummary", { count: 1 }));',
+			// ⚠️ 2026-10-24：这句现在只在"真有东西要传"时才执行（纯清理那一支不说上传的事），
+			// 而且下面还多了"顺手删本地副本"那一段 —— 锚点必须带上现在的条件。
+			from: '\tif (total > 0) lines.push(ctx.t("uploadAllKeeps"));',
+			to: '\tif (total > 0) lines.push(ctx.t("uploadAllSummary", { count: 1 }));',
 			expect: "确认框要写清「文件留在原处、云端不删」",
 		},
 		{

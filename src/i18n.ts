@@ -108,8 +108,9 @@ export const I18N: Record<string, Locale> = {
 
 		// ── 离线副本 ──
 		localCopy: "What happens to the local copy",
+		// ⭐ 2026-10-24：那句「什么时候删」从 `releaseSpaceDesc`（设置页那个按钮的说明，已取消）搬到这里。
 		localCopyDesc:
-			"Keep the file in your vault after uploading, or delete it to save space. Keeping it is what makes offline viewing work. Without it, images, audio and video still show online, but PDFs cannot be shown.",
+			"Keep the file in your vault after uploading, or delete it to save space — with “Delete it”, “Upload all” also removes the local copies for good once it finishes. Keeping it is what makes offline viewing work; without it, images, audio and video still show online, but PDFs cannot be shown.",
 		localCopy_keep: "Keep it (works offline)",
 		localCopy_trash: "Delete it (saves space, no offline)",
 		fallbackDownload: "Download missing local copies automatically",
@@ -170,11 +171,9 @@ export const I18N: Record<string, Locale> = {
 			"Only this device's references can be seen. Other devices (or another vault sharing this storage) may still be using some of these files — deleting cannot be undone.",
 		cloudCleanupPersistFailed: "Could not save the local-copy index: {error}",
 		cloudCleanupUnreadableNote: "Could not read {path}, so the cleanup was cancelled.",
-		// F18：清理本地占用（并入「不留副本」档，见设计 §4.4.3 与 §6.4 来路 ③）
-		releaseSpaceName: "Free up local space",
-		releaseSpaceDesc:
-			"Deletes local copies of files your notes still use — permanently, not to the trash, so the space frees up at once. Cloud files and the links in your notes are untouched, and a copy comes back the next time a note shows it. With a limit set, it stops at the limit.",
-		releaseSpaceButton: "Delete local copies…",
+		// F18：清理本地副本。⚠️ 2026-10-24 起**没有独立的设置项**了（按钮取消）：
+		// 触发点是「上传全部附件」的收尾（按 `localCopy` 档位）与切档时的那一次询问。
+		// 所以下面这些是**确认框与通知**的文案，不是设置项说明。
 		releaseSpaceTitle: "Delete these local copies for good?",
 		releaseSpaceSummary: "{count} local copy(ies), about {mb} MB:",
 		releaseSpaceCannotUndo:
@@ -397,6 +396,12 @@ export const I18N: Record<string, Locale> = {
 		uploadAllMissingLocal: "{count} local file(s) are gone and will be skipped.",
 		uploadAllRepairOnly: "{count} of them are already in your storage — only their links are rewritten, no bytes are uploaded again.",
 		uploadAllKeeps: "Your files stay where they are and keep their names. Nothing in your storage is deleted.",
+		// ⭐ 2026-10-24：本地副本按档位顺手清（设置页那个按钮取消后，这里是唯一的说明处）。
+		uploadAllCleanupAll:
+			"It will also delete {count} local copy(ies) of already-uploaded files (about {mb} MB) for good, to free the space.",
+		uploadAllCleanupToLimit:
+			"It will also trim the local copies down to your {limit} limit: {count} to delete, about {mb} MB, for good.",
+		uploadAllCleanupSkipped: "Local copies were left alone: {reason}",
 		uploadAllCta: "Upload {count}",
 		// ⭐ 2026-10-24：本机文件是**另一个**开关（站外那组管的是"别人的服务器"）。
 		uploadLocalFiles: "Also upload files on this computer",
@@ -526,7 +531,8 @@ export const I18N: Record<string, Locale> = {
 		attachAutoFailed: "刚加入库的 {count} 个附件上传失败 —— 文件仍然留在你的库里。",
 
 		localCopy: "上传后如何处理本地副本",
-		localCopyDesc: "上传后把文件留在库里，或者删掉它省空间。留着才能离线查看；删掉后图片、音频、视频仍能在线显示，但 PDF 显示不出来。",
+		// ⭐ 2026-10-24：那句「什么时候删」从 `releaseSpaceDesc`（设置页那个按钮的说明，已取消）搬到这里。
+		localCopyDesc: "上传后把文件留在库里，或者删掉它省空间 —— 选「不保留」时，「上传全部附件」会在传完之后顺手把本地副本永久删除。留着才能离线查看；删掉后图片、音频、视频仍能在线显示，但 PDF 显示不出来。",
 		localCopy_keep: "保留（可离线查看）",
 		localCopy_trash: "不保留（省空间，不能离线查看）",
 		fallbackDownload: "自动下载缺失的本地副本",
@@ -571,11 +577,10 @@ export const I18N: Record<string, Locale> = {
 			"只能看到本设备的引用情况。其他设备（或共用这个存储的另一个库）可能还在用其中一些文件 —— 删除后无法恢复。",
 		cloudCleanupPersistFailed: "本地副本索引保存失败：{error}",
 		cloudCleanupUnreadableNote: "读不到 {path}，因此取消了这次清理。",
-		// F18：清理本地占用（并入「不留副本」档，见设计 §4.4.3 与 §6.4 来路 ③）
-		releaseSpaceName: "释放本地空间",
-		releaseSpaceDesc: "删掉笔记仍在用的附件的本地副本 —— 永久删除、不进回收站，空间立刻腾出。云端文件和笔记里的链接都不动，下次看图会自动补回。设了上限时只清到上限为止。",
-		releaseSpaceButton: "删除本地副本…",
-		releaseSpaceTitle: "永久删除这些本地副本？",
+		// F18：清理本地副本。⚠️ 2026-10-24 起**没有独立的设置项**了（按钮取消）：
+		// 触发点是「上传全部附件」的收尾（按 `localCopy` 档位）与切档时的那一次询问。
+		// 所以下面这些是**确认框与通知**的文案，不是设置项说明。
+		releaseSpaceTitle: "把这些本地副本永久删除？",
 		releaseSpaceSummary: "{count} 个本地副本，约 {mb} MB：",
 		releaseSpaceCannotUndo:
 			"这些文件会被永久删除（不进回收站），无法撤销。下次笔记里显示它们时会自动重新下载。",
@@ -784,6 +789,10 @@ export const I18N: Record<string, Locale> = {
 		uploadAllMissingLocal: "另有 {count} 个本机文件已经不在，会跳过。",
 		uploadAllRepairOnly: "其中 {count} 个已经在你的存储里，这次只改链接、不重传。",
 		uploadAllKeeps: "文件留在原处、名字不变；云端那份不会被删除。",
+		// ⭐ 2026-10-24：本地副本按档位顺手清（设置页那个按钮取消后，这里是唯一的说明处）。
+		uploadAllCleanupAll: "另外会永久删除 {count} 份已上传文件的本地副本（约 {mb} MB），把空间腾出来。",
+		uploadAllCleanupToLimit: "另外会把本地副本清到上限 {limit} 以内：这次删除 {count} 份，约 {mb} MB，永久删除。",
+		uploadAllCleanupSkipped: "本地副本没有清理：{reason}",
 		uploadAllCta: "上传 {count} 个",
 		// ⭐ 2026-10-24：本机文件是**另一个**开关（站外那组管的是"别人的服务器"）。
 		uploadLocalFiles: "同时上传本机文件",

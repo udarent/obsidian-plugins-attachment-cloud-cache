@@ -81,9 +81,8 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 | **Public link address (optional)** | Empty means `endpoint/bucket/key`; fill it in for a CDN or your own domain. |
 | **Test connection** | A **status light** (*checking* / *public* / *private* / *unreachable*) plus a button that re-checks upload, read-back, delete and external reach — without keeping anything or rewriting a link. |
 | **Upload new attachments automatically** | On by default; off leaves new files local only. |
-| **What happens to the local copy** | **Keep it** (default, offline works) or **delete it after uploading** (saves space; no offline, and PDFs need a copy). |
+| **What happens to the local copy** | **Keep it** (default, offline works) or **delete it after uploading** (saves space; no offline, and PDFs need a copy). With delete mode, “Upload all” also removes the local copies of files that were already uploaded, once it finishes. |
 | **Local copy limit (MB) · Download missing local copies automatically** | `0` = no limit; least-recently-used copies go first, and only after the object is confirmed in your storage. Auto-download is skipped in delete mode — except for a private bucket, where it always runs. |
-| **Free up local space** | Deletes local copies of files your notes still link — **permanently, not to the trash**. With a limit set, it stops at the limit. |
 | **Revert links to local paths** | Points note links back at the files in your vault. **Nothing is deleted**; files with no copy keep pointing at your storage. |
 | **Upload files from other sites** | Off by default; the site list narrows the **automatic** path only, and picking by hand is never restricted. |
 | **When an attachment is no longer linked** | Ask (default) / notify / do nothing. Cleanup always asks. |
@@ -274,9 +273,8 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 | **公开链接地址（可选）** | 留空就用 `服务地址/存储桶/键`；用 CDN 或自己的域名时填这里。 |
 | **测试连接** | 一盏**状态灯**（检测中 / 公开 / 私有 / 无法访问）＋一个按钮：重测上传、读回、删除与「链接对外」，什么都不留，也**绝不改写**任何一条链接。 |
 | **新附件自动上传** | 默认开启；关闭后新文件只存在本地。 |
-| **上传后如何处理本地副本** | **保留**（默认，可离线查看）或**上传后删掉**（省空间；离线看不到，PDF 也需要副本）。 |
+| **上传后如何处理本地副本** | **保留**（默认，可离线查看）或**上传后删掉**（省空间；离线看不到，PDF 也需要副本）。选「上传后删掉」时，「上传全部附件」会在传完后把已上传文件的本地副本一并清掉。 |
 | **本地副本上限（MB）· 自动下载缺失的本地副本** | `0` 表示不限制；超限时先删最久没用过的，且确认存储里还有那个对象才删。选「不留副本」时不自动下载 —— 但桶不公开时始终会取回。 |
-| **释放本地空间** | 删掉笔记仍引用着的附件的本地副本 —— **永久删除、不进回收站**；设了上限时只清到上限为止。 |
 | **把链接改回本地路径** | 把笔记里的链接改回指向库里的文件。**什么都不删**；没有副本的那些继续指向你的存储。 |
 | **站外文件也上传到云端** | 默认关闭；站点名单只筛**自动**那一路，手动挑选不受限制。 |
 | **附件不再被引用时** | 弹窗让我选（默认）/ 只给一条通知 / 什么都不做。清理永远需要你确认。 |

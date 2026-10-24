@@ -1854,7 +1854,8 @@ export async function runLoadAcceptance(options = {}) {
 			assert.ok(await existsOnDisk(root, neverUploadedPath), "★ 台账里没有的对象不得删（它未必在云端）");
 			assert.ok(releaseIndex.has(neverUploadedKey), "★ 它的索引记录也要留着");
 
-			// ⑥ 再跑一次：**该删的已经删完了**，但"云端确认不上"的那份仍是候选
+			// ⑥ 再跑**一趟「上传全部附件」**（纯清理分支）：该删的已经删完了，
+			// 但"云端确认不上"的那份仍是候选
 			//（候选是纯判定、不联网；HEAD 复核在执行时做），所以它会再次出现在确认框里
 			// 并在执行时被跳过 —— 结果通知必须**如实**报"删了 0 个、跳过 1 个"，
 			// 而且"一个都没删"要另给一句解释（否则用户以为功能坏了）。
@@ -1867,7 +1868,14 @@ export async function runLoadAcceptance(options = {}) {
 			await plugin.saveSettings();
 			mockObsidian.Notice.instances.length = 0;
 			const deletesAfterFirst = harness.calls.delete.length;
-			await plugin.freeUpLocalSpace();
+			// ⚠️ 2026-10-24：设置页那个「释放本地空间」按钮**取消了**（用户要求：上传时按档位
+			// 顺便清）⇒ 这一段改用**新入口**驱动：「上传全部附件」的收尾。
+			// 此刻 `localCopy` 是「不保留」、而库里已经没有待上传的东西 ⇒ 走**纯清理**那一支
+			//（`total === 0` 也要弹确认框，否则"没有新附件"这条路上存量副本永远清不掉）。
+			// ⚠️ 必须等它**真跑完**（通知出现）再数删除次数：这一步是异步的，
+			// 早一步断言就会在"清理还没开始"的时候得到 0 次（那会假绿）。
+			runUpload();
+			await waitFor(async () => mockObsidian.Notice.instances.length > 0, "这一趟给出了结论", 10000, diagnose);
 			assert.equal(harness.calls.delete.length, deletesAfterFirst, "★ 该删的已经删完 ⇒ 不该再有新的删除");
 			assert.ok(
 				mockObsidian.Notice.instances.some((notice) =>

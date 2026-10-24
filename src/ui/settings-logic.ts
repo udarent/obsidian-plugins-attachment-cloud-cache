@@ -262,15 +262,6 @@ export function localCopyCleanupTarget(action: unknown, cacheLimitMb: unknown): 
 }
 
 /**
- * 「释放本地空间」（F18）那一项要不要显示。
- *
- * ⚠️ 判据**只**来自 `localCopyCleanupTarget`（见上）—— 别再在这里写第二套条件。
- */
-export function shouldShowReleaseSpace(action: unknown, cacheLimitMb?: unknown): boolean {
-	return localCopyCleanupTarget(action, cacheLimitMb).kind !== "none";
-}
-
-/**
  * 「站点名单」输入框要不要显示。
  *
  * ⚠️ 只在黑名单 / 白名单那两档显示：`off` 那一档下名单**根本不生效**，

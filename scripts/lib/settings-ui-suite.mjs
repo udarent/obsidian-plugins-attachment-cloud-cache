@@ -19,7 +19,6 @@ export function runSettingsUiSuite(mod) {
 		// settings-logic
 		shouldShowCacheLimit,
 		shouldShowFallbackDownload,
-		shouldShowReleaseSpace,
 		localCopyCleanupTarget,
 		localCopyOptions,
 		deleteModeOptions,
@@ -95,35 +94,10 @@ export function runSettingsUiSuite(mod) {
 	assert.equal(shouldShowFallbackDownload("cache"), true, "遗留值按 keep 处理（显示）");
 	assert.equal(shouldShowCacheLimit("cache"), true, "遗留值按 keep 处理（显示）");
 
-	// ⭐⭐ F18（2026-10-15 改口径）：这个按钮现在**按目标**显示，而目标 = 档位 + 上限。
-	//
-	// 1.2.2 及以前它只在「不留副本」档显示 —— 那时按钮的含义是"全删"，在保留档显示它
-	// 与"我要留副本"自相矛盾。现在它在保留档清的是**用户自己设的上限**（不是全删），
-	// 那条矛盾消失了；而"设了上限却没有手动入口、只能等后台那一轮"正是用户 2026-10-15
-	// 报的那个缺口。⇒ 判据整体换成 `localCopyCleanupTarget`（见下）。
-	assert.equal(shouldShowReleaseSpace("trash"), true, "★ 不留副本档要显示（这正是这一档的存量部分）");
-	assert.equal(
-		shouldShowReleaseSpace("keep", 500),
-		true,
-		"★ 保留副本档设了上限也要显示（否则用户设了 500 却找不到手动入口）"
-	);
-	assert.equal(
-		shouldShowReleaseSpace("keep", 0),
-		false,
-		"★ 不限量时不该显示（没有目标就无可清之物，摆一个点了没动静的按钮更糟）"
-	);
-	assert.equal(shouldShowReleaseSpace("keep"), false, "★ 上限缺省（= 0 = 不限制）时隐藏");
-	assert.equal(shouldShowReleaseSpace("keep", -5), false, "★ 负上限按'不限制'处理 ⇒ 隐藏");
-	assert.equal(shouldShowReleaseSpace("keep", Number.NaN), false, "★ 坏上限不算'有目标'");
-	assert.equal(
-		shouldShowReleaseSpace("keep", Number.POSITIVE_INFINITY),
-		false,
-		"★ 无穷大的上限不算'有目标'（目标变成一个不可能达到的数时，按钮只会白摆着）"
-	);
-	assert.equal(shouldShowReleaseSpace("nonsense"), false, "★ 非法值也隐藏（宁可少显示，绝不误导）");
-	assert.equal(shouldShowReleaseSpace(undefined), false, "缺值时隐藏");
-	// 遗留值已折成 keep ⇒ 与 keep 一致（隐藏）
-	assert.equal(shouldShowReleaseSpace("cache"), false, "遗留值按 keep 处理（隐藏）");
+	// ⚠️ 2026-10-24：这一整段原来是「释放本地空间」那个按钮的**显隐**谓词
+	// （`shouldShowReleaseSpace`）的用例 —— 按钮随用户要求取消（上传时按档位顺手清），
+	// 谓词一起删掉了。判据本身（`localCopyCleanupTarget`）仍在用（上传收尾 + 切档询问），
+	// 所以覆盖保留在**下一段**（直接测目标），断言的含义一个字没变。
 
 	// ⭐ 目标本身 —— 流程拿它算 `keepBytes`，所以它与上面的显隐**必须是同一处判据**。
 	assert.deepEqual(
@@ -146,6 +120,18 @@ export function runSettingsUiSuite(mod) {
 		localCopyCleanupTarget("keep", 500.9),
 		{ kind: "limit", mb: 500 },
 		"上限是 MB 粒度（小数截断，与 `parseCacheLimitMb` 同口径）"
+	);
+	// ⚠️ 2026-10-24：这条从"显隐"搬到这里（那个谓词随按钮取消了）。含义不变：
+	// `Number.isFinite` 一旦被去掉，`Infinity` 就会变成一个**永远清不完**的目标。
+	assert.deepEqual(
+		localCopyCleanupTarget("keep", Number.POSITIVE_INFINITY),
+		{ kind: "none" },
+		"★ 无穷大的上限不算「有目标」（目标变成一个不可能达到的数时，清理只会永远清不完）"
+	);
+	assert.deepEqual(
+		localCopyCleanupTarget("nonsense"),
+		{ kind: "none" },
+		"★ 非法档位也按「没有目标」处理（宁可少清，绝不误导）"
 	);
 
 	// ============================================================

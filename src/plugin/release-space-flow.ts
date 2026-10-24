@@ -9,18 +9,22 @@
  * | 不留副本 | 一份不留 | 现状口径（"这些本地副本将被永久删除"） |
  * | 保留副本 + 上限 N | **清到上限以内**（只清超出的部分） | "清到 N 以内 ⇒ 清完约剩 M"（如实报，包括清不到时） |
  *
- * 判据在 `ui/settings-logic.ts` 的 `localCopyCleanupTarget`（与设置页显隐**同一处**），
- * 量的计算在 `maintenance/release-space.ts` 的 `planReleaseSpace`。
+ * 判据在 `ui/settings-logic.ts` 的 `localCopyCleanupTarget`，量的计算在
+ * `maintenance/release-space.ts` 的 `planReleaseSpace`，**两者都只经 `planLocalCleanup` 一处**。
  *
- * ## 三个入口共用这一条流程
+ * ## 两个触发点（2026-10-24 起）
  *
- * 1. **用户主动**（设置页「释放本地空间」那个按钮）⇒ `whenEmpty: "notice"`
- *    —— 他是特地来清东西的，没有可清项必须说一声；
- * 2. **切档时的那次询问** ⇒ `whenEmpty: "silent"`
- *    —— 没东西可清就别打扰他（他刚做的事是"改设置"，不是"清理"）；
- * 3. **保留副本档下的同一个按钮** —— 目标换成"上限"，其余一样。
+ * 1. **切档时的那次询问** ⇒ `whenEmpty: "silent"` —— 没东西可清就别打扰他
+ *    （他刚做的事是"改设置"，不是"清理"）；
+ * 2. **「上传全部附件」的收尾** ⇒ **不走本函数**：它拿 `planLocalCleanup` 算同一份 plan，
+ *    把"另外会永久删除 N 份"写进**那次上传的确认框**里，传完之后执行
+ *    （见 `plugin/upload-existing-flow.ts`）。档位就是授权，所以**不再单独问一次**。
  *
- * ⚠️ **更不自动删**：那是不可逆的批量动作，每个入口都要走确认框。
+ * ⚠️ 设置页那个「释放本地空间」按钮**已于 2026-10-24 取消**（用户要求："上传的时候
+ * 根据是否保留附件的选项来决定是否顺便删除本地副本"）。`whenEmpty: "notice"` 那一档留着，
+ * 是为了将来若再给一个"主动清理"入口时措辞不用重写。
+ *
+ * ⚠️ **删之前仍然要确认**：不可逆的批量动作不能静默发生 —— 区别只是"在哪个框里确认"。
  *
  * ## ⚠️ 为什么是"直接删"而不是回收站
  *
@@ -40,6 +44,7 @@ import type { ReleaseSpaceSelection } from "../maintenance/release-space";
 import { readCopies, runReleaseSpace } from "../maintenance/run";
 import { displayNameForKey } from "../object-key";
 import { localCopyCleanupTarget } from "../ui/settings-logic";
+import type { LocalCopyCleanupTarget } from "../ui/settings-logic";
 import type { PluginContext } from "./context";
 import { referencedVaultPaths } from "./notes-query";
 import { cloudReferencedKeys } from "./shared-flows";
@@ -86,27 +91,58 @@ async function localSpaceSelection(ctx: PluginContext, keepBytes: number): Promi
 }
 
 /**
+ * 按**当前档位**算一遍"哪些本地副本可以清"（目标 ＋ 候选）。
+ *
+ * 返回 `null` = **没有清理目标**（保留副本档 ＋ 没设上限）；否则连"空候选"也返回，
+ * 由调用方决定要不要说话（"没有可清项"在两条路上的措辞不同，见 `releaseLocalSpace`）。
+ *
+ * ⚠️ **两个调用方共用这一份**（2026-10-24）：`releaseLocalSpace`（切档询问 / 主动清理）
+ * 与「上传全部附件」的收尾。两处各算一遍的话，"哪些能删"迟早出现两种答案 ——
+ * 而这是个**删文件**的判据，答案不一致的代价不是难看，是丢东西。
+ *
+ * ⚠️ 可能**抛**：`localSpaceSelection` 在"有笔记读不到"时会抛（那时不该删任何东西，
+ * 因为漏读的那篇可能正是引用着这些图的）。调用方必须接住并按自己的语境处理。
+ */
+export interface LocalCleanupPlan {
+	target: LocalCopyCleanupTarget;
+	/** 上限档要保留的字节数；`all` 档是 0。**只在这里换算一次**。 */
+	keepBytes: number;
+	selection: ReleaseSpaceSelection;
+}
+
+export async function planLocalCleanup(ctx: PluginContext): Promise<LocalCleanupPlan | null> {
+	const target = localCopyCleanupTarget(ctx.settings.localCopy, ctx.settings.cacheLimitMb);
+	if (target.kind === "none") return null;
+	// ⚠️ 换算**只**用 `megabytesToBytes`（与后台淘汰同一个口径）：这里手写一遍
+	// `mb * 1024 * 1024` 就等于让"500"在两条路上变成两个数。
+	const keepBytes = target.kind === "limit" ? megabytesToBytes(target.mb) : 0;
+	const selection = await localSpaceSelection(ctx, keepBytes);
+	// ⚠️ `keepBytes` 跟着一起交出去：调用方（`releaseLocalSpace` 的"还超着没有"那句）
+	// 需要它，而在这里再换算一遍就是第二份"500 到底是多大"的定义。
+	return { target, keepBytes, selection };
+}
+
+/**
  * 「清理本地副本」：确认之后删掉候选，并如实汇报删了几个、腾了多少、**清到了没有**。
  *
- * @param whenEmpty 没有可清项时要不要出声（见文件头"三个入口"那段）。
+ * @param whenEmpty 没有可清项时要不要出声。
+ *
+ * ⚠️ 2026-10-24 起**设置页那个按钮取消了**（用户要求：上传时按档位顺便清）。
+ * 现在只剩一个入口：**切档时问一次**（`saveSettings` 里，`whenEmpty: "silent"`）。
+ * 这一段仍然保留 `whenEmpty: "notice"` 那一档，因为"主动清理"将来若要再给入口，
+ * 措辞就该是那一种（"没有可清项"要明说）。
  */
 export async function releaseLocalSpace(
 	ctx: PluginContext,
 	whenEmpty: "notice" | "silent"
 ): Promise<void> {
-	const target = localCopyCleanupTarget(ctx.settings.localCopy, ctx.settings.cacheLimitMb);
-	// 没有目标（保留副本档 + 没设上限）⇒ 设置页里那个按钮**本来就不显示**
-	// （见 `shouldShowReleaseSpace`）；走到这里只可能是陈旧的设置页。
-	// 什么都不做、也不出声：它不是一个用户能到达的状态，而"没有目标"最不该被
-	// 解释成"那就全清"。
-	if (target.kind === "none") return;
-
-	// ⚠️ 换算**只**用 `megabytesToBytes`（与后台淘汰同一个口径）：这里手写一遍
-	// `mb * 1024 * 1024` 就等于让"500"在两条路上变成两个数。
-	const keepBytes = target.kind === "limit" ? megabytesToBytes(target.mb) : 0;
-	let selection: ReleaseSpaceSelection;
+	// 没有目标（保留副本档 + 没设上限）⇒ **什么都不做、也不出声**：
+	// "没有目标"最不该被解释成"那就全清"。
+	let plan: LocalCleanupPlan;
 	try {
-		selection = await localSpaceSelection(ctx, keepBytes);
+		const computed = await planLocalCleanup(ctx);
+		if (!computed) return;
+		plan = computed;
 	} catch (error) {
 		// 扫引用失败（有笔记读不到）⇒ 什么都不清，并把原因说清楚。
 		// ⚠️ 不能"跳过那篇笔记继续"：漏掉的那篇可能正是引用着这些图的笔记，
@@ -119,6 +155,7 @@ export async function releaseLocalSpace(
 		new Notice(describeError(error));
 		return;
 	}
+	const { target, selection, keepBytes } = plan;
 
 	if (selection.candidates.length === 0) {
 		if (whenEmpty === "silent") return;
