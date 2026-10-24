@@ -29,13 +29,16 @@
  *     node scripts/capture-demo-gif.mjs
  *     FFMPEG_PATH=/path/to/ffmpeg node scripts/capture-demo-gif.mjs
  *
- * ffmpeg 找不到时按 `FFMPEG_PATH` → 托管工作区的 `ffmpeg-static` → `PATH` 里的 `ffmpeg`
- * 依次尝试（本机没有系统级 ffmpeg，走的是中间那条）。
+ * ffmpeg 找不到时按 `FFMPEG_PATH` → 装过的 `ffmpeg-static` → 托管 node 工作区里那份
+ * `ffmpeg-static` → `PATH` 里的 `ffmpeg` 依次尝试（本机没有系统级 ffmpeg，走的是第三条）。
+ * 换一台机器跑：先 `npm i --no-save ffmpeg-static`（它自己下载对应平台的二进制）。
  */
 
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -76,14 +79,33 @@ const COLORS = 96;
 /** 每帧最短停留（毫秒）：GIF 的延时精度是 10ms，太短会看不清。 */
 const MIN_MS = 140;
 
+const require = createRequire(import.meta.url);
+
+/**
+ * ffmpeg 在哪。
+ *
+ * ⚠️ **不写死任何绝对路径**（尤其不写某台机器的用户目录）：这个脚本要能换机器跑，
+ * 也要能被人 clone 下来直接用。候选顺序＝`FFMPEG_PATH` → 装过的 `ffmpeg-static`
+ * → 托管 node 工作区里那份 → `PATH` 里的 `ffmpeg`。
+ */
 function resolveFfmpeg() {
-	const candidates = [
-		process.env.FFMPEG_PATH,
-		"C:/Users/chenyue/.workbuddy/binaries/node/workspace/node_modules/ffmpeg-static/ffmpeg.exe",
-		"ffmpeg",
-	].filter(Boolean);
-	for (const candidate of candidates) {
-		if (candidate.includes("/") && !existsSync(candidate)) continue;
+	const candidates = [process.env.FFMPEG_PATH];
+	// 作为依赖装过（本地 / 全局）时，包自己会把下载下来的二进制路径导出
+	try {
+		candidates.push(require("ffmpeg-static"));
+	} catch {
+		// 没装 —— 靠后面的候选
+	}
+	// 托管 node 工作区里装的那份（本机没有系统 ffmpeg，平时走这条）
+	const binary = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+	candidates.push(
+		join(homedir(), ".workbuddy", "binaries", "node", "workspace", "node_modules", "ffmpeg-static", binary)
+	);
+	candidates.push("ffmpeg");
+	for (const candidate of candidates.filter(Boolean)) {
+		if (candidate.includes("/") || candidate.includes("\\")) {
+			if (!existsSync(candidate)) continue;
+		}
 		try {
 			execFileSync(candidate, ["-hide_banner", "-version"], { stdio: "ignore" });
 			return candidate;
@@ -91,7 +113,7 @@ function resolveFfmpeg() {
 			// 试下一个
 		}
 	}
-	throw new Error("找不到 ffmpeg —— 用 FFMPEG_PATH 指一个，或 npm i -g ffmpeg-static 后用它的路径");
+	throw new Error("找不到 ffmpeg —— 先 `npm i --no-save ffmpeg-static`，或用 FFMPEG_PATH 指一个");
 }
 
 /** `1:02:03.45` 形式的 ASS 时间。 */
