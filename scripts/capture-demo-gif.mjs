@@ -58,7 +58,7 @@ const WIDTH = 1080;
  * 压在画面底部（不是紧跟文字的黑框）。旧图 1080 宽时它是 60px、颜色 `#111218`，
  * 按宽度折算到 900 宽 ≈ 50px。下面 `PAD` 那块滤镜就是照这个复刻的。
  */
-const BAND = 60;
+const BAND = 68;
 /** 字幕条底色（抄旧图的实测值，不是随手挑的黑）。 */
 const BAND_COLOR = "0x111218";
 
@@ -117,8 +117,15 @@ function writeCaptions(marks, size) {
 			"Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
 		// BorderStyle=1（只描边不带框）＋ 全透明描边：字是压在**整条字幕带**上的，
 		// 再套一个框就成了"框上框"（第一版就是这样，用户说不如以前）。
+		// ⚠️ 主行 20 / 次行 18 —— 次行原来 15，用户 2026-10-24 说"中文字幕没有英文清晰"：
+		// 一是字太小、二是颜色太灰（原来是 #AEB6…）、三是雅黑在 18px 下笔画偏细。
 		"Style: Caption,Arial,20,&H00FFFFFF,&H00FFFFFF,&H00111218,&H00111218," +
-			"-1,0,0,0,100,100,0,0,1,0,0,2,30,30,16,1",
+			"-1,0,0,0,100,100,0,0,1,0,0,2,30,30,10,1",
+		// 中文用**黑体（SimHei）**：笔画粗壮均匀，在 96 色 GIF 里比雅黑更"实"
+		//（雅黑的细笔画最容易被量化吃掉 —— 实测放大对比过）。颜色压到接近白但略暗一档，
+		// 保留"次行比主行弱"的层次，又不至于糊。
+		"Style: CaptionCN,SimHei,18,&H00E6E6EC,&H00E6E6EC,&H00111218,&H00111218," +
+			"-1,0,0,0,100,100,0,0,1,0,0,2,30,30,10,1",
 		"",
 		"[Events]",
 		"Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -133,7 +140,8 @@ function writeCaptions(marks, size) {
 		// ⭐ 两行字幕（主行英文 ＋ 次行中文），复刻旧版（1.8.0）那一屏的形状：
 		// 主行正常字号、次行小一号且灰一点；`\N` 是 ASS 的硬换行。
 		const main = String(mark.label).replace(/\{/g, "(").replace(/\}/g, ")");
-		const sub = typeof mark.sub === "string" && mark.sub ? `\\N{\\fs15\\c&HADAEB6&}${mark.sub}` : "";
+		// `\r` = 切到另一个样式（字体/字号/颜色一起换），比逐项覆盖稳
+		const sub = typeof mark.sub === "string" && mark.sub ? `\\N{\\rCaptionCN}${mark.sub}` : "";
 		lines.push(`Dialogue: 0,${assTime(start)},${assTime(end)},Caption,,0,0,0,,${main}${sub}`);
 	}
 	const path = join(FRAMES, "captions.ass");
