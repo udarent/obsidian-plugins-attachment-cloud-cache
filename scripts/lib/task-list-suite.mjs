@@ -22,7 +22,7 @@
 import assert from "node:assert/strict";
 
 export function runTaskListSuite(mod) {
-	const { setTaskStatus, foldTaskProgress, selectionInOrder, buildTaskLabels } = mod;
+	const { setTaskStatus, foldTaskProgress, selectionInOrder } = mod;
 
 	// ============================================================
 	// 1. 改一项状态：**返回新的 Map**，不改原来那一份
@@ -89,35 +89,9 @@ export function runTaskListSuite(mod) {
 		assert.deepEqual(selectionInOrder([{ id: "" }], selected), [], "空 id 的行不算一行");
 	}
 
-	// ============================================================
-	// 4. 界面文字：**由调用方给**，主按钮跟着勾选数变
-	// ============================================================
-	{
-		const seen = [];
-		const t = (key, params) => {
-			seen.push({ key, params });
-			return `${key}${params ? JSON.stringify(params) : ""}`;
-		};
-		const labels = buildTaskLabels(t, "mySurfaceCta");
-		assert.equal(
-			labels.cta(3).startsWith("mySurfaceCta"),
-			true,
-			"主按钮那句用**调用方给的键**（三条链的措辞不同：上传 / 删除 / 缓存）"
-		);
-		assert.equal(labels.cta(3).includes("3"), true, "★ 主按钮要说清勾了几个（否则用户按下去不知道会发生几次）");
-		assert.equal(
-			labels.selectAll,
-			"externalPickAll",
-			"「全选」沿用既有那句（同一句话只维护一处），不是在这里另抄一份文案"
-		);
-		const progress = foldTaskProgress(new Map([["a", "done"]]), 2);
-		assert.equal(labels.running(progress).includes('"total":2'), true, "跑的时候要报「已完成/总数」");
-		assert.equal(
-			labels.finished(progress).includes('"done":1'),
-			true,
-			"跑完要按成功/跳过/失败三类报（不能只说一句「完成」）"
-		);
-	}
-
-	return { cases: 4 };
+	// ⚠️ 2026-10-24：原第 4 段（`buildTaskLabels` 造一套界面文字）随弹窗容器一起退役。
+	// 它守的两条判据**没有丢**，只是搬到了生产调用点各自的守门人上：
+	//   · 「主按钮要带勾选数」⇒ `verify:flows`（按钮数字＝能作用的件数）＋ 验收 §8i3（模板里必须真有 `{count}`）；
+	//   · 「全选那句只维护一处」⇒ 现在只有附件管理一处在给 `labels`（`gallery-modal.ts`）。
+	return { cases: 3 };
 }

@@ -23,7 +23,7 @@
  * ## 与 `external-picker-logic.ts` 的分工
  *
  * 勾选的**状态操作**（`toggleSelection` / `selectEverything`）住在那边 ——
- * 它先服务于挑图那条链，现在三条链共用同一份实现（**同一条规则只许有一处**）。
+ * 它先服务于挑图那条链，现在由清单壳（`task-list-shell.ts`）用着（**同一条规则只许有一处**）。
  * 这里是"清单运行起来之后"的那一半：状态机 + 进度折叠。
  */
 
@@ -59,7 +59,7 @@ export type TaskReporter = (key: string, status: TaskStatus) => void;
 
 /**
  * 界面文字。**全部由调用方给**（各自走 `t()`）——
- * 理由：三条链的措辞不同（"上传"/"删除"/"缓存"），而模板参数要走真正的翻译器。
+ * 理由：各容器的措辞不同（附件管理有自己的一套 `gallery*` 键），而模板参数要走真正的翻译器。
  */
 export interface TaskListLabels {
 	/** 清单为空时的说明（要说清"为什么可能是空的"）。 */
@@ -93,45 +93,15 @@ export interface TaskListLabels {
 	statusDone: string;
 	statusFailed: string;
 	statusSkipped: string;
-	/** "再显示 N 行"那颗按钮（清单一次只画前若干行，见 `task-list-modal.ts` 的性能纪律）。 */
+	/** "再显示 N 行"那颗按钮（清单一次只画前若干行，见 `task-list-shell.ts` 的分块纪律）。 */
 	showMore: (count: number) => string;
 	/**
 	 * 行尾那颗「打开」的文案（D-66）。
 	 *
-	 * ⚠️ 可选：没给就不画链接 —— 而**生产上三条链都经 `buildTaskLabels` 给齐**
-	 * （与 `file-cards.ts::FileCardHandlers` 同一个口径：点不动的链接比没有更糟）。
+	 * ⚠️ 可选：没给就不画链接。**附件管理给齐了**（`ui/gallery-modal.ts::labels`），
+	 * 与 `file-cards.ts::FileCardHandlers` 同一个口径：点不动的链接比没有更糟。
 	 */
 	open?: string;
-}
-
-/**
- * 由 `t()` 造一套界面文字（三条链共用；只有**主按钮**那句按链传进来）。
- *
- * ⚠️ "全选 / 全不选 / 取消"三句直接沿用 `externalPick*` 那三条 —— 它们本来就是
- * 通用的三个词，而**同一句话只维护一处**（本项目的老纪律）。将来若给它们改名，
- * 三处一起改，别只改一半。
- */
-export function buildTaskLabels(
-	t: (key: string, params?: Record<string, unknown>) => string,
-	ctaKey: string
-): TaskListLabels {
-	return {
-		empty: t("taskListEmpty"),
-		selectAll: t("externalPickAll"),
-		selectNone: t("externalPickNone"),
-		selectedCount: (selected, total) => t("taskListSelected", { selected, total }),
-		cancel: t("externalPickCancel"),
-		close: t("taskListClose"),
-		cta: (count) => t(ctaKey, { count }),
-		running: (progress) => t("taskProgressRunning", { finished: progress.finished, total: progress.total }),
-		finished: (progress) =>
-			t("taskProgressFinished", { done: progress.done, skipped: progress.skipped, failed: progress.failed }),
-		statusDone: t("taskStatusDone"),
-		statusFailed: t("taskStatusFailed"),
-		statusSkipped: t("taskStatusSkipped"),
-		showMore: (count) => t("taskShowMore", { count }),
-		open: t("fileCardOpen"),
-	};
 }
 
 /**

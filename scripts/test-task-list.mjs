@@ -21,7 +21,9 @@ await withLoadedTs("src/ui/task-list", (mod) => {
 			"stays separate from failed because 'it was already in your storage' is not a fault the user " +
 			"should go and fix; status updates return a new map so the state has exactly one source; " +
 			"ticked items are handed over in list order and stray keys from a previous scope cannot leak " +
-			"into the run; and every label comes from the caller's translator, with the primary button " +
-			"always stating how many items are selected)."
+			"into the run." +
+			// ⚠️ 2026-10-24：原来还有一句讲 `buildTaskLabels`（主按钮带勾选数）。那个函数随弹窗容器
+			// 一起退役 ⇒ 那句话不再成立（现在只有附件管理在给 labels）。
+			""
 	);
 });

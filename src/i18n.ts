@@ -313,18 +313,8 @@ export const I18N: Record<string, Locale> = {
 			"automatic handling stays off, because you had it set to do nothing automatically — you can still pick files one by one",
 		maintainMoreItems: "…and {count} more",
 		maintainCancelled: "Cancelled — nothing was changed.",
-		// ── 清单类弹窗（缩略图 + 勾选 + 进度）：上传附件 / 清理没有笔记引用的云端附件共用 ──
-		taskListEmpty: "Nothing to show here.",
-		// ⭐ 一件能勾的都没有时主按钮退回成它（D-70：那种清单只剩"打开笔记去修"的行）
-		taskListClose: "Close",
+		// 标题栏右侧那句（附件管理与以后的任何清单共用 —— 全选/全不选/取消各走自己的键）
 		taskListSelected: "{selected} of {total} selected",
-		taskProgressRunning: "Working… {finished}/{total}",
-		taskProgressFinished: "Finished: {done} done, {skipped} skipped, {failed} failed.",
-		taskStatusDone: "done",
-		taskStatusFailed: "failed",
-		taskStatusSkipped: "skipped",
-		taskShowMore: "Show {count} more row(s) — the rest are still included",
-		fileCardOpen: "Open",
 		fileCardOpenMissing: "That file is no longer in the vault: {path}",
 		maintainPersistFailed: "Could not save the index after repairing it: {error}",
 		maintainSkipUnknownCopy: "The index no longer points at this file — skipped",
@@ -390,9 +380,6 @@ export const I18N: Record<string, Locale> = {
 		uploadLocalFilesDesc:
 			"When on, “Upload all” also uploads the files your notes point at on this computer (file:/// addresses) and rewrites those links. They are read from the absolute paths written in your notes, and missing ones are skipped. Has no effect on phones.",
 
-		externalPickAll: "Select all",
-		externalPickNone: "Select none",
-		externalPickCancel: "Cancel",
 		externalCached: "Uploaded the file from {host} and rewrote the link.",
 		// ── 本机文件（file:///D:/…）：与站外同一套链，只有"字节从哪来"不同 ──
 		localCached: "Uploaded the local file {name} and rewrote the link.",
@@ -694,18 +681,8 @@ export const I18N: Record<string, Locale> = {
 			"自动处理保持关闭（你原本选的是「什么都不做」）；「上传附件」仍然随时可用",
 		maintainMoreItems: "……还有 {count} 个",
 		maintainCancelled: "已取消，没有改动任何内容。",
-		// ── 清单类弹窗（缩略图 + 勾选 + 进度）：上传附件 / 清理没有笔记引用的云端附件共用 ──
-		taskListEmpty: "这里没有可处理的条目。",
-		// ⭐ 一件能勾的都没有时主按钮退回成它（D-70：那种清单只剩"打开笔记去修"的行）
-		taskListClose: "关闭",
+		// 标题栏右侧那句（附件管理与以后的任何清单共用 —— 全选/全不选/取消各走自己的键）
 		taskListSelected: "已选 {selected} / {total}",
-		taskProgressRunning: "正在处理…… {finished}/{total}",
-		taskProgressFinished: "已结束：完成 {done} 个、跳过 {skipped} 个、失败 {failed} 个。",
-		taskStatusDone: "完成",
-		taskStatusFailed: "失败",
-		taskStatusSkipped: "跳过",
-		taskShowMore: "再显示 {count} 行（其余的行照样会被处理）",
-		fileCardOpen: "打开",
 		fileCardOpenMissing: "文件已不在库里：{path}",
 		maintainPersistFailed: "修复后保存索引失败：{error}",
 		maintainSkipUnknownCopy: "索引里已经不再指向这个文件 —— 跳过",
@@ -765,9 +742,6 @@ export const I18N: Record<string, Locale> = {
 		uploadLocalFilesDesc:
 			"打开后，「上传全部附件」会把笔记里指向这台电脑的文件（file:/// 开头）也传上去并改写链接。这些文件不在库里，按笔记里写的绝对路径去读，已经不在的会跳过。手机上不生效。",
 
-		externalPickAll: "全选",
-		externalPickNone: "全不选",
-		externalPickCancel: "取消",
 		externalCached: "已上传来自 {host} 的文件并改写链接。",
 		// ── 本机文件（file:///D:/…）：与站外同一套链，只有"字节从哪来"不同 ──
 		localCached: "已把本机文件 {name} 上传上去并改写链接。",

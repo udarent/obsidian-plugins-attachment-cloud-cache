@@ -525,8 +525,8 @@ let hostLanguage = "en";
  *
  * ## ⚠️ 替身只**记账**，不造 SVG
  *
- * 真机上的样子由宿主负责；而调用它的那一层（`ui/task-list-modal.ts`）本来就不进单测
- * （宿主的 `Modal` 没有可编程 DOM —— 见那个文件的文件头）。所以这里能回答的只有一件事：
+ * 真机上的样子由宿主负责；而调用它的那一层（`ui/task-list-shell.ts`）本来就不进单测
+ * （宿主的 `Modal` 没有可编程 DOM —— 见 `gallery-modal.ts` 的文件头）。所以这里能回答的只有一件事：
  * **调用发生了、图标名对不对**（`setIconCalls`）。
  *
  * ⚠️ 缺了它，`import { setIcon } from "obsidian"` 会在**加载期**就报

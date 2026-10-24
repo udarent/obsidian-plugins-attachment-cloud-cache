@@ -482,26 +482,9 @@ export async function runLoadAcceptance(options = {}) {
 	// ── 插件实例 ──
 	const plugin = new PluginClass(app, { id: "attachment-cloud-cache", dir: ".obsidian/plugins/attachment-cloud-cache" });
 
-	/**
-	 * 清单式弹窗的替身（2026-10-15 起「上传附件 / 检查未被引用的云端附件 / 检查未引用的云端附件」
-	 * 都走它）。真弹窗在 Node 里点不了（宿主的 `Setting.addButton` 是空操作 ⇒ 连按钮都不会建），
-	 * 所以这里换成「**全选 + 按主按钮**」—— 与用户「全选 → 确认」是同一条路径。
-	 * ⚠️ 它的 `run` 必须**真的跑**：上传/删除/进度都在那里面。
-	 */
-	const pickAsks = [];
-	const pickTasksAll = async (options) => {
-		pickAsks.push(options);
-		const all = (options.cards ?? []).map((card) => card.id);
-		// ⚠️ 必须**尊重 `initiallySelected`**（D-68）：真弹窗只勾那些，而"没有被任何笔记引用"
-		// 的文件默认**不勾**。替身全选的话，验收会看到"未引用的也被传了"，于是把
-		// 「批量上传恰好 PUT 一次」判成失败 —— 那是**替身与真机不一致**，不是源码的问题
-		//（这类坑本项目吃过：夹具多了真机没有的东西，或者少了真机有的一步）。
-		const allowed = options.initiallySelected ? new Set(options.initiallySelected) : null;
-		const selected = allowed ? all.filter((id) => allowed.has(id)) : all;
-		await options.run?.(selected, () => {});
-		return { selected, ran: true };
-	};
-	plugin.pickTasks = pickTasksAll;
+	// ⚠️ 2026-10-24：这里原来替身掉的是 `plugin.pickTasks`（清单式弹窗，四条链共用）。
+	// 那个容器随孤儿清单一起退役了 —— 现在只有附件管理一个清单容器（`gallery-modal.ts`，
+	// 它在真机上开真 `Modal`，本套件不驱动它的按钮；它的行为由 `verify:flows` 在真机验证）。
 	/**
 	 * 记录 `saveData` 的调用。
 	 *

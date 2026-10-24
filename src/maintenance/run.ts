@@ -415,7 +415,7 @@ export interface BatchOptions {
 	 * ⚠️ **只在"这一个候选真的被处理了"时上报**（成功 / 失败 / 跳过）。
 	 * 改写与收尾两趟**不在这里报**（它们是全局的）：所以最后一件处理完时进度就满了，
 	 * 而命令还在改写链接 —— 界面上那句"已结束"由**调用方**在返回之后才说
-	 * （见 `ui/task-list-modal.ts` 的 `runFinished`）。
+	 * （见 `ui/gallery-modal.ts` 的完成态汇报）。
 	 */
 	onItem?: (
 		event:

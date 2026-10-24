@@ -99,8 +99,8 @@ export interface FileCardInput {
 	 * `hint` 变成它的悬停说明（`title` / `aria-label`）。
 	 *
 	 * ⭐ 2026-10-22（D-71，用户要求）：失效的附件不要在文案里读，**在列表里用图标标出来**。
-	 * ⚠️ 这一层**不 import 宿主**（文件头那条纪律），所以真正的图标由勾选清单
-	 * （`task-list-modal.ts`，它本来就 import `obsidian`）去画；这一层只把名字带过去。
+	 * ⚠️ 这一层**不 import 宿主**（文件头那条纪律），所以真正的图标由清单壳
+	 * （`ui/task-list-shell.ts`，它本来就 import `obsidian`）去画；这一层只把名字带过去。
 	 * 只读清单（`renderFileCards`）拿不到图标 API ⇒ 退回显示 `hint` 文字
 	 * （那几条链没有"图标"这个场景，显示文字也说得清）。
 	 */
@@ -138,7 +138,7 @@ export interface FileCardInput {
 	 * 表格模式下的**各列内容**（2026-10-23，R24 的列表改成多列）。
 	 *
 	 * 键由调用方与 `TaskListOptions.columns` 对齐；值为字符串或 `{ text, tone, title }`。
-	 * ⚠️ 与 `hint` / `meta` 是**两套并存的表达**：给弹窗那两条链的仍是"名字 ＋ 一行小字"，
+	 * ⚠️ 与 `hint` / `meta` 是**两套并存的表达**：两行式（没给 `columns`）用"名字 ＋ 一行小字"，
 	 * 表格把同一批事实摊进各自的列。别指望两边自动同步 —— 谁读哪个由容器决定。
 	 */
 	cells?: Readonly<Record<string, string | FileCardCell>>;
@@ -395,7 +395,7 @@ export function renderThumb(container: HTMLElement, card: FileCard): void {
 			// 于是连"降级成类型标记"都走不到 —— 那正是用户看到的样子）。
 			//
 			// ⚠️ 性能要求（用户同日提的"文件太多会卡"）**不靠它**兜：清单是**分块画**的
-			//（一次最多 200 行，见 `task-list-modal.ts`），打开时最多只建这么多 `<img>`。
+			//（一次最多 200 行，见 `task-list-shell.ts` 的 `ROW_DRAW_CHUNK`），打开时最多只建这么多 `<img>`。
 			// 取舍写在这里：宁可首屏多几个请求，也不要"图根本不出来"这种看不见的坏掉。
 			attr: { src: first, alt: "" },
 		});

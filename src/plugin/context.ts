@@ -34,7 +34,6 @@ import type { S3Client } from "../s3/client";
 import type { PluginSettings } from "../types";
 import type { ConfirmOptions } from "../ui/confirm-modal";
 import type { FileCard, FileCardInput } from "../ui/file-cards";
-import type { TaskListOptions, TaskListResult } from "../ui/task-list-modal";
 
 /**
  * 一条流程能看到的全部东西。
@@ -61,14 +60,6 @@ export interface PluginContext {
 	readonly fileCards: (items: readonly FileCardInput[], limit: number) => FileCard[];
 	/** 统一的确认框（真机探针里被替换掉的那一个）。 */
 	readonly confirmMaintenance: (options: ConfirmOptions) => Promise<boolean>;
-	/**
-	 * 开一个**清单式弹窗**（缩略图 + 勾选（含全选/全不选）+ 进度），三条链共用
-	 * （上传附件 / 检查未被引用的云端附件 / 挑选要缓存的文件）。返回 `null` = 取消或直接关掉。
-	 *
-	 * ⚠️ 与 `confirmMaintenance` 的分工：那个只有"是/否"，用于**一批已经确定的动作**；
-	 * 这个用于"先让用户挑出要处理哪些，再看着它们逐个跑完"。两者都还在用。
-	 */
-	readonly pickTasks: (options: TaskListOptions) => Promise<TaskListResult | null>;
 	/**
 	 * 维护类流程共用的依赖装配（`maintenance/run.ts` 那一家）。
 	 *

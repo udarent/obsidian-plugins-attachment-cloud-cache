@@ -101,9 +101,7 @@ import type { ExternalHook } from "./render/external-hook";
 import { createExternalLiveQueue } from "./render/external-live";
 import type { ExternalLiveQueue, OpenViewLike } from "./render/external-live";
 import { createExternalCacher } from "./core/external-cache";
-import { askTaskList } from "./ui/task-list-modal";
 import { GalleryModal } from "./ui/gallery-modal";
-import type { TaskListOptions, TaskListResult } from "./ui/task-list-modal";
 
 /**
  * 导入一份凭据文件的结果。
@@ -312,23 +310,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 这条接缝是这条链路唯一能被端到端驱动的地方 —— 没有它，
 	 * "用户勾了几张之后到底发生了什么"就只能靠单元套件间接推断。
 	 */
-	/**
-	 * 清单式弹窗（缩略图 + 勾选 + 进度，四条链共用）的接缝。
-	 *
-	 * ⚠️ 默认是**真弹窗**；入口验收会覆写它（宿主的 `Modal` 在 Node 里点不了，
-	 * 而"点了按钮会发生什么"恰恰是那几条链最要紧的部分）。
-	 * ⚠️ 必须挂成**实例字段**并让 `flowContext()` 转调它 —— 内联 `askTaskList(...)`
-	 * 的话，覆写这个字段就**没有任何效果**（2026-10-15 实测踩到：验收卡在等待超时，
-	 * 而现象只是"什么都没发生"，看不出是接缝没接上）。
-	 */
-	pickTasks: (options: TaskListOptions) => Promise<TaskListResult | null> = (options) =>
-		askTaskList(this.app, {
-			...options,
-			// ⭐ 行尾「打开」（D-66）在装配点接上：判定（哪些行能打开、打开的是路径还是地址）
-			// 在 `ui/file-cards.ts::planFileCards`，真正的打开动作只有这里知道怎么问宿主。
-			onOpen: (target) => this.openCardTarget(target),
-		});
-
 	/**
 	 * 打开清单里的一行（D-66）。
 	 *
@@ -739,7 +720,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	private async openGallery(): Promise<void> {
 		if (this.galleryModal) return;
 		const modal = new GalleryModal(this.flowContext(), {
-			// ⭐ 行尾「打开」（D-66）：与另外两条链**同一个**打开动作（`openCardTarget`），
+			// ⭐ 行尾「打开」（D-66）：清单里唯一那个打开动作（`openCardTarget`），
 			// 判定在 `file-cards.ts` —— 这里只接线，不重新判一遍。
 			onOpen: (target) => this.openCardTarget(target),
 			onClosed: () => {
@@ -1603,7 +1584,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			buildClient: () => this.buildClient(),
 			fileCards: (items, limit) => this.fileCards(items, limit),
 			confirmMaintenance: (options) => this.confirmMaintenance(options),
-			pickTasks: (options) => this.pickTasks(options),
 			maintenanceDeps: () => this.maintenanceDeps(),
 			isDesktop: () => this.isDesktopHost(),
 			localThumbUrls: (url) => this.localThumbUrls(url),
