@@ -2,6 +2,20 @@
 
 README 演示动图（`docs/demo.gif`）里粘进笔记的三件东西，全部来自这个目录，**没有一件来自用户自己的库**。
 
+## 怎么重拍（两条命令，顺序不能反）
+
+```bash
+node scripts/capture-demo.mjs      # ① 录帧 → demo-frames/（PNG 序列 ＋ timeline.json），跑完自动清场
+node scripts/capture-demo-gif.mjs  # ② 合成 → docs/demo.gif（ffmpeg ＋ libass 字幕）
+```
+
+- 字幕文案写在 `capture-demo.mjs` 的 `mark(...)` 里（主行英文、次行中文）—— 合成脚本只消费它，**别去那边改文案**。
+- ⚠️ 录制要**独占 Obsidian**：脚本会临时开一个一次性空库（`%TEMP%/acc-demo-vault`）、改宿主语言、
+  自己启一个带调试端口的宿主 ⇒ **跑之前先关掉所有 Obsidian**，否则连不上调试端口。
+- ⚠️ `demo-frames/` **不入库**（只入库 `docs/demo.gif`）：中间产物几十张 PNG、几 MB，重拍时重跑即可。
+- 合成需要 ffmpeg（本机没有系统级的那份）：`FFMPEG_PATH` → 装过的 `ffmpeg-static` → 托管工作区那份 → `PATH`
+  依次找，细节在该脚本头部。
+
 | 文件 | 是什么 | 从哪来 | 体积 |
 |---|---|---|---|
 | `photo.jpg` | 260×173 风景照（Moraine Lake 日出倒影） | Pexels [417074](https://www.pexels.com/photo/417074/)，James Wheeler，Pexels License | 13 KB |
