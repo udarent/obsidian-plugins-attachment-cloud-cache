@@ -29,14 +29,19 @@
  *（`app.vault.setConfig` 改不动它）。社区插件另有一道闸：`localStorage["enable-plugin-"+app.appId]
  * = "true"`，否则空库里插件根本不加载（表里那些 `enable-plugin-<16位>` 就是这个键）。
  *
- * ## 流程（约 15 秒）
+ * ## 流程：**复刻 1.8.0 那一版的分镜**（五步、约 13 秒、英文字幕 ＋ 中文小字）
  *
- * 1. 笔记已在**源码模式**（实时预览会把图渲染出来，就看不见"链接被改写"了）；
- * 2. 粘贴一张照片 ⇒ 走**宿主**的 `editor-paste`（不是 DOM 事件，理由见 `verify-real-storage.mjs`）；
- * 3. 笔记里那行 `![](attachments/diagram.png)` 当场变成 `![](https://files.example.com/…png)`；
- * 4. 切回实时预览 ⇒ 图渲染出来；
- * 5. 打开「Attachment manager」看一眼表格；
- * 6. **把 mock 存储停掉**，重建视图 ⇒ 图照常显示（渲染读的是库里那份本地副本）。
+ * 2026-10-24 用户：「感觉还没有以前做得好，先复刻以前做过的动图，确保能力还在」。
+ * 于是照 `de3cf30`（1.8.0）的分镜重录 —— 那版的形状是：`notes/Attachments.md`、
+ * 文件名当标题、"Everything for this project:"、一次性粘三件、**源码模式下看着三条链接被改写**、
+ * 最后切回预览看它们照常渲染。字幕也是那版的**两行**（英文主行 ＋ 中文次行）。
+ *
+ * 1. 笔记在**源码模式**（实时预览会把嵌入渲染出来，就看不见"链接被改写"了）；
+ * 2. 一次性粘贴三件（照片 / 图表 / PDF）⇒ 走**宿主**的 `editor-paste`
+ *（不是 DOM 事件，理由见 `verify-real-storage.mjs`）；
+ * 3. 三条 `![](…/name-hash.ext)` 当场变成 `![](https://cdn.example.com/…)`；
+ * 4. 停掉 mock 存储；
+ * 5. 切回实时预览 ⇒ 三件照常显示（渲染读的是库里那几份本地副本）。
  *
  * ## 为什么用 mock 存储
  *
@@ -66,22 +71,38 @@ const APP_DIR = process.env.APPDATA ? join(process.env.APPDATA, "obsidian") : nu
 const OBSIDIAN_JSON = APP_DIR ? join(APP_DIR, "obsidian.json") : null;
 
 /** 每帧间隔（毫秒）。120ms ≈ 8.3fps，合成时再按"到下一帧的真实间隔"重算时长。 */
-const FRAME_MS = 150;
+const FRAME_MS = 110;
 /** 想要的窗口尺寸（写进宿主按库保存的窗口状态：不写它，宿主会给一个随机的默认尺寸）。 */
 // ⚠️ 窗口别开太宽：附件管理那个弹窗是 `min(880px, 92vw)`，**宽度上限就是 880**
 // ⇒ 窗口越宽，弹窗在画面里占比越小、字越小（合成时还要缩到 900）。1024×800 时
 // 弹窗占满约 86% 宽，读起来刚刚好。
-const WINDOW = { x: 60, y: 40, width: 1024, height: 800 };
+const WINDOW = { x: 40, y: 24, width: 1080, height: 620 };
 
-const DEMO_DIR = "attachments";
-/** 演示要贴的那张照片（真照片，来源与许可见 `scripts/demo-assets/README.md`）。 */
-const PHOTO_PATH = join(REPO, "scripts/demo-assets/photo.jpg");
-const PHOTO_NAME = "photo.jpg";
-const PHOTO_TYPE = "image/jpeg";
-const PHOTO_BASE64 = readFileSync(PHOTO_PATH).toString("base64");
+const DEMO_DIR = "notes";
+/**
+ * 要粘贴的三件附件（复刻旧版：一张图 ＋ 一个 PDF ＋ 一段音频）。
+ *
+ * ⚠️ 三件都是**仓库里的真文件**（`scripts/demo-assets/`，来源见那里的 README）：
+ * 图片是 Pexels 的免费照片，PDF / WAV 是脚本自己生成的最小样本（几百字节 / 8 KB）。
+ * ⇒ 录出来的动图里没有一个字节来自用户自己的库。
+ */
+// ⚠️ 顺序有讲究：**PDF 排在最后**。宿主 1.14 的 PDF 嵌入会按页高铺开，
+// 排中间会把后面那件顶到屏幕外 ⇒ 第 5 步"三件都还在"就看不全（实测踩到）。
+// ⚠️ 为什么第三件不是音频（旧版用的是 wav）：`<audio>` 的原生控件**不进 CDP 截图**
+//（实测：元素在、readyState=4、duration=1、高 42px，截出来一片白）⇒ 观众会以为播放器坏了。
+// 换成第二张图最稳：不依赖任何原生控件。
+const PASTE_FILES = [
+	{ name: "photo.jpg", type: "image/jpeg", path: "scripts/demo-assets/photo.jpg" },
+	{ name: "chart.png", type: "image/png", path: "scripts/demo-assets/chart.png" },
+	{ name: "meeting-notes.pdf", type: "application/pdf", path: "scripts/demo-assets/meeting-notes.pdf" },
+].map((file) => ({
+	name: file.name,
+	type: file.type,
+	base64: readFileSync(join(REPO, file.path)).toString("base64"),
+}));
 /** 写进笔记的链接前缀（上传仍走 mock 端点；这个只决定链接长什么样）。 */
-const PUBLIC_BASE = "https://files.example.com";
-const NOTE = "Paste an image.md";
+const PUBLIC_BASE = "https://cdn.example.com";
+const NOTE = "notes/Attachments.md";
 const OUT = join(REPO, "demo-frames");
 
 const log = (line = "") => console.log(line);
@@ -99,7 +120,7 @@ function prepareVault() {
 				// 「附件管理」的「位置」列要有个可读的目录名，别显示成根目录
 				attachmentFolderPath: DEMO_DIR,
 				// 文件名与 H1 不叠成两行大标题
-				showInlineTitle: false,
+				showInlineTitle: true,
 				livePreview: true,
 				useMarkdownLinks: true,
 			},
@@ -244,17 +265,19 @@ async function main() {
 		);
 		if (ready?.error) throw new Error(ready.error);
 
-		// ── 3) 备好笔记并打开（内容全英文、只有这一篇）──
+		// ── 3) 备好笔记并打开 ──
+		// ⭐ 复刻旧版（1.8.0，`de3cf30`）的版式：**文件名当标题**（inline title），正文两行导语，
+		// 然后一次性粘贴三件附件。旧动图就是 `notes/Attachments.md` + "Everything for this project:"。
 		const noteBody = [
-			"# Your attachments, on your own storage",
-			"",
-			"Paste a file into any note. It goes to your bucket, the link is rewritten, and a copy stays here.",
-			"",
+			"Everything for this project:",
+			"The photo, the chart and the meeting notes.",
 			"",
 		].join("\n");
 		await evaluate(
 			client,
 			`(async () => {
+				const dir = ${JSON.stringify(DEMO_DIR)};
+				if (!app.vault.getAbstractFileByPath(dir)) await app.vault.createFolder(dir).catch(() => {});
 				const path = ${JSON.stringify(NOTE)};
 				const body = ${JSON.stringify(noteBody)};
 				const existing = app.vault.getAbstractFileByPath(path);
@@ -282,7 +305,10 @@ async function main() {
 					st.textContent =
 						".workspace-split.mod-left-split{display:none!important}" +
 						".workspace-split.mod-right-split{display:none!important}" +
-						".status-bar .status-bar-item.mod-clickable{display:none!important}";
+						".status-bar .status-bar-item.mod-clickable{display:none!important}" +
+						// 旧动图（1.8.0）那一屏**没有标签栏**，顶部直接是面包屑 —— 复刻它，
+						// 顺带把纵向空间让给正文（三件附件要挤进一屏）
+						".workspace-tab-header-container{display:none!important}";
 					document.head.appendChild(st);
 				}
 				return Boolean(editor);
@@ -318,20 +344,20 @@ async function main() {
 				await delay(Math.max(0, FRAME_MS - spent));
 			}
 		})();
-		const mark = (label) => marks.push({ at: Date.now() - t0, label });
+		/** 打一个字幕点。`sub` 是第二行（旧版是"英文 ＋ 中文"，这里照抄那个形状）。 */
+		const mark = (label, sub) => marks.push({ at: Date.now() - t0, label, sub });
 
-		// ⭐ 先切到**源码模式**：实时预览会把嵌入渲染成图，观众看不到"链接被改写"这件事。
-		// ⚠️ 不能用 `app.vault.setConfig("livePreview", false)` —— 值确实变了，但编辑器**不重渲染**。
+		// ⭐ 源码模式：三行都是裸 markdown，观众才看得见"链接被改写"这件事
+		//（标题是宿主画的 inline title，所以源码模式下它照样是渲染后的样子）
+		// ⚠️ 不能用 `app.vault.setConfig("livePreview", false)` —— 值变了，但编辑器**不重渲染**。
 		const toggleSource = async () => {
 			await evaluate(client, `(() => { app.commands.executeCommandById("editor:toggle-source"); return true; })()`);
-			await delay(700);
+			await delay(600);
 		};
 		await toggleSource();
 
-		mark("Paste a picture into any note");
-		await delay(500);
-		mark("Paste — it goes straight to your bucket");
-		await delay(300);
+		mark("Step 1 · Paste any file — a photo, a chart, a PDF", "第 1 步 · 粘贴任意附件：图片、图表、PDF 都行");
+		await delay(1000);
 
 		// ⚠️ 切模式之后光标回到文件开头 ⇒ 粘贴前必须重新落到末尾
 		await evaluate(
@@ -347,29 +373,28 @@ async function main() {
 		);
 		await delay(200);
 
-		// ── 粘贴（走宿主事件；DOM 的合成 paste 载荷是空的）──
-		// ⭐ 贴的是 `scripts/demo-assets/photo.jpg`：**真照片**（不是画出来的渐变块）。
-		// 用户 2026-10-24 要求「用之前的风景照」；那张的原文件已经找不到了（当年在演示库里），
-		// 从旧动图里裁只有 211×140、放大后糊 ⇒ 用户改口径「原图找不到就重新在网上找一张」。
-		// 现在是 Pexels 的 CC0 类免费图（Moraine Lake），来源与许可写在 demo-assets/README.md。
+		// ── 一次性粘贴三件（走宿主事件；DOM 的合成 paste 载荷是空的）──
 		await evaluate(
 			client,
 			`(() => {
 				const editor = app.workspace.activeEditor?.editor;
 				const info = app.workspace.activeEditor;
-				const bin = atob(${JSON.stringify(PHOTO_BASE64)});
-				const bytes = new Uint8Array(bin.length);
-				for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+				const files = ${JSON.stringify(PASTE_FILES)};
 				const dt = new DataTransfer();
-				dt.items.add(new File([bytes], ${JSON.stringify(PHOTO_NAME)}, { type: ${JSON.stringify(PHOTO_TYPE)} }));
+				for (const f of files) {
+					const bin = atob(f.base64);
+					const bytes = new Uint8Array(bin.length);
+					for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+					dt.items.add(new File([bytes], f.name, { type: f.type }));
+				}
 				app.workspace.trigger("editor-paste", { clipboardData: dt, preventDefault() {}, type: "paste" }, editor, info);
 				return true;
 			})()`
 		);
 
-		// ── 等上传完成（笔记里出现远端地址），期间光标停在那一行 ⇒ 能看见链接变化 ──
-		let uploaded = false;
-		for (let i = 0; i < 90; i += 1) {
+		// ── 等三处链接都变成远端地址（判据取**公开前缀**，改域名时这里跟着走）──
+		let rewritten = 0;
+		for (let i = 0; i < 120; i += 1) {
 			const text = await evaluate(
 				client,
 				`(async () => {
@@ -377,75 +402,74 @@ async function main() {
 					return f ? await app.vault.read(f) : "";
 				})()`
 			);
-			// ⭐ 判据取**公开前缀**（链接长什么样就是它），不是桶名 —— 改域名时这里跟着走
-			if (typeof text === "string" && text.includes(PUBLIC_BASE)) {
-				uploaded = true;
-				break;
-			}
-			await delay(200);
+			rewritten = typeof text === "string" ? text.split(PUBLIC_BASE).length - 1 : 0;
+			if (rewritten >= 3) break;
+			await delay(150);
 		}
-		log(uploaded ? "· 上传完成（笔记里已是远端地址）" : "⚠️ 等上传超时，动图里这一段会是本地链接");
-		mark("The link is rewritten to point there");
-		await delay(1200);
+		log(rewritten >= 3 ? "· 三件都上传完成（笔记里已是远端地址）" : `⚠️ 只有 ${rewritten}/3 变成远端地址（动图里会露馅）`);
+		mark("Step 2 · Each one uploads to your storage, and the note keeps a link", "第 2 步 · 它们都上传到你的存储，笔记里各留一条链接");
+		await delay(1600);
 
-		// ── 切回实时预览：图片渲染出来 ──
-		await toggleSource();
-		await delay(400);
-		mark("A local copy stays in your vault, so it renders offline");
-		await delay(1300);
+		mark("Step 3 · The file itself stays in your vault — it is the local copy", "第 3 步 · 文件本身留在库里，它就是本地副本");
+		await delay(2000);
 
-		// ── 打开附件管理 ──
-		await evaluate(client, `(() => { app.commands.executeCommandById("attachment-cloud-cache:manage-attachments"); return true; })()`);
-		for (let i = 0; i < 50; i += 1) {
-			const open = await evaluate(client, `Boolean(document.querySelector(".acc-gallery"))`);
-			if (open) break;
-			await delay(120);
-		}
-		// ⚠️ mark 要等**淡入真的结束**：节点存在 ≠ 看得见，弹窗还有一段 opacity 过渡。
-		// 靠"等 N 毫秒"只能猜（录制采样间隔一改就错位：实测字幕抢在弹窗前整整一帧）。
-		// ⇒ 直接问到 `opacity` 到 1 为止，再打点。
-		for (let i = 0; i < 40; i += 1) {
-			const opacity = await evaluate(
-				client,
-				`(() => { const el = document.querySelector(".acc-gallery"); return el ? Number(getComputedStyle(el).opacity) : 0; })()`
-			);
-			if (typeof opacity === "number" && opacity > 0.98) break;
-			await delay(60);
-		}
-		await delay(60);
-		mark("Attachment manager: every file, its state and usage");
-		await delay(2200);
-		// ⚠️ 弹窗根节点是 `.acc-gallery`（挂在 body 下），不是 `.acc-gallery-modal` ——
-		// 按那个类名找关闭按钮会**静默失败**，于是最后一段被弹窗挡住（实测踩过）。
-		const closed = await evaluate(
-			client,
-			`(() => {
-				const byClass = document.querySelector(".acc-gallery .modal-close-button") ?? document.querySelector(".modal-close-button");
-				if (byClass) { byClass.click(); return "close-button"; }
-				const byText = Array.from(document.querySelectorAll("button")).find((b) => /^(Close|关闭)$/.test((b.textContent ?? "").trim()));
-				if (byText) { byText.click(); return "text"; }
-				return "none";
-			})()`
-		);
-		log(`· 关闭弹窗：${closed}`);
-		await delay(600);
-		if (await evaluate(client, `Boolean(document.querySelector(".acc-gallery"))`)) {
-			throw new Error("弹窗没关掉（录制会拍到一半弹窗，先修这个）");
-		}
-		await delay(500);
-
-		// ── 停掉存储，然后重建视图：图照常显示 ──
-		mark("Storage stopped — the image still renders");
+		// ── 停掉存储（界面不动，让观众盯着那三条链接）──
+		mark("Step 4 · Your storage is now unreachable", "第 4 步 · 现在把你的存储整个停掉");
+		await delay(300);
 		await closeMock();
 		log("· mock 存储已停掉");
+		await delay(1200);
+
+		// ── 切回实时预览：三件都渲染出来（图片 / PDF / 音频）──
 		await evaluate(
 			client,
-			`(async () => {
-				// ⚠️ 用**当前** leaf 重开（传 true 会新开一个标签，画面上出现两个同名标签）
-				await app.workspace.getLeaf(false).openFile(app.vault.getAbstractFileByPath(${JSON.stringify(NOTE)}));
+			`(() => {
+				const editor = app.workspace.activeEditor?.editor;
+				if (editor) { editor.setCursor({ line: 0, ch: 0 }); editor.focus?.(); }
 				return true;
 			})()`
 		);
+		await toggleSource();
+		// 视图沿用原来的滚动位置（光标在末尾 ⇒ 停在 PDF 那一屏）⇒ 拉回顶部。
+		// ⚠️ 实时预览的滚动容器是 CodeMirror 的 `.cm-scroller`（不是阅读视图的
+		// `.markdown-preview-view`）：两处都试一下，谁在就滚谁。
+		await evaluate(
+			client,
+			`(() => {
+				const view = app.workspace.activeLeaf?.view;
+				view?.previewMode?.applyScroll?.(0);
+				for (const sel of [".cm-scroller", ".markdown-preview-view", ".markdown-reading-view"]) {
+					document.querySelector(sel)?.scrollTo?.({ top: 0 });
+				}
+				return true;
+			})()`
+		);
+		await delay(600);
+		// 排障用的一行：三件到底渲染出几个（音频最容易静默缺席）
+		const rendered = await evaluate(
+			client,
+			`(async () => ({
+				text: (await app.vault.read(app.vault.getAbstractFileByPath(${JSON.stringify(NOTE)}))).split("\\n").filter((l) => l.includes("![")).length,
+				img: document.querySelectorAll(".markdown-preview-view img, .cm-content img, .internal-embed img").length,
+				audio: document.querySelectorAll("audio, .internal-embed audio, .media-embed audio, .audio-embed").length,
+				pdf: document.querySelectorAll(".pdf-embed, .internal-embed[src$='.pdf']").length,
+				embeds: [...document.querySelectorAll(".internal-embed")].map((el) => el.className + "|" + (el.getAttribute("src") ?? "")),
+				audioSrc: [...document.querySelectorAll("audio")].map((a) => ({
+					src: String(a.currentSrc || a.src).slice(0, 90),
+					ready: a.readyState,
+					net: a.networkState,
+					dur: Number.isFinite(a.duration) ? a.duration : null,
+					h: a.getBoundingClientRect().height,
+				})),
+			}))()`
+		);
+		// ⚠️ 这是**守卫**不是日志：第 5 步的字幕说"三件都还在"，少一件就是假话。
+		//（踩过的坑：`<audio>` 的原生控件不进 CDP 截图 —— 元素在、readyState=4，截出来一片白。）
+		if (rendered?.text !== 3 || rendered?.pdf < 1 || rendered?.img < 2) {
+			throw new Error(`第 5 步没把三件都画出来：${JSON.stringify(rendered)}`);
+		}
+		log(`· 第 5 步渲染齐全：${JSON.stringify(rendered.embeds)}`);
+		mark("Step 5 · All three still render — with no network", "第 5 步 · 三者照常显示/播放，零网络请求");
 		await delay(2600);
 
 		recording = false;

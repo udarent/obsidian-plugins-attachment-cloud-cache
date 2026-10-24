@@ -18,9 +18,9 @@ and the file itself stays in your vault as the local copy. **Rendering reads tha
 
 **Contents** · [Quick start](#quick-start) · [Why](#why-use-it) · [Features](#features) · [Requirements](#requirements) · [Installation](#installation) · [Settings](#settings) · [Commands](#commands) · [Good to know](#good-to-know) · [Privacy](#privacy--security) · [Verification](#how-far-it-is-verified) · [Help](#getting-help) · [License](#license)
 
-![Paste an image into a note: the link becomes an address on your own bucket while the file stays in the vault; the attachment manager shows it as uploaded and linked; then the storage is stopped and the image still renders](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
+![Paste a photo, a chart and a PDF into a note: each one uploads to your own storage and the note keeps a link; the files themselves stay in your vault, so when the storage goes down all three still render](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
 
-*Recorded in source mode on purpose: paste a picture and watch `![](...)` become a link on **your** bucket. The attachment manager then shows it as uploaded and linked — and once the storage is stopped, the image still renders, because what renders is the copy in your vault. The vault is a throwaway one and the storage is a local mock, so nothing real is in there.*
+*Paste a photo, a chart and a PDF — each one uploads and the link in the note is rewritten. The file itself stays in your vault (that **is** the local copy), so once the storage is switched off, all three still render with no network.*
 
 ## Quick start
 
@@ -224,9 +224,9 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 
 **目录** · [快速开始](#快速开始) · [为什么用它](#为什么用它) · [功能](#功能) · [环境要求](#环境要求) · [安装](#安装) · [设置](#设置) · [命令](#命令) · [需要注意的](#需要注意的) · [隐私与安全](#隐私与安全) · [已验证到什么程度](#已验证到什么程度) · [遇到问题](#遇到问题) · [许可](#许可)
 
-![演示：往笔记里粘贴一张图片 —— 笔记里的链接当场变成你自己存储上的地址，文件仍留在库中；「附件管理」里显示它已上传、有引用；随后把存储整个停掉，图片照常显示](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
+![演示：往笔记里粘贴一张照片、一张图表和一个 PDF —— 各自上传到你的存储，笔记里各留一条链接；文件本身留在库里，随后把存储整个停掉，三件照常显示](https://raw.githubusercontent.com/udarent/obsidian-plugins-attachment-cloud-cache/main/docs/demo.gif)
 
-*刻意用**源码模式**拍：粘贴一张图，看着 `![](...)` 变成**你自己存储上**的地址。接着在「附件管理」里看到它「已上传 / 有引用」—— 然后把存储整个停掉，图片照常显示（渲染读的是库里的副本）。演示用的是临时库和本机 mock 存储，里面没有任何真实数据。*
+*粘贴照片、图表和 PDF —— 各自上传，笔记里的链接被改写成远端地址。文件本身留在库里（**它就是本地副本**），所以把存储整个停掉之后，三件照常显示，一个网络请求都没有。*
 
 ## 快速开始
 

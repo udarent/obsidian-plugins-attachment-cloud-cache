@@ -16,8 +16,11 @@
  * ## 字幕
  *
  * `timeline.json` 的 `marks`（录制脚本打的点）就是字幕分段：一条从它自己的时刻
- * 持续到下一条。文案在 `CAPTIONS` 里，**按 mark 的顺序对**（改了顺序这里会报错，
- * 不会静默错位）。
+ * 持续到下一条。**文案就是 mark 的 `label`（主行）与 `sub`（次行）**，写在录制脚本里
+ * 那次动作的旁边 —— 只有一份，改文案不用来这里。
+ *
+ * 两行是复刻旧版（1.8.0）的形状：主行英文、次行小一号的灰字（旧版次行是中文）。
+ * 行间用 ASS 的 `\N` 硬换行。
  *
  * ## 用法
  *
@@ -47,7 +50,7 @@ const OUT = join(REPO, "docs/demo.gif");
  * 900 宽那版 313 KB、800 宽 200 KB、760 宽 ~160 KB。README 首屏取 760（正文列会比它宽，
  * 但 760 已经读得清 6 列表格）。
  */
-const WIDTH = 760;
+const WIDTH = 1080;
 /**
  * 底部字幕条的高度（成片像素）。
  *
@@ -55,7 +58,7 @@ const WIDTH = 760;
  * 压在画面底部（不是紧跟文字的黑框）。旧图 1080 宽时它是 60px、颜色 `#111218`，
  * 按宽度折算到 900 宽 ≈ 50px。下面 `PAD` 那块滤镜就是照这个复刻的。
  */
-const BAND = 52;
+const BAND = 60;
 /** 字幕条底色（抄旧图的实测值，不是随手挑的黑）。 */
 const BAND_COLOR = "0x111218";
 
@@ -114,7 +117,7 @@ function writeCaptions(marks, size) {
 			"Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
 		// BorderStyle=1（只描边不带框）＋ 全透明描边：字是压在**整条字幕带**上的，
 		// 再套一个框就成了"框上框"（第一版就是这样，用户说不如以前）。
-		"Style: Caption,Arial,19,&H00FFFFFF,&H00FFFFFF,&H00111218,&H00111218," +
+		"Style: Caption,Arial,20,&H00FFFFFF,&H00FFFFFF,&H00111218,&H00111218," +
 			"-1,0,0,0,100,100,0,0,1,0,0,2,30,30,16,1",
 		"",
 		"[Events]",
@@ -127,9 +130,11 @@ function writeCaptions(marks, size) {
 		// 留白会让人以为"开头没字幕"。
 		const start = index === 0 ? 0 : mark.at;
 		const end = index + 1 < marks.length ? marks[index + 1].at : lastEnd;
-		lines.push(
-			`Dialogue: 0,${assTime(start)},${assTime(end)},Caption,,0,0,0,,${String(mark.label).replace(/\{/g, "(").replace(/\}/g, ")")}`
-		);
+		// ⭐ 两行字幕（主行英文 ＋ 次行中文），复刻旧版（1.8.0）那一屏的形状：
+		// 主行正常字号、次行小一号且灰一点；`\N` 是 ASS 的硬换行。
+		const main = String(mark.label).replace(/\{/g, "(").replace(/\}/g, ")");
+		const sub = typeof mark.sub === "string" && mark.sub ? `\\N{\\fs15\\c&HADAEB6&}${mark.sub}` : "";
+		lines.push(`Dialogue: 0,${assTime(start)},${assTime(end)},Caption,,0,0,0,,${main}${sub}`);
 	}
 	const path = join(FRAMES, "captions.ass");
 	writeFileSync(path, `${lines.join("\n")}\n`);
