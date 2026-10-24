@@ -294,7 +294,10 @@ export const I18N: Record<string, Locale> = {
 		galleryStateUploaded: "Uploaded",
 		galleryStateNotUploaded: "Not uploaded",
 		galleryStateCloudOnly: "In cloud only",
-		galleryStateUnverified: "Not uploaded (unverified)",
+		// ⚠️ 别写回 "Not uploaded (unverified)"：状态列 140px 装不下，会截成
+		// "Not uploaded (u…"（中文「未上传（未核）」够宽，英文不够 —— 又是只有换语言才看得见的那种）。
+		// "Unverified" 与 Uploaded / Not uploaded / In cloud only 并列，本身就是一种状态。
+		galleryStateUnverified: "Unverified",
 		galleryStateCached: "cached external",
 		// ⭐ 命令**失败**时必须有人说话（2026-10-16 用户实测："点击命令没有反应"）。
 		// 以前异步命令抛错只留一条控制台记录，界面上什么都不发生 —— 那是最坏的失败形态。
@@ -663,7 +666,8 @@ export const I18N: Record<string, Locale> = {
 		galleryStateUploaded: "已上传",
 		galleryStateNotUploaded: "未上传",
 		galleryStateCloudOnly: "云端有本地无",
-		galleryStateUnverified: "未上传（未核）",
+		// ⚠️ 原写「未上传（未核）」—— 中英两半要**对齐同一种说法**（英文改成 "Unverified" 了）。
+		galleryStateUnverified: "未核实",
 		galleryStateCached: "站外缓存",
 		// ⭐ 命令**失败**时必须有人说话（2026-10-16 用户实测："点击命令没有反应"）。
 		// 以前异步命令抛错只留一条控制台记录，界面上什么都不发生 —— 那是最坏的失败形态。

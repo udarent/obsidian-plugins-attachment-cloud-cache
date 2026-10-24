@@ -221,7 +221,10 @@ const filter = [
 	`ass=${assPath.replace(/\\/g, "/").replace(/^([A-Za-z]):/, "$1\\\\:")}`,
 	"split[base][pal]",
 	`[pal]palettegen=max_colors=${COLORS}:stats_mode=diff[p]`,
-	"[base][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+	// ⭐ 无抖动（2026-10-24 实测）：这一版画面以**表格与文字**为主，bayer 抖动会给大片白色背景
+	// 撒上噪点 —— 每帧反而多 15 KB（220 vs 205 KB），文字边缘也更毛。照片只有 240 宽，
+	// 96 色下的色阶几乎看不出来，所以选不抖动。
+	"[base][p]paletteuse=dither=none:diff_mode=rectangle",
 ].join(",");
 
 console.log("· ffmpeg 编码中…");

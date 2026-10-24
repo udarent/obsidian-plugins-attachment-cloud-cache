@@ -348,7 +348,9 @@ export class GalleryModal extends Modal {
 			// 名称 2 : 位置 1 —— 文件名普遍比目录长，平分会让"认得出是哪个文件"这件事先坏掉
 			{ key: "name", label: t("galleryColName"), kind: "name", width: "minmax(0, 2fr)" },
 			{ key: "folder", label: t("galleryColFolder"), width: "minmax(0, 1fr)" },
-			{ key: "state", label: t("galleryColState"), width: "120px" },
+			// ⚠️ 120px 在**英文**下会把「Not uploaded」截成「Not uploaded …」（中文「未上传」够，英文不够）；
+			// 2026-10-24 演示动图里一眼看到 ⇒ 140px。再宽就要从「名称」那一列抢，不值得。
+			{ key: "state", label: t("galleryColState"), width: "140px" },
 			{ key: "ref", label: t("galleryColRef"), width: "84px" },
 			{ key: "size", label: t("galleryColSize"), width: "68px" },
 			// ⚠️ 40px 会把表头截成「Actio…」（英文「Actions」比中文「操作」宽一倍）；

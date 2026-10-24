@@ -29,19 +29,23 @@
  *（`app.vault.setConfig` 改不动它）。社区插件另有一道闸：`localStorage["enable-plugin-"+app.appId]
  * = "true"`，否则空库里插件根本不加载（表里那些 `enable-plugin-<16位>` 就是这个键）。
  *
- * ## 流程：**复刻 1.8.0 那一版的分镜**（五步、约 13 秒、英文字幕 ＋ 中文小字）
+ * ## 流程：**沿用 1.8.0 的版式与语气，内容换成 1.9.0 的核心功能**（六步、约 16 秒）
  *
- * 2026-10-24 用户：「感觉还没有以前做得好，先复刻以前做过的动图，确保能力还在」。
- * 于是照 `de3cf30`（1.8.0）的分镜重录 —— 那版的形状是：`notes/Attachments.md`、
- * 文件名当标题、"Everything for this project:"、一次性粘三件、**源码模式下看着三条链接被改写**、
- * 最后切回预览看它们照常渲染。字幕也是那版的**两行**（英文主行 ＋ 中文次行）。
+ * 用户 2026-10-24：「按之前动图的风格，做新版本内容的动图……给用户展示核心功能」。
+ * ⇒ 版式、节奏、两行字幕、源码模式演链接改写**一律照旧**（那套是用户认可的），
+ * 只把中间那两步换成新东西：**唯一的命令 ＋ 附件管理弹窗**。
  *
- * 1. 笔记在**源码模式**（实时预览会把嵌入渲染出来，就看不见"链接被改写"了）；
- * 2. 一次性粘贴三件（照片 / 图表 / PDF）⇒ 走**宿主**的 `editor-paste`
- *（不是 DOM 事件，理由见 `verify-real-storage.mjs`）；
- * 3. 三条 `![](…/name-hash.ext)` 当场变成 `![](https://cdn.example.com/…)`；
- * 4. 停掉 mock 存储；
- * 5. 切回实时预览 ⇒ 三件照常显示（渲染读的是库里那几份本地副本）。
+ * | 步 | 演什么 | 为什么放在这儿 |
+ * |---|---|---|
+ * | 1 | 源码模式下一次性粘贴三件（照片 / 图表 / PDF） | 与旧版同一个开场：观众先看见"这是个笔记插件" |
+ * | 2 | 三条链接当场变成 `https://cdn.example.com/…` | 插件的主承诺（附件进你自己的存储），在**源码**里最清楚 |
+ * | 3 | 文件本身还在库里 —— 它就是本地副本 | 这一句是第 6 步"停存储仍显示"的伏笔 |
+ * | 4 | 命令面板里**只剩一条**「Attachment manager」→ 打开它 | 1.9.0 最大的变化：旧的两条命令并进这一个弹窗 |
+ * | 5 | 点筛选胶囊（件数跟着走）→ 勾两行（按钮数字跟着变、Rename 灰掉） | 一张表 ＋ 筛选 ＋ 批量动作，就是这次新加的全部能力 |
+ * | 6 | 停掉存储 → 切回预览 ⇒ 三件照常渲染 | 收尾接回主承诺：上传了，但离线照样能用 |
+ *
+ * ⚠️ 第 5 步**只勾选、不执行**：执行会删掉本地副本（第 6 步就没得看了），
+ * 而"数字＝真正能作用的件数"这件事，勾选时就已经看得见。
  *
  * ## 为什么用 mock 存储
  *
@@ -100,6 +104,22 @@ const PASTE_FILES = [
 	type: file.type,
 	base64: readFileSync(join(REPO, file.path)).toString("base64"),
 }));
+/**
+ * 额外躺在库里、**既没上传也没被引用**的两个文件。
+ *
+ * ⭐ 它们只为第 5 步的筛选服务：没有它们，「Not uploaded」「To clean up」两个胶囊
+ * 永远是 0，点下去清单是空的 —— 观众就看不到"筛选真的在筛"。
+ * ⚠️ 文件名要像"人自己放进去的东西"（旧手稿、早期的说明），不能像测试夹具。
+ */
+const EXTRA_FILES = [
+	{ name: "whiteboard.png", type: "image/png", path: "scripts/demo-assets/chart.png" },
+	{ name: "old-handout.pdf", type: "application/pdf", path: "scripts/demo-assets/meeting-notes.pdf" },
+].map((file) => ({
+	name: file.name,
+	type: file.type,
+	base64: readFileSync(join(REPO, file.path)).toString("base64"),
+}));
+
 /** 写进笔记的链接前缀（上传仍走 mock 端点；这个只决定链接长什么样）。 */
 const PUBLIC_BASE = "https://cdn.example.com";
 const NOTE = "notes/Attachments.md";
@@ -131,7 +151,12 @@ function prepareVault() {
 	// 固定浅色主题：动图要在 GitHub 的深色/浅色两套皮肤下都好看，浅色更好认表格线
 	writeFileSync(join(VAULT_DIR, ".obsidian/appearance.json"), JSON.stringify({ theme: "moonstone" }, null, 2));
 	writeFileSync(join(VAULT_DIR, ".obsidian/community-plugins.json"), JSON.stringify(["attachment-cloud-cache"]));
-	writeFileSync(join(VAULT_DIR, ".obsidian/core-plugins.json"), JSON.stringify(["file-explorer", "global-search"]));
+	// ⚠️ 「命令面板」本身是核心插件：不列它，`command-palette:open` 这条命令**根本不存在**
+	//（第 4 步要靠它在镜头前把"只剩一条"演出来）⇒ 2026-10-24 实测踩到，补上。
+	writeFileSync(
+		join(VAULT_DIR, ".obsidian/core-plugins.json"),
+		JSON.stringify(["file-explorer", "global-search", "command-palette"])
+	);
 	for (const name of ["main.js", "manifest.json", "styles.css"]) {
 		const from = join(REPO, name);
 		if (!existsSync(from)) throw new Error(`缺少构建产物 ${name} —— 先跑 npm run build`);
@@ -283,6 +308,15 @@ async function main() {
 				const existing = app.vault.getAbstractFileByPath(path);
 				if (existing) await app.vault.modify(existing, body);
 				else await app.vault.create(path, body);
+				// ⭐ 两个"没人引用、也没上传过"的文件（第 5 步的筛选要有东西可筛）
+				for (const extra of ${JSON.stringify(EXTRA_FILES)}) {
+					const extraPath = dir + "/" + extra.name;
+					if (app.vault.getAbstractFileByPath(extraPath)) continue;
+					const bin = atob(extra.base64);
+					const bytes = new Uint8Array(bin.length);
+					for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+					await app.vault.createBinary(extraPath, bytes.buffer);
+				}
 				await app.workspace.getLeaf(true).openFile(app.vault.getAbstractFileByPath(path));
 				return true;
 			})()`
@@ -308,7 +342,11 @@ async function main() {
 						".status-bar .status-bar-item.mod-clickable{display:none!important}" +
 						// 旧动图（1.8.0）那一屏**没有标签栏**，顶部直接是面包屑 —— 复刻它，
 						// 顺带把纵向空间让给正文（三件附件要挤进一屏）
-						".workspace-tab-header-container{display:none!important}";
+						".workspace-tab-header-container{display:none!important}" +
+						// ⚠️ 光标闪烁是**录制噪声**：它每 500ms 变一次 ⇒ 每一帧都与上一帧不同，
+						// 去重失效、GIF 白胖一倍（实测 148 帧只去重到 36）。观众不需要看见它。
+						".cm-cursor,.cm-cursorLayer,.cm-dropCursor{display:none!important}" +
+						"*{caret-color:transparent!important}";
 					document.head.appendChild(st);
 				}
 				return Boolean(editor);
@@ -357,7 +395,7 @@ async function main() {
 		await toggleSource();
 
 		mark("Step 1 · Paste any file — a photo, a chart, a PDF", "第 1 步 · 粘贴任意附件：图片、图表、PDF 都行");
-		await delay(1000);
+		await delay(800);
 
 		// ⚠️ 切模式之后光标回到文件开头 ⇒ 粘贴前必须重新落到末尾
 		await evaluate(
@@ -408,19 +446,209 @@ async function main() {
 		}
 		log(rewritten >= 3 ? "· 三件都上传完成（笔记里已是远端地址）" : `⚠️ 只有 ${rewritten}/3 变成远端地址（动图里会露馅）`);
 		mark("Step 2 · Each one uploads to your storage, and the note keeps a link", "第 2 步 · 它们都上传到你的存储，笔记里各留一条链接");
-		await delay(1600);
-
-		mark("Step 3 · The file itself stays in your vault — it is the local copy", "第 3 步 · 文件本身留在库里，它就是本地副本");
-		await delay(2000);
-
-		// ── 停掉存储（界面不动，让观众盯着那三条链接）──
-		mark("Step 4 · Your storage is now unreachable", "第 4 步 · 现在把你的存储整个停掉");
-		await delay(300);
-		await closeMock();
-		log("· mock 存储已停掉");
 		await delay(1200);
 
-		// ── 切回实时预览：三件都渲染出来（图片 / PDF / 音频）──
+		mark("Step 3 · The file itself stays in your vault — it is the local copy", "第 3 步 · 文件本身留在库里，它就是本地副本");
+		await delay(1400);
+
+		// ── 第 4 步：命令面板里**只剩一条**（1.9.0 把旧的两条并进了这个弹窗）──
+		mark("Step 4 · One command for attachments — the attachment manager", "第 4 步 · 附件相关的只有一条命令：附件管理");
+		await delay(500);
+		await evaluate(client, `(() => { app.commands.executeCommandById("command-palette:open"); return true; })()`);
+		/** 往命令面板里打字并读回结果（结果异步刷出 ⇒ 轮询到条数稳定）。 */
+		const searchPalette = async (query) => {
+			const typed = await evaluate(
+				client,
+				`(() => {
+					const input = document.querySelector(".prompt-input");
+					if (!input) return false;
+					input.value = ${JSON.stringify(query)};
+					input.dispatchEvent(new Event("input", { bubbles: true }));
+					return true;
+				})()`
+			);
+			if (!typed) return null;
+			let last = { count: -1, items: [] };
+			for (let i = 0; i < 28; i += 1) {
+				await delay(110);
+				const next = await evaluate(
+					client,
+					`(() => {
+						const items = [...document.querySelectorAll(".prompt-results .suggestion-item")].map((el) => el.textContent.trim());
+						return { count: items.length, items };
+					})()`
+				);
+				if (next && next.count === last.count && next.count >= 0) return next;
+				last = next ?? last;
+			}
+			return last;
+		};
+
+		// ⚠️ 搜什么词有讲究：搜 "attach" 会命中**宿主自带**的两条命令
+		//（"Insert attachment" / "Download attachments for current file"）—— 那样
+		// "就这一条"就成了假话（实测 3 条）。搜插件名只命中我们自己那一条。
+		// ⚠️ 等输入框出现不能用固定时长（重载后第一次开会慢一拍），先轮询。
+		for (let i = 0; i < 30; i += 1) {
+			const ready = await evaluate(client, `Boolean(document.querySelector(".prompt-input"))`);
+			if (ready) break;
+			await delay(100);
+		}
+		let palette = null;
+		let queryUsed = null;
+		for (const query of ["cloud cache", "attachment manager"]) {
+			const result = await searchPalette(query);
+			if (result && result.count === 1 && /Attachment manager/.test(result.items[0] ?? "")) {
+				palette = result;
+				queryUsed = query;
+				break;
+			}
+			palette = palette ?? result;
+		}
+		log(`· 命令面板搜 ${JSON.stringify(queryUsed)}：${JSON.stringify(palette)}`);
+		// ⚠️ 守卫：字幕说"就这一条"，那搜索里就真的只能有一条，否则这句是假话
+		if (!palette || palette.count !== 1) {
+			throw new Error(`命令面板里应只剩一条（我们的那条），实际 ${palette?.count} 条：${JSON.stringify(palette?.items)}`);
+		}
+		await delay(800);
+		// 点那一条（等于回车选中）：它自己收起面板并开出弹窗
+		await evaluate(client, `(() => { document.querySelector(".prompt-results .suggestion-item")?.click(); return true; })()`);
+
+		// 等弹窗**真的画出来**（节点存在 ≠ 看得见：还有一段 opacity 过渡）
+		let opened = false;
+		for (let i = 0; i < 60; i += 1) {
+			const state = await evaluate(
+				client,
+				`(() => {
+					const el = document.querySelector(".acc-gallery-modal .acc-gallery") ?? document.querySelector(".acc-gallery");
+					if (!el) return { open: false };
+					const opacity = Number(getComputedStyle(el.closest(".modal") ?? el).opacity);
+					return {
+						open: true,
+						opacity,
+						filters: document.querySelectorAll(".acc-gallery-filter").length,
+						rows: document.querySelectorAll(".acc-task-row").length,
+					};
+				})()`
+			);
+			if (state?.open && state.opacity > 0.98 && state.filters === 6) {
+				opened = true;
+				log(`· 弹窗已打开：${state.filters} 个胶囊 / ${state.rows} 行`);
+				break;
+			}
+			await delay(100);
+		}
+		if (!opened) throw new Error("附件管理弹窗没打开（或胶囊不是 6 个）");
+		await delay(1100);
+
+		// ── 第 5 步：筛选（件数跟着走）＋ 勾选（按钮数字跟着走）──
+		mark("Step 5 · Filter chips carry their counts — tick rows to act", "第 5 步 · 胶囊上就是件数，勾两行试试批量");
+		await delay(300);
+		/** 点一个胶囊并等清单重画完（判据：行数变了且胶囊已按下）。 */
+		const pickFilter = async (key) => {
+			await evaluate(client, `(() => { document.querySelector('[data-filter="${key}"]')?.click(); return true; })()`);
+			for (let i = 0; i < 30; i += 1) {
+				const state = await evaluate(
+					client,
+					`(() => ({
+						active: document.querySelector('[data-filter="${key}"]')?.getAttribute("aria-pressed") === "true",
+						rows: document.querySelectorAll(".acc-task-row").length,
+					}))()`
+				);
+				if (state?.active) return state.rows;
+				await delay(100);
+			}
+			throw new Error(`筛选 ${key} 没生效`);
+		};
+		// 「Not uploaded」：那两个既没上传、也没被引用的文件
+		const notUploadedRows = await pickFilter("not-uploaded");
+		log(`· 「Not uploaded」→ ${notUploadedRows} 行`);
+		if (notUploadedRows !== 2) throw new Error(`「Not uploaded」应有 2 行，实际 ${notUploadedRows}`);
+		await delay(1000);
+
+		// 勾前两行：按钮上的数字 = 真正能作用的件数，Rename 只支持单选 ⇒ 变灰
+		// ⚠️ 就在「Not uploaded」里勾（不回切「Uploaded」）：勾两个没传过的 ⇒
+		// 「Upload (2)」可点、Rename 灰 —— 同一句话的两种证据，还少一拍切换。
+		await evaluate(
+			client,
+			`(() => {
+				const boxes = [...document.querySelectorAll(".acc-task-check")];
+				boxes[0]?.click();
+				return true;
+			})()`
+		);
+		await delay(400);
+		await evaluate(
+			client,
+			`(() => {
+				const boxes = [...document.querySelectorAll(".acc-task-check")];
+				boxes[1]?.click();
+				return true;
+			})()`
+		);
+		await delay(1200);
+
+		const footer = await evaluate(
+			client,
+			`(() => [...document.querySelectorAll(".acc-gallery .acc-task-actions button")].map((b) => ({
+				text: (b.textContent ?? "").replace(/\\s+/g, " ").trim(),
+				disabled: Boolean(b.disabled),
+			})))()`
+		);
+		log(`· 勾两行之后：${JSON.stringify(footer)}`);
+		const rename = (footer ?? []).find((button) => /Rename/.test(button.text));
+		const upload = (footer ?? []).find((button) => /^Upload/.test(button.text));
+		// ⚠️ 守卫：这两条正是"数字＝能作用的件数"的证据，画面与字幕都靠它们
+		if (!rename?.disabled) throw new Error(`勾两行之后 Rename 应该灰掉：${JSON.stringify(footer)}`);
+		if (!upload || upload.disabled || !/\(2\)/.test(upload.text)) {
+			throw new Error(`勾两行之后「Upload」应该是 (2) 且可点：${JSON.stringify(footer)}`);
+		}
+		await delay(1100);
+
+		// ── 第 6 步：关掉弹窗、停存储（界面回到笔记，让观众盯着那三条链接）──
+		// ⚠️ 关闭**必须有兜底且必须校验**：只点右上角那颗 X 时它会静默失败
+		//（2026-10-24 实测：弹窗一直盖在笔记上，最后一幕整段被挡住，而日志一切正常）。
+		let closedBy = "none";
+		for (const attempt of ["close-button", "footer-close", "escape"]) {
+			closedBy = await evaluate(
+				client,
+				`(() => {
+					const mode = ${JSON.stringify("__M__")}.replace("__M__", ${JSON.stringify(attempt)});
+					const root = document.querySelector(".acc-gallery");
+					if (!root) return "already-closed";
+					if (mode === "close-button") {
+						const button = document.querySelector(".acc-gallery-modal .modal-close-button") ?? document.querySelector(".modal-close-button");
+						if (button) { button.click(); return "close-button"; }
+						return "no-close-button";
+					}
+					if (mode === "footer-close") {
+						const buttons = [...root.querySelectorAll(".acc-task-actions button")];
+						const button = buttons[buttons.length - 1];
+						if (button) { button.click(); return "footer-close"; }
+						return "no-footer-button";
+					}
+					document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+					return "escape";
+				})()`
+			);
+			for (let i = 0; i < 12; i += 1) {
+				await delay(100);
+				if (!(await evaluate(client, `Boolean(document.querySelector(".acc-gallery"))`))) break;
+			}
+			if (!(await evaluate(client, `Boolean(document.querySelector(".acc-gallery"))`))) break;
+		}
+		log(`· 关闭弹窗：${closedBy}`);
+		// ⚠️ 守卫：弹窗还开着 ⇒ 后面三步全被挡住，动图就废了
+		if (await evaluate(client, `Boolean(document.querySelector(".acc-gallery"))`)) {
+			throw new Error(`弹窗关不掉（试过 ${closedBy}）—— 最后一幕会被挡住`);
+		}
+		await delay(400);
+		mark("Step 6 · Your storage is now unreachable", "第 6 步 · 现在把你的存储整个停掉");
+		await delay(500);
+		await closeMock();
+		log("· mock 存储已停掉");
+		await delay(1100);
+
+		// ── 第 7 步：切回实时预览 ⇒ 三件照常渲染（渲染读的是库里那几份本地副本）──
 		await evaluate(
 			client,
 			`(() => {
@@ -433,44 +661,67 @@ async function main() {
 		// 视图沿用原来的滚动位置（光标在末尾 ⇒ 停在 PDF 那一屏）⇒ 拉回顶部。
 		// ⚠️ 实时预览的滚动容器是 CodeMirror 的 `.cm-scroller`（不是阅读视图的
 		// `.markdown-preview-view`）：两处都试一下，谁在就滚谁。
-		await evaluate(
-			client,
-			`(() => {
-				const view = app.workspace.activeLeaf?.view;
-				view?.previewMode?.applyScroll?.(0);
-				for (const sel of [".cm-scroller", ".markdown-preview-view", ".markdown-reading-view"]) {
-					document.querySelector(sel)?.scrollTo?.({ top: 0 });
-				}
-				return true;
-			})()`
-		);
-		await delay(600);
+		// ⚠️⚠️ 判据不能取 `scrollTop === 0`：实测它会报 0 而画面仍停在柱状图中段
+		//（实时预览的滚动由 CodeMirror 自己的 DOM 管，`scrollTo` 有时被随后的渲染冲掉）。
+		// ⇒ 直接问**画面**：第一张图在视野上部、PDF 底部也在视野里 —— 那才叫"三件都看得见"。
+		// ⚠️ 图必须限定在**正文容器**里找：正文之外也有 img（侧栏图标、文件树缩略图），
+		// 裸的 querySelector 取 DOM 里第一个 —— 实测拿到一个 top=300 的侧栏图标，于是误判"没取好景"。
+		// ⚠️ 图必须限定在**正文容器**里找：正文之外也有 img（侧栏图标、文件树缩略图），
+		// 裸的 querySelector 取 DOM 里第一个 —— 实测拿到一个 top=300 的侧栏图标，于是误判"没取好景"。
+		let framed = false;
+		let lastBox = null;
+		for (let i = 0; i < 30; i += 1) {
+			const box = await evaluate(
+				client,
+				`(() => {
+					const editor = app.workspace.activeEditor?.editor;
+					editor?.scrollIntoView?.({ from: { line: 0, ch: 0 }, to: { line: 0, ch: 0 } }, true);
+					for (const el of document.querySelectorAll(".cm-scroller, .markdown-preview-view, .markdown-reading-view")) {
+						el.scrollTo?.({ top: 0 });
+					}
+					const img = document.querySelector(".cm-content img") ?? document.querySelector(".markdown-preview-view img");
+					const pdf = document.querySelector(".pdf-embed");
+					if (!img) return null;
+					return {
+						imgTop: Math.round(img.getBoundingClientRect().top),
+						pdfBottom: pdf ? Math.round(pdf.getBoundingClientRect().bottom) : null,
+						view: window.innerHeight,
+					};
+				})()`
+			);
+			lastBox = box;
+			lastBox = box;
+			// 判据：PDF 底边在视口内（这是"三件同屏"真正的锚）+ 第一张图落在视口上半部。
+			// ⚠️ imgTop 在**滚动进行中**测到的值会偏大（实测同一帧先报 300、下一轮就正常），
+			// 所以它只当粗筛；画面到底对不对，最终靠人看那一帧 + `pdfBottom < view` 兜底。
+			if (box && box.imgTop >= 0 && box.imgTop < 420 && (box.pdfBottom ?? 0) > 0 && box.pdfBottom < box.view) {
+				framed = true;
+				log(`· 最后一幕取景：图 top=${box.imgTop}｜PDF bottom=${box.pdfBottom}/${box.view}`);
+				break;
+			}
+			await delay(120);
+		}
+		if (!framed) throw new Error(`最后一幕没把三件同时框进视野（照片会被切掉）：${JSON.stringify(lastBox)}`);
+		// ⚠️ 换字幕放在**滚到顶部之后**：否则 Step 6 末尾会有一小段停在"页面中部"
+		//（切到预览时沿用编辑器的滚动位置），看着像卡了一下（实测 0.6s）。
+		mark("Step 7 · All three still render — with no network", "第 7 步 · 三者照常显示，零网络请求");
+		await delay(300);
 		// 排障用的一行：三件到底渲染出几个（音频最容易静默缺席）
 		const rendered = await evaluate(
 			client,
 			`(async () => ({
 				text: (await app.vault.read(app.vault.getAbstractFileByPath(${JSON.stringify(NOTE)}))).split("\\n").filter((l) => l.includes("![")).length,
 				img: document.querySelectorAll(".markdown-preview-view img, .cm-content img, .internal-embed img").length,
-				audio: document.querySelectorAll("audio, .internal-embed audio, .media-embed audio, .audio-embed").length,
 				pdf: document.querySelectorAll(".pdf-embed, .internal-embed[src$='.pdf']").length,
 				embeds: [...document.querySelectorAll(".internal-embed")].map((el) => el.className + "|" + (el.getAttribute("src") ?? "")),
-				audioSrc: [...document.querySelectorAll("audio")].map((a) => ({
-					src: String(a.currentSrc || a.src).slice(0, 90),
-					ready: a.readyState,
-					net: a.networkState,
-					dur: Number.isFinite(a.duration) ? a.duration : null,
-					h: a.getBoundingClientRect().height,
-				})),
 			}))()`
 		);
-		// ⚠️ 这是**守卫**不是日志：第 5 步的字幕说"三件都还在"，少一件就是假话。
-		//（踩过的坑：`<audio>` 的原生控件不进 CDP 截图 —— 元素在、readyState=4，截出来一片白。）
+		// ⚠️ 这是**守卫**不是日志：第 7 步的字幕说"三件都还在"，少一件就是假话。
 		if (rendered?.text !== 3 || rendered?.pdf < 1 || rendered?.img < 2) {
-			throw new Error(`第 5 步没把三件都画出来：${JSON.stringify(rendered)}`);
+			throw new Error(`第 7 步没把三件都画出来：${JSON.stringify(rendered)}`);
 		}
-		log(`· 第 5 步渲染齐全：${JSON.stringify(rendered.embeds)}`);
-		mark("Step 5 · All three still render — with no network", "第 5 步 · 三者照常显示/播放，零网络请求");
-		await delay(2600);
+		log(`· 第 7 步渲染齐全：${JSON.stringify(rendered.embeds)}`);
+		await delay(2300);
 
 		recording = false;
 		await recorder;
