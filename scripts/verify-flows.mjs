@@ -318,6 +318,13 @@ async function main() {
 				const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
 				plugin.__accAutoUpload = plugin.settings.autoUpload;
 				plugin.settings.autoUpload = false;
+				// ⚠️ 同时把两个**库外开关**关掉：演示库里 externalImageCache 是开着的
+				// （早先测站外留下的），不关掉这一节就会"顺手"去下载站外图 ——
+				// 确认框会多出一行、还会真发请求，而这一节要验的是**默认档**的行为。
+				plugin.__accExternal = plugin.settings.externalImageCache;
+				plugin.__accLocalFiles = plugin.settings.uploadLocalFiles;
+				plugin.settings.externalImageCache = false;
+				plugin.settings.uploadLocalFiles = false;
 				const folder = app.vault.getAbstractFileByPath("acc-verify");
 				if (!folder) await app.vault.createFolder("acc-verify").catch(() => {});
 				const bytes = new Uint8Array(${JSON.stringify(PNG)});
@@ -382,6 +389,8 @@ async function main() {
 				}
 				const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
 				if (typeof plugin.__accAutoUpload === "boolean") plugin.settings.autoUpload = plugin.__accAutoUpload;
+				if (typeof plugin.__accExternal === "boolean") plugin.settings.externalImageCache = plugin.__accExternal;
+				if (typeof plugin.__accLocalFiles === "boolean") plugin.settings.uploadLocalFiles = plugin.__accLocalFiles;
 				return true;
 			})()`
 		);

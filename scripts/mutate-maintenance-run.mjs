@@ -90,20 +90,16 @@ await runMutations({
 			name: "★ 批量上传不处理外链候选（笔记里的外链图原样留着）",
 			from: "\tif (options.external && options.external.candidates.length > 0 && deps.cacheExternal) {",
 			to: "\tif (false) {",
-			expect: "外链图被下载、上传，笔记里的链接被改写",
+			expect: "站外图被下载",
 		},
 
-		{
-			// 后果：确认框把「没有被任何笔记引用的附件」列了出来（D-68），而执行层**重新算候选**
-			// 时不带这个口子 ⇒ 它们被"没有被任何笔记引用"跳过：用户勾了、点了确认，
-			// 那一行**永远停在等待**，既不是失败也不是跳过（`onItem` 只对真正处理到的上报）。
-			// ⚠️ 窗口在**验收 §8j**：纯判定层的 `includeUnreferenced` 早就钉过了，
-			// 漏的正是"确认框那半与执行层那半是不是同一个口径"。
-			name: "★★ 执行层不收未引用的候选（勾了它、确认了，那一行永远停在等待）",
-			from: "\t\tincludeUnreferenced: options.includeUnreferenced === true,",
-			to: "\t\tincludeUnreferenced: false,",
-			expect: "勾上「没有被任何笔记引用」的附件之后必须**真的**上传",
-		},
+		// ⚠️ 这里原本有一条「执行层不收未引用的候选」的锚点（D-68 时期：清单里勾了
+		// 未引用项，执行层却因为 `includeUnreferenced` 没打开而把它跳过 ⇒ 那一行永远停在等待）。
+		// 2026-10-23 取消清单之后**那个场景没有了**：一键链在**选候选**那一处就不收未引用
+		//（`includeUnreferenced: false` 写死），没有任何调用方会传 true ⇒ 这条锚点变成
+		// "改了也不改变行为"的漏过项（实测）。行为本身仍由验收 8b2' 正向钉着
+		//（那一趟前后 PUT 计数必须一样）。`BatchOptions.includeUnreferenced` 这个口子留着
+		// 是因为 `maintenance` 套件还在测它，且将来若恢复"带清单的入口"会再用到。
 
 		// ── ⭐ 收尾删"宿主撞名另落的重复副本"（D-24 ④，2026-10-14 用户要求）──
 		{

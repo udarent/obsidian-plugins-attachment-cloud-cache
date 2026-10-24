@@ -384,16 +384,25 @@ export const I18N: Record<string, Locale> = {
 		// ⭐ 2026-10-23：这一项是「Revert links to local paths」的**反向**，交互也对称 ——
 		// 一次确认，不弹清单、不勾选（用户要求「取消弹窗选择的复杂交互」）。
 		uploadAllName: "Upload all attachments",
-		// ⚠️ 范围要写清：**只**库内被引用（或只差改链接）的附件 —— 站外图/本机文件不在这里；
-		// 没有任何笔记引用的也不传（传了没有笔记会指向它）。这两条是收窄，必须提前说。
+		// ⭐ 2026-10-24：范围不再是"只有库内" —— 站外图与本机文件由设置里那两个开关决定。
+		// 描述 ≤3 句（设置页纪律），只讲"做什么 + 关键影响"。
 		uploadAllDesc:
-			"Send the attachments in your vault to your storage and rewrite the links in your notes to point at them. One confirmation, no list to tick: files that no note links to, and files outside your vault, are not part of this. Files stay where they are and are not renamed.",
+			"Send the attachments in your vault to your storage and rewrite the links in your notes to point at them, with one confirmation and no list to tick. Off-site images and files on this computer join in only if the settings below allow them; files that no note links to are not part of this. Files stay where they are and are not renamed.",
 		uploadAllButton: "Upload all",
 		uploadAllTitle: "Upload to your storage",
 		uploadAllSummary: "Upload {count} attachment(s) and rewrite the links in your notes to the remote address.",
+		uploadAllExternal: "{count} of them live on other sites — this run will contact: {sites}",
+		uploadAllSiteMore: " and {count} more",
+		uploadAllLocal: "{count} of them are files on this computer (outside your vault): {paths}",
+		uploadAllMissingLocal: "{count} local file(s) are gone and will be skipped.",
 		uploadAllRepairOnly: "{count} of them are already in your storage — only their links are rewritten, no bytes are uploaded again.",
 		uploadAllKeeps: "Your files stay where they are and keep their names. Nothing in your storage is deleted.",
 		uploadAllCta: "Upload {count}",
+		// ⭐ 2026-10-24：本机文件是**另一个**开关（站外那组管的是"别人的服务器"）。
+		uploadLocalFiles: "Also upload files on this computer",
+		uploadLocalFilesDesc:
+			"When on, “Upload all” also uploads the files your notes point at on this computer (file:/// addresses) and rewrites those links. They are read from the absolute paths written in your notes, and missing ones are skipped. Has no effect on phones.",
+
 		externalPickAll: "Select all",
 		externalPickNone: "Select none",
 		externalPickCancel: "Cancel",
@@ -763,16 +772,24 @@ export const I18N: Record<string, Locale> = {
 		// ⭐ 2026-10-23：这一项是「把链接改回本地路径」的**反向**，交互也对称 ——
 		// 一次确认，不弹清单、不勾选（用户要求「取消弹窗选择的复杂交互」）。
 		uploadAllName: "上传全部附件",
-		// ⚠️ 范围要写清：**只**库内被引用（或只差改链接）的附件 —— 站外图/本机文件不在这里；
-		// 没有任何笔记引用的也不传（传了没有笔记会指向它）。两条收窄必须提前说。
+		// ⭐ 2026-10-24：范围不再是"只有库内" —— 站外图与本机文件由设置里那两个开关决定。
 		uploadAllDesc:
-			"把库里的附件传到你的存储，并把笔记里指向它们的链接改成远端地址。只需确认一次，不用逐项勾选：没有任何笔记引用的附件、以及库外的文件不在范围内。文件留在原处，不改名。",
+			"把库里的附件传到你的存储，并把笔记里指向它们的链接改成远端地址，只需确认一次、不用逐项勾选。站外图与本机文件只在你于下方允许时才一起传；没有任何笔记引用的附件不在范围内。文件留在原处，不改名。",
 		uploadAllButton: "上传全部",
 		uploadAllTitle: "上传到云端",
 		uploadAllSummary: "将上传 {count} 个附件，并把笔记里指向它们的链接改成远端地址。",
+		uploadAllExternal: "其中 {count} 个在站外，这次会访问：{sites}",
+		uploadAllSiteMore: " 等 {count} 个站点",
+		uploadAllLocal: "其中 {count} 个是这台电脑上的文件（库外）：{paths}",
+		uploadAllMissingLocal: "另有 {count} 个本机文件已经不在，会跳过。",
 		uploadAllRepairOnly: "其中 {count} 个已经在你的存储里，这次只改链接、不重传。",
 		uploadAllKeeps: "文件留在原处、名字不变；云端那份不会被删除。",
 		uploadAllCta: "上传 {count} 个",
+		// ⭐ 2026-10-24：本机文件是**另一个**开关（站外那组管的是"别人的服务器"）。
+		uploadLocalFiles: "同时上传本机文件",
+		uploadLocalFilesDesc:
+			"打开后，「上传全部附件」会把笔记里指向这台电脑的文件（file:/// 开头）也传上去并改写链接。这些文件不在库里，按笔记里写的绝对路径去读，已经不在的会跳过。手机上不生效。",
+
 		externalPickAll: "全选",
 		externalPickNone: "全不选",
 		externalPickCancel: "取消",

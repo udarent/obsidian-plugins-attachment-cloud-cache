@@ -19,23 +19,19 @@ console.log(
 		"disk) is only dropped after two rounds of the background check, so a file that is merely still in transit " +
 		"is never mistaken for a missing one; " +
 		"cancelling touched nothing; batch upload rewrote both link forms, left the user's file exactly where it " +
-		"was (no cache folder is ever created — that file *is* the local copy), and the attachment no note refers to " +
-		"is now *listed* with an inline tag but left unticked, so a plain confirm never uploads it, while any stray " +
-		"copy is left alone too; a file that was already uploaded but whose note still points " +
+		"was (no cache folder is ever created — that file *is* the local copy), and an attachment no note refers to " +
+		"is not even a candidate — uploading it would leave nothing pointing at it — while any stray copy is left " +
+		"alone too; a file that was already uploaded but whose note still points " +
 		"at the local path (a name with spaces and a `(1)`) comes back as a repair: the link is rewritten, not one " +
 		"byte is uploaded again, and the dialog says so; " +
-		"an unconfigured paste is left to Obsidian; batch upload also picks up the images notes " +
-		"link to elsewhere, and its dialog names the sites it will visit (that confirmation is the authorisation) " +
-		"while cancelling downloads nothing; with the feature on such an image is downloaded, uploaded and its link " +
+		"an unconfigured paste is left to Obsidian; batch upload leaves the images a note links to elsewhere alone " +
+		"while the off-site feature is off, and once that switch is on it picks them up and its dialog names the " +
+		"sites it will visit (that confirmation is the authorisation) while cancelling downloads nothing; with the " +
+		"feature on such an image is downloaded, uploaded and its link " +
 		"rewritten, whereas a hostile site list sends no request and leaves the note byte-for-byte identical — and " +
 		"letting it through again proves the list filters rather than disables; changing a site setting makes the " +
 		"plugin look at the notes " +
-		"that are open right now; the \"pick which to cache\" command was driven end to end (its dialog standing in for " +
-		"\"see the list, select all, confirm\") — a fresh image lands a local copy *and* a row in the " +
-		"index file, an image whose bytes are already cached reuses that copy instead of adding anything, and a " +
-		"CDN-style URL whose last path segment carries a token after the dot still produces a local copy whose name ends " +
-		"in the " +
-		"real type; and with a cache limit set, the background rotation deleted the least recently used " +
+		"that are open right now; and with a cache limit set, the background rotation deleted the least recently used " +
 		"copies outright (freeing the space now) and removed their index entries, without ever going near the trash, " +
 		"and with the note itself untouched; switching the local-copy mode to \"keep nothing\" offered once to also " +
 		"clear the copies that were already there — the copy a note still links to was deleted outright (not trashed) " +
@@ -44,9 +40,8 @@ console.log(
 		"running it again deletes nothing and says so, including why; a note's off-site addresses are only " +
 		"offered when they really are files — a wiki page with no file-ish tail, a player.html page and a " +
 		"server-rendered pd.jsp are never even requested, while a real .pdf/.zip download link still is — and the " +
-		"local files a note points at outside the vault are listed while they are still on disk and tickable, " +
-		"while one that is gone is still listed - greyed out, with an \"Open note\" link to the note where that " +
-		"link lives - so it is never offered for upload yet is not a dead end either; and a command that throws " +
+		"local files a note points at outside the vault only join the batch when that switch is on, while one that " +
+		"is gone is skipped and the dialog says how many were skipped; and a command that throws " +
 		"half-way still tells the user what went wrong — an async command failure must never be silence, " +
 		"which is exactly what \"the command did nothing when I clicked it\" looked like))."
 );

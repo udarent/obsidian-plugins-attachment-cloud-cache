@@ -41,6 +41,7 @@
 import type { PluginSettings } from "../types";
 import type { CacheIndex } from "../cache/index";
 import { decideExternalCache } from "../render/external-decide";
+import type { ExternalCachePurpose } from "../render/external-decide";
 // ⭐ 本机文件（`file:///D:/…`）的判定 —— 与站外那份**并列**，不是套在它里面（两者的判据不同，
 // 一个看主机/站点名单，一个看平台/扩展名；混成一个函数会让两边的 reason 说不清是谁给的）。
 import { decideLocalFile, localPathFromUrl } from "../local-file";
@@ -277,6 +278,26 @@ export interface ExternalCandidateOptions {
 	 * 不 import 宿主、不看 `Platform`，于是"谁去问平台"全库只有一处。详见 `local-file.ts` 模块头。
 	 */
 	isDesktop: boolean;
+	/**
+	 * ⭐ 站外候选**要不要受设置里的开关与站点名单约束**（必填，2026-10-24）。
+	 *
+	 * - `"auto"`：**按设置走** —— 功能关着就一个都不收，名单（白 / 黑）照样生效。
+	 *   ⚠️ 这是「上传全部附件」现在用的档：那条链已经**没有清单**了，用户看不到
+	 *   "会访问哪台主机"，于是"要不要碰站外"只能靠**事前**设置表达
+	 *   （打开「站外文件」开关 ＋ 配好名单）。用户 2026-10-24 定的口径。
+	 * - `"manual"`：无视开关与名单（这是清单形态的语义：勾选本身即同意）。
+	 *
+	 * ⚠️ **必填**：漏传等于静默地把开关作废（本项目最警惕的失败形态）——
+	 * 而这条一旦静默，表现是"用户关掉了站外功能，插件照样去别人的服务器拉图"。
+	 */
+	purpose: ExternalCachePurpose;
+	/**
+	 * 本机文件（`file:///…`）要不要算候选（必填，2026-10-24）。
+	 *
+	 * ⚠️ 与站外那条**分开**：它们的授权来源不同。站外受"站外开关 ＋ 名单"约束，
+	 * 本机受 {@link PluginSettings.uploadLocalFiles} 约束 —— 两件事，两个开关。
+	 */
+	includeLocalFiles: boolean;
 	/**
 	 * 只看**这些笔记**（范围过滤，2026-10-22）。缺省 = 全部笔记。
 	 *
@@ -518,20 +539,24 @@ function isHttpUrl(value: string): boolean {
  * **同一个判定**。于是这些性质自动一致：功能关掉就不碰、自己的存储地址不当外链、
  * 回环/链路本地地址一律不碰、存储没配好时不出现在清单里。
  *
- * ## ⭐ 显式工具**不受功能开关与站点名单约束**（1.2.0）
+ * ## ⭐ 授权从哪来：由 `purpose` 决定（2026-10-24 改）
  *
- * 判定走 `purpose: "manual"` —— 于是"能被挑中的那些"只受硬性判据约束
- *（地址形态、本存储、回环地址、存储是否就绪），而**功能开关与站点名单都不管它**。
- * 理由：点这个确认框、勾一个框，本身就是一次显式动作；而名单是"**自动搬**的准入"。
- * ⚠️ 这条在 1.2.0 合并开关之后**必须**写下来：否则关掉那个开关会连带
- * 关掉「手动选择要上传的文件」，那个入口就等于不存在了（本项目最警惕的那类回归）。
+ * 同一个函数服务两种授权模型，**必须是调用方表态**（`ExternalCandidateOptions.purpose`）：
  *
- * ## 授权不在这里做
+ * | 档 | 开关 / 名单 | 谁在用 |
+ * |---|---|---|
+ * | `"manual"` | **都不管** | 清单形态（勾选 = 同意）。⚠️ 现在没有生产调用方了 |
+ * | `"auto"` | **按设置走** | 「上传全部附件」—— 它没有清单，授权只能来自**事前**设置 |
  *
- * 判定只回答"能不能搬"。**真正的授权是两个显式动作**：
- * 这条命令的确认框（点确认 = 同意去访问列出来的那些站点），
- * 以及「选择要缓存的外链图片」里的勾选。判据：**授权来自显式动作**
- * （事前打开开关，或当场勾选 / 点确认），而不是某个"默认"。
+ * ⚠️ 为什么一键链必须是 `"auto"`：那条链**一次确认、不列清单**，用户看不到"会访问哪台主机"，
+ * 于是把它接成 `"manual"` 就等于"关掉站外开关之后，插件照样去别人的服务器拉图"。
+ * 用户 2026-10-24 的原话：站外图可以用设置里的「站外文件是否上传云端」来确定。
+ *
+ * ## 本机文件是**另一个**开关
+ *
+ * `file:///D:/…` 的授权不来自站外那一组设置，而是 `PluginSettings.uploadLocalFiles`
+ *（默认关）。分开的理由：站外是"别人的服务器"，本机是"这台电脑上的绝对路径" ——
+ * 风险形状不同，用户会想分别决定。
  */
 export function selectExternalUploadCandidates(
 	notes: readonly NoteTextLike[],
@@ -569,6 +594,13 @@ export function selectExternalUploadCandidates(
 			if (localDecision.action === "read") {
 				// 本机文件：没有主机 ⇒ `host` 留空、不进 `sites`，界面显示的是**那条绝对路径**
 				//（见 `ExternalCandidate.local`）。注意**只收桌面端**：手机上这一步就是 `ignore`。
+				// ⚠️ 过了平台判据还要过**设置**这一关（2026-10-24）：判定层只回答"读得到吗"，
+				// "要不要读库外的东西"是用户的决定（`uploadLocalFiles`，默认关）。
+				// 两句分开写：平台判据是"做不到"，设置是"没允许" —— 诊断时要能分得清。
+				if (!options.includeLocalFiles) {
+					bump("设置里没有允许上传本机文件");
+					continue;
+				}
 				candidates.push({ url, notePath: path, host: "", local: true });
 				localFiles += 1;
 				continue;
@@ -578,12 +610,11 @@ export function selectExternalUploadCandidates(
 				src: url,
 				settings: options.settings,
 				configured: options.configured,
-				// ⭐ 显式工具：功能开关与站点名单都不约束它（见上面的小节）。
-				// ⚠️⚠️ 这是 `purpose: "manual"` 的**唯一调用点**，而 `manual` 多一条硬性判据：
-				// 地址只能是**从正文文本里读出来的** ⇒ 必须"看起来像个文件"
-				//（没有扩展名的地址、后缀不像文件类型的地址、以及后缀是页面/页面程序的地址
-				// 一律不算候选，见判定层那三处说明）。
-				purpose: "manual",
+				// ⭐ 由调用方表态（见 `ExternalCandidateOptions.purpose`）：
+				// `"auto"` = 按设置走（「上传全部附件」用它）；`"manual"` = 无视开关与名单。
+				// ⚠️ 与 purpose **无关**的是那两道形状判据：它们挂在"这条地址是不是被显示"上
+				//（`embedded`，采集层刚算好），因为要问的是"像不像文件"，不是"谁在问"。
+				purpose: options.purpose,
 				// ⭐ 而"要不要过那两道形状判据"由**这条地址是不是被显示**决定 —— 采集层刚算好
 				//（`![]()` / `<img>` 是显示，`[]()` / `<a>` 只是指向）。
 				embedded,

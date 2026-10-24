@@ -634,6 +634,19 @@ export class SettingsTab extends PluginSettingTab {
 				render: (setting) => this.renderSiteList(setting),
 			},
 			{
+				// ⭐ 2026-10-24（用户要求）：本机文件（`file:///D:/…`）与站外图**同一套方案** ——
+				// 一个设置开关决定「上传全部附件」要不要碰它。
+				// ⚠️ 与站外那个开关**分开**：站外是"别人的服务器"，本机是"这台电脑上的绝对路径"，
+				// 风险形状不同，用户会想分别决定。
+				// ⚠️ 只在桌面端显示：手机上本机路径根本读不到（判定层在平台那一步就拦了），
+				// 摆一个"打开也没用"的开关比不摆更糟。
+				name: this.t("uploadLocalFiles"),
+				desc: this.t("uploadLocalFilesDesc"),
+				aliases: ["local", "file", "computer", "path", "本机", "本地", "文件", "电脑", "上传"],
+				visible: () => this.plugin.isDesktopHost(),
+				control: { type: "toggle", key: "uploadLocalFiles" },
+			},
+			{
 				name: this.t("uploadAllName"),
 				desc: this.t("uploadAllDesc"),
 				aliases: ["upload", "all", "cloud", "上传", "全部", "云端", "转存", "反向"],

@@ -265,6 +265,11 @@ async function main() {
 						return { error: "secretStorage 写不进：" + String(error) };
 					}
 					plugin.settings.autoUpload = false;      // 造文件不该触发自动上传
+					// ⚠️ 两个**库外开关**也关掉：演示库里 externalImageCache 是开着的（早先测试留下的），
+					// 不关掉这条链会顺手去下载库里的站外图 —— 多出 PUT、多出失败项，
+					// 而这一节要验的是"库内那批"的对象层面事实。
+					plugin.settings.externalImageCache = false;
+					plugin.settings.uploadLocalFiles = false;
 					plugin.settings.localCopy = "keep";      // 别让"删本地副本"碰夹具
 					plugin.settings.orphanAsk = "always";
 

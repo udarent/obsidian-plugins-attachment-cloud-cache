@@ -954,7 +954,10 @@ export async function runMaintenanceSuite(mod) {
 			{ path: "notes/two.md", text: "![](https://other.test/c.png)\n![](https://third.test/d.png)" },
 			{ path: "notes/three.md", text: "![](https://img.example.com/cached.png)" },
 		];
-		const options = { settings: externalSettings, configured: true };
+		// ⚠️ `purpose` / `includeLocalFiles` 在 TS 里是**必填**（漏传会让开关静默失效）。
+		// 这一段测的是**旧语义**——"显式工具不受开关与名单约束"，所以是 manual + 收本机文件。
+		// 「上传全部附件」那一路走 `purpose: "auto"` ＋ 设置里那个开关（另有用例，见下面 5c / 5d）。
+		const options = { settings: externalSettings, configured: true, purpose: "manual", includeLocalFiles: true };
 
 		const picked = selectExternalUploadCandidates(notes, options);
 		assert.deepEqual(
@@ -1289,6 +1292,81 @@ export async function runMaintenanceSuite(mod) {
 			installers.skipped.some((entry) => entry.reason.includes("安装包")),
 			"★ 跳过的原因要能说出来（诊断里得有「安装包」这一档，否则用户无从解释）"
 		);
+
+		// ── 8. ⭐⭐ 2026-10-24：`purpose: "auto"` 时**按设置走**（「上传全部附件」用的就是这一档）──
+		//
+		// 那条链**没有清单**了（一次确认），所以"要不要碰站外"只能由事前设置表达
+		// （用户原话：站外图可以用设置里的「站外文件是否上传云端」来确定）。
+		// ⚠️ 判据必须钉在这里：把它接成 manual 的后果是"用户关掉了站外开关，插件照样去
+		// 别人的服务器拉图"—— 而这件事在界面上**完全静默**。
+		{
+			const autoBase = { ...options, purpose: "auto" };
+			const offCandidates = selectExternalUploadCandidates(notes, autoBase);
+			assert.deepEqual(
+				offCandidates.candidates,
+				[],
+				"★★ 开关关着 ⇒ 站外一个候选都不收（「用设置决定」就落在这条上）"
+			);
+			assert.ok(
+				offCandidates.skipped.some((entry) => entry.reason.includes("关闭")),
+				"★ 跳过原因要说「功能已关闭」（诊断要能回答「为什么一个都没有」）"
+			);
+
+			const onCandidates = selectExternalUploadCandidates(notes, {
+				...autoBase,
+				settings: { ...externalSettings, externalImageCache: true, externalSiteMode: "off" },
+			});
+			assert.deepEqual(
+				onCandidates.candidates.map((candidate) => candidate.url),
+				picked.candidates.map((candidate) => candidate.url),
+				"★ 开关打开 ⇒ 候选与显式工具那条**一模一样**（判定只有一份，不因为谁在问而分叉）"
+			);
+
+			// ⭐ 名单在 auto 档生效：白名单只留 other.test（两种档位对名单的态度必须不一样）
+			const allowed = selectExternalUploadCandidates(notes, {
+				...autoBase,
+				settings: {
+					...externalSettings,
+					externalImageCache: true,
+					externalSiteMode: "allowlist",
+					externalSiteList: ["other.test"],
+				},
+			});
+			assert.deepEqual(
+				allowed.candidates.map((candidate) => candidate.url),
+				["https://other.test/c.png"],
+				"★★ 白名单在 auto 档必须生效（否则用户以为排除了的站点照样被访问）"
+			);
+			assert.ok(
+				allowed.skipped.some((entry) => entry.reason.includes("名单")),
+				"★ 被名单挡住也要说得出原因"
+			);
+		}
+
+		// ── 9. ⭐⭐ 本机文件是**另一个**开关（`includeLocalFiles`，2026-10-24）──
+		//
+		// 与站外分开的理由：站外是"别人的服务器"，本机是"这台电脑上的绝对路径"。
+		// 风险形状不同，用户会想分别决定 ⇒ 两个开关、两条判据。
+		{
+			const localNotesForSwitch = [{ path: "notes/local.md", text: "![](file:///D:/a/x.png)" }];
+			const allowed = selectExternalUploadCandidates(localNotesForSwitch, desktopOptions);
+			assert.deepEqual(
+				allowed.candidates.map((candidate) => candidate.url),
+				["file:///D:/a/x.png"],
+				"前提：开关允许时它是候选"
+			);
+
+			const denied = selectExternalUploadCandidates(localNotesForSwitch, {
+				...desktopOptions,
+				includeLocalFiles: false,
+			});
+			assert.deepEqual(denied.candidates, [], "★★ 设置里没允许 ⇒ 本机文件一个都不收");
+			assert.equal(denied.localFiles, 0, "★ 也不该计入条数");
+			assert.ok(
+				denied.skipped.some((entry) => entry.reason.includes("本机")),
+				"★ 跳过原因要指出是设置没允许（与「手机读不到」那条平台判据分开）"
+			);
+		}
 	}
 	// 3b. ⭐⭐ 2026-10-15（D-32）：**所有引用写法**都要认（判据 + 改写一起）
 	//

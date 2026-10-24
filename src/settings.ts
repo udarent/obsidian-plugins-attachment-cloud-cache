@@ -165,6 +165,10 @@ const FACTORY_SETTINGS = {
 	externalSiteMode: "off" as ExternalSiteMode,
 	// ⚠️ 空名单。注意 `allowlist` + 空名单 = **一个站点都不自动处理**（见 `types.ts`）。
 	externalSiteList: [] as string[],
+	// ⚠️ 默认**关**，与 `externalImageCache` 同一条理由（而且更重）：
+	// 打开它意味着按笔记里写的 `file:///D:/…` 去读**库外**的绝对路径 —— 那些路径
+	// 不受库里任何约束，常常还是临时目录。用户没要求就不该去翻。
+	uploadLocalFiles: false,
 	// ⚠️ 默认**不限制**（0）。上限默认关着有两层理由：
 	// ① 自动淘汰是"后台删文件"，用户没要求就不该发生；
 	// ② 它默认关着，"离线可用"这个主承诺就不会被悄悄打折。
@@ -194,6 +198,7 @@ const SETTINGS_SPEC: {
 	externalImageCache: boolValue(),
 	externalSiteMode: oneOfValue(EXTERNAL_SITE_MODES),
 	externalSiteList: stringListValue(),
+	uploadLocalFiles: boolValue(),
 	cacheLimitMb: numberValue({ min: 0, max: CACHE_LIMIT_MB_MAX }),
 	orphanAsk: oneOfValue(ORPHAN_ASK_MODES),
 	debugLogging: boolValue(),

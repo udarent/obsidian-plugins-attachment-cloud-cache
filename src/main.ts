@@ -1626,8 +1626,12 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 只有一件事靠它：`file:///D:/…` 这类**本机绝对路径**只有桌面读得到
 	 * （手机端那个路径不存在）。所以判据留在这里（装配点），而**纯判定层收的是结果**
 	 * （`decideLocalFile({ isDesktop })`）—— 于是那一层可穷举，测试里也不用去替换宿主标志。
+	 *
+	 * ⚠️ 公开是给**设置页**用的（2026-10-24）：「同时上传本机文件」那一项在手机上
+	 * 打开也没用（读不到那个路径），所以它按桌面端才显示。设置页不能自己问 `Platform`
+	 * —— 全库一处问平台这条纪律不能为了少一个公开方法就破掉。
 	 */
-	private isDesktopHost(): boolean {
+	isDesktopHost(): boolean {
 		return Platform.isDesktopApp === true;
 	}
 

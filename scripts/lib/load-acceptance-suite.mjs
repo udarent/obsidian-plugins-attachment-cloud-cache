@@ -192,6 +192,17 @@ const PICKER_REUSE_URL = `https://images.example.test/deep/pick-a.png`;
 const TOKEN_IMAGE_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x33, 0x44]);
 const TOKEN_SHAPED_URL = `https://images.example.test/th/id/OIP-C.sPb8lvTxu-zlEqgEmUgCTwAAAA?w=208&h=169`;
 
+/**
+ * 8b2'' 用的地址与字节：**必须与上面三个都不同**。
+ *
+ * ⚠️ 第一版直接复用了 `EXTERNAL_IMAGE_URL`（`/a.png`），于是 8b 段已经为它传过一个对象 ——
+ * 到这一段走"对象已存在 ⇒ 不重传、只改链接"，`PUT` 计数**一次都没涨**，
+ * 断言以"站外图上传恰好一次"失败（而实际行为是对的）。
+ * 现场：通知写着 `Uploaded 1 ... Rewrote 1 link(s)`，`PUT` 4→4。
+ */
+const SWITCH_IMAGE_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x77, 0x88]);
+const SWITCH_IMAGE_URL = `https://${EXTERNAL_HOST}/switch.png`;
+
 /** 记下"站外图床"被请求过几次 —— 用来断言"只下载一次"。 */
 const externalHostRequests = [];
 
@@ -206,6 +217,10 @@ function externalImageResponse(url) {
 	// 这条路径要从两端都钉住（见 8b4）。
 	if (String(url).includes("/pick-a.png") || String(url).includes("/pick-b.png")) {
 		return { status: 200, headers: { "content-type": "image/png" }, arrayBuffer: PICKER_IMAGE_BYTES.buffer };
+	}
+	// ⭐ 8b2'' 的专属地址（字节各不相同 ⇒ 一定是一个新对象）
+	if (String(url).includes("/switch.png")) {
+		return { status: 200, headers: { "content-type": "image/png" }, arrayBuffer: SWITCH_IMAGE_BYTES.buffer };
 	}
 	// ⭐ 8b4 的"令牌形状"地址：类型只能靠响应头给（URL 里根本没有真扩展名）
 	if (String(url).includes("/th/id/OIP-C.")) {
@@ -1281,25 +1296,26 @@ export async function runLoadAcceptance(options = {}) {
 		}
 
 		// ============================================================
-		// 8b2'. ⭐⭐ **收窄的反面**：站外图 / 本机文件 / 库里"没有任何引用"的附件
-		//        都**不再**是「上传全部附件」的候选（2026-10-23）
+		// 8b2''. ⭐⭐ 站外图 / 本机文件**由设置里那两个开关决定**（2026-10-24 用户定稿）
 		//
-		// 这不是"漏了"，是**刻意收窄**：那颗按钮现在是「把链接改回本地路径」的反向，
-		// 两端都是"库内那份"。而站外图 / 本机文件需要"看得见会访问哪台主机"的授权 ——
-		// 那必须有一份可读的清单才谈得上同意，而这一条链已经没有清单了。
+		// 上一版把这两类**永久排除**了，理由是"没有清单 = 没有授权"。用户当场否掉：
+		// 「站外图可以用设置中的"站外文件是否上传云端"来确定」「本机 file:///，可以采用相同的
+		// 方案，在设置中做一个开关，让用户决定」——**开关本身就是事前授权**。
 		//
-		// ⚠️ 所以这段是**反向断言**：把这三类都摆进库里，跑一次，谁也不许被碰。
-		// 没有它，"收窄"只是注释里的一句话 —— 哪天有人顺手把 `includeUnreferenced`
-		// 或站外候选接回来，没有任何东西会变红。
+		// ⚠️ 所以这里**成对**验，两半都不能少：
+		//   ① 开关关着（默认）⇒ 一个请求都不发、未引用的附件也不传；
+		//   ② 打开开关 ⇒ 同一段正文这次要被下载、上传、改写。
+		// 少了 ②，把这条链接错接成"无视设置"（比如永远按 manual 档）也不会变红。
 		// ============================================================
 		{
-			const externalUrl = EXTERNAL_IMAGE_URL;
+			const externalUrl = SWITCH_IMAGE_URL;
 			const externalNote = "notes/不外传.md";
 			await writeFile(join(root, externalNote), `# 外链\n\n![x](${externalUrl})\n`, "utf8");
+			await harness.refreshPathCache();
 
-			// 库里一份**没有任何引用**的附件（它在 8b 那段被造过，但那里断言的是
-			// "没被搬走"；这里断言的是"没被上传"）
-			const orphanBefore = server.countByMethod("PUT");
+			// ── ① 默认档（关）──
+			assert.equal(plugin.settings.externalImageCache, false, "前提：这一段从默认档开始");
+			const putsBefore = server.countByMethod("PUT");
 			externalHostRequests.length = 0;
 			mockObsidian.Notice.instances.length = 0;
 			runUpload();
@@ -1309,7 +1325,7 @@ export async function runLoadAcceptance(options = {}) {
 			assert.equal(
 				externalHostRequests.length,
 				0,
-				"★★ 站外图**不再**由这条链处理（没有清单 = 没有站点授权；自动那一路有自己的开关）"
+				`★★ 站外开关关着 ⇒ 一个请求都不该发（实际发了 ${externalHostRequests.length} 次）`
 			);
 			assert.ok(
 				(await readFile(join(root, externalNote), "utf8")).includes(externalUrl),
@@ -1317,9 +1333,90 @@ export async function runLoadAcceptance(options = {}) {
 			);
 			assert.equal(
 				server.countByMethod("PUT"),
-				orphanBefore,
+				putsBefore,
 				"★★ 没有任何笔记引用的附件也不该被上传（传上去没有笔记会指向它）"
 			);
+
+			// ── ② 打开开关 ⇒ 同一段正文这次要真被处理 ──
+			plugin.settings.externalImageCache = true;
+			externalHostRequests.length = 0;
+			const putsWithExternal = server.countByMethod("PUT");
+			runUpload();
+			await waitFor(
+				async () => !(await readFile(join(root, externalNote), "utf8")).includes(externalUrl),
+				"打开开关之后，站外图被下载、上传，笔记里的链接被改写",
+				15000,
+				diagnose
+			);
+			assert.equal(externalHostRequests.length, 1, "★ 站外图只该下载一次");
+			assert.equal(
+				server.countByMethod("PUT"),
+				putsWithExternal + 1,
+				`★ 站外图上传恰好一次（跑前 ${putsWithExternal}，跑后 ${server.countByMethod("PUT")}；通知：${JSON.stringify(
+					mockObsidian.Notice.instances.map((n) => n.message)
+				)}）`
+			);
+			assert.ok(
+				(await readFile(join(root, externalNote), "utf8")).includes(PUBLIC_BASE),
+				"★ 换上的是自己存储的地址"
+			);
+			// ⚠️ 还原默认档：后面的用例都按"功能关着"跑
+			plugin.settings.externalImageCache = false;
+		}
+
+		// ============================================================
+		// 8b2-本机. ⭐⭐ 本机文件：**另一个**开关（2026-10-24）
+		//
+		// 用户原话：「本机 file:///，可以采用相同的方案，在设置中做一个开关，让用户决定」。
+		// 与站外那段同样**成对**验：关着不碰、打开就传。
+		// ⚠️ 这里用的是**磁盘上真实存在**的临时文件（不是纯字符串）：本机那条链会真去
+		// `stat` + `readFile`，"文件在不在"是它的一部分判据 —— 用假的路径只能测到"跳过"。
+		// ============================================================
+		{
+			const dir = await mkdtemp(join(tmpdir(), "acc-local-"));
+			// ⚠️ 名字里带空格与中文：本机路径允许空格（http 那一路按空白切，这一路不切）——
+			// 两条规则不同，正是这里要顺手覆盖的地方。
+			const localFile = join(dir, "截图 一.png");
+			await writeFile(localFile, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x55, 0x66]));
+			const localUrl = `file:///${localFile.replace(/\\/g, "/")}`;
+			const localNote = "notes/本机.md";
+			await writeFile(join(root, localNote), `# 本机\n\n![x](${localUrl})\n`, "utf8");
+			await harness.refreshPathCache();
+
+			// ── ① 默认档（关）⇒ 不碰 ──
+			assert.equal(plugin.settings.uploadLocalFiles, false, "前提：这一段从默认档开始");
+			const beforeLocal = server.countByMethod("PUT");
+			mockObsidian.Notice.instances.length = 0;
+			runUpload();
+			await waitFor(async () => mockObsidian.Notice.instances.length > 0, "这一趟给出了结论", 10000, diagnose);
+			assert.equal(server.countByMethod("PUT"), beforeLocal, "★★ 设置里没允许 ⇒ 本机文件一个都不传");
+			assert.ok(
+				(await readFile(join(root, localNote), "utf8")).includes(localUrl),
+				"★★ 那条本机链接必须原样留着"
+			);
+
+			// ── ② 打开开关 ⇒ 上传 ＋ 改写 ──
+			plugin.settings.uploadLocalFiles = true;
+			const beforeLocalOn = server.countByMethod("PUT");
+			runUpload();
+			await waitFor(
+				async () => !(await readFile(join(root, localNote), "utf8")).includes(localUrl),
+				"打开开关之后，本机文件被上传、链接被改写",
+				15000,
+				diagnose
+			);
+			assert.equal(
+				server.countByMethod("PUT"),
+				beforeLocalOn + 1,
+				`★ 本机文件上传恰好一次（跑前 ${beforeLocalOn}，跑后 ${server.countByMethod("PUT")}）`
+			);
+			assert.ok(
+				(await readFile(join(root, localNote), "utf8")).includes(PUBLIC_BASE),
+				"★ 换上的是自己存储的地址"
+			);
+			// ⚠️ 还原默认档并清掉临时目录（它在**库外**，不还原就等于往用户磁盘留垃圾）
+			plugin.settings.uploadLocalFiles = false;
+			await rm(dir, { recursive: true, force: true });
 		}
 
 		// ============================================================

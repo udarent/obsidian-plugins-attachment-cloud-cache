@@ -125,9 +125,9 @@ In **Settings → Attachment Cloud Cache** (Chinese names in the [中文版](#at
 
 ## Privacy & security
 
-- **It normally talks only to your storage** — no telemetry, no analytics. Only one thing can reach outside: the
-  optional off-site feature below (turning it on is the consent). “Upload all” only uploads files that are already in
-  your vault.
+- **It normally talks only to your storage** — no telemetry, no analytics. Two things can reach outside, and both are
+  off by default: the optional off-site feature below (that same switch also decides whether “Upload all” touches
+  off-site images), and the switch that lets “Upload all” read files on this computer. Turning either on is the consent.
 - **One optional feature reaches other sites, and it never turns itself on** — off by default; enabling it is the
   consent, and the site list narrows it further. The request carries nothing beyond the file's address.
 - **A web page is never stored** — `text/html` and other `text/*` answers are refused rather than uploaded.
@@ -160,7 +160,7 @@ your storage, and can other people open my links?" without changing anything.
 |---|---|---|
 | Images stay blank, `403` in the console | The bucket is **private** and the note holds a direct link | Nothing to fix: with a private bucket the plugin keeps a local copy and shows that instead |
 | Images blank **and** the status light says *Unreachable* | Endpoint / bucket / keys | Re-run Test connection, then re-check the endpoint (some providers need the region written into it) |
-| A file is marked "gone from this computer" in the upload list | The `file:///…` target was deleted or moved (temp folders do this) | Open the note from that row and fix the link — the plugin will not upload a file it cannot read |
+| The confirmation says some local files are "gone from this computer" | Those `file:///…` targets were deleted or moved (temp folders do this) | They are skipped. Open the note and fix those links — the plugin will not upload a file it cannot read |
 | A command appears to do nothing | Two known causes: storage not configured yet (it says so), or the vault has a note that **cannot be read** | The cleanup command refuses to run in that case **on purpose** — it will not treat "unknown" as "unused" |
 | After switching devices the images do not come back | The index records paths **on that device** | Copy the plugin folder **without** `.cache-index.json` (see Good to know) |
 | A download seems stuck | Requests now time out (60 s for a download) and the object stays retryable | If it still hangs, open an issue with the console log |
@@ -313,8 +313,9 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 
 ## 隐私与安全
 
-- **默认只连你自己的存储** —— 不含遥测、统计。会伸到外面的只剩下面那个可选的站外功能（打开它就是同意）；
-  「上传全部附件」只传**库里已有的**文件，不读任何库外路径。
+- **默认只连你自己的存储** —— 不含遥测、统计。会伸到库外的只有两件事，而且都默认关闭：
+  下面那个可选的站外功能（同一个开关也决定「上传全部附件」要不要碰站外图），
+  以及「同时上传本机文件」那个开关（允许它按笔记里写的绝对路径读这台电脑）。打开任何一个就是同意。
 - **有一个可选功能会访问其它站点，而且它不会自己启动** —— 默认关闭，打开它就是同意，站点名单再把范围收窄；
   请求里除文件地址本身不带任何其它内容。
 - **网页永远不会被存下来** —— `text/html` 与其它 `text/*` 一律拒收，而不是传上去。
@@ -344,7 +345,7 @@ AWS S3、MinIO、Backblaze B2、自建端点），笔记里留下一条可迁移
 |---|---|---|
 | 图一直空着，控制台有 `403` | 桶是**私有**的，而笔记里写的是直链 | 不用修：私有桶下插件保留本地副本并用它显示 |
 | 图空着，**且**状态灯是「无法访问」 | 服务地址 / 桶名 / 密钥 | 重跑一次「测试连接」，再核对地址（有些服务商要求把区域写进地址里） |
-| 上传清单里说某个文件「已经不在这台电脑上」 | 那条 `file:///…` 指向的文件被删或挪走了（临时目录经常这样） | 点那一行的「打开笔记」把链接改掉 —— 插件不会去传一个读不到的文件 |
+| 确认框说有几个本机文件「已经不在这台电脑上」 | 那些 `file:///…` 指向的文件被删或挪走了（临时目录经常这样） | 它们会被跳过。去笔记里把那几条链接改掉 —— 插件不会去传一个读不到的文件 |
 | 点了命令像没反应 | 两种已知原因：还没配置存储（它会说），或者库里有一篇笔记**读不到** | 清理命令在这种情况会**故意**取消 —— 它不会把「不知道」当成「没人引用」 |
 | 换设备之后图不显示 | 索引记的是**那台设备**上的路径 | 复制插件目录时**不要**带 `.cache-index.json`（见上面「需要注意的」） |
 | 某次下载像卡住了 | 请求现在有上限（下载 60 秒），而且那个对象下次还能重试 | 若仍然卡住，带控制台日志提 issue |
