@@ -42,6 +42,17 @@ const OUT = join(REPO, "docs/demo.gif");
 
 /** 成片宽度（README 的正文列大约这么宽；再大只是让文件变重）。 */
 const WIDTH = 900;
+/**
+ * 底部字幕条的高度（成片像素）。
+ *
+ * ⭐ 2026-10-24 用户口径：「以前那种方式更好」—— 指的是 **1.2.0 那版**：整条深色横带
+ * 压在画面底部（不是紧跟文字的黑框）。旧图 1080 宽时它是 60px、颜色 `#111218`，
+ * 按宽度折算到 900 宽 ≈ 50px。下面 `PAD` 那块滤镜就是照这个复刻的。
+ */
+const BAND = 52;
+/** 字幕条底色（抄旧图的实测值，不是随手挑的黑）。 */
+const BAND_COLOR = "0x111218";
+
 /** 调色板颜色数：128 够用，256 在字节数上肉眼可见地更贵。 */
 const COLORS = 128;
 /** 每帧最短停留（毫秒）：GIF 的延时精度是 10ms，太短会看不清。 */
@@ -81,7 +92,7 @@ function writeCaptions(marks, size) {
 		"[Script Info]",
 		"ScriptType: v4.00+",
 		`PlayResX: ${size.width}`,
-		`PlayResY: ${size.height}`,
+		`PlayResY: ${size.height + BAND}`,
 		"WrapStyle: 2",
 		"ScaledBorderAndShadow: yes",
 		"",
@@ -89,9 +100,10 @@ function writeCaptions(marks, size) {
 		"Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, " +
 			"Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, " +
 			"Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-		// BorderStyle=3 = 不透明底框（BackColour 就是那层底），白字黑底、贴着底边
-		"Style: Caption,Arial,27,&H00FFFFFF,&H00FFFFFF,&H00000000,&HB4000000," +
-			"-1,0,0,0,100,100,0,0,3,12,0,2,30,30,24,1",
+		// BorderStyle=1（只描边不带框）＋ 全透明描边：字是压在**整条字幕带**上的，
+		// 再套一个框就成了"框上框"（第一版就是这样，用户说不如以前）。
+		"Style: Caption,Arial,19,&H00FFFFFF,&H00FFFFFF,&H00111218,&H00111218," +
+			"-1,0,0,0,100,100,0,0,1,0,0,2,30,30,16,1",
 		"",
 		"[Events]",
 		"Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -187,6 +199,8 @@ const ffmpeg = resolveFfmpeg();
 mkdirSync(dirname(OUT), { recursive: true });
 const filter = [
 	`scale=${WIDTH}:-2:flags=lanczos`,
+	// ⭐ 底部铺一条整宽的深色带（旧版那种），字幕画在带上 —— 见 BAND 的注释
+	`pad=iw:ih+${BAND}:0:0:color=${BAND_COLOR}`,
 	`ass=${assPath.replace(/\\/g, "/").replace(/^([A-Za-z]):/, "$1\\\\:")}`,
 	"split[base][pal]",
 	`[pal]palettegen=max_colors=${COLORS}:stats_mode=diff[p]`,

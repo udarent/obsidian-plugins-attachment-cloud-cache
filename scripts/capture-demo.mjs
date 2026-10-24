@@ -32,7 +32,7 @@
  * ## 流程（约 15 秒）
  *
  * 1. 笔记已在**源码模式**（实时预览会把图渲染出来，就看不见"链接被改写"了）；
- * 2. 粘贴一张图 ⇒ 走**宿主**的 `editor-paste`（不是 DOM 事件，理由见 `verify-real-storage.mjs`）；
+ * 2. 粘贴一张照片 ⇒ 走**宿主**的 `editor-paste`（不是 DOM 事件，理由见 `verify-real-storage.mjs`）；
  * 3. 笔记里那行 `![](attachments/diagram.png)` 当场变成 `![](https://files.example.com/…png)`；
  * 4. 切回实时预览 ⇒ 图渲染出来；
  * 5. 打开「Attachment manager」看一眼表格；
@@ -74,6 +74,10 @@ const FRAME_MS = 120;
 const WINDOW = { x: 60, y: 40, width: 1024, height: 800 };
 
 const DEMO_DIR = "attachments";
+/** 演示要贴的那张照片（真照片，见文件头与 `scripts/demo-assets/README.md`）。 */
+const PHOTO_PATH = join(REPO, "scripts/demo-assets/photo.png");
+const PHOTO_NAME = "photo.png";
+const PHOTO_BASE64 = readFileSync(PHOTO_PATH).toString("base64");
 /** 写进笔记的链接前缀（上传仍走 mock 端点；这个只决定链接长什么样）。 */
 const PUBLIC_BASE = "https://files.example.com";
 const NOTE = "Paste an image.md";
@@ -343,30 +347,20 @@ async function main() {
 		await delay(200);
 
 		// ── 粘贴（走宿主事件；DOM 的合成 paste 载荷是空的）──
+		// ⭐ 贴的是 `scripts/demo-assets/photo.png`：**真照片**（不是画出来的渐变块）。
+		// 它是 1.2.0 那版演示动图里的那张风景照，用户 2026-10-24 指定「应该用之前的风景照」——
+		// 原文件当时在演示库里、现在已经不在了，所以是从旧动图里裁出 211×140 再柔化放大到 520×345
+		//（`scripts/demo-assets/README.md` 记着这件事）。⚠️ 再往上放大只会更糊。
 		await evaluate(
 			client,
 			`(() => {
 				const editor = app.workspace.activeEditor?.editor;
 				const info = app.workspace.activeEditor;
-				// 画一张 640×360 的图（渐变 ＋ 几个色块），不读任何文件
-				const c = document.createElement("canvas");
-				c.width = 640; c.height = 360;
-				const g = c.getContext("2d");
-				const grad = g.createLinearGradient(0, 0, 640, 360);
-				grad.addColorStop(0, "#6b8afd");
-				grad.addColorStop(1, "#a06bfd");
-				g.fillStyle = grad; g.fillRect(0, 0, 640, 360);
-				g.fillStyle = "rgba(255,255,255,0.92)";
-				g.fillRect(72, 96, 496, 24);
-				g.fillRect(72, 148, 344, 16);
-				g.fillRect(72, 184, 420, 16);
-				g.fillStyle = "rgba(255,255,255,0.65)";
-				g.beginPath(); g.arc(520, 268, 52, 0, Math.PI * 2); g.fill();
-				const bin = atob(c.toDataURL("image/png").split(",")[1]);
+				const bin = atob(${JSON.stringify(PHOTO_BASE64)});
 				const bytes = new Uint8Array(bin.length);
 				for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
 				const dt = new DataTransfer();
-				dt.items.add(new File([bytes], "diagram.png", { type: "image/png" }));
+				dt.items.add(new File([bytes], ${JSON.stringify(PHOTO_NAME)}, { type: "image/png" }));
 				app.workspace.trigger("editor-paste", { clipboardData: dt, preventDefault() {}, type: "paste" }, editor, info);
 				return true;
 			})()`
@@ -401,13 +395,14 @@ async function main() {
 
 		// ── 打开附件管理 ──
 		await evaluate(client, `(() => { app.commands.executeCommandById("attachment-cloud-cache:manage-attachments"); return true; })()`);
-		for (let i = 0; i < 30; i += 1) {
+		for (let i = 0; i < 50; i += 1) {
 			const open = await evaluate(client, `Boolean(document.querySelector(".acc-gallery"))`);
 			if (open) break;
-			await delay(200);
+			await delay(120);
 		}
-		// ⚠️ mark 放在**弹窗已经出现之后**：放前面的话字幕会先跳出来、弹窗晚半拍才淡入，
-		// 那一瞬间"字幕说的东西还没出现"（实测差一帧）
+		// ⚠️ mark 放在**弹窗已经画出来之后**：节点存在 ≠ 已经看得见（它还淡入 ~200ms）。
+		// 400ms 太久（字幕比弹窗晚 0.6s，读起来像"说晚了"）⇒ 200ms 刚好落在淡入结束那一下。
+		await delay(200);
 		mark("Attachment manager: every file, its state and usage");
 		await delay(2200);
 		// ⚠️ 弹窗根节点是 `.acc-gallery`（挂在 body 下），不是 `.acc-gallery-modal` ——
