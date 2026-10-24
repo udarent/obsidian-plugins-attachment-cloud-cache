@@ -74,9 +74,10 @@ const FRAME_MS = 120;
 const WINDOW = { x: 60, y: 40, width: 1024, height: 800 };
 
 const DEMO_DIR = "attachments";
-/** 演示要贴的那张照片（真照片，见文件头与 `scripts/demo-assets/README.md`）。 */
-const PHOTO_PATH = join(REPO, "scripts/demo-assets/photo.png");
-const PHOTO_NAME = "photo.png";
+/** 演示要贴的那张照片（真照片，来源与许可见 `scripts/demo-assets/README.md`）。 */
+const PHOTO_PATH = join(REPO, "scripts/demo-assets/photo.jpg");
+const PHOTO_NAME = "photo.jpg";
+const PHOTO_TYPE = "image/jpeg";
 const PHOTO_BASE64 = readFileSync(PHOTO_PATH).toString("base64");
 /** 写进笔记的链接前缀（上传仍走 mock 端点；这个只决定链接长什么样）。 */
 const PUBLIC_BASE = "https://files.example.com";
@@ -347,10 +348,10 @@ async function main() {
 		await delay(200);
 
 		// ── 粘贴（走宿主事件；DOM 的合成 paste 载荷是空的）──
-		// ⭐ 贴的是 `scripts/demo-assets/photo.png`：**真照片**（不是画出来的渐变块）。
-		// 它是 1.2.0 那版演示动图里的那张风景照，用户 2026-10-24 指定「应该用之前的风景照」——
-		// 原文件当时在演示库里、现在已经不在了，所以是从旧动图里裁出 211×140 再柔化放大到 520×345
-		//（`scripts/demo-assets/README.md` 记着这件事）。⚠️ 再往上放大只会更糊。
+		// ⭐ 贴的是 `scripts/demo-assets/photo.jpg`：**真照片**（不是画出来的渐变块）。
+		// 用户 2026-10-24 要求「用之前的风景照」；那张的原文件已经找不到了（当年在演示库里），
+		// 从旧动图里裁只有 211×140、放大后糊 ⇒ 用户改口径「原图找不到就重新在网上找一张」。
+		// 现在是 Pexels 的 CC0 类免费图（Moraine Lake），来源与许可写在 demo-assets/README.md。
 		await evaluate(
 			client,
 			`(() => {
@@ -360,7 +361,7 @@ async function main() {
 				const bytes = new Uint8Array(bin.length);
 				for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
 				const dt = new DataTransfer();
-				dt.items.add(new File([bytes], ${JSON.stringify(PHOTO_NAME)}, { type: "image/png" }));
+				dt.items.add(new File([bytes], ${JSON.stringify(PHOTO_NAME)}, { type: ${JSON.stringify(PHOTO_TYPE)} }));
 				app.workspace.trigger("editor-paste", { clipboardData: dt, preventDefault() {}, type: "paste" }, editor, info);
 				return true;
 			})()`

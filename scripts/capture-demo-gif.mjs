@@ -204,7 +204,7 @@ const filter = [
 	`ass=${assPath.replace(/\\/g, "/").replace(/^([A-Za-z]):/, "$1\\\\:")}`,
 	"split[base][pal]",
 	`[pal]palettegen=max_colors=${COLORS}:stats_mode=diff[p]`,
-	"[base][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle",
+	"[base][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
 ].join(",");
 
 console.log("· ffmpeg 编码中…");
