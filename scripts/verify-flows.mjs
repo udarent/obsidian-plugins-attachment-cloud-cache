@@ -11,7 +11,7 @@
  *
  * ## 它会动什么（都在演示库上，跑完还原）
  *
- * - 库用**演示库**（默认 `E:/svn/obsidian-plugins/ObsidianVault`，可用 `ACC_FLOWS_VAULT_DIR` 改）；
+ * - 库用**演示库**（默认是仓库的同级目录 `../ObsidianVault`，可用 `ACC_FLOWS_VAULT_DIR` 改）；
  * - 只往里放三个 `acc-verify/` 文件，跑完删掉；`data.json` / `.cache-index.json` **先备份后写回**；
  * - ⚠️ 不碰你自己的笔记库：默认指向演示库，而且只动带 `acc-verify/` 前缀的东西；
  * - ⚠️ **不碰任何远端**：全程不需要配置存储（候选是从库与索引算出来的）。
@@ -75,7 +75,8 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
  * 这个探针会往里放三个 `acc-verify/` 文件、并改两条设置，跑完**全部还原**
  *（`data.json` / `.cache-index.json` 先备份后写回）。
  */
-const VAULT_DIR = process.env.ACC_FLOWS_VAULT_DIR ?? "E:/svn/obsidian-plugins/ObsidianVault";
+// ⚠️ 默认值是**仓库的同级目录**（`../ObsidianVault`），不写某台机器的绝对路径。
+const VAULT_DIR = process.env.ACC_FLOWS_VAULT_DIR ?? resolve(REPO, "..", "ObsidianVault");
 const VAULT_NAME = VAULT_DIR.split(/[\\/]/).filter(Boolean).pop() ?? "";
 const PLUGIN_DIR = join(VAULT_DIR, ".obsidian", "plugins", PLUGIN_ID);
 

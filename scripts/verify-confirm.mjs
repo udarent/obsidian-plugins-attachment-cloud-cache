@@ -53,7 +53,10 @@ const PORT = Number(
 );
 const OBSIDIAN = process.env.OBSIDIAN_EXE ?? "C:/Program Files/Obsidian/Obsidian.exe";
 const PLUGIN_ID = "attachment-cloud-cache";
-const VAULT_DIR = process.env.ACC_CONFIRM_VAULT_DIR ?? "E:/svn/obsidian-plugins/ObsidianVault";
+// ⚠️ 默认值是**仓库的同级目录**（`../ObsidianVault`），不写某台机器的绝对路径 ——
+// 那种路径会随仓库一起公开，对别人也毫无用处。
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const VAULT_DIR = process.env.ACC_CONFIRM_VAULT_DIR ?? resolve(REPO, "..", "ObsidianVault");
 const VAULT_NAME = VAULT_DIR.split(/[\\/]/).filter(Boolean).pop() ?? "";
 const PLUGIN_DIR = join(VAULT_DIR, ".obsidian", "plugins", PLUGIN_ID);
 const WAIT_SECONDS = Number(process.env.OBSIDIAN_DEBUG_WAIT ?? 90);

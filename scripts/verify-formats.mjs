@@ -31,7 +31,8 @@
  */
 
 import { existsSync, readFileSync, statSync, copyFileSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -44,7 +45,10 @@ const PORT = Number(
 );
 const OBSIDIAN = process.env.OBSIDIAN_EXE ?? "C:/Program Files/Obsidian/Obsidian.exe";
 const VAULT = process.env.OBSIDIAN_VAULT ?? "ObsidianVault";
-const VAULT_DIR = process.env.OBSIDIAN_VAULT_DIR ?? "E:/svn/obsidian-plugins/ObsidianVault";
+// ⚠️ 默认值是**仓库的同级目录**（`../ObsidianVault`），不写某台机器的绝对路径 ——
+// 那种路径会随仓库一起公开，对别人也毫无用处。
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const VAULT_DIR = process.env.OBSIDIAN_VAULT_DIR ?? resolve(REPO, "..", "ObsidianVault");
 const PLUGIN_DIR = join(VAULT_DIR, ".obsidian", "plugins", "attachment-cloud-cache");
 const ASSET_DIR = process.env.ACC_FORMATS_DIR ?? join(tmpdir(), "acc-formats");
 const WAIT_SECONDS = Number(process.env.OBSIDIAN_DEBUG_WAIT ?? 90);
