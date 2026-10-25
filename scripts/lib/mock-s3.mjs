@@ -385,8 +385,16 @@ export function createMockS3(options) {
 					return segment;
 				}
 			});
-		const requestBucket = segments[0] ?? "";
-		const key = segments.slice(1).join("/");
+		// ⭐ 两种寻址都要认：path-style（`/桶/key`）与 **virtual-host**（`桶.主机/key`）。
+		//
+		// 判据是"`Host` 以 `<配置的桶>.` 开头"，**不是**"路径第一段不认识" ——
+		// 后者会把一个打错桶名的 path-style 请求误认成 virtual-host（于是回 200、
+		// 而这类"桶名写错"正是最该被抓住的一种）。去掉桶前缀后必须还剩一个主机名。
+		const hostHeader = String(headers["host"] ?? "");
+		const bucketPrefix = `${bucket}.`;
+		const virtualHost = hostHeader.startsWith(bucketPrefix) && hostHeader.length > bucketPrefix.length;
+		const requestBucket = virtualHost ? bucket : (segments[0] ?? "");
+		const key = virtualHost ? segments.filter((segment) => segment !== "").join("/") : segments.slice(1).join("/");
 
 		const record = {
 			method: req.method ?? "",

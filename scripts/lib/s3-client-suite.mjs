@@ -40,6 +40,8 @@
  */
 
 import assert from "node:assert/strict";
+import http from "node:http";
+
 import { createMockS3, nodeTransport } from "./mock-s3.mjs";
 
 const CREDENTIALS = {
@@ -57,6 +59,53 @@ async function withServer(options, fn) {
 	} finally {
 		await server.close();
 	}
+}
+
+/**
+ * 把请求**真的**发到本地 mock，但保留原 URL 的 `Host` 与路径。
+ *
+ * 用途只有一个：virtual-host 寻址（`https://桶.主机/`）。替身服务监听在 `IP:端口` 上，
+ * `桶.IP` 根本解析不到 ⇒ 不换一条传输就永远覆盖不到这条路径。
+ *
+ * ⭐ 关键在于**只换连接目标、不换 Host 与路径**：替身会拿收到的 `Host` 与路径**独立重算**
+ * 签名 ⇒ 这条用例真正断言的是"客户端签的就是它发的"（virtual-host 下签名路径必须是 `/`）。
+ * ⚠️ 不能用 `fetch`：`Host` 是 fetch 的**禁用头**，写进去会被忽略，于是验签必然对不上
+ * —— 而症状会是"SignatureDoesNotMatch"，看起来像密钥错了。
+ */
+function hostPreservingTransport(endpoint) {
+	const target = new URL(endpoint);
+	return async ({ url, method, headers, body }) => {
+		const parsed = new URL(url);
+		const payload = body ? Buffer.from(body) : null;
+		const sent = { ...headers, host: parsed.host };
+		if (payload) sent["content-length"] = String(payload.length);
+		const response = await new Promise((resolve, reject) => {
+			const request = http.request(
+				{
+					host: target.hostname,
+					port: target.port,
+					method,
+					path: `${parsed.pathname}${parsed.search}`,
+					headers: sent,
+				},
+				(res) => {
+					const chunks = [];
+					res.on("data", (chunk) => chunks.push(chunk));
+					res.on("end", () =>
+						resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks) })
+					);
+				}
+			);
+			request.on("error", reject);
+			if (payload) request.write(payload);
+			request.end();
+		});
+		const out = {};
+		for (const [name, value] of Object.entries(response.headers)) {
+			if (typeof value === "string") out[name.toLowerCase()] = value;
+		}
+		return { status: response.status, headers: out, body: new Uint8Array(response.body) };
+	};
 }
 
 /** 包一层传输，用来记录"真正发出去的头"（Host 有没有被手填就看这个）。 */
@@ -357,6 +406,39 @@ export async function runS3ClientSuite(mod) {
 			}
 		);
 	}
+
+	// 1d. ⭐⭐ IP 端点 + virtual-host ⇒ **必须当场报配置错**，不许静默把桶名丢掉
+	//
+	// `URL` 的 `host` setter 对非法值**静默无操作**：`桶.192.168.1.5` 末段是数字 ⇒ 被当成
+	// IPv4 解析而失败 ⇒ 赋值什么也没发生，而 `toString()` 看起来完全正常。
+	// 于是请求会打到 `/key`（桶名丢了），服务端回 `NoSuchBucket` —— 报错完全不指向原因，
+	// 而且这台主机上恰好有同名桶时，操作会落到别人的桶上。
+	// 2026-10-25 给这条路径补断言时才发现它一直是坏的（此前没有任何断言看着它）。
+	const ipAddress = { endpoint: "http://192.168.1.5:9000", bucket: "my-bucket", forcePathStyle: false };
+	assert.throws(
+		() => requestTargetFor(ipAddress, "a.png"),
+		(error) => {
+			assert.ok(
+				/IP/.test(error.message) && /path-style/i.test(error.message),
+				`★ 报错要说清"哪儿不行 + 改哪儿"（IP / path-style），实际：${error.message}`
+			);
+			return true;
+		},
+		"★★ IP 端点 + virtual-host 必须报错，绝不能静默丢掉桶名"
+	);
+	assert.throws(() => bucketTargetFor(ipAddress), /path-style/i, "★ 列举那条路同理（同一个判据）");
+	// ⚠️ 而"只用于展示"的前缀宁可不显示，也不能给一个少桶名的地址
+	assert.equal(
+		objectBaseFor(ipAddress),
+		"",
+		"★★ 设置页那个 placeholder 在 IP + virtual-host 时必须留空（半个地址会被当成'建议你用这个'）"
+	);
+	// 反例：域名端点照旧工作（不能因为加了自检就把正常路径打死）
+	assert.equal(
+		objectBaseFor({ endpoint: "https://s3.example.com", bucket: "my-bucket", forcePathStyle: false }),
+		"https://my-bucket.s3.example.com",
+		"域名端点下 virtual-host 前缀照旧（自检不该误伤）"
+	);
 
 	// ============================================================
 	// 2. ⭐ 上传：字节一致 + 服务端独立验签
@@ -1044,5 +1126,48 @@ export async function runS3ClientSuite(mod) {
 		assert.ok(Date.now() - started < 5_000, "必须真的提前返回，而不是等到默认的 60 秒");
 	}
 
-	return { scenarios: 16 };
+
+	// ============================================================
+	// 16. ⭐⭐ virtual-host 寻址下的**桶根**（列举对象）—— 地址与签名都落在 `/`
+	//
+	// 从前这里是一份**手写的第二份**地址拼法（`bucketRoot()`）：与 `bucketTargetFor`
+	// 各写一遍，virtual-host 下连 URL 尾部斜杠都不一样，而两份都不报错。
+	// 而"签名路径必须等于实际请求路径"是这个客户端最容易出事的一条纪律
+	//（拼错只会回 `SignatureDoesNotMatch`，报错完全不指向原因）。
+	//
+	// ⚠️ 替身监听在 `IP:端口` 上 ⇒ `桶.IP` 解析不到，必须换一条**只改连接目标**的传输；
+	// 替身仍拿收到的 Host 与路径独立重算签名。
+	// ============================================================
+	await withServer({}, async (server, endpoint) => {
+		const base = new URL(endpoint);
+		// ⚠️ 客户端这边必须用**域名**端点：地址是 IP 时 `桶.192.168.1.5` 不是合法主机名
+		//（`URL` 的 host setter 会静默不生效、桶名整个丢掉），所以 `applyBucketHost`
+		// 现在当场判死（见下面 1c）。传输层仍然连到替身的 `IP:端口`，只保留 Host 与路径。
+		const fakeEndpoint = `http://storage.example.com:${base.port}`;
+		const client = makeClient(mod, fakeEndpoint, { forcePathStyle: false }, { transport: hostPreservingTransport(endpoint) });
+
+		const listed = await client.listObjects({ prefix: "x" });
+		assert.deepEqual(listed.objects, [], "空桶 + 前缀过滤 ⇒ 空列表（说明请求真的被服务端处理了）");
+
+		const last = server.requests.at(-1);
+		assert.equal(
+			last.signatureOk,
+			true,
+			"★★ virtual-host 下服务端按收到的 `Host` 与路径 `/` 重算签名必须一致（签的＝发的）"
+		);
+		assert.equal(last.method, "GET", "列举是桶级 GET");
+		const receivedHost = String(last.headers?.host ?? "");
+		assert.equal(
+			receivedHost,
+			`test-bucket.storage.example.com:${base.port}`,
+			`★★ 桶名必须在主机名里（virtual-host），实际收到：${receivedHost}`
+		);
+		assert.equal(
+			String(last.rawUrl ?? ""),
+			`/?list-type=2&prefix=x`,
+			`★★ 桶级请求的路径是 \`/\`（桶在主机名里），实际：${last.rawUrl}`
+		);
+	});
+
+	return { scenarios: 17 };
 }

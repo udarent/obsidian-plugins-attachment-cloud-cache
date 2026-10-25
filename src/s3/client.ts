@@ -165,6 +165,30 @@ function assertKeyUsable(key: string): void {
  * `key` 必须是**未编码**的原始键：本项目里它由 `object-key.ts` 产出，
  * 已经把 `%` 换成了 `_`，所以不存在"二次编码"的输入。
  */
+/**
+ * 把桶名放进**主机名**（virtual-host 寻址）。
+ *
+ * ⚠️⚠️ 必须自检：`URL` 的 `host` setter 对**非法值静默无操作** —— 端点是个 IP
+ *（`http://192.168.1.5:9000`）时，`桶.192.168.1.5` 不是合法主机名（末段是数字，会被当成
+ * IPv4 解析而失败），于是赋值**什么也没发生**，而 `toString()` 看起来完全正常。
+ *
+ * 后果不是报错，是**桶名整个丢了**：请求打到 `http://192.168.1.5:9000/key`，服务端回
+ * `NoSuchBucket`（更糟的是：那台主机上恰好有同名桶时，操作会落到别人的桶上）。
+ * 2026-10-25 给这条路径补断言时才发现：`forcePathStyle: false` ＋ IP 端点一直是坏的。
+ *
+ * ⇒ 当场判死，并把"改哪儿"说出来（打开 path-style，或改用域名访问存储）。
+ * 这是**配置错误**（`configError`，不进重试）：改配置才有用，重试同一个地址不会变好。
+ */
+function applyBucketHost(parsed: URL, bucket: string): void {
+	parsed.host = `${bucket}.${parsed.host}`;
+	// 大小写不敏感地比：URL 会把主机名转小写，而 MinIO 允许桶名带大写
+	if (!parsed.host.toLowerCase().startsWith(`${bucket.toLowerCase()}.`)) {
+		throw configError(
+			"这个存储地址没法把桶名放进域名（地址里是 IP）。请在设置里打开「使用 path-style 地址」，或改用域名访问存储。"
+		);
+	}
+}
+
 export function requestTargetFor(address: ObjectAddress, key: string): RequestTarget {
 	const endpoint = normalizeEndpoint(address.endpoint);
 	if (!endpoint) throw configError("S3 端点未配置，请先在设置里填写");
@@ -179,7 +203,7 @@ export function requestTargetFor(address: ObjectAddress, key: string): RequestTa
 
 	if (address.forcePathStyle === false) {
 		const parsed = new URL(endpoint);
-		parsed.host = `${bucket}.${parsed.host}`;
+		applyBucketHost(parsed, bucket);
 		parsed.pathname = `/${encodedKey}`;
 		parsed.search = "";
 		parsed.hash = "";
@@ -216,7 +240,7 @@ export function bucketTargetFor(address: ObjectAddress): RequestTarget {
 
 	if (address.forcePathStyle === false) {
 		const parsed = new URL(endpoint);
-		parsed.host = `${bucket}.${parsed.host}`;
+		applyBucketHost(parsed, bucket);
 		parsed.pathname = "/";
 		parsed.search = "";
 		parsed.hash = "";
@@ -319,7 +343,7 @@ export function objectBaseFor(address: ObjectAddress): string {
 	if (address.forcePathStyle === false) {
 		try {
 			const parsed = new URL(endpoint);
-			parsed.host = `${bucket}.${parsed.host}`;
+			applyBucketHost(parsed, bucket);
 			parsed.pathname = "";
 			parsed.search = "";
 			parsed.hash = "";
@@ -943,7 +967,10 @@ export class S3Client {
 
 		// ⚠️ 列举是**桶级**请求（路径里没有 key），所以不能走 `requestTargetFor`：
 		// 那个函数会（正确地）拒绝空 key —— 它的语义是"给某个对象定位"。
-		const target = this.bucketRoot();
+		// ⭐ 桶根只有**一处**实现（`bucketTargetFor`）：列举（桶级 GET）与 headBucket（桶级 HEAD）
+		// 走的是同一个地址形状 —— 从前这里是另一份手写的拷贝（virtual-host 下连 URL 尾部斜杠都不同），
+		// 而两份都不报错。签名路径必须与实际请求路径逐字一致，这种"看起来一样"最容易出事。
+		const target = bucketTargetFor(this.config);
 		const url = `${target.url}?${queryStringFor(query)}`;
 		const payloadHash = await payloadHashOf("");
 
@@ -965,30 +992,6 @@ export class S3Client {
 			}
 			return parsed;
 		});
-	}
-
-	/**
-	 * 桶级请求的地址与**签名路径**（列举对象用）。
-	 *
-	 * 两种寻址各有一条路径形状，而**签名路径必须与实际请求路径逐字一致**
-	 * （`requestTargetFor` 里那道自检就是为此）：
-	 * - path-style：`/{桶}`；
-	 * - virtual-host：`/`（桶在主机名里）。
-	 */
-	private bucketRoot(): { url: string; path: string } {
-		this.assertConfig();
-		const endpoint = normalizeEndpoint(this.config.endpoint);
-		const bucket = this.config.bucket;
-		if (!endpoint || !bucket) throw configError("存储地址或桶名未配置，无法列举对象");
-
-		if (this.config.forcePathStyle === false) {
-			const parsed = new URL(endpoint);
-			parsed.hostname = `${bucket}.${parsed.hostname}`;
-			parsed.pathname = "/";
-			return { url: parsed.toString().replace(/\/+$/, ""), path: "/" };
-		}
-		const encodedBucket = uriEncode(bucket);
-		return { url: `${endpoint}/${encodedBucket}`, path: `/${encodedBucket}` };
 	}
 
 	/** 对象在桶里的实际地址（与笔记里写的地址可能不同，见 `publicUrlFor`）。 */

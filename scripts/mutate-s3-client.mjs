@@ -185,12 +185,12 @@ await runMutations({
 			expect: "实际发出 /a%20b",
 		},
 		{
-			// ⚠️ 锚点要带上上一行（`parsed.host = …`）：这句 `parsed.pathname = "/"` 在同一文件里
-			// 出现两次（另一处在 `bucketRoot()` 的 virtual-host 分支），不加上下文会**静默改到别处**
-			// （2026-10-15 由"锚点唯一"检查查出来）。
+			// ⚠️ 锚点要带上上一行（`applyBucketHost(…)`）：工具函数里有同名语句、`parsed.pathname = "/"`
+			// 也只是第三处（另两处是对象地址与展示用前缀），不加上下文会**静默改到别处**
+			// （2026-10-15 由"锚点唯一"检查查出来；2026-10-25 `bucketRoot()` 并入 `bucketTargetFor` 后跟着改）。
 			name: "桶探针的 virtual-host 分支多出一段路径（地址不再是桶根）",
-			from: '\t\tparsed.host = `${bucket}.${parsed.host}`;\n\t\tparsed.pathname = "/";',
-			to: '\t\tparsed.host = `${bucket}.${parsed.host}`;\n\t\tparsed.pathname = "/bucket";',
+			from: '		applyBucketHost(parsed, bucket);\n		parsed.pathname = "/";',
+			to: '		applyBucketHost(parsed, bucket);\n		parsed.pathname = "/bucket";',
 			expect: "实际发出 /bucket",
 		},
 		{
@@ -282,6 +282,15 @@ await runMutations({
 			from: "\t\t\tif (error instanceof TransportTimeout) {",
 			to: "\t\t\tif (false) {",
 			expect: "卡住必须是超时",
+		},
+		{
+			// 后果：`URL` 的 `host` setter 对非法值**静默无操作**（IP 端点下 `桶.192.168.1.5` 不合法）
+			// ⇒ 桶名整个丢掉，请求打到 `/key`，服务端回 `NoSuchBucket`（报错完全不指向原因）。
+			// 这条锚点守的就是"不许静默"：去掉自检后必须先红在"必须报错"那条断言上。
+			name: "★★ IP 端点 + virtual-host 静默丢掉桶名（请求打到 /key）",
+			from: "\tif (!parsed.host.toLowerCase().startsWith(`${bucket.toLowerCase()}.`)) {\n",
+			to: "\tif (false) {\n",
+			expect: "IP 端点 + virtual-host 必须报错",
 		},
 	],
 });
