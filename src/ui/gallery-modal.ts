@@ -283,6 +283,10 @@ export class GalleryModal extends Modal {
 				key: "delete-cloud",
 				label: (count: number) => t("galleryActionDeleteCloud", { count }),
 				destructive: true,
+				// ⭐ CR-05 定案（2026-10-25）：**没有**强制删除这一档。
+				// 「说明」不在这里加文案 —— 顶部固定说明（`galleryRuleLine`）已经写清
+				// 「先改为本地引用、那份对象才变成没人引用」，确认框里另有
+				// `galleryCloudConfirmBlocked` 报「N 个仍被引用会被跳过」。三处各写一遍只会散了。
 				countFor: (ids) => this.applicable(ids, "delete-cloud"),
 			},
 			{
