@@ -22,7 +22,9 @@
  * 3. **压缩先写新段、再删旧段** —— 反过来会有一瞬间"声明里少了若干 hash"，
  *    正好有人在这时清理，就会删掉仍被引用的对象。
  *
- * ⚠️ 这里只做纯函数：I/O 由调用方执行。这样每条规则都能被套件穷举、也都能挂变异锚点。
+ * ⚠️ 判定与写计划是纯函数；I/O 走**注入的四个方法**（`DeclarationIo`，见文件末尾），
+ * 这样每条规则都能被套件穷举、也都能挂变异锚点，不必为"读不到就别删"起一个 HTTP 服务。
+ * 真实实现（S3）在 `plugin/shared-bucket-flow.ts`。
  *
  * ⚠️ 移动端：**不许** import 任何 Node 内置模块（`check:mobile-api` 会红）；
  * 指纹用的是自家的 `sha256Pure`（同步、无 `node:crypto`、也不依赖 `crypto.subtle`）。
@@ -152,6 +154,24 @@ export function parseDeclaration(text: string): Declaration | null {
 		cleaned[hash] = { name: entry.name, ext: entry.ext, addedAt: entry.addedAt };
 	}
 	return { v: 1, vault: source.vault, device: source.device, updatedAt: source.updatedAt, refs: cleaned };
+}
+
+/**
+ * 把一份声明序列化成**字节稳定**的 JSON（`refs` 按 hash 排序）。
+ *
+ * 为什么要稳定：同一份内容重写出来必须逐字节相同 —— 否则"只重写受影响的那一段"
+ * 每次都会产生新字节，事后比对（以及指纹之外的排查）就没有基线可用了。
+ */
+export function serializeDeclaration(declaration: Declaration): string {
+	const refs: Record<string, DeclarationRef> = {};
+	for (const hash of Object.keys(declaration.refs).sort()) refs[hash] = declaration.refs[hash];
+	return JSON.stringify({
+		v: declaration.v,
+		vault: declaration.vault,
+		device: declaration.device,
+		updatedAt: declaration.updatedAt,
+		refs,
+	});
 }
 
 // ─────────────────────────────── 读端合并 ───────────────────────────────
@@ -407,4 +427,198 @@ export function fingerprint(objects: readonly DeclaredObject[]): string {
 	}
 	const digest = hexEncode(sha256Pure(utf8Bytes(keys.join("\n")))).slice(0, 16);
 	return `${keys.length}:${digest}:${maxModified}`;
+}
+
+// ─────────────────────────────── I/O（注入式） ───────────────────────────────
+
+/**
+ * 声明要用到的四个动作。
+ *
+ * ⚠️ 刻意**不 import `S3Client`**：声明层的每条规则都要能被套件穷举，而套件不该为了
+ * 测"读不到就什么都不出"去起一个 HTTP 服务。真实实现（`plugin/shared-bucket-flow.ts`）
+ * 用 `listObjects` / `getObject` / `putObject` / `deleteObject` 填这四个方法。
+ */
+export interface DeclarationIo {
+	/** 列举一页。`token` 为 `null` 表示第一页；`maxKeys` 由实现夹到服务端上限。 */
+	list(prefix: string, token: string | null, maxKeys: number): Promise<DeclarationPage>;
+	/** 读原文；对象不存在返回 `null`（**不是**抛错 —— 与"读失败"要分得开）。 */
+	get(key: string): Promise<string | null>;
+	put(key: string, text: string): Promise<void>;
+	remove(key: string): Promise<void>;
+}
+
+export interface DeclarationFile {
+	readonly key: string;
+	/** 服务端时间（ISO 8601）—— 指纹只认它。 */
+	readonly lastModified: string;
+}
+
+export interface DeclarationPage {
+	readonly files: readonly DeclarationFile[];
+	readonly nextToken: string | null;
+}
+
+/**
+ * 单页上限。
+ *
+ * ⚠️ 它同时是一条**异常判据**：正常上限 = 设备数 × ⌈refs/500⌉，几十个文件就是很多了。
+ * 一旦还有第二页，说明 `_acc/` 下堆到了上千个对象 —— 那不是"声明很多"，
+ * 那是有人在别的用途上用了这个前缀，或者我们写坏了。这时**不出候选**（见 `scanDeclarations`）。
+ */
+export const DECLARATION_PAGE_LIMIT = 1000;
+
+/** 一次扫描失败的原因。四类分开，是因为要给用户完全不同的话。 */
+export type DeclarationFailure = "too-many" | "failed" | "corrupt" | "unstable";
+
+export type DeclarationScan =
+	| { readonly ok: true; readonly files: readonly DeclarationFile[]; readonly fingerprint: string }
+	| { readonly ok: false; readonly reason: DeclarationFailure; readonly detail: string };
+
+/**
+ * 扫一遍 `_acc/v1/` 前缀（**只读这个前缀，不是列全桶**）。
+ *
+ * 失败方向是"不判"：任何异常都返回 `ok: false`，调用方据此**不出候选**。
+ * 把"读不到"当成"没人引用"是这一层唯一不可接受的错。
+ */
+export async function scanDeclarations(io: DeclarationIo): Promise<DeclarationScan> {
+	let page: DeclarationPage;
+	try {
+		page = await io.list(`${DECLARATION_ROOT}/`, null, DECLARATION_PAGE_LIMIT);
+	} catch (error) {
+		return { ok: false, reason: "failed", detail: messageOf(error) };
+	}
+	if (page.nextToken !== null && page.nextToken !== "") {
+		return {
+			ok: false,
+			reason: "too-many",
+			detail: `${page.files.length}+`,
+		};
+	}
+	const files = page.files.filter((file) => isDeclarationKey(file.key));
+	return { ok: true, files, fingerprint: fingerprint(files) };
+}
+
+/** 读出来的一份声明（带上它属于谁 —— 判占用时要按"别人"过滤）。 */
+export interface DeclarationEntry {
+	readonly vault: string;
+	readonly device: string;
+	readonly declaration: Declaration;
+}
+
+export type DeclarationLoad =
+	| {
+			readonly ok: true;
+			readonly entries: readonly DeclarationEntry[];
+			readonly files: readonly DeclarationFile[];
+			readonly fingerprint: string;
+	  }
+	| { readonly ok: false; readonly reason: DeclarationFailure; readonly detail: string };
+
+/**
+ * 读**桶里所有设备**的声明（执行判定那一步的唯一入口）。
+ *
+ * ## 为什么一条坏声明就让整轮失效
+ *
+ * 读端要回答"这个 hash 还有没有人用"。少读一条 ⇒ 可能把**别人还在用的对象**删掉。
+ * 所以：`get` 失败、文件在列举后消失、JSON 不合法、路径与内容对不上（有人把 A 的声明
+ * 拷到 B 的目录）—— 一律 `ok: false`。方向是"这一轮不删"，代价只是用户下次再点一次。
+ *
+ * ⚠️ 与 `parseDeclaration` 的"整份 null"是同一条纪律的两层：那里是**一份**声明、
+ * 这里是**整个集合**。两层都必须整份失败，否则坏条目会从某一层漏过去。
+ */
+export async function loadDeclarations(io: DeclarationIo): Promise<DeclarationLoad> {
+	const scan = await scanDeclarations(io);
+	if (!scan.ok) return scan;
+
+	const entries: DeclarationEntry[] = [];
+	for (const file of scan.files) {
+		let text: string | null;
+		try {
+			text = await io.get(file.key);
+		} catch (error) {
+			return { ok: false, reason: "failed", detail: messageOf(error) };
+		}
+		// 列举之后消失了 ⇒ 集合此刻正在变，这一轮的结论已经过期
+		if (text === null) return { ok: false, reason: "unstable", detail: file.key };
+		const declaration = parseDeclaration(text);
+		if (!declaration) return { ok: false, reason: "corrupt", detail: file.key };
+		// 路径必须与内容自报的身份一致：否则"这条声明是谁的"就不可信了
+		const prefix = devicePrefix(declaration.vault, declaration.device);
+		if (prefix === "" || !file.key.startsWith(`${prefix}/`)) {
+			return { ok: false, reason: "corrupt", detail: file.key };
+		}
+		entries.push({ vault: declaration.vault, device: declaration.device, declaration });
+	}
+	return { ok: true, entries, files: scan.files, fingerprint: scan.fingerprint };
+}
+
+/**
+ * 读**本设备**那份声明的现状（写之前要用它算"重写哪一段"）。
+ *
+ * 读不到就返回 `null`（首次使用、权限不足、形状坏了都落在这一支）——
+ * 调用方必须把它当"读失败"，**不能**当成"空的现状"：真按空的来写，
+ * 会覆盖掉 head 里已有的几百条引用，那些对象失去保护，下一次清理就会被删。
+ */
+export async function loadDeviceState(
+	io: DeclarationIo,
+	vaultId: string,
+	deviceId: string
+): Promise<DeclarationState | null> {
+	const prefix = devicePrefix(vaultId, deviceId);
+	if (prefix === "") return null;
+	try {
+		const page = await io.list(`${prefix}/`, null, DECLARATION_PAGE_LIMIT);
+		// 本设备自己就超过一页 ⇒ 写坏了，别在坏数据上继续写
+		if (page.nextToken !== null && page.nextToken !== "") return null;
+		let head: Declaration | null = null;
+		const segments: SegmentState[] = [];
+		for (const file of page.files) {
+			if (!isDeclarationKey(file.key)) continue;
+			const text = await io.get(file.key);
+			if (text === null) return null;
+			const declaration = parseDeclaration(text);
+			if (!declaration) return null;
+			if (declaration.vault !== vaultId || declaration.device !== deviceId) return null;
+			if (isHeadKey(file.key)) {
+				head = declaration;
+				continue;
+			}
+			const number = segmentNumber(file.key);
+			if (number === null) continue;
+			segments.push({ number, decl: declaration });
+		}
+		return { head, segments };
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * 执行一份写计划：**先全部写、再全部删**（`planUpdates` 已经排好序，这里再分一次组）。
+ *
+ * 顺序不是风格问题：压缩时先删旧段会有一瞬间"声明里少了若干 hash"，
+ * 正好有人在这时清理，就会删掉仍被引用的对象。中断在"多写了新段"是安全的。
+ *
+ * 任何一步失败都**抛错**（调用方据此中止本批上传）。返回实际执行的动作数。
+ */
+export async function applyDeclarationSteps(
+	io: DeclarationIo,
+	steps: readonly DeclarationStep[]
+): Promise<number> {
+	let done = 0;
+	for (const step of steps) {
+		if (step.kind !== "write") continue;
+		await io.put(step.key, serializeDeclaration(step.decl));
+		done += 1;
+	}
+	for (const step of steps) {
+		if (step.kind !== "delete") continue;
+		await io.remove(step.key);
+		done += 1;
+	}
+	return done;
+}
+
+function messageOf(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }

@@ -7,9 +7,9 @@ import { runDeclarationSuite } from "./lib/declaration-suite.mjs";
  * 这一层的错误**不会当场报错**，要等到某台设备清理孤儿时才发作 —— 而那时候的动作是
  * 删除云端对象、不可恢复。所以每条不变量都要证明"改坏了测试会红"，而不是"看起来写了测试"。
  *
- * 这里的四条各自对应一种真实失效：合并优先级反了（读到旧名字甚至旧集合）、
+ * 这里的五条各自对应一种真实失效：合并优先级反了（读到旧名字甚至旧集合）、
  * 压缩顺序反了（有一瞬间声明里少了若干 hash）、封存边界差一（多写一个空段）、
- * 指纹只取最后一条时间（集合没变也判"变了"⇒ 批量删除白停，或反之）。
+ * 执行层把删除提前（写计划排好也没用）、指纹只取最后一条时间（集合没变也判「变了」⇒ 批量删除白停，或反之）。
  */
 await runMutations({
 	source: "src/s3/declaration.ts",
@@ -26,27 +26,27 @@ await runMutations({
 		},
 		{
 			// 后果：**先删旧段、再写新段** ⇒ 中间有一瞬间声明里少了若干 hash。
-			// 如果此刻另一台设备在清理，它读到的就是"没人引用" —— 删掉的是别人还在用的对象。
+			// 如果此刻另一台设备在清理，它读到的就是「没人引用」—— 删掉的是别人还在用的对象。
 			name: "★★ 压缩顺序反了（先删旧段、再写新段）",
-			from:
-				"\t\tfor (const segment of finalSegments) {\n" +
-				'\t\t\tdeletes.push({ kind: "delete", key: `${prefix}/seg-${String(segment.number).padStart(4, "0")}.json` });\n' +
-				"\t\t}\n" +
-				"\t\treturn [...writes, ...deletes];",
-			to:
-				"\t\tfor (const segment of finalSegments) {\n" +
-				'\t\t\tdeletes.push({ kind: "delete", key: `${prefix}/seg-${String(segment.number).padStart(4, "0")}.json` });\n' +
-				"\t\t}\n" +
-				"\t\treturn [...deletes, ...writes];",
+			from: '\t\tfor (const segment of finalSegments) {\n\t\t\tdeletes.push({ kind: "delete", key: `${prefix}/seg-${String(segment.number).padStart(4, "0")}.json` });\n\t\t}\n\t\treturn [...writes, ...deletes];',
+			to: '\t\tfor (const segment of finalSegments) {\n\t\t\tdeletes.push({ kind: "delete", key: `${prefix}/seg-${String(segment.number).padStart(4, "0")}.json` });\n\t\t}\n\t\treturn [...deletes, ...writes];',
 			expect: "先写新段、再删旧段",
 		},
 		{
 			// 后果：恰好 500 条时也封存 ⇒ 多一个只装 500 条的空 head 往返，
-			// 而且"段数 = ⌈refs/500⌉"这条成本口径从此不成立（压缩会被无端触发）。
+			// 而且「段数 = ⌈refs/500⌉」这条成本口径从此不成立（压缩会被无端触发）。
 			name: "★ 封存边界差一（恰好 500 条就封存）",
-			from: "\twhile (Object.keys(headRefs).length > SEGMENT_LIMIT) {",
-			to: "\twhile (Object.keys(headRefs).length >= SEGMENT_LIMIT) {",
+			from: '\twhile (Object.keys(headRefs).length > SEGMENT_LIMIT) {',
+			to: '\twhile (Object.keys(headRefs).length >= SEGMENT_LIMIT) {',
 			expect: "恰好 500 条 ⇒ 只写 head，不封存",
+		},
+		{
+			// 后果：**先删旧段、再写新段**（`planUpdates` 排好的顺序在执行层被推翻）⇒ 压缩中断时
+			// 落盘的状态是"新段没写、旧段已删" = 声明里少了一整批 hash。写计划排好序不代表执行层会遵守。
+			name: "★★ 执行层把删除提前（写计划排好了也没用）",
+			from: '\tfor (const step of steps) {\n\t\tif (step.kind !== "write") continue;\n\t\tawait io.put(step.key, serializeDeclaration(step.decl));\n\t\tdone += 1;\n\t}\n\tfor (const step of steps) {\n\t\tif (step.kind !== "delete") continue;\n\t\tawait io.remove(step.key);\n\t\tdone += 1;\n\t}',
+			to: '\tfor (const step of steps) {\n\t\tif (step.kind !== "delete") continue;\n\t\tawait io.remove(step.key);\n\t\tdone += 1;\n\t}\n\tfor (const step of steps) {\n\t\tif (step.kind !== "write") continue;\n\t\tawait io.put(step.key, serializeDeclaration(step.decl));\n\t\tdone += 1;\n\t}',
+			expect: "全部写完才删",
 		},
 		{
 			// 后果：指纹只反映"最后一条"的 LastModified ⇒ 集合没变但顺序变了就判"变了"，

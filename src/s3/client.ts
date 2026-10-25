@@ -504,9 +504,15 @@ export interface ListObjectsOptions {
 	maxKeys?: number;
 }
 
-/** 列举结果。`nextToken` 为空表示已经到底。 */
+/**
+ * 列举结果。`nextToken` 为空表示已经到底。
+ *
+ * ⚠️ `lastModified` 是**服务端时间**，只用于"声明集合指纹"（批量删除期间判断
+ * "有没有人在我数的时候写过声明"）。取不到时给空串 —— 指纹于是只靠"数量 + key 摘要"
+ * 也仍能发现变化，只是少一维。
+ */
 export interface ListObjectsResult {
-	objects: { key: string; size: number; etag: string }[];
+	objects: { key: string; size: number; etag: string; lastModified: string }[];
 	nextToken: string | null;
 }
 
@@ -539,7 +545,7 @@ export function parseListObjects(xml: unknown): ListObjectsResult | null {
 	if (typeof xml !== "string" || xml === "") return null;
 	if (!/<ListBucketResult[\s>]/i.test(xml)) return null;
 
-	const objects: { key: string; size: number; etag: string }[] = [];
+	const objects: { key: string; size: number; etag: string; lastModified: string }[] = [];
 	for (const match of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/gi)) {
 		const body = match[1];
 		const key = xmlTextOf(body, "Key");
@@ -548,6 +554,7 @@ export function parseListObjects(xml: unknown): ListObjectsResult | null {
 			key,
 			size: Number(xmlTextOf(body, "Size") ?? "0") || 0,
 			etag: (xmlTextOf(body, "ETag") ?? "").replace(/^"|"$/g, ""),
+			lastModified: xmlTextOf(body, "LastModified") ?? "",
 		});
 	}
 

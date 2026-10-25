@@ -13,7 +13,7 @@ await withLoadedTs("src/s3/declaration", async (mod) => {
 	const stats = await runDeclarationSuite(mod);
 	console.log(
 		`Declaration tests passed (${stats.cases} groups: 布局与 id 校验 / 解析失败方向 / 合并优先级 / ` +
-			`写计划（新增·封存·减引用·改名·压缩）/ 指纹；段容量 500、同 hash 取序号最大、` +
+			`写计划（新增·封存·减引用·改名·压缩）/ 指纹 / I/O 失败方向；段容量 500、同 hash 取序号最大、` +
 			`压缩先写后删 —— 每条都按"错了会删掉别人的对象"写断言)`
 	);
 });
