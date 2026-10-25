@@ -1,7 +1,7 @@
 /**
  * 「共享桶的跨库判据」套件（`src/maintenance/shared-bucket.ts`）。
  *
- * 这一层管的是**能不能删别人的东西**。所以每组断言都按"错了会怎样"命名：
+ * 这一层管的是**能不能删别人的东西**，以及**声明还准不准**（引用对账）。两组断言都按"错了会怎样"命名：
  * 少排除自己 ⇒ 自己引用过的永远删不掉；少了"没有声明"这一支 ⇒ 会删掉别的库还在用的对象；
  * 少了检查点 ⇒ 批量跑到一半别人新增了引用，后半批照删。
  */
@@ -64,7 +64,7 @@ const fileOf = (vault, device, name, refs, lastModified = "2026-10-25T00:00:00.0
 ];
 
 export async function runSharedBucketSuite(mod) {
-	const { occupancyOf, occupantsOtherThan, occupiedByOthers, createSharedBucketGuard, declareRefs } = mod;
+	const { occupancyOf, occupantsOtherThan, occupiedByOthers, createSharedBucketGuard, declareRefs, diffReferences } = mod;
 
 	// ============================================================
 	// 1. 占用表：同一台设备的多份文件要合并成一条
@@ -220,5 +220,53 @@ export async function runSharedBucketSuite(mod) {
 		assert.equal(bad.ok, false, "★ id 不合法要失败（静默不写＝这一批对象没有保护）");
 	}
 
-	return { cases: 5 };
+	// ============================================================
+	// 6. 引用对账：补上新引用、摘掉没引用的、改名只改名字
+	// ============================================================
+	{
+		const a = "a".repeat(64);
+		const b = "b".repeat(64);
+		const c = "c".repeat(64);
+		const now = "2026-10-25T12:00:00.000Z";
+		const declared = new Map([
+			[a, { name: "a.png", ext: "png", addedAt: "2026-10-01T00:00:00.000Z" }],
+			[b, { name: "b.png", ext: "png", addedAt: "2026-10-02T00:00:00.000Z" }],
+		]);
+
+		// 6a. 引用集合里少了 b ⇒ 摘掉；多了 c ⇒ 补上；a 原样不动
+		{
+			const sync = diffReferences([`a-${a}.png`, `c-${c}.pdf`], declared, now);
+			assert.equal(sync.removes.includes(a), false, "★ 仍在引用里的不该被摘（摘了它就失去保护，别的设备会删掉它）");
+			assert.deepEqual(sync.removes, [b], "★ 声明里有、引用里没有 ⇒ 必须摘（否则永远替它做保护）");
+			assert.equal(a in sync.adds, false, "★ 没变化的条目不该重写（每次对账都重写 = 写放大，addedAt 也会漂）");
+			assert.equal(Object.keys(sync.adds).length, 1, "只补新的那条");
+			assert.equal(sync.adds[c].name, "c.pdf", "名字从 key 反推（共享桶下 key 里可能没有名字）");
+			assert.equal(sync.adds[c].ext, "pdf", "扩展名也要记");
+			assert.equal(sync.adds[c].addedAt, now, "新条目用当前时间");
+		}
+
+		// 6b. 改名：只改 name，`addedAt` 必须保留（那是封存切块的排序依据）
+		{
+			const renamed = diffReferences([`新名字-${a}.png`], new Map([[a, declared.get(a)]]), now);
+			assert.equal(renamed.adds[a].name, "新名字.png", "名字要跟着改");
+			assert.equal(renamed.adds[a].addedAt, "2026-10-01T00:00:00.000Z", "★ addedAt 不许因为改名而变（否则封存顺序漂移）");
+			assert.deepEqual(renamed.removes, [], "同一个 hash 还在引用里 ⇒ 不摘");
+		}
+
+		// 6c. 认不出哈希的老 key ⇒ 跳过，不猜
+		{
+			const sync = diffReferences(["legacy-object.png"], new Map(), now);
+			assert.deepEqual(Object.keys(sync.adds), [], "★ 认不出身份就不写（猜出来的 hash 会让清理判错）");
+			assert.deepEqual(sync.removes, [], "也不因此摘掉任何东西");
+		}
+
+		// 6d. 两个方向同时发生 ⇒ 一次调用里都带上（`planUpdates` 一次写完）
+		{
+			const sync = diffReferences([`c-${c}.png`], declared, now);
+			assert.deepEqual(sync.removes.sort(), [a, b].sort(), "两条都摘掉");
+			assert.equal(Object.keys(sync.adds).length, 1, "补一条");
+		}
+	}
+
+	return { cases: 6 };
 }

@@ -13,6 +13,6 @@ await withLoadedTs("src/maintenance/shared-bucket", async (mod) => {
 	const stats = await runSharedBucketSuite(mod);
 	console.log(
 		`Shared-bucket tests passed (${stats.cases} groups: 占用表合并 / 判据（自己不算·别人算）/ ` +
-			`守卫三种结论 / 检查点 / 声明写入；每条都按"错了会删掉别人的对象"写断言)`
+			`守卫三种结论 / 检查点 / 声明写入 / 引用对账；每条都按"错了会删掉别人的对象"写断言)`
 	);
 });

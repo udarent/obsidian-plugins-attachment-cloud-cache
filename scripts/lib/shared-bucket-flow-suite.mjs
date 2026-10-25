@@ -54,7 +54,7 @@ const settings = (over = {}) => ({
 });
 
 export async function runSharedBucketFlowSuite(mod) {
-	const { identityOf, declarationIoFor, rememberReferences, forgetReferences, sharedBucketGuardFor } = mod;
+	const { identityOf, declarationIoFor, rememberReferences, forgetReferences, syncDeclaration, sharedBucketGuardFor } = mod;
 
 	// ============================================================
 	// 1. 身份：形状不对就不参与（宁可不判，也别写到别人的前缀里）
@@ -181,5 +181,33 @@ export async function runSharedBucketFlowSuite(mod) {
 		assert.equal(offClient.calls.length, 0, "空批确实没有请求");
 	}
 
-	return { cases: 5 };
+	// ============================================================
+	// 6. 整份对账：关着功能时**连全库都不读**
+	// ============================================================
+	{
+		// ⚠️ 数一遍"读了几次全库"：只看返回值分不出"没读"和"读了但失败"（后者同样返回 false），
+		// 而两者的代价差一整个全库扫描。
+		let scans = 0;
+		const counting = (over) => ({
+			settings: settings(over),
+			app: {
+				vault: {
+					getMarkdownFiles: () => {
+						scans += 1;
+						return [];
+					},
+					getFiles: () => [],
+					read: async () => "",
+				},
+			},
+		});
+		const off = await syncDeclaration(counting({ sharedBucket: false }), fakeClient());
+		assert.equal(off, false, "关着 ⇒ 不对账");
+		assert.equal(scans, 0, "★ 关着 ⇒ 连全库都不读（不是「读了但没写」）");
+		const noId = await syncDeclaration(counting({ vaultId: "" }), fakeClient());
+		assert.equal(noId, false, "身份缺失 ⇒ 不对账（否则会写到别的前缀）");
+		assert.equal(scans, 0, "身份不合法时也不读全库");
+	}
+
+	return { cases: 6 };
 }

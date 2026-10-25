@@ -34,6 +34,7 @@ import {
 	planUpdates,
 	scanDeclarations,
 } from "../s3/declaration";
+import { displayNameForKey, hashFromKey } from "../object-key";
 
 /** 一份身份：哪个库的哪台设备。 */
 export interface SelfIdentity {
@@ -104,6 +105,70 @@ export function occupiedByOthers(
 		if (others.length > 0) denied.set(hash, others);
 	}
 	return denied;
+}
+
+// ─────────────────────────── 引用对账 ───────────────────────────
+
+/** 一次对账的结论：该补的、该摘的。`planUpdates` 一次就能把两边都写进去。 */
+export interface ReferenceSync {
+	readonly adds: Record<string, DeclarationRef>;
+	readonly removes: string[];
+}
+
+/**
+ * 把"本库此刻引用着的对象 key"与"声明里记着的引用"对一次账。
+ *
+ * ## 为什么需要它（而不是只在事件里做增量）
+ *
+ * 增量有两个补不上的洞：
+ * 1. **手工改动**：用户直接把云端 URL 敲进笔记（没有经过上传链）⇒ 声明里没有它；
+ * 2. **错过的事件**：应用关着的时候引用被删掉了 ⇒ 声明里那条永远留着。
+ *
+ * 而声明一旦"只增不减"，它就从"状态"退化成"流水账"：**每个上传过的对象都被永久保护**，
+ * 别的设备清理时统统跳过 —— 用户看到的是"待清理里删了又回来 / 怎么也删不掉"。
+ * 所以这里按设计（§9.5 流程 2）**整份对账**，而不是只做增量。
+ *
+ * ## 三条取舍
+ *
+ * - **只认同一个哈希**：`hashFromKey` 认不出（模板时代的老 key）⇒ 跳过，不猜；
+ * - **改名保留 `addedAt`**：那个字段是封存切块的排序依据，改名不是"重新加入"；
+ * - **摘引用只看"这里没有它"**：调用方必须传**完整**的引用集合（本库此刻引用了什么），
+ *   不能传"这次变化的那几条" —— 传半个集合会把另一半全摘掉。
+ */
+export function diffReferences(
+	referenced: Iterable<string>,
+	declared: ReadonlyMap<string, DeclarationRef>,
+	now: string
+): ReferenceSync {
+	const adds: Record<string, DeclarationRef> = {};
+	const seen = new Set<string>();
+
+	for (const key of referenced) {
+		const hash = hashFromKey(key);
+		if (hash === null) continue; // 认不出身份 ⇒ 不猜
+		seen.add(hash);
+		const name = displayNameForKey(key) || key;
+		const ext = extensionOf(key);
+		const prev = declared.get(hash);
+		if (!prev) {
+			adds[hash] = { name, ext, addedAt: now };
+			continue;
+		}
+		// 名字或类型变了才重写；`addedAt` 沿用旧的（封存排序的依据，不该因为改名而变）
+		if (prev.name !== name || prev.ext !== ext) adds[hash] = { name, ext, addedAt: prev.addedAt };
+	}
+
+	const removes: string[] = [];
+	for (const hash of declared.keys()) if (!seen.has(hash)) removes.push(hash);
+
+	return { adds, removes };
+}
+
+/** 对象 key 的扩展名（小写、不含点）；没有就空串。只取最后一段，避免目录里的点。 */
+function extensionOf(key: string): string {
+	const segment = key.split(/[\\/]/).pop() ?? "";
+	const dot = segment.lastIndexOf(".");
+	return dot > 0 ? segment.slice(dot + 1).toLowerCase() : "";
 }
 
 // ─────────────────────────── 删除期守卫 ───────────────────────────

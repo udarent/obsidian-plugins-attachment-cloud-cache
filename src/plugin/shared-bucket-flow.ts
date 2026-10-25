@@ -15,11 +15,12 @@
 import { Notice } from "obsidian";
 import type { S3Client } from "../s3/client";
 import type { DeclarationIo, DeclarationPage } from "../s3/declaration";
-import { DECLARATION_PAGE_LIMIT, isSafeId } from "../s3/declaration";
+import { DECLARATION_PAGE_LIMIT, isSafeId, loadDeviceState, mergeRefs } from "../s3/declaration";
 import { utf8Bytes } from "../s3/hash";
 import type { CleanupGuard, SelfIdentity } from "../maintenance/shared-bucket";
-import { createSharedBucketGuard, declareRefs } from "../maintenance/shared-bucket";
+import { createSharedBucketGuard, declareRefs, diffReferences } from "../maintenance/shared-bucket";
 import type { PluginContext } from "./context";
+import { cloudReferencedKeys } from "./shared-flows";
 
 /** 一次上传要登记的引用（`ingest` 在 PUT 之前拿得到的三个事实）。 */
 export interface DeclaredRefInput {
@@ -116,6 +117,50 @@ export async function rememberReferences(
 		})
 	);
 	return false;
+}
+
+/**
+ * 把本设备的声明与**本库此刻的引用快照**对一次账（设计 §9.5 流程 2）。
+ *
+ * 与 {@link forgetReferences} 的分工：
+ * - `forgetReferences` 是**一件事结束时**的快速路径（刚删掉的那个对象）；
+ * - 这个函数是**周期性收口**：补上"手工敲进笔记的 URL"、摘掉"应用关着时被改掉的引用"。
+ *   只做增量的话，声明会慢慢退化成流水账（每个上传过的对象都被永久保护）。
+ *
+ * ## 三个失败方向都是"什么都不改"
+ *
+ * 读不到笔记（`cloudReferencedKeys` 抛错）⇒ 不同步：那一侧是**删/摘**的方向，
+ * 把"不知道"当成"没有引用"会摘掉真实的保护。读不到现状、身份缺失同理。
+ * 代价只是"这一轮白跑"，而声明晚一轮收口不会造成误删。
+ *
+ * @returns 有没有真的写过（`false` = 跳过或失败，调用方不必处理）
+ */
+export async function syncDeclaration(
+	ctx: PluginContext,
+	client: Pick<S3Client, "listObjects" | "getObject" | "putObject" | "deleteObject">
+): Promise<boolean> {
+	if (!ctx.settings.sharedBucket) return false;
+	const self = identityOf(ctx.settings);
+	if (!self) return false;
+
+	let referenced: Set<string>;
+	try {
+		referenced = await cloudReferencedKeys(ctx);
+	} catch {
+		// 有笔记读不到 ⇒ 这一轮不对账（宁可不摘，也不摘错）
+		return false;
+	}
+
+	const io = declarationIoFor(client);
+	const state = await loadDeviceState(io, self.vault, self.device);
+	if (!state) return false;
+
+	const { adds, removes } = diffReferences(referenced, mergeRefs(state), new Date().toISOString());
+	// 一条都不用改 ⇒ 不发任何请求（这条会在每次引用变化时被调到，静默是常态）
+	if (Object.keys(adds).length === 0 && removes.length === 0) return false;
+
+	const result = await declareRefs({ io, self }, adds, removes);
+	return result.ok;
 }
 
 /**

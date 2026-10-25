@@ -46,6 +46,30 @@ await runMutations({
 			expect: "声明集合变了",
 		},
 		{
+			// 后果：认不出的老 key 也被硬塞进 `adds`（键是 `null`）⇒ 声明里长出一条没人能解释的记录，
+			// 而清理端按哈希查表时会以为"有人在引用它"。
+			name: "★ 认不出哈希也硬写（声明里长出一条无主记录）",
+			from: '		if (hash === null) continue; // 认不出身份 ⇒ 不猜',
+			to: '		if (false) continue; // 认不出身份 ⇒ 不猜',
+			expect: "认不出身份就不写",
+		},
+		{
+			// 后果：每次对账把**所有条目**都重写一遍 ⇒ 写放大（几百条就多传几十 KB），
+			// 而且 `addedAt` 被刷成"现在"，封存切块的排序依据漂移。
+			name: "★ 每次对账都重写全部条目（addedAt 也漂）",
+			from: '		if (prev.name !== name || prev.ext !== ext) adds[hash] = { name, ext, addedAt: prev.addedAt };',
+			to: '		if (true) adds[hash] = { name, ext, addedAt: now };',
+			expect: "没变化的条目不该重写",
+		},
+		{
+			// 后果：仍在引用的也照摘 ⇒ 那条对象失去保护，别的设备清理时会被删掉。
+			// 这是这一层最贵的一次静默。
+			name: "★★ 把仍在引用的也摘掉（真实保护丢失）",
+			from: '	for (const hash of declared.keys()) if (!seen.has(hash)) removes.push(hash);',
+			to: '	for (const hash of declared.keys()) if (true) removes.push(hash);',
+			expect: "仍在引用里的不该被摘",
+		},
+		{
 			// 后果：读不到现状时"不写但报成功" ⇒ 调用方照常上传 ⇒ 这一批对象
 			// **没有任何保护**，下一次清理会把它们当孤儿删掉（而且没人知道）。
 			name: "★★ 读不到现状却报成功（这一批对象没有保护）",

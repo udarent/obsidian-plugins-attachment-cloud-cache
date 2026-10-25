@@ -56,6 +56,7 @@ import { Notice, TFile } from "obsidian";
 import { debugTimed } from "../debug-log";
 import { describeError } from "../error-text";
 import { externalKeysOf } from "../maintenance/cloud-cleanup";
+import { syncDeclaration } from "./shared-bucket-flow";
 import {
 	createOrphanWatcher,
 	dropLocallyReferenced,
@@ -285,6 +286,20 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 		// ⭐ 问过就记住，**无论用户怎么回答** —— 这是"不打扰"的底线
 		//（他可能还在整理笔记，同一条引用被删掉的原因有很多种）
 		for (const key of selection.asks) asked.add(key);
+
+		// ⭐ 共享桶（R25）：顺手把本设备的声明与本库此刻的引用**对一次账**。
+		//
+		// 为什么挂在这里：这条链本来就是"引用变了"的那条通知线（防抖后只在真有候选时才跑），
+		// 而声明是"本库当前引用了什么"的状态 —— 只做增量（上传时加、删对象时减）会漏两种：
+		// 手工敲进笔记的云端 URL、以及应用关着时被改掉的引用。漏了它们，声明就会慢慢退化成
+		// 流水账：每个上传过的对象都被永久保护，别的设备再也删不掉任何东西。
+		//
+		// ⚠️ `void`：它内部三个失败方向都是"什么都不改"（读不到笔记/现状/身份），不抛；
+		// 而且它是**收口**不是主事 —— 别让它拖慢这条通知。
+		if (ctx.settings.sharedBucket) {
+			const client = ctx.buildClient();
+			if (client) void syncDeclaration(ctx, client);
+		}
 
 		// ⭐ 唯一的出口（2026-10-25）：一条**不阻塞**的通知。
 		// 弹窗档（三选一：保留 / 只删本地 / 连云端一起删）已随设置项一起取消 ——

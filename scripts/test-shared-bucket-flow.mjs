@@ -11,6 +11,6 @@ await withLoadedTs("src/plugin/shared-bucket-flow", async (mod) => {
 	const stats = await runSharedBucketFlowSuite(mod);
 	console.log(
 		`Shared-bucket flow tests passed (${stats.cases} groups: 身份形状 / I-O 映射（含 404 ⇒ null）/ ` +
-			`登记引用（关着零请求、写失败返回 false）/ 守卫开关；每条都按"错了会删掉别人的对象或凭空多发请求"写断言)`
+			`登记引用（关着零请求、写失败返回 false）/ 摘引用 / 整份对账（关着连全库都不读）/ 守卫开关；每条都按"错了会删掉别人的对象或凭空多发请求"写断言)`
 	);
 });

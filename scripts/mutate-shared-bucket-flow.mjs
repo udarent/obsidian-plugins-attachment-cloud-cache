@@ -37,6 +37,13 @@ await runMutations({
 			expect: "非 404 的错误必须抛",
 		},
 		{
+			// 后果：功能关着也去读全库、写声明 ⇒ 没打开共享桶的人凭空多出全库扫描与 `ListBucket` 依赖。
+			name: "★ 关着功能也做整份对账",
+			from: '	if (!ctx.settings.sharedBucket) return false;',
+			to: '	if (false) return false;',
+			expect: "关着 ⇒ 连全库都不读",
+		},
+		{
 			// 后果：删完不摘引用 ⇒ 那条记录替一个不存在的对象永远做保护，
 			// 别的设备清理时被它挡下，而用户看到的是"删掉了又回候选里"。
 			name: "★★ 删完不摘引用（声明替不存在的对象做保护）",
