@@ -37,10 +37,18 @@ await runMutations({
 			expect: "非 404 的错误必须抛",
 		},
 		{
+			// 后果：删完不摘引用 ⇒ 那条记录替一个不存在的对象永远做保护，
+			// 别的设备清理时被它挡下，而用户看到的是"删掉了又回候选里"。
+			name: "★★ 删完不摘引用（声明替不存在的对象做保护）",
+			from: '	const result = await declareRefs({ io: declarationIoFor(client), self }, {}, hashes);',
+			to: '	const result = await declareRefs({ io: declarationIoFor(client), self }, {}, []);',
+			expect: "删掉的对象必须触发一次声明重写",
+		},
+		{
 			// 后果：声明写失败却返回成功 ⇒ 这一批照常上传，而那批对象**没有任何保护**。
 			name: "★★ 写失败报成功（对象传上去却没有保护）",
-			from: "\tif (result.ok) return true;",
-			to: "\tif (true) return true;",
+			from: "\tconst result = await declareRefs({ io: declarationIoFor(client), self }, adds);\n\tif (result.ok) return true;",
+			to: "\tconst result = await declareRefs({ io: declarationIoFor(client), self }, adds);\n\tif (true) return true;",
 			expect: "写失败 ⇒ 返回 false",
 		},
 	],

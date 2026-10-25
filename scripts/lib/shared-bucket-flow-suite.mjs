@@ -54,7 +54,7 @@ const settings = (over = {}) => ({
 });
 
 export async function runSharedBucketFlowSuite(mod) {
-	const { identityOf, declarationIoFor, rememberReferences, sharedBucketGuardFor } = mod;
+	const { identityOf, declarationIoFor, rememberReferences, forgetReferences, sharedBucketGuardFor } = mod;
 
 	// ============================================================
 	// 1. 身份：形状不对就不参与（宁可不判，也别写到别人的前缀里）
@@ -153,5 +153,33 @@ export async function runSharedBucketFlowSuite(mod) {
 		assert.equal(await guard.checkpoint(), "same", "没人动过 ⇒ same");
 	}
 
-	return { cases: 4 };
+	// ============================================================
+	// 5. 摘引用：对象真的没了之后，声明里那条必须消失
+	// ============================================================
+	{
+		const hash = "b".repeat(64);
+		const head = `_acc/v1/v1/d1/head.json`;
+		const seeded = JSON.stringify({ v: 1, vault: "v1", device: "d1", updatedAt: "2026-10-25T00:00:00.000Z", refs: { [hash]: { name: "b.png", ext: "png", addedAt: "2026-10-25T00:00:00.000Z" } } });
+		const ctx = { settings: settings(), t: (key) => key };
+
+		const client = fakeClient({ files: [[head, seeded]] });
+		assert.equal(await forgetReferences(ctx, client, [hash]), true, "摘引用要成功");
+		// ⚠️ 先钉"确实重写了"：变异验证取第一条失败的断言，而"根本没写"正是
+		// "没摘引用"这个缺陷的第一形态（声明原样留着）。
+		assert.equal(
+			client.calls.filter((call) => call[0] === "put").length,
+			1,
+			"★ 删掉的对象必须触发一次声明重写（否则它永远留在声明里）"
+		);
+		const put = client.calls.find((call) => call[0] === "put");
+		assert.equal(JSON.parse(put[3]).refs[hash], undefined, "声明里那条必须消失（否则永远替它做保护）");
+
+		const offClient = fakeClient({ files: [[head, seeded]] });
+		assert.equal(await forgetReferences({ settings: settings({ sharedBucket: false }), t: (key) => key }, offClient, [hash]), true, "关着 ⇒ 直接放行");
+		assert.equal(offClient.calls.length, 0, "关着时一个请求都不发");
+		assert.equal(await forgetReferences(ctx, offClient, []), true, "没有哈希 ⇒ 什么都不做");
+		assert.equal(offClient.calls.length, 0, "空批确实没有请求");
+	}
+
+	return { cases: 5 };
 }

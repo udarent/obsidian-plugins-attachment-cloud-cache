@@ -27,11 +27,12 @@ import { Notice, TFile as TFileClass } from "obsidian";
 import { enumerateGallery } from "../gallery/enumerate";
 import type { GalleryItem, GallerySnapshot } from "../gallery/enumerate";
 import { keyOfUrl, referenceSnapshot } from "./notes-query";
+import { hashFromKey } from "../object-key";
 import { scanReferences, runBatchUpload } from "../maintenance/run";
 import type { BatchResult } from "../maintenance/run";
 import { selectLocalOrphans } from "../maintenance/local-orphans";
 import { runCloudCleanup } from "../maintenance/cloud-cleanup";
-import { sharedBucketGuardFor } from "./shared-bucket-flow";
+import { forgetReferences, sharedBucketGuardFor } from "./shared-bucket-flow";
 import type { CloudCleanupResult } from "../maintenance/cloud-cleanup";
 import { writeDeleteLog } from "./shared-flows";
 import { formatSize } from "../gallery/enumerate";
@@ -284,6 +285,14 @@ export async function deleteCloudSelected(
 		keys
 	);
 	await writeDeleteLog(ctx, records);
+	// ⭐ 对象真的没了 ⇒ **从本设备的声明里摘掉这些引用**（声明是"当前引用了什么"的状态）。
+	// ⚠️ 只摘真删掉的：删除失败时对象还在云端，摘掉会让它失去保护。
+	const goneHashes: string[] = [];
+	for (const record of records) {
+		const hash = hashFromKey(record.key);
+		if (hash) goneHashes.push(hash);
+	}
+	if (goneHashes.length > 0) await forgetReferences(ctx, client, goneHashes);
 	// ⚠️ 三种"没删成"必须各说一句，否则用户只看到"全部跳过"却不知道原因：
 	// ① 被别的设备占着（跳过是**设计如此**）；② 整批被挡（没声明 / 读不到）；
 	// ③ 跑到一半声明变了（停剩余批次）。三种都不许说成"清理完成"。

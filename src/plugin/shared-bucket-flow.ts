@@ -119,6 +119,38 @@ export async function rememberReferences(
 }
 
 /**
+ * 从本设备的声明里**摘掉**一批引用（对象真的没了之后）。
+ *
+ * ## 为什么要摘
+ *
+ * 声明是"本库当前引用了什么"的**状态**。删掉云端对象之后不摘，那条引用会永远留在声明里
+ * ⇒ 本设备的记录一直在替一个不存在的对象做保护，别的设备清理时会被它挡下，
+ * 而用户看到的是"待清理里删掉了，过一会儿又回到候选里"（或者更糟：永远删不掉）。
+ *
+ * ⚠️ 只在**对象真的不在云端**之后调用（`deleted` / `alreadyGone`）：
+ * 删除失败时对象还在，摘掉引用等于让它失去保护。
+ * ⚠️ 失败只发一条通知，不抛 —— 用户要的那件事（删）已经完成了，
+ * 声明晚一轮再摘不会造成误删（方向是**多保护**）。
+ */
+export async function forgetReferences(
+	ctx: PluginContext,
+	client: Pick<S3Client, "listObjects" | "getObject" | "putObject" | "deleteObject">,
+	hashes: readonly string[]
+): Promise<boolean> {
+	if (!ctx.settings.sharedBucket || hashes.length === 0) return true;
+	const self = identityOf(ctx.settings);
+	if (!self) return false;
+	const result = await declareRefs({ io: declarationIoFor(client), self }, {}, hashes);
+	if (result.ok) return true;
+	new Notice(
+		ctx.t(result.reason === "read-failed" ? "sharedBucketStateUnreadable" : "sharedBucketDeclareFailed", {
+			error: result.detail,
+		})
+	);
+	return false;
+}
+
+/**
  * 删除云端对象之前用的守卫；功能关着（或身份缺失）返回 `null`（= 不启用跨库判据）。
  *
  * ⚠️ 关着时**一次网络请求都不多发**：守卫的代价是"一次全量读 ＋ 每 20 个一次指纹"，
