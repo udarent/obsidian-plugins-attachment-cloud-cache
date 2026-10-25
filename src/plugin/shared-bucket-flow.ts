@@ -18,7 +18,8 @@ import type { DeclarationIo, DeclarationPage } from "../s3/declaration";
 import { DECLARATION_PAGE_LIMIT, isSafeId, loadDeviceState, mergeRefs } from "../s3/declaration";
 import { utf8Bytes } from "../s3/hash";
 import type { CleanupGuard, SelfIdentity } from "../maintenance/shared-bucket";
-import { createSharedBucketGuard, declareRefs, diffReferences } from "../maintenance/shared-bucket";
+import { backlogCount, backlogRefs, enqueueName, settleNames } from "../maintenance/declaration-names";
+import { createSharedBucketGuard, declareRefs, diffReferences, renameReference } from "../maintenance/shared-bucket";
 import type { PluginContext } from "./context";
 import { cloudReferencedKeys } from "./shared-flows";
 
@@ -117,6 +118,102 @@ export async function rememberReferences(
 		})
 	);
 	return false;
+}
+
+/**
+ * 改名之后：把云端声明里的显示名改过来；写不进去就**记进待补队列**（CR-16）。
+ *
+ * 为什么不一失败就重试 / 就报错：改名是**本地整理动作**，宿主已经把全库链接改完了。
+ * 为一次云端写去阻塞它，等于让"改个文件名"依赖网络。所以这里只做两件事：
+ * 能写就写，写不了就记下来（下次上传 / 清理 / 迁移前补）。
+ *
+ * @returns `written` 已写（或本来就不需要写）/ `queued` 进队列了 / `off` 功能关着
+ */
+export async function rememberRenamedName(
+	ctx: PluginContext,
+	client: Pick<S3Client, "listObjects" | "getObject" | "putObject" | "deleteObject">,
+	ref: { readonly hash: string; readonly name: string; readonly ext: string }
+): Promise<"written" | "queued" | "off"> {
+	if (!ctx.settings.sharedBucket) return "off";
+	const self = identityOf(ctx.settings);
+	if (!self) return "off";
+
+	let outcome: Awaited<ReturnType<typeof renameReference>>;
+	try {
+		outcome = await renameReference({
+			io: declarationIoFor(client),
+			self,
+			hash: ref.hash,
+			name: ref.name,
+			ext: ref.ext,
+		});
+	} catch {
+		// 连读现状都失败（断网 / 权限）⇒ 按"待补"处理，别让它冒泡打断改名那条链
+		outcome = "failed";
+	}
+
+	// ⚠️ `absent` 也算"不用补"：云端声明里没有这条 hash 说明"本地有、云端没记"，
+	// 那不是改名能修的（下一次对账或上传会处理），塞进队列只会让它永远补不上。
+	if (outcome === "renamed" || outcome === "absent") {
+		const backlog = ctx.settings.declarationNameBacklog ?? {};
+		if (backlog[ref.hash]) {
+			ctx.settings.declarationNameBacklog = settleNames(backlog, [ref.hash]);
+			await ctx.hostContext().persistSettings?.().catch(() => undefined);
+		}
+		return "written";
+	}
+
+	ctx.settings.declarationNameBacklog = enqueueName(
+		ctx.settings.declarationNameBacklog ?? {},
+		ref.hash,
+		ref.name,
+		ref.ext,
+		new Date().toISOString()
+	);
+	await ctx.hostContext().persistSettings?.().catch(() => undefined);
+	return "queued";
+}
+
+/**
+ * 把待补的显示名补写进声明（上传 / 清理 / 迁移**启动前**各调一次，CR-16）。
+ *
+ * ## 三条取舍
+ *
+ * - **一条失败就停**：失败通常是网络或权限，继续补只会把队列打乱（而且每一条都要一次读写）；
+ * - 结清的才出队：`renamed` / `absent` 都算结清，其余留着下次；
+ * - **不抛错**：调用方那件事（上传 / 删除 / 迁移）比"显示名"重要得多。
+ *
+ * @returns 本次结清了几条（0 = 没有待补，或这次一条都没成功）
+ */
+export async function flushDeclarationNames(
+	ctx: PluginContext,
+	client: Pick<S3Client, "listObjects" | "getObject" | "putObject" | "deleteObject">
+): Promise<number> {
+	if (!ctx.settings.sharedBucket) return 0;
+	const self = identityOf(ctx.settings);
+	if (!self) return 0;
+	const backlog = ctx.settings.declarationNameBacklog ?? {};
+	if (backlogCount(backlog) === 0) return 0;
+
+	const settled: string[] = [];
+	for (const ref of backlogRefs(backlog)) {
+		let outcome: Awaited<ReturnType<typeof renameReference>>;
+		try {
+			outcome = await renameReference({ io: declarationIoFor(client), self, hash: ref.hash, name: ref.name, ext: ref.ext });
+		} catch {
+			outcome = "failed";
+		}
+		if (outcome === "renamed" || outcome === "absent") {
+			settled.push(ref.hash);
+			continue;
+		}
+		break;
+	}
+
+	if (settled.length === 0) return 0;
+	ctx.settings.declarationNameBacklog = settleNames(backlog, settled);
+	await ctx.hostContext().persistSettings?.().catch(() => undefined);
+	return settled.length;
 }
 
 /**

@@ -64,7 +64,15 @@ const fileOf = (vault, device, name, refs, lastModified = "2026-10-25T00:00:00.0
 ];
 
 export async function runSharedBucketSuite(mod) {
-	const { occupancyOf, occupantsOtherThan, occupiedByOthers, createSharedBucketGuard, declareRefs, diffReferences } = mod;
+	const {
+		occupancyOf,
+		occupantsOtherThan,
+		occupiedByOthers,
+		createSharedBucketGuard,
+		declareRefs,
+		diffReferences,
+		renameReference,
+	} = mod;
 
 	// ============================================================
 	// 1. 占用表：同一台设备的多份文件要合并成一条
@@ -268,5 +276,30 @@ export async function runSharedBucketSuite(mod) {
 		}
 	}
 
-	return { cases: 6 };
+	// ============================================================
+	// 7. 改名只改 `name`，`addedAt` 必须沿用（CR-16）
+	// ============================================================
+	{
+		const target = hash(7);
+		const io = fakeIo([
+			fileOf("v1", "d1", "head.json", { [target]: ref("旧名字.png", "2026-10-01T00:00:00.000Z") }),
+		]);
+		const out = await renameReference({ io, self: { vault: "v1", device: "d1" }, hash: target, name: "新名字.png", ext: "png" });
+		assert.equal(out, "renamed", "改名言明就是 renamed");
+		const put = io.ops.find((op) => op[0] === "put");
+		assert.ok(put, "真的重写了声明");
+		const written = JSON.parse(io.files.get(put[1]).text);
+		assert.equal(written.refs[target].name, "新名字.png", "名字改了");
+		assert.equal(
+			written.refs[target].addedAt,
+			"2026-10-01T00:00:00.000Z",
+			"★★ addedAt 不许因为改名而变（它是封存切块的排序依据）"
+		);
+
+		// 声明里没有这个 hash ⇒ absent（那是"本地有、云端没记"，不归改名管）
+		const absent = await renameReference({ io, self: { vault: "v1", device: "d1" }, hash: hash(8), name: "x.png", ext: "png" });
+		assert.equal(absent, "absent", "没这条 ⇒ absent，调用方不该把它塞进待补队列");
+	}
+
+	return { cases: 7 };
 }

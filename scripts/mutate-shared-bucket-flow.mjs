@@ -37,6 +37,22 @@ await runMutations({
 			expect: "非 404 的错误必须抛",
 		},
 		{
+			// 后果：关着共享桶也去写声明 ⇒ 没打开功能的人凭空多出 `ListBucket` / 写权限依赖。
+			name: "★ 关着也去写声明（没开功能的人被要求多一项权限）",
+			from: '	if (!ctx.settings.sharedBucket) return "off";',
+			to: '	if (false) return "off";',
+			expect: "关着 ⇒ 什么都不做",
+		},
+		{
+			// 后果：补写失败也当成"结清" ⇒ 队列被清空，而声明里还是旧名字。
+			// 症状是"改了名、过几天又变回去"，且没有任何报错。
+			name: "★★ 补写失败也结清（名字永远补不上）",
+			from: '		if (outcome === "renamed" || outcome === "absent") {',
+			to: '		if (true) {',
+			// 先红的是状态码断言（`读失败 ⇒ 一条都没补`）—— 比"队列被清空"更早说话
+			expect: "读失败 ⇒ 一条都没补",
+		},
+		{
 			// 后果：功能关着也去读全库、写声明 ⇒ 没打开共享桶的人凭空多出全库扫描与 `ListBucket` 依赖。
 			name: "★ 关着功能也做整份对账",
 			from: '	if (!ctx.settings.sharedBucket) return false;',

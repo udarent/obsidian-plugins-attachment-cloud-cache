@@ -33,7 +33,7 @@ import { scanReferences, runBatchUpload } from "../maintenance/run";
 import type { BatchResult } from "../maintenance/run";
 import { selectLocalOrphans } from "../maintenance/local-orphans";
 import { runCloudCleanup } from "../maintenance/cloud-cleanup";
-import { forgetReferences, sharedBucketGuardFor } from "./shared-bucket-flow";
+import { flushDeclarationNames, forgetReferences, sharedBucketGuardFor } from "./shared-bucket-flow";
 import type { CloudCleanupResult } from "../maintenance/cloud-cleanup";
 import { writeDeleteLog } from "./shared-flows";
 import { formatSize } from "../gallery/enumerate";
@@ -270,6 +270,10 @@ export async function deleteCloudSelected(
 		};
 	}
 	const records: DeletedObjectRecord[] = [];
+	// ⭐ 删除前先把待补的显示名补上（CR-16）：这也是"本来就要联网"的时刻。
+	// ⚠️ 失败不阻断删除（它只影响别设备看到的名字）。
+	await flushDeclarationNames(ctx, client);
+
 	// ⭐ 共享桶（R25）：功能关着就是 `null` —— 一次多余的请求都不发
 	const guard = sharedBucketGuardFor(ctx, client) ?? undefined;
 	const result = await runCloudCleanup(

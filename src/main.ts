@@ -28,7 +28,8 @@ import { Component, MarkdownRenderer, Notice, Platform, Plugin, TFile, TFolder, 
 
 import { SETTINGS_DEFAULTS, hasLegacyExternalImageDefault, hasLegacyObjectKeyTemplate, legacyAutoCacheEnabled, mergePluginSettings } from "./settings";
 import { isSafeId, randomId } from "./s3/declaration";
-import { rememberReferences } from "./plugin/shared-bucket-flow";
+import { hashFromKey } from "./object-key";
+import { flushDeclarationNames, rememberReferences, rememberRenamedName } from "./plugin/shared-bucket-flow";
 import { unifyObjectNames } from "./plugin/migrate-flow";
 import type { LocalCopyAction, PluginSettings } from "./types";
 import { detectLocale, translate } from "./i18n";
@@ -626,6 +627,11 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				// ⚠️ 宿主的 `rename` 给了 `旧 → 新`，所以这不是猜（与 `resolvedLinks` 那次不同）。
 				// ⚠️ **静默**：这不算"修好了什么"，只是把账本搬到新地址 —— 不打扰用户。
 				// ⚠️ 目录改名时子文件路径也要跟着搬（`includeDescendants`）。
+				// ⭐ 改名要更新云端声明里的显示名（CR-16）—— 所以**先**按旧路径找到那条记录，
+				// 搬完就只剩新路径了。目录改名（`includeDescendants`）没有自己的条目 ⇒ 自然跳过，
+				// 这正是"**移动不写云端**"那条边界的实现方式（声明只存 hash，不存路径）。
+				const renamedKey = this.settings.sharedBucket ? this.currentIndex().findByCachePath(oldPath)?.key ?? "" : "";
+
 				const moved = this.currentIndex().moveCachePath(oldPath, file.path, {
 					includeDescendants: file instanceof TFolder,
 				});
@@ -637,6 +643,10 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 							console.error("[attachment-cloud-cache] 索引跟随改名落盘失败", error);
 						});
 				}
+				// ⭐ 把新名字写回云端声明（写不进去就记进待补队列）。
+				// ⚠️ `void` + 不抛：本地改名**已经成功**了，这条链只影响"别设备看到的名字"。
+				// ⚠️ 回调参数是 `TAbstractFile`（目录改名也会进来）⇒ 只有 `TFile` 才有名字与扩展名
+				if (renamedKey && file instanceof TFile) void this.noteRenamedAttachment(renamedKey, file.name, file.extension);
 			})
 		);
 		// 快照在布局就绪后建立（那时文件已可读），且**不阻塞启动**
@@ -812,11 +822,37 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 *
 	 * ⚠️ 功能关着时**一次请求都不发**：这里先看开关，再看有没有客户端。
 	 */
+	/**
+	 * 附件改名之后，把新名字写进**云端声明**（CR-16）。
+	 *
+	 * 只在共享桶打开时有意义：那档的 key 是纯哈希，别设备靠声明里的 `name` 显示文件名。
+	 * 写不进去（离线 / 权限 / 形状）就进待补队列 —— 由 `flushDeclarationNames` 在上传、
+	 * 清理、迁移之前补。**绝不**因为这条失败去回滚一次已经成功的本地改名。
+	 *
+	 * ⚠️ 移动（换目录）不会走到这里：`findByCachePath(旧目录)` 找不到条目。
+	 */
+	private async noteRenamedAttachment(key: string, name: string, extension: string): Promise<void> {
+		if (!this.settings.sharedBucket) return;
+		const client = this.buildClient();
+		if (!client) return;
+		const hash = hashFromKey(key);
+		if (!hash) return;
+		try {
+			await rememberRenamedName(this.flowContext(), client, { hash, name, ext: extension });
+		} catch (error) {
+			// 走到这里说明连"记进队列"都失败了（落盘失败之类）—— 只记控制台，不改用户看到的东西
+			console.error("[attachment-cloud-cache] 改名后更新云端声明失败", error);
+		}
+	}
+
 	private async declareReference(ref: { hash: string; name: string; ext: string }): Promise<boolean> {
 		if (!this.settings.sharedBucket) return true;
 		const client = this.buildClient();
 		// 没有客户端时上传本来也走不通；这里不额外发通知（上传那条路会自己报）
 		if (!client) return false;
+		// ⭐ 上传前先把待补的显示名补上（CR-16）：上传是"本来就要联网"的时刻，
+		// 在这里补最不打扰；失败不影响这次上传（`flushDeclarationNames` 不抛）。
+		await flushDeclarationNames(this.flowContext(), client);
 		return rememberReferences(this.flowContext(), client, [ref]);
 	}
 
@@ -1844,6 +1880,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			app: this.app,
 			settings: () => this.settings,
 			index: () => store?.index ?? new CacheIndex(),
+			persistSettings: () => this.saveSettings(),
 			persistIndex: async () => {
 				if (store) await this.serialize(() => store.save());
 				// 触发 ④：`persistIndex` 在**每次成功上传/下载之后**都会被调用

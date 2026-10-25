@@ -35,7 +35,15 @@
  */
 
 import { EXTERNAL_SITE_MODES, LOCAL_COPY_ACTIONS, MIGRATION_STATES, isExternalSiteMode, isLocalCopyAction } from "./types";
-import type { ExternalSiteMode, LocalCopyAction, MigrationState, PluginSettings, S3Config } from "./types";
+import type {
+	DeclarationNameBacklog,
+	DeclarationNameEntry,
+	ExternalSiteMode,
+	LocalCopyAction,
+	MigrationState,
+	PluginSettings,
+	S3Config,
+} from "./types";
 import { CACHE_LIMIT_MB_MAX } from "./types";
 import { isPlainRecord } from "./records";
 import { isSafeId } from "./s3/declaration";
@@ -155,6 +163,34 @@ function idValue(): FieldReader<string> {
 }
 
 /**
+ * 「改名待补」队列（CR-16）：只认 `hash → { name, ext, at }` 这个形状。
+ *
+ * ⚠️ 逐条校验而不是整份回退：坏掉一条（用户手工编辑过 `data.json`）不该让**其余**待补
+ * 一起丢掉 —— 那正是"显示名永久旧"的开始。不认识的键、形状不对的条目一律**丢掉**。
+ * ⚠️ 上限与纯逻辑同源（`BACKLOG_LIMIT`）：超了按 `at` 留最近的，不在这里另定一个数。
+ */
+function nameBacklogValue(): FieldReader<DeclarationNameBacklog> {
+	return (raw) => {
+		if (!isPlainRecord(raw)) return {};
+		const kept: Record<string, DeclarationNameEntry> = {};
+		for (const [hash, value] of Object.entries(raw)) {
+			if (!/^[0-9a-f]{64}$/.test(hash)) continue;
+			if (!isPlainRecord(value)) continue;
+			const name = (value as { name?: unknown }).name;
+			if (typeof name !== "string" || name.trim() === "") continue;
+			const ext = (value as { ext?: unknown }).ext;
+			const at = (value as { at?: unknown }).at;
+			kept[hash] = {
+				name: name.trim(),
+				ext: typeof ext === "string" ? ext.trim().toLowerCase() : "",
+				at: typeof at === "string" ? at : "",
+			};
+		}
+		return kept;
+	};
+}
+
+/**
  * 出厂默认值（**内部**表，名字与导出的 `SETTINGS_DEFAULTS` 区分开）。
  *
  * 与字段阅读器分开，是为了让"字段表只描述**怎么读**"，默认值只有一处定义：
@@ -197,6 +233,8 @@ const FACTORY_SETTINGS = {
 	// ⚠️ 持久化的是**闸门**不是进度：崩溃时它留在 `running`，于是重启后改名仍被拒，
 	// 直到用户明确选「继续」或「放弃」（见 `types.ts::MigrationState`）。
 	migrationState: "idle" as MigrationState,
+	// 空对象 = 没有要补的（常态）。⚠️ 不要写成 `undefined`：设置层的形状检查会把它当非法值。
+	declarationNameBacklog: {} as DeclarationNameBacklog,
 } as const;
 
 /**
@@ -222,6 +260,7 @@ const SETTINGS_SPEC: {
 	vaultId: idValue(),
 	deviceId: idValue(),
 	migrationState: oneOfValue(MIGRATION_STATES),
+	declarationNameBacklog: nameBacklogValue(),
 };
 
 const S3_FALLBACKS: S3Config = {

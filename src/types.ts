@@ -165,6 +165,23 @@ export function isMigrationState(value: unknown): value is MigrationState {
 	return typeof value === "string" && (MIGRATION_STATES as readonly string[]).includes(value);
 }
 
+/**
+ * 「改名待补」的一条：下次连上网要写进云端声明的显示名（CR-16）。
+ *
+ * 只影响**别设备看到的名字**：写丢了最坏是显示名旧一轮，绝不参与删除判定。
+ */
+export interface DeclarationNameEntry {
+	/** 新的文件名（含扩展名）。 */
+	readonly name: string;
+	/** 小写扩展名，不含点。 */
+	readonly ext: string;
+	/** 入队时间（ISO）。队列按它淘汰最旧的。 */
+	readonly at: string;
+}
+
+/** `hash → 待补条目`（见 `maintenance/declaration-names.ts`）。 */
+export type DeclarationNameBacklog = Readonly<Record<string, DeclarationNameEntry>>;
+
 
 /** S3 兼容存储的连接参数。 */
 export interface S3Config {
@@ -343,5 +360,12 @@ export interface PluginSettings {
 	 * 判据放在执行层是因为界面挡不住命令面板与并发回调（本项目的老规矩：判据不许只有 UI 一层）。
 	 */
 	migrationState: MigrationState;
+	/**
+	 * 改名没来得及写进云端声明的那些（CR-16）。
+	 *
+	 * ⚠️ 它是**补写队列**，不是"改名历史"：同一个 hash 连改几次只留最后一次。
+	 * ⚠️ 上传 / 清理 / 迁移**启动前**会 flush 一次；flush 失败只记账，不阻断那件事。
+	 */
+	declarationNameBacklog: DeclarationNameBacklog;
 	s3: S3Config;
 }

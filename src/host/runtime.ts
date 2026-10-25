@@ -203,6 +203,14 @@ export interface HostContext {
 	index: () => CacheIndex;
 	/** 索引变更后落盘（已串行化）。 */
 	persistIndex: () => Promise<void>;
+	/**
+	 * 设置变更后落盘（与索引同一条串行队列）。
+	 *
+	 * 存在的理由只有一件事：流程层会**就地改**设置（如把改名待补队列记下来，CR-16），
+	 * 而"谁负责落盘"必须只有一处 —— 装配点。
+	 * ⚠️ 可选：套件替身不必实现（省略 = 不落盘，内存里仍然是对的）。
+	 */
+	persistSettings?: () => Promise<void>;
 	notify: (message: string) => void;
 	t: (key: string, params?: Record<string, unknown>) => string;
 	/** 钥匙串读取（凭据的值只在这里取，绝不进设置）。 */

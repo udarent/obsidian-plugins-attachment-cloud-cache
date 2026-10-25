@@ -54,7 +54,16 @@ const settings = (over = {}) => ({
 });
 
 export async function runSharedBucketFlowSuite(mod) {
-	const { identityOf, declarationIoFor, rememberReferences, forgetReferences, syncDeclaration, sharedBucketGuardFor } = mod;
+	const {
+		identityOf,
+		declarationIoFor,
+		rememberReferences,
+		forgetReferences,
+		syncDeclaration,
+		sharedBucketGuardFor,
+		rememberRenamedName,
+		flushDeclarationNames,
+	} = mod;
 
 	// ============================================================
 	// 1. 身份：形状不对就不参与（宁可不判，也别写到别人的前缀里）
@@ -209,5 +218,131 @@ export async function runSharedBucketFlowSuite(mod) {
 		assert.equal(scans, 0, "身份不合法时也不读全库");
 	}
 
-	return { cases: 6 };
+	// ============================================================
+	// 7. 改名：写进声明；写不进去就**进待补队列**（CR-16）
+	// ============================================================
+	{
+		const hash = "a".repeat(64);
+		const head = "_acc/v1/v1/d1/head.json";
+		const seeded = JSON.stringify({
+			v: 1,
+			vault: "v1",
+			device: "d1",
+			updatedAt: "2026-10-25T00:00:00.000Z",
+			refs: { [hash]: { name: "旧名字.png", ext: "png", addedAt: "2026-10-01T00:00:00.000Z" } },
+		});
+		let persisted = 0;
+		const ctx = (over = {}) => ({
+			settings: settings({ declarationNameBacklog: {}, ...over }),
+			hostContext: () => ({
+				persistSettings: async () => {
+					persisted += 1;
+				},
+			}),
+			t: (key) => key,
+		});
+
+		// 7a. 关着 ⇒ off，零请求
+		{
+			const client = fakeClient({ files: [[head, seeded]] });
+			const outcome = await rememberRenamedName(
+				ctx({ sharedBucket: false }),
+				client,
+				{ hash, name: "新名字.png", ext: "png" }
+			);
+			assert.equal(outcome, "off", "关着 ⇒ 什么都不做");
+			assert.equal(client.calls.length, 0, "★ 关着时一个请求都不发");
+		}
+
+		// 7b. 写成功：声明里的名字变了，`addedAt` **不变**（它是封存切块的排序依据）
+		{
+			const client = fakeClient({ files: [[head, seeded]] });
+			const target = ctx();
+			const outcome = await rememberRenamedName(target, client, { hash, name: "新名字.png", ext: "png" });
+			assert.equal(outcome, "written", "写成功");
+			const put = client.calls.find((call) => call[0] === "put");
+			assert.ok(put, "真的重写了声明");
+			const written = JSON.parse(put[3]);
+			assert.equal(written.refs[hash].name, "新名字.png", "★ 声明里的显示名跟着改");
+			assert.equal(
+				written.refs[hash].addedAt,
+				"2026-10-01T00:00:00.000Z",
+				"★★ `addedAt` 不许因为改名而变（它是封存切块的排序依据）"
+			);
+			assert.deepEqual(target.settings.declarationNameBacklog, {}, "写成功 ⇒ 不需要入队");
+		}
+
+		// 7c. 写失败：进队列（改名在本地已经成功，不能因为这条回滚）
+		{
+			const client = fakeClient({ files: [[head, seeded]], putError: new Error("offline") });
+			const target = ctx();
+			const outcome = await rememberRenamedName(target, client, { hash, name: "新名字.png", ext: "png" });
+			assert.equal(outcome, "queued", "★ 写不进去 ⇒ 记进待补队列");
+			assert.equal(target.settings.declarationNameBacklog[hash]?.name, "新名字.png", "队列里是新名字");
+			assert.ok(persisted > 0, "队列要落盘（否则重启就丢）");
+		}
+
+		// 7d. 声明里没有这个 hash ⇒ 不入队（那不是改名能修的）
+		{
+			const client = fakeClient({ files: [[head, seeded]] });
+			const target = ctx();
+			const outcome = await rememberRenamedName(target, client, { hash: "b".repeat(64), name: "x.png", ext: "png" });
+			assert.equal(outcome, "written", "云端没这条 ⇒ 视为不用补");
+			assert.deepEqual(target.settings.declarationNameBacklog, {}, "★ 不入队（否则它永远补不上）");
+		}
+	}
+
+	// ============================================================
+	// 8. 补写队列：空着零请求；成功结清；读失败原样留着
+	// ============================================================
+	{
+		const hash = "c".repeat(64);
+		const head = "_acc/v1/v1/d1/head.json";
+		const seeded = JSON.stringify({
+			v: 1,
+			vault: "v1",
+			device: "d1",
+			updatedAt: "2026-10-25T00:00:00.000Z",
+			refs: { [hash]: { name: "旧名字.png", ext: "png", addedAt: "2026-10-01T00:00:00.000Z" } },
+		});
+		let persisted = 0;
+		const ctx = (backlog) => ({
+			settings: settings({ declarationNameBacklog: backlog }),
+			hostContext: () => ({
+				persistSettings: async () => {
+					persisted += 1;
+				},
+			}),
+			t: (key) => key,
+		});
+
+		// 8a. 空队列 ⇒ 0，且**一次请求都不发**（上传路径会频繁调到这里）
+		{
+			const client = fakeClient({ files: [[head, seeded]] });
+			assert.equal(await flushDeclarationNames(ctx({}), client), 0, "空队列 ⇒ 0");
+			assert.equal(client.calls.length, 0, "★ 空队列时一个请求都不发");
+		}
+
+		// 8b. 队列里那条在声明里 ⇒ 补写成功并结清
+		{
+			const client = fakeClient({ files: [[head, seeded]] });
+			const target = ctx({ [hash]: { name: "新名字.png", ext: "png", at: "2026-10-25T01:00:00.000Z" } });
+			assert.equal(await flushDeclarationNames(target, client), 1, "补了一条");
+			assert.deepEqual(target.settings.declarationNameBacklog, {}, "★ 补成功才出队");
+			const put = client.calls.find((call) => call[0] === "put");
+			assert.equal(JSON.parse(put[3]).refs[hash].name, "新名字.png", "写进去的是队列里的名字");
+			assert.ok(persisted > 0, "结清也要落盘");
+		}
+
+		// 8c. 读失败 ⇒ 0，队列原样留着（下次再补）
+		{
+			const backlog = { [hash]: { name: "新名字.png", ext: "png", at: "2026-10-25T01:00:00.000Z" } };
+			const client = fakeClient({ files: [[head, seeded]], getError: new Error("denied") });
+			const target = ctx(backlog);
+			assert.equal(await flushDeclarationNames(target, client), 0, "读失败 ⇒ 一条都没补");
+			assert.deepEqual(target.settings.declarationNameBacklog, backlog, "★★ 队列原样留着（丢了就永远补不上）");
+		}
+	}
+
+	return { cases: 8 };
 }

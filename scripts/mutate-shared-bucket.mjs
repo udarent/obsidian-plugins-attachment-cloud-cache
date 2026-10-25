@@ -70,6 +70,14 @@ await runMutations({
 			expect: "仍在引用里的不该被摘",
 		},
 		{
+			// 后果：改名时用"现在"当 `addedAt` ⇒ 这一条在封存顺序里跳到最新，
+			// 几百次改名就能把段的切分搅乱（而且没人会报这个错）。
+			name: "★★ 改名把 addedAt 刷成现在（封存顺序漂移）",
+			from: '	const result = await declareRefs(options, { [key]: { name, ext, addedAt: current.addedAt } }, []);',
+			to: '	const result = await declareRefs(options, { [key]: { name, ext, addedAt: new Date().toISOString() } }, []);',
+			expect: "不许因为改名而变",
+		},
+		{
 			// 后果：读不到现状时"不写但报成功" ⇒ 调用方照常上传 ⇒ 这一批对象
 			// **没有任何保护**，下一次清理会把它们当孤儿删掉（而且没人知道）。
 			name: "★★ 读不到现状却报成功（这一批对象没有保护）",

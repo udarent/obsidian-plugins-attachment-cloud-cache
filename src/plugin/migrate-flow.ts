@@ -48,6 +48,7 @@ import type { MigrationState } from "../types";
 import type { PluginContext } from "./context";
 import { remoteUrlForKey } from "./notes-query";
 import { cloudReferencedKeys, writeDeleteLog } from "./shared-flows";
+import { flushDeclarationNames } from "./shared-bucket-flow";
 
 /** 列桶时一页多少条（S3 上限）。 */
 const LIST_PAGE = 1000;
@@ -76,7 +77,14 @@ export interface MigrateProgress {
 }
 
 export interface MigrateNamesDeps {
-	readonly client: Pick<S3Client, "listObjects" | "headObject" | "copyObject" | "deleteObject">;
+	/**
+	 * ⚠️ 含 `getObject` / `putObject`：迁移**启动前**要先补写"改名待补"的显示名（CR-16），
+	 * 那条路要读现状、写声明。少了这两个方法，类型上就看不出这条依赖。
+	 */
+	readonly client: Pick<
+		S3Client,
+		"listObjects" | "headObject" | "copyObject" | "deleteObject" | "getObject" | "putObject"
+	>;
 	/** 状态位落盘（"谁负责落盘"只有一处，所以由装配点给）。 */
 	readonly setState: (state: MigrationState) => Promise<void>;
 	readonly onProgress?: (event: MigrateProgress) => void;
@@ -202,6 +210,10 @@ export async function unifyObjectNames(ctx: PluginContext, deps: MigrateNamesDep
 		unknown: counts.unknown,
 		...patch,
 	});
+
+	// ⭐ 迁移启动前先把待补的显示名补上（CR-16）：迁移会重写链接、搬 key，
+	// 让"声明里的名字还欠着"混进来只会让复核更难读。失败不阻断迁移。
+	await flushDeclarationNames(ctx, deps.client);
 
 	// ── 预检：台账 × 引用 × 桶 ──
 	let referenced: Set<string>;

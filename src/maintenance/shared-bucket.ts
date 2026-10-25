@@ -31,6 +31,7 @@ import {
 	applyDeclarationSteps,
 	loadDeclarations,
 	loadDeviceState,
+	mergeRefs,
 	planUpdates,
 	scanDeclarations,
 } from "../s3/declaration";
@@ -294,6 +295,48 @@ export async function declareRefs(
 	} catch (error) {
 		return { ok: false, reason: "write-failed", detail: messageOf(error) };
 	}
+}
+
+/**
+ * 改名之后，把**声明里的显示名**改过来（CR-16）。
+ *
+ * ## 为什么单独一个函数（而不是复用 `declareRefs`）
+ *
+ * `addedAt` 是**封存切块的排序依据**。改名不是"重新加入"，所以它必须沿用**现有那一份**的
+ * `addedAt` —— 拿"现在"覆盖会让这一条在封存顺序里跳到最新，几百次改名就能把段的切分搅乱。
+ * 这里先读一次现状，正是为了拿到那个值（多一次 GET，换一个不会漂的排序键）。
+ *
+ * ## 四种结论
+ *
+ * | 返回 | 含义 | 调用方该做什么 |
+ * |---|---|---|
+ * | `renamed` | 写完（或本来就一致） | 可以从待补队列里结清它 |
+ * | `absent` | 声明里没有这个 hash | **不要**补入队 —— 那是"本地有、云端没记"，不归改名管 |
+ * | `failed` | 读或写失败（离线 / 权限 / 形状） | 记进待补队列，下次再补 |
+ * | `off` | 功能关着 / 没有身份 | 什么都不做 |
+ *
+ * ⚠️ 不在这里抛错：改名在本地**已经成功**了，这里失败只该影响"别设备看到的名字"。
+ */
+export async function renameReference(
+	options: DeclarationWriteOptions & { readonly hash: string; readonly name: string; readonly ext: string }
+): Promise<"renamed" | "absent" | "failed" | "off"> {
+	const { io, self, hash } = options;
+	const key = typeof hash === "string" ? hash.trim() : "";
+	if (!key) return "absent";
+
+	const state = await loadDeviceState(io, self.vault, self.device);
+	if (!state) return "failed";
+	const current = mergeRefs(state).get(key);
+	if (!current) return "absent";
+
+	const name = String(options.name ?? "").trim();
+	if (name === "") return "absent";
+	const ext = String(options.ext ?? "").trim().toLowerCase();
+	// 名字与类型都没变 ⇒ 不用发请求（用户只是把文件挪了个目录）
+	if (current.name === name && current.ext === ext) return "renamed";
+
+	const result = await declareRefs(options, { [key]: { name, ext, addedAt: current.addedAt } }, []);
+	return result.ok ? "renamed" : "failed";
 }
 
 function messageOf(error: unknown): string {
