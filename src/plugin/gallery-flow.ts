@@ -303,6 +303,11 @@ export async function deleteCloudSelected(
 			})
 		);
 	}
+	// ⭐ 被别的设备占着的那几条：附件的"跳过"计数里看不出**为什么**，这里补一句。
+	// ⚠️ 与 `blocked`（整批没读成）分开：那是一条对象都没删，这是删了别的、只跳过这几条。
+	if (result.denied > 0) {
+		new Notice(ctx.t("sharedBucketDenied", { count: result.denied }));
+	}
 	if (result.stopped) {
 		new Notice(
 			ctx.t(result.stopped === "changed" ? "sharedBucketStopped" : "sharedBucketCheckpointFailed", {
