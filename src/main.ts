@@ -29,6 +29,7 @@ import { Component, MarkdownRenderer, Notice, Platform, Plugin, TFile, TFolder, 
 import { SETTINGS_DEFAULTS, hasLegacyExternalImageDefault, hasLegacyObjectKeyTemplate, legacyAutoCacheEnabled, mergePluginSettings } from "./settings";
 import { isSafeId, randomId } from "./s3/declaration";
 import { rememberReferences } from "./plugin/shared-bucket-flow";
+import { unifyObjectNames } from "./plugin/migrate-flow";
 import type { LocalCopyAction, PluginSettings } from "./types";
 import { detectLocale, translate } from "./i18n";
 import { SettingsTab } from "./ui/settings-tab";
@@ -1591,6 +1592,41 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 */
 	async runUploadAttachments(): Promise<void> {
 		await uploadExistingAttachments(this.flowContext());
+	}
+
+	/**
+	 * 「统一对象名」的入口（CR-15）—— 设置页按钮点它，**不是**命令。
+	 *
+	 * 为什么不是命令：它改的是**存量对象**（复制 → 改笔记 → 删旧），属于一次性的维护动作。
+	 * 放进命令面板意味着"随手一搜就能对全库动手"，而这条链会批量改写用户笔记。
+	 *
+	 * ⚠️ 并发保护放在这里（内存标志）而不是状态位：状态位是**跨进程**的闸门（重启后还要拦改名），
+	 * 而"这一刻是不是已经有一次在跑"只有本进程知道。
+	 */
+	private unifying = false;
+
+	async runUnifyObjectNames(): Promise<void> {
+		if (this.unifying) {
+			new Notice(this.t("unifyNamesAlreadyRunning"));
+			return;
+		}
+		const client = this.buildClient();
+		if (!client) {
+			new Notice(this.t("maintainNotConfigured"));
+			return;
+		}
+		this.unifying = true;
+		try {
+			await unifyObjectNames(this.flowContext(), {
+				client,
+				setState: async (state) => {
+					this.settings.migrationState = state;
+					await this.saveSettings();
+				},
+			});
+		} finally {
+			this.unifying = false;
+		}
 	}
 
 	private flowContext(): PluginContext {

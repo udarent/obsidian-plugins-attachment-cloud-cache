@@ -38,8 +38,8 @@ export interface DeletedObjectRecord {
 	name: string;
 	/** 对象是不是真的删掉了；`alreadyGone` = 服务端回 404，本来就不存在。 */
 	outcome: "deleted" | "alreadyGone";
-	/** 走的是哪条入口：孤儿询问，还是那条命令。 */
-	scope: "orphan" | "command";
+	/** 走的是哪条入口：孤儿通知、那条命令，还是「统一对象名」的迁移。 */
+	scope: "orphan" | "command" | "migration";
 }
 
 /**
@@ -129,7 +129,10 @@ export async function recordDeletions(
 					// （这一栏是给人看的，宁可写得保守 —— 说"删了"而其实"本来就没有"，
 					// 也比反过来强：后者会让人以为"还有东西等着删"。）
 					outcome: raw?.outcome === "alreadyGone" ? "alreadyGone" : "deleted",
-					scope: raw?.scope === "orphan" ? "orphan" : "command",
+					// 只有这三个取值；未知值一律按 `command`（那一栏是给人看的，
+					// 宁可写得保守也不敢凭空造一个新入口）。
+					scope:
+						raw?.scope === "orphan" ? "orphan" : raw?.scope === "migration" ? "migration" : "command",
 				},
 				at
 			)

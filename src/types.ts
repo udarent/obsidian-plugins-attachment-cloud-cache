@@ -144,6 +144,27 @@ export function isExternalSiteMode(value: unknown): value is ExternalSiteMode {
 	return typeof value === "string" && (EXTERNAL_SITE_MODES as readonly string[]).includes(value);
 }
 
+/**
+ * 「统一对象名」（CR-15）的状态位 —— **持久化**，因为它的唯一用途是跨进程拦住改名。
+ *
+ * | 值 | 什么时候写的 | 改名的后果 |
+ * |---|---|---|
+ * | `idle` | 没跑过 / 跑完 / 用户放弃 | 允许 |
+ * | `running` | 迁移开始（**先写它、再动手**） | 拒绝 |
+ * | `interrupted` | 迁移中途抛错（收尾那一步写） | 拒绝（续跑或放弃后才放开） |
+ *
+ * ⚠️ 崩溃时来不及写 `interrupted` ⇒ 状态**留在 `running`**。这正是设计要的：
+ * 重启后仍然拦改名，直到用户明确选「继续」或「放弃」。
+ * ⚠️ 判据只能读这个字段，**不能看界面**：按钮灰掉挡不住命令面板与并发回调。
+ */
+export type MigrationState = "idle" | "running" | "interrupted";
+
+export const MIGRATION_STATES: readonly MigrationState[] = ["idle", "running", "interrupted"];
+
+export function isMigrationState(value: unknown): value is MigrationState {
+	return typeof value === "string" && (MIGRATION_STATES as readonly string[]).includes(value);
+}
+
 
 /** S3 兼容存储的连接参数。 */
 export interface S3Config {
@@ -315,5 +336,12 @@ export interface PluginSettings {
 	vaultId: string;
 	/** 本设备身份（同上；一个库在多台设备上各有一个）。 */
 	deviceId: string;
+	/**
+	 * 「统一对象名」（CR-15）跑到哪一步了 —— 见 {@link MigrationState}。
+	 *
+	 * ⚠️ 它**不是**进度条，而是**改名的执行层闸门**：非 `idle` 时 `renameItem` 直接拒绝。
+	 * 判据放在执行层是因为界面挡不住命令面板与并发回调（本项目的老规矩：判据不许只有 UI 一层）。
+	 */
+	migrationState: MigrationState;
 	s3: S3Config;
 }

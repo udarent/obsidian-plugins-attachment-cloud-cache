@@ -170,6 +170,9 @@ export function runSettingsSuite(mod) {
 	const ALTERNATIVES = {
 		localCopy: "trash",
 		externalSiteMode: "allowlist",
+		// CR-15：三态闸门，`changed` 不是合法值 ⇒ 会被回落成 `idle`（那是**正确**行为，
+		// 非法值就该被重置）；所以拿另一个**合法**值来验往返。
+		migrationState: "running",
 	};
 	for (const key of Object.keys(ALTERNATIVES)) {
 		assert.ok(key in SETTINGS_DEFAULTS, `ALTERNATIVES 里的 ${key} 已不在 SETTINGS_DEFAULTS 中（死键）`);

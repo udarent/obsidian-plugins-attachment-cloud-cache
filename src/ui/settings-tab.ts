@@ -253,6 +253,18 @@ export class SettingsTab extends PluginSettingTab {
 				control: { type: "toggle", key: "sharedBucket" },
 			},
 			{
+				// ⭐ 统一对象名（R25 / CR-15）：这是**动作**，收在同一组参数的末尾
+				//（D-89：动作不夹在参数之间）。紧跟「共享桶」—— 它就是那个开关的配套动作。
+				// ⚠️ 为什么不放命令面板：它会**批量改写笔记**（复制 → 改链接 → 删旧），
+				// 而"一搜就能对全库动手"的入口形状不适合这类动作。
+				// ⚠️ 必须排在「测试连接」**之前**：那一项是"填完再去点"的最后一颗，
+				// 组尾必须是它（`test-settings-ui` 有结构守卫）。
+				name: this.t("unifyNamesName"),
+				desc: this.t("unifyNamesDesc"),
+				aliases: ["unify", "migrate", "rename", "hash", "copyobject", "统一", "迁移", "改名", "对象名", "哈希"],
+				render: (setting) => this.renderUnifyNames(setting),
+			},
+			{
 				// ⭐ 状态与按钮**在同一项里**（2026-10-18）：用户问的是"现在通不通"，
 				// 而按钮就是让这个答案变成"刚才"的那个动作 —— 分成两项，用户得在两处
 				// 之间来回对照，还会以为它们是两件不相干的事。
@@ -934,6 +946,21 @@ export class SettingsTab extends PluginSettingTab {
 	 * ⚠️ **不**标成破坏性：它不删文件、不删对象，只把链接换回库内路径 ——
 	 * 把它染成警示色会和"腾出空间"那颗按钮混成同一类动作。
 	 */
+	/**
+	 * 「统一对象名」按钮（CR-15）。
+	 *
+	 * ⚠️ **不标破坏性**：它确实会删旧对象，但删之前要求"链接全搬完、新对象全到位"，
+	 * 而旧对象此刻已经没有任何引用 —— 染成警示色会和"永久删除本地副本"那颗混成同一类。
+	 * 真正的确认在弹窗里（四个数 + 会改到几篇）。
+	 */
+	private renderUnifyNames(setting: Setting): void {
+		setting.addButton((button) =>
+			button.setButtonText(this.t("unifyNamesButton")).onClick(() => {
+				void this.plugin.runUnifyObjectNames();
+			})
+		);
+	}
+
 	private renderRevertLinks(setting: Setting): void {
 		setting.addButton((button) =>
 			button.setButtonText(this.t("revertButton")).onClick(() => {

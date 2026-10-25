@@ -95,6 +95,7 @@ In **Settings → Attachment Cloud Cache** (Chinese names are in the [中文版]
 | | **Compatibility mode** | Addresses files as `endpoint/bucket/key`; keep it on for R2, MinIO and most self-hosted services. |
 | | **Public link address (optional)** | Empty uses the address built above; fill it in for a CDN or your own domain. |
 | | **Shared bucket** | Off by default: several devices or vaults can share one bucket — each upload records what this vault uses before the file is sent, and cloud deletes skip anything another device still uses. Names of new uploads become pure content hashes (still shown as the original name in notes). Needs the `ListBucket` permission. |
+| | **Unify object names** | Turns the objects already in your bucket into pure content hashes and points the notes at them. Run it once after switching the shared bucket on; running it again is safe. Needs the `CopyObject` permission. |
 | | **Test connection** | A light (*checking* / *public* / *private* / *unreachable*) + a button: re-checks upload, read-back, delete and outside reach. |
 | **Upload** | **Upload new attachments automatically** | On by default; off leaves new files local only. |
 | | **Upload files from other sites** | Off by default. The site list only narrows the **automatic** path; picking by hand is never restricted. |
@@ -281,6 +282,7 @@ MinIO、Backblaze B2、自建服务），笔记里留下链接，文件留在库
 | | **兼容模式** | 地址按 `服务地址/桶/键` 拼；R2、MinIO 和多数自建服务要开。 |
 | | **公开链接地址（可选）** | 留空用上面拼出的地址；用 CDN 或自己域名时填。 |
 | | **共享桶** | 默认关：多台设备或多个库共用一个桶时，上传前先记下本库引用了什么，删除云端时跳过别的设备还在用的对象；新上传的对象名变成纯内容哈希（笔记里仍显示原名）。需要 ListBucket 权限。 |
+| | **统一对象名** | 把桶里已有的对象改成纯内容哈希，并把笔记里的链接指过去。打开共享桶之后跑一次即可，重复跑是安全的。需要 CopyObject 权限。 |
 | | **测试连接** | 状态灯（检测中 / 公开 / 私有 / 无法访问）+ 按钮：重测上传、读回、删除、对外访问。 |
 | **上传** | **新附件自动上传** | 默认开；关掉后新文件只留本地。 |
 | | **站外文件也上传到云端** | 默认关。站点名单只约束**自动**这一路，手动挑不受限。 |

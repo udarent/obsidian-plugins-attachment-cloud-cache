@@ -392,6 +392,46 @@ export class CacheIndex {
 	}
 
 	/**
+	 * 对象换了 key（CR-15 统一对象名）之后，把索引与台账一起改指过去。
+	 *
+	 * ## 为什么必须有这一步（E 阶段）
+	 *
+	 * 条目与台账都是**按 key 存的**。key 换了却不搬，后果是：
+	 * - 索引里那条永远匹配不上（渲染时按新 URL 反查不到）⇒ **全库重新下载**，
+	 *   而下载落点是附件目录 ⇒ 用户库里多出一整批重复文件；
+	 * - 台账里还是旧 key ⇒ 云端清理看不见新对象（不认领），也永远认领旧的（已不存在）。
+	 *
+	 * ## 三条边界
+	 *
+	 * - 台账**两条都要动**：`from` 摘掉、`to` 记上。只摘不记会让新对象变成"不是我们传的"。
+	 * - 新 key 上**已经有条目** ⇒ 保留它（它带着更新的 `lastUsedAt` 与真实落点），
+	 *   只把老条目摘掉；`remoteUrl` 以调用方给的为准不覆盖已有条目。
+	 * - 同一个 key 传进来 ⇒ 什么都不做（幂等，续跑时会反复调到）。
+	 *
+	 * @returns 有没有真的改到什么（台账或条目）
+	 */
+	rekey(from: string, to: string, remoteUrl: string): boolean {
+		const oldKey = typeof from === "string" ? from.trim() : "";
+		const newKey = typeof to === "string" ? to.trim() : "";
+		if (!oldKey || !newKey || oldKey === newKey) return false;
+
+		const hadEntry = this.entries.has(oldKey);
+		// ⚠️ 顺序：**先摘旧、再加新**。反过来在 `oldKey === newKey` 被上游写错时
+		// 会把唯一那条台账删掉（那时整份索引看起来"从来没过这个对象"）。
+		this.uploaded.delete(oldKey);
+		this.uploaded.add(newKey);
+		if (!hadEntry) return true;
+
+		const entry = this.entries.get(oldKey);
+		if (!entry) return true;
+		const existing = this.entries.get(newKey);
+		this.erase(oldKey);
+		if (existing) return true;
+		this.write({ ...entry, key: newKey, remoteUrl: remoteUrl || entry.remoteUrl });
+		return true;
+	}
+
+	/**
 	 * 按远端 URL 反查 —— 渲染钩子的入口。
 	 *
 	 * ⚠️ 同一个 key 可能被记成不同形式的 URL（配了 `publicUrlBase` 与没配、

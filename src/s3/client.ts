@@ -234,6 +234,22 @@ export function bucketTargetFor(address: ObjectAddress): RequestTarget {
 	return target;
 }
 
+/**
+ * 组装 `x-amz-copy-source` 的值（`/<桶>/<编码后的 key>`）。
+ *
+ * ⚠️ 与 {@link requestTargetFor} 的区别：那里在 virtual-host 风格下**不带桶名**
+ *（桶在域名里），而 copy-source 这个头**任何时候都要带桶** —— 少了它服务端只会回
+ * `InvalidArgument`，而错误文本不会提示"漏了桶名"。所以这里独立拼一份，不去复用
+ * 那个已经按风格分叉的路径。
+ */
+export function copySourceFor(address: ObjectAddress, key: string): string {
+	const bucket = String(address.bucket ?? "").trim();
+	if (!bucket) throw configError("S3 桶名未配置，请先在设置里填写");
+	const cleanKey = normalizeKey(key);
+	assertKeyUsable(cleanKey);
+	return `/${uriEncode(bucket)}/${encodePath(cleanKey).slice(1)}`;
+}
+
 /** 只要 URL 的便捷入口。 */
 export function objectUrl(address: ObjectAddress, key: string): string {
 	return requestTargetFor(address, key).url;
@@ -470,6 +486,20 @@ export interface S3ClientDeps {
 	 * 会失败、而且下次还能重试"，真机用默认值。
 	 */
 	timeouts?: Partial<Record<TransportMethod, number>>;
+}
+
+/**
+ * 复制结果。
+ *
+ * ⚠️ **没有 `size`**：CopyObject 不返回目标对象的字节数（只有 ETag）。
+ * 迁移要核对长度，只能复制完再 HEAD 一次 —— 这不是省事与否的问题，
+ * 而是"复制成功"与"字节真的到了"在这条 API 里本来就是两件事。
+ */
+export interface CopyResult {
+	key: string;
+	url: string;
+	etag: string;
+	attempts: number;
 }
 
 export interface PutResult {
@@ -744,6 +774,39 @@ export class S3Client {
 		});
 	}
 
+	/**
+	 * 服务端复制（`PUT` ＋ `x-amz-copy-source`）—— 迁移存量对象名时用（CR-15）。
+	 *
+	 * ⚠️ **S3 的 CopyObject 会在 200 里报错**：失败时正文是 `<Error><Code>…`，
+	 * 而状态码仍是 200。只看状态码就会把它当成成功，紧接着删掉旧 key —— 数据就没了。
+	 * 所以这里既看状态码，也看正文里**有没有 `CopyObjectResult`**。
+	 *
+	 * ⚠️ 不复制元数据以外的任何东西（不设 ACL、不加 `x-amz-metadata-directive`）：
+	 * 迁移只换 key，对象的字节与 Content-Type 应当原样保留，由服务端默认行为负责。
+	 */
+	async copyObject(sourceKey: string, targetKey: string): Promise<CopyResult> {
+		const target = requestTargetFor(this.config, targetKey);
+		const publicUrl = publicUrlFor(this.config, targetKey);
+		const payloadHash = await payloadHashOf("");
+		const copySource = copySourceFor(this.config, sourceKey);
+
+		return this.withRetry("copyObject", target.path, async (attempt) => {
+			const { headers } = await this.sign(target, "PUT", payloadHash, undefined, undefined, {
+				"x-amz-copy-source": copySource,
+			});
+			const response = await this.send({ url: target.url, method: "PUT", headers }, {
+				operation: "COPY",
+				key: target.path,
+				attempt,
+			});
+			const text = new TextDecoder().decode(response.body);
+			if (!isSuccess(response.status) || !/<CopyObjectResult\b/i.test(text)) {
+				throw this.fail(response, { operation: "COPY", key: target.path, attempt });
+			}
+			return { key: target.path, url: publicUrl, etag: etagOf(response.headers), attempts: attempt };
+		});
+	}
+
 	/** 下载。404 会被当作错误抛出（是否容忍由调用方决定）。 */
 	async getObject(key: string): Promise<GetResult> {
 		const target = requestTargetFor(this.config, key);
@@ -981,7 +1044,15 @@ export class S3Client {
 		method: string,
 		payloadHash: string,
 		contentType?: string,
-		query?: Record<string, string>
+		query?: Record<string, string>,
+		/**
+		 * 额外要签的头（目前只有 COPY 的 `x-amz-copy-source`）。
+		 *
+		 * ⚠️ 必须**进签名**：SigV4 要求所有 `x-amz-*` 头参与签名。拼进请求却不签，
+		 * 服务端回的是 `SignatureDoesNotMatch` —— 而那种错误看起来像"密钥填错了"，
+		 * 排查方向会被彻底带偏。
+		 */
+		extraHeaders?: Record<string, string>
 	): Promise<{ headers: Record<string, string> }> {
 		this.assertConfig();
 		const { amzDate } = formatAmzDate(this.now());
@@ -994,6 +1065,7 @@ export class S3Client {
 			"x-amz-date": amzDate,
 		};
 		if (contentType) toSign["content-type"] = contentType;
+		for (const name of Object.keys(extraHeaders ?? {})) toSign[name.toLowerCase()] = extraHeaders?.[name] ?? "";
 
 		const { authorization } = await signRequest({
 			method,

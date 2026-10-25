@@ -34,8 +34,8 @@
  *   而且遗留值该从文件里清掉 ⇒ 见 `hasLegacyObjectKeyTemplate` 与 `main.ts` 的载入流程。
  */
 
-import { EXTERNAL_SITE_MODES, LOCAL_COPY_ACTIONS, isExternalSiteMode, isLocalCopyAction } from "./types";
-import type { ExternalSiteMode, LocalCopyAction, PluginSettings, S3Config } from "./types";
+import { EXTERNAL_SITE_MODES, LOCAL_COPY_ACTIONS, MIGRATION_STATES, isExternalSiteMode, isLocalCopyAction } from "./types";
+import type { ExternalSiteMode, LocalCopyAction, MigrationState, PluginSettings, S3Config } from "./types";
 import { CACHE_LIMIT_MB_MAX } from "./types";
 import { isPlainRecord } from "./records";
 import { isSafeId } from "./s3/declaration";
@@ -194,6 +194,9 @@ const FACTORY_SETTINGS = {
 	// 那会让所有设备写出同一个前缀，声明互相覆盖。
 	vaultId: "",
 	deviceId: "",
+	// ⚠️ 持久化的是**闸门**不是进度：崩溃时它留在 `running`，于是重启后改名仍被拒，
+	// 直到用户明确选「继续」或「放弃」（见 `types.ts::MigrationState`）。
+	migrationState: "idle" as MigrationState,
 } as const;
 
 /**
@@ -218,6 +221,7 @@ const SETTINGS_SPEC: {
 	sharedBucket: boolValue(),
 	vaultId: idValue(),
 	deviceId: idValue(),
+	migrationState: oneOfValue(MIGRATION_STATES),
 };
 
 const S3_FALLBACKS: S3Config = {

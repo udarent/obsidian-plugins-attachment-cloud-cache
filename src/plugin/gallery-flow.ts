@@ -28,6 +28,7 @@ import { enumerateGallery } from "../gallery/enumerate";
 import type { GalleryItem, GallerySnapshot } from "../gallery/enumerate";
 import { keyOfUrl, referenceSnapshot } from "./notes-query";
 import { hashFromKey } from "../object-key";
+import { blocksRename } from "../maintenance/migrate-keys";
 import { scanReferences, runBatchUpload } from "../maintenance/run";
 import type { BatchResult } from "../maintenance/run";
 import { selectLocalOrphans } from "../maintenance/local-orphans";
@@ -381,6 +382,15 @@ export async function convertToLocalSelected(
 }
 
 export async function renameItem(ctx: PluginContext, id: string, newPath: string): Promise<void> {
+	// ⚠️ **执行层闸门**（CR-15 / §9.6）：迁移期间改名会让"新 key 由旧名推出来"这条链错位
+	// （声明里的名字改了，而对象名是按改之前的名字算的）⇒ 续跑时又会算出一个新 key。
+	//
+	// 判据读**持久化的状态位**，不是弹窗里那颗灰掉的按钮：命令面板、别的插件、同步回调
+	// 都能绕过界面（本项目的老规矩：判据不许只有 UI 一层）。
+	if (blocksRename(ctx.settings.migrationState)) {
+		new Notice(ctx.t("unifyNamesRenameBlocked"));
+		throw new Error("gallery rename: blocked while unifying object names");
+	}
 	const file = ctx.app.vault.getAbstractFileByPath(id);
 	if (!(file instanceof TFileClass)) throw new Error("gallery rename: not a file");
 	await ctx.app.fileManager.renameFile(file, newPath);
