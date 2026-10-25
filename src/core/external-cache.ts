@@ -352,6 +352,11 @@ export interface ExternalCacherDeps extends NotifySink {
 	now?: () => Date;
 	hashBytes?: (bytes: Uint8Array) => Promise<string>;
 	/**
+	 * 共享桶（R25）：把这次引用登记进本设备的声明（见 `IngestDeps.declareRef`）。
+	 * ⚠️ 必须**转交**而不是丢掉：站外缓存也是一次"本库开始引用某个对象"。
+	 */
+	declareRef?: (ref: { hash: string; name: string; ext: string }) => Promise<boolean>;
+	/**
 	 * 读一份**本机绝对路径**上的文件（`file:///D:/…` 那条路用）。
 	 *
 	 * ⚠️ 留成接缝只为**测试**：生产路径上必须是默认值（`local-file.ts` 里那份真读磁盘的实现）。
@@ -554,6 +559,7 @@ export function createExternalCacher(deps: ExternalCacherDeps): ExternalCacher {
 				t: deps.t,
 				hashBytes: deps.hashBytes,
 				now: deps.now,
+				declareRef: deps.declareRef,
 				// ⭐ 标记来源：云端清理据此把站外缓存整体排除（见 CacheEntry.origin）
 				origin: "external",
 			},

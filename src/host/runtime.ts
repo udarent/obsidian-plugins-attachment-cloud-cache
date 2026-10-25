@@ -229,6 +229,11 @@ export interface HostContext {
 	 * 由 `host/intercept.ts::createAnnounceGate` 实现，两条入口共用同一个闸门。
 	 */
 	claimUnconfiguredNotice?: () => boolean;
+	/**
+	 * 共享桶（R25）：上传前把引用登记进声明（见 `IngestDeps.declareRef`）。
+	 * 省略 = 功能关着（一个请求都不多发）。
+	 */
+	declareRef?: (ref: { hash: string; name: string; ext: string }) => Promise<boolean>;
 }
 
 export interface TransferRequest {
@@ -263,6 +268,7 @@ export async function runTransfer(host: HostContext, request: TransferRequest): 
 				// 中转文件的标记（见 `HostContext.onStaged`）：没有它，自动接管那条链
 				// 会把自己刚落下、还要用它上传的中转文件当成用户新加的附件再传一遍。
 				onStaged: host.onStaged,
+				declareRef: host.declareRef,
 			},
 			req
 		);

@@ -242,6 +242,16 @@ export class SettingsTab extends PluginSettingTab {
 			},
 
 			{
+				// ⭐ 共享桶（R25 / CR-13）：一项**决策**，放在「测试连接」这个**动作**之前 ——
+				// 动作永远是这一组的最后一项（D-89：动作不夹在参数之间）。
+				// ⚠️ 描述是**纯文本**（`**` 会原样显示），且只讲"做什么 + 关键影响"：
+				// 要不要多一项 `ListBucket` 权限，是打开它之前唯一必须知道的事实。
+				name: this.t("sharedBucket"),
+				desc: this.t("sharedBucketDesc"),
+				aliases: ["shared", "multiple devices", "several vaults", "ListBucket", "多设备", "共用", "共享", "权限"],
+				control: { type: "toggle", key: "sharedBucket" },
+			},
+			{
 				// ⭐ 状态与按钮**在同一项里**（2026-10-18）：用户问的是"现在通不通"，
 				// 而按钮就是让这个答案变成"刚才"的那个动作 —— 分成两项，用户得在两处
 				// 之间来回对照，还会以为它们是两件不相干的事。

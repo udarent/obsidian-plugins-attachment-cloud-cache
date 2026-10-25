@@ -164,6 +164,17 @@ export const I18N: Record<string, Locale> = {
 
 		// ── 维护命令 ──
 		cloudCleanupPersistFailed: "Could not save the local-copy index: {error}",
+		// ── 共享桶（R25 / CR-13）──
+		sharedBucket: "Shared bucket",
+		sharedBucketDesc:
+			"Let several devices or vaults share one bucket: each upload records what this vault uses before the file is sent, and deleting from the cloud skips anything another device still uses. Needs the ListBucket permission.",
+		sharedBucketNoIdentity: "Not uploaded: this vault has no identity yet. Reload the plugin and try again.",
+		sharedBucketStateUnreadable: "Not uploaded: could not read this device's reference record ({error}).",
+		sharedBucketDeclareFailed: "Not uploaded: could not record the reference in the bucket ({error}).",
+		sharedBucketNoDeclaration: "Nothing is listed: this bucket has no reference record yet. Upload something first.",
+		sharedBucketBlocked: "Nothing is deleted: the cross-device reference record could not be read ({error}).",
+		sharedBucketStopped: "Stopped after {count}: the reference record changed while deleting. Nothing else was deleted.",
+		sharedBucketCheckpointFailed: "Stopped after {count}: the reference record became unreadable. Nothing else was deleted.",
 		cloudCleanupUnreadableNote: "Could not read {path}, so the cleanup was cancelled.",
 		// F18：清理本地副本。⚠️ 2026-10-24 起**没有独立的设置项**了（按钮取消）：
 		// 触发点是「上传全部附件」的收尾（按 `localCopy` 档位）与切档时的那一次询问。
@@ -509,6 +520,17 @@ export const I18N: Record<string, Locale> = {
 		ingestIndexPersistFailed: "文件已上传，但本地副本索引保存失败：{error}",
 
 		cloudCleanupPersistFailed: "本地副本索引保存失败：{error}",
+		// ── 共享桶（R25 / CR-13）──
+		sharedBucket: "共享桶",
+		sharedBucketDesc:
+			"允许多台设备或多个库共用一个桶：上传时先记下本库引用了什么，删除云端时跳过别的设备还在用的对象。需要 ListBucket 权限。",
+		sharedBucketNoIdentity: "没有上传：本库还没有身份标识。重载插件后再试。",
+		sharedBucketStateUnreadable: "没有上传：读不到本设备的引用记录（{error}）。",
+		sharedBucketDeclareFailed: "没有上传：引用记录写不进桶里（{error}）。",
+		sharedBucketNoDeclaration: "没有列出任何对象：这个桶里还没有引用记录。先传一次再试。",
+		sharedBucketBlocked: "一个都没删：跨设备引用记录读不到（{error}）。",
+		sharedBucketStopped: "删到 {count} 个就停了：期间引用记录被改动过，剩下的没删。",
+		sharedBucketCheckpointFailed: "删到 {count} 个就停了：引用记录读不到了，剩下的没删。",
 		cloudCleanupUnreadableNote: "读不到 {path}，因此取消了这次清理。",
 		// F18：清理本地副本。⚠️ 2026-10-24 起**没有独立的设置项**了（按钮取消）：
 		// 触发点是「上传全部附件」的收尾（按 `localCopy` 档位）与切档时的那一次询问。

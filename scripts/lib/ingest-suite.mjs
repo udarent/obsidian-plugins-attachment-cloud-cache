@@ -1297,10 +1297,34 @@ export async function runIngestSuite(mod) {
 		assert.equal(h.server.countByMethod("PUT"), 1, "复用时不得再上传");
 	});
 
+	// ============================================================
+	// 23. ⭐ 共享桶：**先登记声明、再传字节**（顺序是安全边界）
+	// ============================================================
+	await withHarness(mod, {}, async (h) => {
+		const seen = [];
+		const refused = await ingestAttachment(
+			{ ...h.deps, declareRef: async (ref) => { seen.push(ref); return false; } },
+			{ bytes: HOSTILE_BYTES, name: "photo.png", mime: "image/png" }
+		);
+		assert.equal(seen.length, 1, "上传之前必须问一次声明（顺序反了就会留下没有保护的对象）");
+		assert.equal(seen[0].hash, sha256Hex(HOSTILE_BYTES), "登记的是内容哈希（不是 key）");
+		assert.equal(seen[0].ext, "png", "扩展名也登记（共享桶下 key 里可能没有名字）");
+		assert.equal(refused.status, "fallback", "★ 声明写不进去 ⇒ 降级成本地链接，这一份不传");
+		assert.equal(h.server.countByMethod("PUT"), 0, "★ 0 次 PUT：没有保护的对象绝不能出现在桶里");
+		assert.ok(refused.localPath, "降级不等于丢东西 —— 字节仍在库里");
+
+		const accepted = await ingestAttachment(
+			{ ...h.deps, declareRef: async () => true },
+			{ bytes: HOSTILE_BYTES, name: "ok.png", mime: "image/png" }
+		);
+		assert.equal(accepted.status, "uploaded", "登记成功 ⇒ 照常上传");
+		assert.equal(h.server.countByMethod("PUT"), 1, "只传了这一份");
+	});
+
 	// ⚠️ 这是**手工维护**的规模数（按 `// N.` 用例块数），不是运行时统计 ——
 	// 加用例时要顺手改它（2026-10-14 复核时它停在 18 而实际已 30+，是本项目
-	// "检查还在跑、但已经不检查任何东西"那一类问题的近亲）。本轮新增 §3g/§3h 四个块。
-	return { scenarios: 22 };
+	// "检查还在跑、但已经不检查任何东西"那一类问题的近亲）。本轮新增 §3g/§3h 四个块；§23 是共享桶的"先登记后上传"。
+	return { scenarios: 23 };
 }
 
 /** 造一个"总是失败"的客户端，用来构造降级路径。 */

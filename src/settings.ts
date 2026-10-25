@@ -38,6 +38,7 @@ import { EXTERNAL_SITE_MODES, LOCAL_COPY_ACTIONS, isExternalSiteMode, isLocalCop
 import type { ExternalSiteMode, LocalCopyAction, PluginSettings, S3Config } from "./types";
 import { CACHE_LIMIT_MB_MAX } from "./types";
 import { isPlainRecord } from "./records";
+import { isSafeId } from "./s3/declaration";
 
 // 枚举类型守卫定义在 types.ts（与枚举本身同处一地，避免两个模块各存一份）。
 // 这里转出去，让"读设置的模块"同时就是"拿守卫的模块"。
@@ -144,6 +145,16 @@ function numberValue(options: { min?: number; max?: number } = {}): FieldReader<
 }
 
 /**
+ * 身份串（`vaultId` / `deviceId`）：只认声明层那套形状。
+ *
+ * 不合法的值**回退到默认值（空串）**，由载入流程重新生成 —— 这一点比"原样保留"重要：
+ * 一个带 `/` 或 `..` 的 id 会被拼进对象 key（声明前缀），保留它等于允许写到别的前缀去。
+ */
+function idValue(): FieldReader<string> {
+	return (raw, fallback) => (isSafeId(raw) ? raw : fallback);
+}
+
+/**
  * 出厂默认值（**内部**表，名字与导出的 `SETTINGS_DEFAULTS` 区分开）。
  *
  * 与字段阅读器分开，是为了让"字段表只描述**怎么读**"，默认值只有一处定义：
@@ -176,6 +187,13 @@ const FACTORY_SETTINGS = {
 	// ⚠️ 默认**关**：它只写控制台，但"默认就在打日志"会让排障时无法区分
 	// "这条是本次的"还是"上次留下的"，也会让支持者收到无关的粘贴。
 	debugLogging: false,
+	// ⚠️ 默认**关**：打开它要给密钥加 `ListBucket` 权限，而且"保护成立"要求所有在用设备
+	// 都升级并打开（旧版不写声明）⇒ 出厂就开着等于给了半个承诺。
+	sharedBucket: false,
+	// 空串 = 还没生成（`loadSettings` 会补一次随机值并落盘）。空串**不能**当成身份用：
+	// 那会让所有设备写出同一个前缀，声明互相覆盖。
+	vaultId: "",
+	deviceId: "",
 } as const;
 
 /**
@@ -197,6 +215,9 @@ const SETTINGS_SPEC: {
 	uploadLocalFiles: boolValue(),
 	cacheLimitMb: numberValue({ min: 0, max: CACHE_LIMIT_MB_MAX }),
 	debugLogging: boolValue(),
+	sharedBucket: boolValue(),
+	vaultId: idValue(),
+	deviceId: idValue(),
 };
 
 const S3_FALLBACKS: S3Config = {

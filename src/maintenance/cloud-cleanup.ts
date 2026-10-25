@@ -47,7 +47,9 @@
  */
 
 import type { CacheIndex } from "../cache/index";
+import { hashFromKey } from "../object-key";
 import type { S3Client } from "../s3/client";
+import type { CleanupGuard, GuardStart } from "./shared-bucket";
 
 /**
  * 把"笔记里引用着的 URL"换算成**对象 key** 集合。
@@ -101,6 +103,20 @@ export interface CloudCleanupDeps {
 	 * 合并会让删除日志里出现"删失败"的记录，或者让进度停在失败的那一件上。
 	 */
 	onItem?: (event: { key: string; status: "done" | "skipped" | "failed" }) => void;
+	/**
+	 * ⭐ 共享桶（R25）：删之前先读全桶的引用声明，被**别的设备/别的库**占着的对象跳过。
+	 *
+	 * 未注入 = 不启用（功能关着，或者身份没生成）。此时行为与从前逐字节相同。
+	 *
+	 * ⚠️ 它是**唯一**的跨库判据，判据本身在 `maintenance/shared-bucket.ts`；
+	 * 这一层只负责"开始前问一次、每 20 个再看一眼、被占就跳过"。
+	 */
+	guard?: CleanupGuard;
+	/**
+	 * 某个对象**因为被别的设备占用而跳过**时回调（供汇报列出是谁占着）。
+	 * ⚠️ 与 `onItem({status:"skipped"})` 不重复：那个是进度，这个是**原因**。
+	 */
+	onDenied?: (event: { key: string; occupants: readonly { vault: string; device: string }[] }) => void;
 }
 
 export interface CloudCleanupResult {
@@ -122,6 +138,27 @@ export interface CloudCleanupResult {
 	failed: number;
 	/** 顺带摘掉的索引记录数（见 `maintenance/run.ts` 里"删完要摘记录"的同一条理由）。 */
 	unindexed: number;
+	/**
+	 * 因**别的设备/别的库仍在引用**而跳过的对象数（共享桶打开时才有意义）。
+	 * ⚠️ 与 `failed` 分开：跳过是**设计如此**，不是出错。
+	 */
+	denied: number;
+	/**
+	 * 整批被挡下时的原因（一个都没删）。
+	 *
+	 * `no-declaration` ⇒ 桶里还没有声明（首次使用 / 别的设备都是旧版）；
+	 * 其余是读声明失败（权限、网络、形状）。⚠️ **都不许说成"没人引用"**。
+	 */
+	blocked?: "no-declaration" | "too-many" | "failed" | "corrupt" | "unstable";
+	/** 被挡下时的原始错误（`blocked === "failed"` 时有值）。 */
+	blockedDetail?: string;
+	/**
+	 * 批量跑到一半提前停止的原因。
+	 *
+	 * `changed` ⇒ 期间有人写过声明（"没人引用"这个结论已经过期）；
+	 * `failed` ⇒ 指纹都重算不出来。两种都**停剩余批次**（宁停不误删）。
+	 */
+	stopped?: "changed" | "failed";
 }
 
 /**
@@ -148,13 +185,60 @@ export async function runCloudCleanup(
 	deps: CloudCleanupDeps,
 	keys: readonly string[]
 ): Promise<CloudCleanupResult> {
-	const result: CloudCleanupResult = { deleted: 0, alreadyGone: 0, failed: 0, unindexed: 0 };
+	const result: CloudCleanupResult = {
+		deleted: 0,
+		alreadyGone: 0,
+		failed: 0,
+		unindexed: 0,
+		denied: 0,
+	};
 	const removed: string[] = [];
 	/** 台账有没有被改动（与 `removed` 分开记：两者会不一致，见下面那段说明）。 */
 	let forgotLedger = false;
 
+	// ⭐ 共享桶：**开始前读一次全桶声明**（与候选数量无关）。读不到就一个都不删 ——
+	// 把"没读到"当成"没人引用"是这一层唯一不可接受的错。
+	let start: Extract<GuardStart, { ok: true }> | null = null;
+	if (deps.guard) {
+		const begun = await deps.guard.begin();
+		if (!begun.ok) {
+			result.blocked = begun.reason;
+			if (begun.detail !== "") result.blockedDetail = begun.detail;
+			for (const key of keys ?? []) deps.onItem?.({ key, status: "skipped" });
+			return result;
+		}
+		start = begun;
+	}
+
+	/** 处理完一件之后数一个：每 20 件重算一次声明指纹（见下面的检查点）。 */
+	let processed = 0;
+	const CHECKPOINT_EVERY = 20;
+	const afterItem = async (): Promise<boolean> => {
+		processed += 1;
+		if (!deps.guard || processed % CHECKPOINT_EVERY !== 0) return true;
+		const verdict = await deps.guard.checkpoint();
+		if (verdict === "same") return true;
+		// 声明集合变了（或读不到了）⇒ 停剩余批次，原因如实带回去
+		result.stopped = verdict;
+		return false;
+	};
+
 	for (const key of keys ?? []) {
 		if (typeof key !== "string" || key === "") continue;
+
+		// ⭐ 跨库判据：被别的设备/别的库占着 ⇒ 跳过（**不可恢复**的那一步，宁可少删）
+		if (start) {
+			const hash = hashFromKey(key);
+			// 哈希都推不出来（模板时代的老 key）⇒ 无法判断 ⇒ 同样跳过
+			if (hash === null || start.isDenied(hash)) {
+				result.denied += 1;
+				deps.onDenied?.({ key, occupants: hash === null ? [] : start.occupantsOf(hash) });
+				deps.onItem?.({ key, status: "skipped" });
+				if (!(await afterItem())) break;
+				continue;
+			}
+		}
+
 		try {
 			const ok = await deps.client.deleteObject(key);
 			if (ok) {
@@ -182,6 +266,7 @@ export async function runCloudCleanup(
 			deps.onItem?.({ key, status: "failed" });
 			void error;
 		}
+		if (!(await afterItem())) break;
 	}
 
 	// 条目与台账的改动都要落盘：它们平时同进同退（有副本才有条目），

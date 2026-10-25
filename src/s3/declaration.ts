@@ -50,6 +50,29 @@ export function isSafeId(value: unknown): value is string {
 	return typeof value === "string" && SAFE_ID.test(value);
 }
 
+/**
+ * 生成一个身份串（`vaultId` / `deviceId`）。
+ *
+ * ⚠️ 它**不是**机密，只是标识符：要的只有"唯一且稳定"，所以时间 ＋ 随机数就够，
+ * 不引 `crypto`（移动端没有 `node:crypto`，`crypto.subtle` 是异步的、还要 polyfill）。
+ * 形状必须过 {@link isSafeId} —— 它会被拼进对象 key 的前缀。
+ *
+ * ⚠️ 同一个库的**每台设备共用 `vaultId`、各有 `deviceId`**：前者变了等于所有声明失联，
+ * 后者变了只是多出一份"旧设备"的声明（会被当成别的设备永久保护，安全但会挡住清理）。
+ */
+export function randomId(
+	random: () => number = Math.random,
+	now: () => number = Date.now
+): string {
+	const time = Math.max(0, Math.floor(now())).toString(36);
+	let tail = "";
+	for (let i = 0; i < 3; i += 1) {
+		const value = Math.floor(Math.max(0, Math.min(0.999999, random())) * 36 ** 6);
+		tail += value.toString(36).padStart(6, "0");
+	}
+	return `${time}-${tail}`.slice(0, 64);
+}
+
 // ─────────────────────────────── 布局 ───────────────────────────────
 
 /** `_acc/v1/<vault>`（不含末尾斜杠）；任一段非法就给空串。 */

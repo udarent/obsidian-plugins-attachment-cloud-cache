@@ -218,10 +218,114 @@ export async function runCloudCleanupSuite(mod) {
 		assert.equal(asked, 0, "空清单不该发任何请求");
 		assert.deepEqual(
 			result,
-			{ deleted: 0, alreadyGone: 0, failed: 0, unindexed: 0 },
+			{ deleted: 0, alreadyGone: 0, failed: 0, unindexed: 0, denied: 0 },
 			"空清单的统计全为 0"
 		);
 	}
 
-	return { cases: 8 };
+
+	// ============================================================
+	// 9. ⭐ 共享桶：读不到声明 ⇒ 一个都不删（不是"没人引用"）
+	// ============================================================
+	{
+		const asked = [];
+		const items = [];
+		const result = await runCloudCleanup(
+			{
+				client: {
+					deleteObject: async (key) => {
+						asked.push(key);
+						return true;
+					},
+				},
+				index: () => ({ remove: () => true, forgetUploaded: () => true, get: () => undefined }),
+				persistIndex: async () => {},
+				notify: () => {},
+				t: (key) => key,
+				guard: {
+					begin: async () => ({ ok: false, reason: "no-declaration", detail: "" }),
+					checkpoint: async () => "same",
+				},
+				onItem: (event) => items.push(event.status),
+			},
+			["a.png", "b.png"]
+		);
+		assert.equal(asked.length, 0, "★ 读不到声明 ⇒ 一个都不删（把「没读到」当成「没人引用」是唯一不可接受的错）");
+		assert.equal(result.blocked, "no-declaration", "原因要能说清是「还没有声明」");
+		assert.equal(result.denied, 0, "这不是「被占用跳过」，别混进同一个计数");
+		assert.deepEqual(items, ["skipped", "skipped"], "每一件都要报「跳过」，不能报成功");
+	}
+
+	// ============================================================
+	// 10. ⭐ 被别的设备占着 ⇒ 跳过；自己的 hash 照删
+	// ============================================================
+	{
+		const asked = [];
+		const denied = [];
+		const mine = "a".repeat(64);
+		const other = "b".repeat(64);
+		const result = await runCloudCleanup(
+			{
+				client: {
+					deleteObject: async (key) => {
+						asked.push(key);
+						return true;
+					},
+				},
+				index: () => ({ remove: () => true, forgetUploaded: () => true, get: () => undefined }),
+				persistIndex: async () => {},
+				notify: () => {},
+				t: (key) => key,
+				guard: {
+					begin: async () => (
+						{ ok: true, isDenied: (hash) => hash === other, occupantsOf: () => [{ vault: "v1", device: "d2" }], declarationCount: 1 }
+					),
+					checkpoint: async () => "same",
+				},
+				onDenied: (event) => denied.push(event),
+			},
+			[`mine-${mine}.png`, `other-${other}.png`]
+		);
+		assert.deepEqual(asked, [`mine-${mine}.png`], "★ 只有自己的那条被删（别人的跳过 = 保护生效）");
+		assert.equal(result.deleted, 1, "删了一个");
+		assert.equal(result.denied, 1, "跳过要单独计数（不是 failed）");
+		assert.equal(denied.length, 1, "要报出被跳过的那一条");
+		assert.deepEqual(denied[0].occupants.map((who) => who.device), ["d2"], "汇报里要说清是谁占着");
+	}
+
+	// ============================================================
+	// 11. ⭐ 检查点：第 20 件之后声明变了 ⇒ 停剩余批次
+	// ============================================================
+	{
+		const asked = [];
+		let checkpoints = 0;
+		const keys = Array.from({ length: 30 }, (_, i) => `f${i}-${String(i).padStart(64, "0")}.bin`);
+		const result = await runCloudCleanup(
+			{
+				client: {
+					deleteObject: async (key) => {
+						asked.push(key);
+						return true;
+					},
+				},
+				index: () => ({ remove: () => true, forgetUploaded: () => true, get: () => undefined }),
+				persistIndex: async () => {},
+				notify: () => {},
+				t: (key) => key,
+				guard: {
+					begin: async () => ({ ok: true, isDenied: () => false, occupantsOf: () => [], declarationCount: 1 }),
+					checkpoint: async () => {
+						checkpoints += 1;
+						return "changed";
+					},
+				},
+			},
+			keys
+		);
+		assert.equal(checkpoints, 1, "每 20 件一个检查点");
+		assert.equal(asked.length, 20, "★ 变了就停：只删了前 20 个，剩下 10 个不动（宁停不误删）");
+		assert.equal(result.stopped, "changed", "原因要说清是「声明变了」");
+	}
+
+	return { cases: 11 };
 }

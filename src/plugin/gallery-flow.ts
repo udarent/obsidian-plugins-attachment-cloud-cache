@@ -31,6 +31,7 @@ import { scanReferences, runBatchUpload } from "../maintenance/run";
 import type { BatchResult } from "../maintenance/run";
 import { selectLocalOrphans } from "../maintenance/local-orphans";
 import { runCloudCleanup } from "../maintenance/cloud-cleanup";
+import { sharedBucketGuardFor } from "./shared-bucket-flow";
 import type { CloudCleanupResult } from "../maintenance/cloud-cleanup";
 import { writeDeleteLog } from "./shared-flows";
 import { formatSize } from "../gallery/enumerate";
@@ -263,9 +264,12 @@ export async function deleteCloudSelected(
 			alreadyGone: 0,
 			failed: keys.length,
 			unindexed: 0,
+			denied: 0,
 		};
 	}
 	const records: DeletedObjectRecord[] = [];
+	// ⭐ 共享桶（R25）：功能关着就是 `null` —— 一次多余的请求都不发
+	const guard = sharedBucketGuardFor(ctx, client) ?? undefined;
 	const result = await runCloudCleanup(
 		{
 			client,
@@ -273,12 +277,30 @@ export async function deleteCloudSelected(
 			persistIndex: () => ctx.hostContext().persistIndex(),
 			notify: (message) => new Notice(message),
 			t: ctx.t,
+			guard,
 			onRemoved: (record) => records.push({ ...record, scope: "command" }),
 			onItem: (event) => onItem?.(event.key, event.status),
 		},
 		keys
 	);
 	await writeDeleteLog(ctx, records);
+	// ⚠️ 三种"没删成"必须各说一句，否则用户只看到"全部跳过"却不知道原因：
+	// ① 被别的设备占着（跳过是**设计如此**）；② 整批被挡（没声明 / 读不到）；
+	// ③ 跑到一半声明变了（停剩余批次）。三种都不许说成"清理完成"。
+	if (result.blocked) {
+		new Notice(
+			ctx.t(result.blocked === "no-declaration" ? "sharedBucketNoDeclaration" : "sharedBucketBlocked", {
+				error: result.blockedDetail ?? "",
+			})
+		);
+	}
+	if (result.stopped) {
+		new Notice(
+			ctx.t(result.stopped === "changed" ? "sharedBucketStopped" : "sharedBucketCheckpointFailed", {
+				count: result.deleted + result.alreadyGone,
+			})
+		);
+	}
 	return result;
 }
 

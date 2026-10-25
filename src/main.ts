@@ -27,6 +27,8 @@
 import { Component, MarkdownRenderer, Notice, Platform, Plugin, TFile, TFolder, getLanguage } from "obsidian";
 
 import { SETTINGS_DEFAULTS, hasLegacyExternalImageDefault, hasLegacyObjectKeyTemplate, legacyAutoCacheEnabled, mergePluginSettings } from "./settings";
+import { isSafeId, randomId } from "./s3/declaration";
+import { rememberReferences } from "./plugin/shared-bucket-flow";
 import type { LocalCopyAction, PluginSettings } from "./types";
 import { detectLocale, translate } from "./i18n";
 import { SettingsTab } from "./ui/settings-tab";
@@ -766,6 +768,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 						// ⚠️ 只有这条路（批量 / 新增附件接管）会传：粘贴与站外缓存两条路
 						// 不产生 `twinPath`，那个前提不成立，问了也不会被用上。
 						probeRemote: (key) => this.probeRemoteObject(key),
+						declareRef: (ref) => this.declareReference(ref),
 						notify: (message) => new Notice(message),
 						// ⚠️ 文案由这一层给：核心层只决定"说哪一句"（见 `IngestDeps.t`）
 						t: (key, params) => this.t(key, params),
@@ -800,6 +803,22 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * "成了没有、为什么没成"正是他在等的东西。执行层自己会过滤掉不值得打扰的
 	 * 几种结局（超时 / 断网 / 未配置），所以这里不会变成刷屏。
 	 */
+	/**
+	 * 共享桶：把一次上传的引用登记进**本设备的声明**（R25 / CR-13）。
+	 *
+	 * 返回 `false` ⇒ 这一次**不传**（`core/ingest.ts` 第 3b 步据此降级成本地链接）。
+	 * 失败原因在 `plugin/shared-bucket-flow.ts` 里发通知（它知道是身份、权限还是网络）。
+	 *
+	 * ⚠️ 功能关着时**一次请求都不发**：这里先看开关，再看有没有客户端。
+	 */
+	private async declareReference(ref: { hash: string; name: string; ext: string }): Promise<boolean> {
+		if (!this.settings.sharedBucket) return true;
+		const client = this.buildClient();
+		// 没有客户端时上传本来也走不通；这里不额外发通知（上传那条路会自己报）
+		if (!client) return false;
+		return rememberReferences(this.flowContext(), client, [ref]);
+	}
+
 	private cacheExternalImage(url: string, notePath: string | undefined, report = false) {
 		return createExternalCacher({
 			app: this.app,
@@ -808,6 +827,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			client: () => this.buildClient(),
 			index: () => this.currentIndex(),
 			persistIndex: () => this.hostContext().persistIndex(),
+			declareRef: (ref) => this.declareReference(ref),
 			...(report
 				? { notify: (message: string) => new Notice(message), t: (key: string, params?: Record<string, unknown>) => this.t(key, params) }
 				: {}),
@@ -1644,6 +1664,21 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		// "文件里还有没有那个键"）。写失败也不影响本次运行 —— 设置已经是对的，
 		// 只是文件要到下次保存才干净，所以这里**不提示失败**（那会变成每次启动都弹一条噪音）。
 		let needsRewrite = false;
+
+		// ⭐ 身份（R25 / CR-13）：`vaultId` / `deviceId` 只生成一次，之后随设置一起落盘。
+		//
+		// ⚠️ 必须**当场落盘**（而不是等用户下次改设置）：不落盘的话每次启动都是新身份，
+		// 上一轮写的声明会被当成"别的设备"⇒ 永远保护着、谁也删不掉（安全但会挡死清理）。
+		// ⚠️ 用随机串而不是库路径：用户改目录名不该让所有声明失效。
+		if (!isSafeId(this.settings.vaultId)) {
+			this.settings.vaultId = randomId();
+			needsRewrite = true;
+		}
+		if (!isSafeId(this.settings.deviceId)) {
+			this.settings.deviceId = randomId();
+			needsRewrite = true;
+		}
+
 		if (hasLegacyObjectKeyTemplate(stored)) {
 			this.legacyKeyTemplateUpgraded = true;
 			needsRewrite = true;
@@ -1788,6 +1823,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			// 所以这条线当下用不到 —— 但留着它，将来任何在这条线上新增"落盘"的调用方
 			// 都不会踩同一个坑（自写的中转文件被当成用户的新附件）。
 			onStaged: (path) => this.stagedPaths.note(path),
+			// 共享桶：粘 / 拖 / 站外缓存 / 批量 / 自动接管 —— 全部经这一条缝
+			declareRef: (ref) => this.declareReference(ref),
 			beginUpload: (count) => this.beginUpload(count),
 			endUpload: () => this.endUpload(),
 			claimUnconfiguredNotice: () => this.unconfiguredAnnounce(),

@@ -234,6 +234,19 @@ export interface IngestDeps extends NotifySink {
 	 * 再接管一次 —— 重复上传，而且两条路会抢同一个文件。
 	 */
 	onStaged?: (path: string) => void;
+	/**
+	 * ⭐ 共享桶（R25）：把这次引用登记进**本设备的引用声明**。
+	 *
+	 * 调用点在第 4 步（上传）**之前** —— 顺序是安全边界：
+	 * 先有声明、后有对象 ⇒ 最坏情况是"声明里有一个还不存在的 hash"（无害，删不掉东西）；
+	 * 反过来就有一段时间对象**没有任何保护**，而别的设备此刻清理会把它判成孤儿删掉。
+	 *
+	 * 返回 `false` ⇒ **这次不传**（调用方拿到本地链接降级）。失败原因由注入方报
+	 *（它知道是权限、网络还是身份没生成）。
+	 *
+	 * ⚠️ 未注入 = 不启用（功能关着）。此时一个请求都不多发。
+	 */
+	declareRef?: (ref: { hash: string; name: string; ext: string }) => Promise<boolean>;
 }
 
 /** 扩展名全缺时的兜底。用 `bin` 而不是空串 —— 见下方 `resolveKeyExtension`。 */
@@ -636,6 +649,29 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 			// 连本地都没能落成。调用方必须**大声报错** —— 此时用户粘贴的内容确实没留下，
 			// 而这正是"绝不丢图"要避免的极端情况。
 			return { status: "fallback", key, ext, name: fileName, displayName: displayFor(key), remoteUrl: "", localPath: "", etag: "", error: asError(error) };
+		}
+	}
+
+	// ── 3b. 共享桶：**先登记引用、再传字节**（顺序是安全边界，见 `IngestDeps.declareRef`）──
+	//
+	// ⚠️ 复用分支（对象已在云端）也要登记：声明的语义是"本库当前引用了哪些内容"，
+	// 与"这次有没有 PUT"无关 —— 漏掉它，换设备后第一次看图就不会被保护。
+	if (deps.declareRef && contentHash) {
+		const declared = await deps.declareRef({ hash: contentHash, name: fileName, ext });
+		if (!declared) {
+			// 声明写不进去 ⇒ 这一份不传。字节已经在附件目录里（或本来就在用户的库里），
+			// 所以降级成"本地链接"并不丢东西 —— 只是这次不接管。
+			return {
+				status: "fallback",
+				key,
+				ext,
+				name: fileName,
+				displayName: displayFor(key),
+				remoteUrl: "",
+				localPath: stagedPath,
+				etag: "",
+				error: asError(new Error("declaration not written")),
+			};
 		}
 	}
 
