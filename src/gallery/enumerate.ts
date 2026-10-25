@@ -123,6 +123,18 @@ function isReferenced(
 }
 
 /** 确定性排序：先名字、再 id —— 不依赖 `Map` 的插入顺序。 */
+/**
+ * 索引条目里记的原始文件名（可能为空）。
+ *
+ * 用途只有一个：**共享桶档（CR-14）的 key 是纯哈希**，没法从 key 反推名字 ——
+ * 那张表只能退回"我们当初上传时记下的名字"。推不出就返回空串，调用方再退回 key。
+ */
+function sourceNameOf(entry: unknown): string {
+	if (!entry || typeof entry !== "object") return "";
+	const name = (entry as { sourceName?: unknown }).sourceName;
+	return typeof name === "string" ? name.trim() : "";
+}
+
 function compareItems(a: GalleryItem, b: GalleryItem): number {
 	if (a.name !== b.name) return a.name < b.name ? -1 : 1;
 	if (a.id === b.id) return 0;
@@ -191,7 +203,10 @@ export function enumerateGallery(input: GalleryEnumerateInput): GallerySnapshot 
 		knownKeys.add(key);
 		items.push({
 			id: key,
-			name: displayNameForKey(key) || key,
+			// ⭐ R25 / CR-14：共享桶档的 key 是纯哈希（没有名字可反推）⇒
+			// 退回索引里记的**原始文件名**，再不行才是 key。少了这一层，
+			// 那张表里会出现一整列 `<64 位哈希>.png`。
+			name: displayNameForKey(key) || sourceNameOf(entry) || key,
 			path: null,
 			key,
 			state: "cloud-only",

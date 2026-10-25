@@ -25,6 +25,14 @@ await runMutations({
 			expect: "URL 里有特殊含义的字符应替换",
 		},
 		{
+			// 后果：共享桶档又变回"带名字的 key" ⇒ 同内容换名字多出一个对象，
+			// 而跨设备去重靠本机台账（换设备就失效）。这正是 CR-14 要消除的那个洞。
+			name: "★★ 共享桶档忘了走纯内容寻址（跨设备去重失效）",
+			from: "\tif (options.contentAddressed) return sanitizeKey(ext ? `${hash}.${ext}` : hash);",
+			to: "\tif (false) return sanitizeKey(ext ? `${hash}.${ext}` : hash);",
+			expect: "纯内容寻址只留哈希与扩展名",
+		},
+		{
 			name: "不再剥离文件名里的 ..（路径穿越入口）",
 			from: 'name = name.replace(/\\.\\./g, "_");',
 			to: "// 变异：去掉穿越清理",

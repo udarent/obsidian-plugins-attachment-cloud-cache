@@ -459,11 +459,17 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 		// 否则同一份内容会因为名字不同而多存一个对象，笔记里两处引用各指一处。
 		const normalized = await nameForHostDuplicate(deps, fileName, contentHash, hashBytes, existingPath);
 		twinPath = normalized.twinPath;
-		key = objectKeyFor({
-			hash: contentHash,
-			ext,
-			filename: normalized.keyName,
-		});
+		// ⭐ R25 / CR-14：共享桶打开时用**纯内容寻址**（key 里没有名字）。
+		// 代价如实记：桶里不再能按名字找文件、链接里也不会带名字 ——
+		// 名字改由引用声明承载（`refs[hash].name`），所以改名不搬对象、也不改 key。
+		key = objectKeyFor(
+			{
+				hash: contentHash,
+				ext,
+				filename: normalized.keyName,
+			},
+			{ contentAddressed: deps.settings.sharedBucket }
+		);
 	} catch (error) {
 		// `objectKeyFor` 是纯函数、不该抛；真抛了说明**哈希那一步**出了问题
 		return { status: "fallback", key: "", ext, name: fileName, displayName: fileName, remoteUrl: "", localPath: "", etag: "", error: asError(error) };

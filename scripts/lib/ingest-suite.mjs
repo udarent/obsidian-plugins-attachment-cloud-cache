@@ -1321,10 +1321,34 @@ export async function runIngestSuite(mod) {
 		assert.equal(h.server.countByMethod("PUT"), 1, "只传了这一份");
 	});
 
+	// ============================================================
+	// 24. ⭐ 共享桶（CR-14）：key 变成纯内容寻址 ⇒ 同内容换名字不再多一个对象
+	// ============================================================
+	await withHarness(mod, {}, async (h) => {
+		const expectedHash = sha256Hex(HOSTILE_BYTES);
+		h.deps.settings.sharedBucket = true;
+		try {
+			const first = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "photo.png", mime: "image/png" });
+			assert.equal(first.key, `${expectedHash}.png`, "★ 共享桶档的 key 里没有名字（同内容必同 key）");
+			assert.equal(first.displayName, "photo.png", "链接里仍显示原来的文件名（不是哈希）");
+			assert.equal(h.server.countByMethod("PUT"), 1, "照常上传一次");
+
+			const again = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "另一个名字.png", mime: "image/png" });
+			assert.equal(again.key, `${expectedHash}.png`, "换个名字仍是同一个 key");
+			assert.equal(
+				h.server.countByMethod("PUT"),
+				1,
+				"★ 同内容换名字**不再多传一个对象**（带名 key 时代会多一个）"
+			);
+		} finally {
+			h.deps.settings.sharedBucket = false;
+		}
+	});
+
 	// ⚠️ 这是**手工维护**的规模数（按 `// N.` 用例块数），不是运行时统计 ——
 	// 加用例时要顺手改它（2026-10-14 复核时它停在 18 而实际已 30+，是本项目
-	// "检查还在跑、但已经不检查任何东西"那一类问题的近亲）。本轮新增 §3g/§3h 四个块；§23 是共享桶的"先登记后上传"。
-	return { scenarios: 23 };
+	// "检查还在跑、但已经不检查任何东西"那一类问题的近亲）。本轮新增 §3g/§3h 四个块；§23 是共享桶的"先登记后上传"，§24 是纯内容寻址的 key 与去重。
+	return { scenarios: 24 };
 }
 
 /** 造一个"总是失败"的客户端，用来构造降级路径。 */

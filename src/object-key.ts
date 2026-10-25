@@ -38,6 +38,17 @@
  * "这份内容是否已知"这类**事实比较**，不用于反推归属。
  */
 
+/** key 的生成口径。目前只有一档开关：是不是**共享桶**（决定 key 里有没有名字）。 */
+export interface ObjectKeyOptions {
+	/**
+	 * 走**纯内容寻址**（`<sha256>.<ext>`，key 里没有名字）。
+	 *
+	 * 打开它等于接受两件事：① 桶里按名字搜不到文件（名字在声明里）；
+	 * ② 同内容换名字不会再产生第二个对象 —— 这正是共享桶要的。
+	 */
+	readonly contentAddressed?: boolean;
+}
+
 export interface ObjectKeyParts {
 	/** 内容哈希（sha256，十六进制）。 */
 	hash: string;
@@ -76,11 +87,18 @@ const PURE_HASH_PATTERN = new RegExp(`^(${HASH_PATTERN})(\\.[^./\\\\]{1,16})?$`)
  * ⚠️ 刻意**不猜**扩展名：`ext` 由调用方按内容类型解析后传进来（见 `resolveKeyExtension`），
  * 与"文件名里那个扩展名"未必相同（站外图片的 URL 尾巴常常没有真扩展名）。
  */
-export function objectKeyFor(parts: ObjectKeyParts): string {
+export function objectKeyFor(parts: ObjectKeyParts, options: ObjectKeyOptions = {}): string {
 	const hash = typeof parts.hash === "string" ? parts.hash.trim() : "";
 	if (!FULL_HASH_PATTERN.test(hash)) return "";
 
 	const ext = typeof parts.ext === "string" ? parts.ext.toLowerCase().replace(/^\./, "") : "";
+
+	// ⭐ R25 / CR-14：共享桶档用**纯内容寻址** —— key 里没有名字。
+	// 于是"同内容必同 key"由 key 本身保证，跨设备/跨库去重不必依赖本机台账；
+	// 名字改由**引用声明**（`refs[hash].name`）承载，所以改名不影响 key、也不用搬对象。
+	// ⚠️ 只在共享桶打开时走这条：单桶档保持"名字在前"，因为那是桶里按名字认文件的唯一线索。
+	if (options.contentAddressed) return sanitizeKey(ext ? `${hash}.${ext}` : hash);
+
 	// 名字一定非空：`sanitizeFilename` 对"没有实在内容"的名字会给 `file` 兜底。
 	const stem = stripExtension(sanitizeFilename(parts.filename));
 	return sanitizeKey(ext ? `${stem}-${hash}.${ext}` : `${stem}-${hash}`);

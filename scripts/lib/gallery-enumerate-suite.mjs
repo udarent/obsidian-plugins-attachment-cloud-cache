@@ -171,5 +171,26 @@ export async function runGalleryEnumerateSuite(mod) {
 		"同一份输入的顺序必须稳定"
 	);
 
-	return { cases: 20 };
+	// ㉑ 共享桶档（CR-14）：key 是纯哈希 ⇒ 名字退回索引里记的原始文件名
+	//
+	// 单独造一份输入，不去动上面那份共享夹具的计数（那些计数本身就是断言）。
+	{
+		const hash = "c".repeat(64);
+		const snap = enumerateGallery({
+			files: [],
+			entries: [{ key: `${hash}.png`, cachePath: "attachments/missing.png", size: 10, sourceName: "截图 2026.png" }],
+			uploadedKeys: [`${hash}.png`],
+			referencedPaths: new Set(),
+			referencedKeys: new Set(),
+		});
+		const row = snap.items.find((item) => item.key === `${hash}.png`);
+		assert.ok(row, "条目在、文件不在 ⇒ 这条要出现在「云端有本地无」里");
+		assert.equal(
+			row.name,
+			"截图 2026.png",
+			"★ 纯哈希 key 反推不出名字 ⇒ 用索引里记的原始文件名（否则整列都是 64 位哈希）"
+		);
+	}
+
+	return { cases: 21 };
 }

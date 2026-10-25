@@ -215,4 +215,29 @@ export function runObjectKeySuite(mod) {
 		null,
 		"大写十六进制不认（与生成器的拒绝同源）"
 	);
+
+	// ---------- 19. ⭐ 共享桶档（CR-14）：纯内容寻址，key 里没有名字 ----------
+	//
+	// 这一档的存在理由：跨设备/跨库去重必须由 key 决定。带名字的 key 会让
+	// "同内容换个名字"得到第二个对象，而本机台账在别的设备上答不上来。
+	const pure = objectKeyFor(ctx, { contentAddressed: true });
+	assert.equal(pure, `${fullHash}.png`, "★ 纯内容寻址只留哈希与扩展名（key 里没有名字）");
+	assert.equal(
+		objectKeyFor({ hash: fullHash, ext: "png", filename: "完全不同的名字.png" }, { contentAddressed: true }),
+		pure,
+		"★ 同内容换名字 ⇒ 同一个 key（跨设备去重的前提）"
+	);
+	assert.equal(
+		objectKeyFor({ hash: fullHash, ext: "", filename: "a" }, { contentAddressed: true }),
+		fullHash,
+		"没有扩展名时就是纯哈希（不留结尾的点）"
+	);
+	assert.equal(
+		objectKeyFor({ hash: "not-a-hash", ext: "png", filename: "a.png" }, { contentAddressed: true }),
+		"",
+		"★ 非 sha256 形状仍然拒绝生成（否则会退化成所有文件共用一个 key）"
+	);
+	assert.equal(hashFromKey(pure), fullHash, "生成与解析必须自洽（两代形状都要认）");
+	assert.equal(displayNameForKey(pure), "", "纯哈希 key 反推不出名字 ⇒ 调用方必须回退到索引/声明");
+	assert.equal(objectKeyFor(ctx), `photo-${fullHash}.png`, "关着共享桶时形状不变（默认档不能被改到）");
 }
