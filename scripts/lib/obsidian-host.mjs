@@ -281,6 +281,25 @@ export async function evaluate(client, expression) {
 export async function launchAndAttach({ exe, port, vault, path, waitSeconds, log = () => {} }) {
 	if (!existsSync(exe)) throw new Error(`找不到 Obsidian：${exe}`);
 
+	// ⭐ 名字不对时**立刻**失败，别等 60 秒超时（2026-10-25）。
+	//
+	// 起因：两个脚本的默认值还是早已不存在的 `TestVault`，而 Obsidian 在名字对不上时
+	// **不报错** —— 它退回上次打开的库或停在选择界面 ⇒ 现象是"等满一分钟，然后说插件没加载"。
+	// 本机能列出库名时，这件事在启动前就能判断完。
+	//
+	// ⚠️ `knownVaultNames()` 读不到（没有 obsidian.json）就返回空数组 ⇒ 那条路直接跳过，
+	// 不许因为"列不出来"就拦住启动 —— 提示不该让验证失败。
+	if (!path) {
+		const known = knownVaultNames();
+		if (known.length > 0 && !known.includes(vault)) {
+			throw new Error(
+				`OBSIDIAN_VAULT=「${vault}」在本机 Obsidian 里不存在（大小写敏感）。\n` +
+					`  本机认得这些 vault：${known.map((name) => `「${name}」`).join("、")}\n` +
+					"  用 OBSIDIAN_VAULT=<上面其中一个> 重跑。"
+			);
+		}
+	}
+
 	// ⚠️ 参数缺一不可：只给 remote-debugging-port 会因 GPU 进程崩溃而退出。
 	// 末尾那个 URI 用来**显式打开目标 vault** —— 不指定就可能停在 vault 选择界面
 	//（那时 `app` 在、`app.plugins` 不在，报出来的却像是"插件没加载"）。
