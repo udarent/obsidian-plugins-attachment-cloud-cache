@@ -28,6 +28,10 @@
  * |---|---|
  * | 括号文件名（`%20`）进了清单，确认后**链接真的变成远端地址** | D-56 |
  * | 把链接改回本地再传一次：**零上传**、链接改回远端、完成文案说「已存在 1 个」 | D-57 |
+ * | **共享桶（R25）**：开关打开后上传 ⇒ key 是纯哈希、`_acc/` 里先有声明；桶里放一份"另一台设备也引用了它"的声明后点「删除云端」⇒ **DELETE = 0**、对象还在、通知说「跳过 1 个：别的设备或别的库还在用」 | CR-13 / CR-14 |
+ *
+ * ⚠️ 共享桶那一节是**唯一**在真插件链上跑到"另一台设备挡住删除"的地方（此前只有单测）。
+ * 它打的是本机 mock，`_acc/` 也写在 mock 里 —— 一个字节都不去真实存储。
  * | `.srt` / `.py` / `.tif` 的 `Content-Type` 分别是 `text/plain` / `text/plain` / `image/tiff` | 第 8 条（D-64） |
  * | 跑完**不关窗**：清单留着、按钮区只剩一颗「关闭」、进度行是"已结束：…" | D-80（评审 3-1） |
  *
@@ -37,6 +41,7 @@
  * ⚠️ 跑之前**必须关掉所有 Obsidian**（宿主单实例；有残留会连到旧实例，断言全错位）。
  */
 
+import { createHash, randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,7 +49,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { countObsidianProcesses, evaluate, launchAndAttach } from "./lib/obsidian-host.mjs";
 import { createMockS3 } from "./lib/mock-s3.mjs";
-import { clickModalCta, closeDialog, waitForConfirm } from "./lib/verify-dom.mjs";
+import { checkRow, clickModalCta, closeDialog, runCommand, waitForConfirm, waitForDialog } from "./lib/verify-dom.mjs";
 
 const PORT = Number(
 	process.argv.includes("--port")
@@ -452,6 +457,260 @@ async function main() {
 			/已存在 1 个/.test(noticeText) || /already there 1/i.test(noticeText),
 			noticeText || "(没有通知)"
 		);
+
+		// ══════════════════════════════════════════════════════════════════
+		// §9 共享桶（R25）：上传前写声明 → 删除时被别的设备挡下
+		// ══════════════════════════════════════════════════════════════════
+		//
+		// 这一节第一次把**共享桶自己的路径**端到端跑一遍（此前只有单测）：
+		// ① 打开开关后上传 ⇒ key 变纯哈希、`_acc/` 里出现本设备的声明；
+		// ② 桶里放一份"另一台设备也引用了这个对象"的声明；
+		// ③ 删云端 ⇒ 那一条被**跳过**、对象还在、通知说清原因。
+		// ⚠️ 全程打的是本机 mock（内存里的桶），跑完随进程消失 —— 不碰任何真实存储。
+		{
+			const sharedPath = `${ASSETS}/shared.txt`;
+			const sharedText = `acc shared probe ${randomBytes(6).toString("hex")}`;
+			const sharedHash = createHash("sha256").update(Buffer.from(sharedText)).digest("hex");
+			const ownHead = "_acc/v1/probevault/probedev/head.json";
+			const foreignHead = "_acc/v1/probevault/otherdev/head.json";
+			const sharedKey = `${sharedHash}.txt`;
+
+			/** 轮询到条件成立为止（最多 ms）；返回最后一次的值。 */
+			const poll = async (read, ok, ms = 20_000) => {
+				const deadline = Date.now() + ms;
+				let value = null;
+				while (Date.now() < deadline) {
+					value = await read().catch(() => null);
+					if (ok(value)) return value;
+					await delay(300);
+				}
+				return value;
+			};
+
+			const sharedSetup = await evaluate(
+				client,
+				`(async () => {
+					try {
+						const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+						// 打开开关 + 固定身份（身份本由首次启动生成，这里固定住才好断言）
+						plugin.settings.sharedBucket = true;
+						plugin.settings.vaultId = "probevault";
+						plugin.settings.deviceId = "probedev";
+						const body = new TextEncoder().encode(${JSON.stringify(sharedText)});
+						const prior = app.vault.getAbstractFileByPath(${JSON.stringify(sharedPath)});
+						if (prior) await app.vault.delete(prior, true);
+						await app.vault.createBinary(${JSON.stringify(sharedPath)}, body.buffer);
+						const note = app.vault.getAbstractFileByPath(${JSON.stringify(NOTE)});
+						const text = await app.vault.read(note);
+						await app.vault.modify(note, text + "\\n\\n[共享](" + ${JSON.stringify(sharedPath)} + ")\\n");
+						return { ok: true };
+					} catch (error) {
+						return { error: String(error?.stack ?? error) };
+					}
+				})()`
+			);
+			if (sharedSetup?.error) throw new Error(`共享桶夹具失败：${sharedSetup.error}`);
+
+			// ① 上传（这一次走的就是共享桶档：key 纯哈希、PUT 之前先写声明）
+			await startUpload(client);
+			const sharedAsked = await waitForConfirm(client, 20_000);
+			check(
+				"共享桶：上传仍是一次确认（没有清单）",
+				Boolean(sharedAsked) && sharedAsked.rows === 0,
+				sharedAsked ? `${sharedAsked.rows} 行` : "没等到确认框"
+			);
+			if (sharedAsked) await clickModalCta(client);
+
+			const headText = await poll(
+				() =>
+					evaluate(
+						client,
+						`(async () => {
+							const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+							try {
+								const got = await plugin.buildClient().getObject(${JSON.stringify(ownHead)});
+								return new TextDecoder().decode(got.data);
+							} catch {
+								return "";
+							}
+						})()`
+					),
+				(text) => typeof text === "string" && text.includes(sharedHash)
+			);
+			check(
+				"★ 共享桶：上传前写下了本设备的引用声明（`_acc/` 里查得到这个哈希）",
+				typeof headText === "string" && headText.includes(sharedHash),
+				typeof headText === "string" && headText !== "" ? headText.slice(0, 120) : "(读不到 head.json)"
+			);
+			let headRefs = {};
+			try {
+				headRefs = JSON.parse(headText ?? "{}").refs ?? {};
+			} catch {
+				headRefs = {};
+			}
+			check(
+				"★ 共享桶：声明里记着**原始文件名**（key 里已经没有名字了）",
+				headRefs?.[sharedHash]?.name === "shared.txt",
+				JSON.stringify(headRefs?.[sharedHash] ?? null)
+			);
+
+			// ② key 形状（CR-14 在真插件链上的证据：不是单测里的纯函数）
+			const storedKeys = [...mock.objects.keys()];
+			check(
+				"★ 共享桶：新对象名是纯内容哈希（`<sha256>.txt`）",
+				storedKeys.includes(sharedKey),
+				storedKeys.filter((key) => key.endsWith(".txt")).join(" | ") || "(没有 .txt 对象)"
+			);
+
+			// ③ 种一份"另一台设备也引用了它"的声明（模拟同一个桶上的另一个库/设备）
+			await evaluate(
+				client,
+				`(async () => {
+					const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+					const now = new Date().toISOString();
+					const body = JSON.stringify({
+						v: 1,
+						vault: "probevault",
+						device: "otherdev",
+						updatedAt: now,
+						refs: { [${JSON.stringify(sharedHash)}]: { name: "shared.txt", ext: "txt", addedAt: now } },
+					});
+					await plugin.buildClient().putObject(${JSON.stringify(foreignHead)}, new TextEncoder().encode(body), "application/json");
+					return true;
+				})()`
+			);
+			check("共享桶：桶里有了另一台设备的声明", mock.objects.has(foreignHead), foreignHead);
+
+			// ④ 让这个对象变成"没人引用"（上传时链接已被改写成云端地址，按哈希整行删掉）
+			await evaluate(
+				client,
+				`(async () => {
+					const note = app.vault.getAbstractFileByPath(${JSON.stringify(NOTE)});
+					const text = await app.vault.read(note);
+					await app.vault.modify(note, text.split("\\n").filter((line) => !line.includes(${JSON.stringify(sharedHash)})).join("\\n"));
+					return true;
+				})()`
+			);
+
+			// ⚠️ 等上传那个窗口**自己收起**（D-80 自动收窗）再开附件管理：
+			// 否则 `waitForDialog` 会抓到还留在屏幕上的进度窗，后面全是错的元素。
+			await poll(
+				() => evaluate(client, `!document.querySelector(".modal-container .modal")`),
+				(gone) => gone === true,
+				10_000
+			);
+			// ⑤ 附件管理 → 待清理 → 勾那一行 → 删除云端 → 确认
+			await runCommand(client, PLUGIN_ID, "manage-attachments");
+			const galleryOpen = await waitForDialog(client, 15_000);
+			check("共享桶：附件管理能打开", Boolean(galleryOpen), galleryOpen ? "已打开" : "没等到弹窗");
+			await evaluate(
+				client,
+				`(() => {
+					const chip = Array.from(document.querySelectorAll(".acc-gallery-filter")).find((el) =>
+						(el.textContent ?? "").includes("全部")
+					);
+					if (!chip) return false;
+					chip.click();
+					return true;
+				})()`
+			);
+			await delay(500);
+			// ⚠️ 名字有两种可能：本地那份还在 ⇒ 用文件名；只有台账 ⇒ 用 key（纯哈希）。
+			// 而且"待清理"这个胶囊在中文界面才叫这个名字 ⇒ 先 dump 一次，失败时看得到现场。
+			const galleryDump = await evaluate(
+				client,
+				`(() => ({
+					chips: Array.from(document.querySelectorAll(".acc-gallery-filter")).map((el) => (el.textContent ?? "").trim()),
+					rows: Array.from(document.querySelectorAll(".acc-task-row")).map((row) => ({
+						name: (row.querySelector(".acc-task-name")?.textContent ?? "").trim(),
+						state: (row.querySelector(".acc-cell-state .acc-cell-text")?.textContent ?? "").trim(),
+						ref: (row.querySelector(".acc-cell-ref .acc-cell-text")?.textContent ?? "").trim(),
+					})),
+					actions: Array.from(document.querySelectorAll(".acc-task-actions button")).map((el) => (el.textContent ?? "").trim() + (el.disabled ? "(灰)" : "")),
+				}))()`
+			);
+			let rowPicked = await checkRow(client, "shared.txt");
+			if (!rowPicked) rowPicked = await checkRow(client, sharedHash);
+			check(
+				"共享桶：那一行出现在清单里并可勾选",
+				rowPicked,
+				`${galleryDump.chips?.length ?? 0} 个胶囊；行 ${galleryDump.rows?.length ?? 0}；
+				  含 shared.txt=${(galleryDump.rows ?? []).some((row) => row.name === "shared.txt")}`
+			);
+			const deleteClicked = await evaluate(
+				client,
+				`(() => {
+					const button = Array.from(document.querySelectorAll(".acc-task-actions button")).find((el) =>
+						(el.textContent ?? "").includes("删除云端")
+					);
+					if (!button || button.disabled) return false;
+					button.click();
+					return true;
+				})()`
+			);
+			check("共享桶：「删除云端」可点", deleteClicked);
+			// ⚠️ **不能用 `waitForConfirm`**：它取的是 DOM 里**第一个** `.modal`，而此时附件管理
+			// 那个弹窗还开着（确认框叠在它上面）⇒ 读到的是清单、点到的也是清单里的按钮。
+			// 这里按"不在 `.acc-gallery-modal` 里面"挑出确认框，再点它自己的主按钮。
+			const confirmModal = `(() => {
+				const list = Array.from(document.querySelectorAll(".modal-container .modal")).filter(
+					(el) => !el.closest(".acc-gallery-modal")
+				);
+				return list[list.length - 1] ?? null;
+			})()`;
+			const destructive = await poll(
+				() =>
+					evaluate(client, `(() => {
+						const modal = ${confirmModal};
+						if (!modal) return null;
+						return { title: (modal.querySelector(".modal-title")?.textContent ?? "").trim() };
+					})()`),
+				(value) => Boolean(value && value.title)
+			);
+			const confirmed = destructive
+				? await evaluate(
+					client,
+					`(() => {
+						const modal = ${confirmModal};
+						if (!modal) return false;
+						const buttons = Array.from(modal.querySelectorAll("button")).filter((el) => (el.textContent ?? "").trim() !== "");
+						const button = buttons.find((el) => el.classList.contains("mod-cta")) ?? buttons.find((el) => !/^(取消|Cancel)$/.test((el.textContent ?? "").trim()));
+						if (!button) return false;
+						button.click();
+						return true;
+					})()`
+				)
+				: false;
+			check(
+				"共享桶：删除确认框出现了并点了确认",
+				Boolean(destructive) && confirmed,
+				destructive ? destructive.title : "没等到确认框"
+			);
+
+			// ⑥ 结论：对象没被删、通知说清原因
+			const deleted = mock.requests.filter(
+				(request) => request.method === "DELETE" && String(request.key ?? "").includes(sharedHash)
+			);
+			check(
+				"★★ 共享桶：被别的设备引用的对象**没有删**（DELETE = 0）",
+				deleted.length === 0 && mock.objects.has(sharedKey),
+				`DELETE ${deleted.length} 次；对象还在=${mock.objects.has(sharedKey)}`
+			);
+			const deniedNotice = await poll(
+				() =>
+					evaluate(
+						client,
+						`(() => Array.from(document.querySelectorAll(".notice")).map((el) => el.textContent || "").join(" ‖ "))()`
+					),
+				(text) => typeof text === "string" && /还在用|still uses/i.test(text)
+			);
+			check(
+				"★ 共享桶：通知说清「别的设备还在用」（不是只说跳过）",
+				typeof deniedNotice === "string" && /还在用|still uses/i.test(deniedNotice),
+				deniedNotice || "(没有通知)"
+			);
+			await closeDialog(client).catch(() => false);
+		}
 
 		// 夹具按前缀兜底删（中途失败也不留垃圾）
 		await evaluate(
