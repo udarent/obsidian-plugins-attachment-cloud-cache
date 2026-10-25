@@ -366,6 +366,52 @@ try {
 		const after = JSON.parse((await client.getObject(ownHead)).data.toString("utf8"));
 		check("★★ 摘完以后 refs 里没有它（声明是状态，不是流水账）", after.refs?.[refHash] === undefined, JSON.stringify(after.refs));
 	});
+
+	// ── 8. ⭐ 非 ASCII / 带空格的 key 在**真实服务商**上走完整一圈（R5 的验证缺口）──
+	//
+	// 此前只在替身与单测里验过。而"中文文件名"从 C2 起就是**常态**（默认模板把原名带进 key），
+	// 一旦服务商对路径编码的宽容度与 AWS 不同，症状会是"上传成功但取不回来"或"签名对不上"。
+	// 这里走的是与产品**同一套**拼地址（`publicUrlFor`）与签名（客户端），所以它证明的是
+	// "用户笔记里那条链接在真实服务商上真的能打开"。
+	{
+		const chineseKey = `acc-e2e-${runId}-中文 名字 (1).png`;
+		created.push(chineseKey);
+		const bytes = Buffer.from(randomBytes(256));
+
+		const put = await client.putObject(chineseKey, bytes, "image/png");
+		check("★ 非 ASCII key：真实桶里 PUT 成功（签名与路径编码都被服务端接受）", Boolean(put?.key), JSON.stringify(put));
+
+		const head = await client.headObject(chineseKey);
+		check("★ 非 ASCII key：HEAD 回来且长度一致", Boolean(head) && head.size === bytes.length, JSON.stringify(head));
+
+		const got = await client.getObject(chineseKey);
+		check(
+			"★★ 非 ASCII key：GET 回来**逐字节相同**（不是「看得到但内容是坏的」）",
+			Buffer.compare(Buffer.from(got.data), bytes) === 0,
+			`收到 ${got.data.length} B / 期望 ${bytes.length} B`
+		);
+
+		const listed = await client.listObjects({ prefix: `acc-e2e-${runId}-中文` });
+		check(
+			"★ 非 ASCII key：列举回来**逐字一致**（XML 转义没把它改形）",
+			listed.objects.some((object) => object.key === chineseKey),
+			JSON.stringify(listed.objects.map((object) => object.key))
+		);
+
+		// ⭐ 笔记里写的就是这个地址 —— 匿名取一次（桶是公开的，正是"别人打得开"那一条）
+		const publicUrl = publicUrlFor(config, chineseKey);
+		const anonymous = await fetch(publicUrl, { headers: { "cache-control": "no-cache" } });
+		const anonymousBytes = Buffer.from(await anonymous.arrayBuffer());
+		check(
+			"★★ 非 ASCII key：**匿名**用笔记里那条地址能取回同样的字节（R5 的最终判据）",
+			anonymous.status === 200 && Buffer.compare(anonymousBytes, bytes) === 0,
+			`HTTP ${anonymous.status}，${anonymousBytes.length} B —— ${publicUrl}`
+		);
+
+		const removed = await client.deleteObject(chineseKey);
+		const gone = await client.headObject(chineseKey);
+		check("非 ASCII key：删掉之后 HEAD 真的 404", removed === true && gone === null, JSON.stringify({ removed, gone }));
+	}
 } catch (error) {
 	failures += 1;
 	log(`  ✗ 运行中断：${error?.stack ?? error}`);
