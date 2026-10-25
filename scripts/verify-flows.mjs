@@ -623,11 +623,20 @@ async function main() {
 		);
 
 		// 动作按钮的数字＝**能作用的件数**；重命名只对单选成立（§5.5 的判据在真机上的落点）
+		//
+		// ⚠️⚠️ 勾哪一行**不能靠 `boxes[0]`**（2026-10-25 踩红）：清单里第一行是谁取决于桶里
+		// 有多少「云端有本地无」的对象 —— 那种行 `path === null`，「重命名」按设计就是灰的
+		// （`no-local-file`），于是这条断言红了，而产品完全正常。判据不许押在会变的东西上：
+		// 这里先按**位置列有实在内容**挑一行（渲染层事实，与 `rename` 的判据不同层）。
 		const perAction = await evaluate(
 			client,
 			`(() => {
 				const root = ${GALLERY_ROOT};
-				const boxes = Array.from(root.querySelectorAll(".acc-task-check"));
+				const rows = Array.from(root.querySelectorAll(".acc-task-row"));
+				const boxOf = (row) => row.querySelector(".acc-task-check");
+				const folderOf = (row) => ((row.querySelector(".acc-cell-folder")?.textContent) || "").trim();
+				// 位置列是「—」/ 空 ⇒ 这一行没有本地文件
+				const withLocal = rows.filter((row) => { const at = folderOf(row); return at.length > 0 && at !== "—"; });
 				const read = () =>
 					Array.from(root.querySelectorAll(".acc-task-actions button")).map((b) => ({
 						text: (b.textContent || "").trim(),
@@ -638,19 +647,32 @@ async function main() {
 					box.checked = on;
 					box.dispatchEvent(new Event("change"));
 				};
-				if (boxes.length < 2) return { error: "行数不够，勾不了两行" };
-				toggle(boxes[0], true);
+				if (withLocal.length === 0) return { error: "清单里没有带本地路径的行 —— 全是「云端有本地无」，没法验重命名" };
+				if (rows.length < 2) return { error: "行数不够，勾不了两行" };
+				const first = withLocal[0];
+				const other = rows.find((row) => row !== first) || null;
+				toggle(boxOf(first), true);
 				const one = read();
-				toggle(boxes[1], true);
+				toggle(boxOf(other), true);
 				const two = read();
-				for (const box of boxes) if (box.checked) toggle(box, false);
-				return { single: renameOf(one), pair: renameOf(two), buttons: one.map((b) => b.text) };
+				for (const row of rows) { const box = boxOf(row); if (box?.checked) toggle(box, false); }
+				return {
+					single: renameOf(one),
+					pair: renameOf(two),
+					buttons: one.map((b) => b.text),
+					picked: folderOf(first),
+				};
 			})()`
 		);
 		check(
 			"勾一行 ⇒「重命名」可用",
 			perAction?.single?.disabled === false,
-			JSON.stringify(perAction?.single ?? perAction?.error ?? null)
+			JSON.stringify({
+				single: perAction?.single ?? null,
+				picked: perAction?.picked ?? null,
+				error: perAction?.error ?? null,
+				buttons: perAction?.buttons ?? null,
+			})
 		);
 		check(
 			"勾两行 ⇒「重命名」灰掉（不能给多个文件改同一个名字）",
