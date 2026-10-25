@@ -64,6 +64,8 @@ export const I18N: Record<string, Locale> = {
 		testing: "Testing…",
 		testOk: "Connected, and the bucket is reachable.",
 		testFail_notReady: "Not ready to test yet: {problem}",
+		testFail_listPermission:
+			"Connected, but this key cannot list the bucket — sharing a bucket needs the ListBucket permission.",
 		testFail_bucketMissing: "Reached the service, but the bucket was not found. Check the bucket name.",
 		testFail_auth: "The service rejected the credentials. Check the keys and the bucket permissions.",
 		testFail_network: "Could not reach the service. Check the address and your network.",
@@ -448,6 +450,7 @@ export const I18N: Record<string, Locale> = {
 		testing: "测试中…",
 		testOk: "连接正常，存储桶可访问。",
 		testFail_notReady: "还无法测试：{problem}",
+		testFail_listPermission: "连上了，但这个密钥不能列桶 —— 共用桶需要 ListBucket 权限。",
 		testFail_bucketMissing: "能连上服务，但找不到这个存储桶 —— 请检查桶名。",
 		testFail_auth: "服务拒绝了凭据 —— 请检查密钥与桶的权限。",
 		testFail_network: "连不上服务 —— 请检查地址与网络。",

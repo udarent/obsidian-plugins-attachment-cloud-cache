@@ -34,6 +34,7 @@ import type { App, Setting, SettingDefinitionItem, SettingGroupItem } from "obsi
 
 import type AttachmentCloudCachePlugin from "../main";
 import { createS3Client, objectBaseFor } from "../s3/client";
+import { DECLARATION_ROOT } from "../s3/declaration";
 import { connectionReadiness } from "../s3/credentials";
 import { deleteLogTargetPath } from "../maintenance/delete-log";
 import type { ConnectionState } from "../link-access";
@@ -530,6 +531,20 @@ export class SettingsTab extends PluginSettingTab {
 				// 否则上面那盏灯还绿着，而紧挨着的这一行说桶不存在 —— 同一次测试里自相矛盾。
 				this.refreshStatusLine(this.plugin.noteConnectionUnreachable());
 				return [{ key: "testFail_bucketMissing", tone: "error" }];
+			}
+
+			// ⭐ 共享桶（R25）：打开它就需要 `ListBucket` —— 密钥常常只给了对象读写，
+			// 而缺这一项的症状是"打开开关之后清理一个都不列"，那时用户已经踩了坑。
+			// 所以在连接自检里**当场试一次列声明前缀**（空桶也回 200，所以只看能不能列）。
+			// ⚠️ 关着开关时不试：没打开共享桶的人不该为多出来的一项权限被卡在自检里。
+			if (this.plugin.settings.sharedBucket) {
+				try {
+					await client.listObjects({ prefix: `${DECLARATION_ROOT}/`, maxKeys: 1 });
+				} catch (error) {
+					// 仍然只给"下一步改哪儿"，不打印原始 XML
+					const kind = classifyConnectionFailure(error);
+					return [{ key: kind === "auth" ? "testFail_listPermission" : connectionFailureKey(kind), tone: "error" }];
+				}
 			}
 		} catch (error) {
 			// 只取**归类**，不把原始 message 抛给用户：那是给排查用的（可能带一屏 XML），
