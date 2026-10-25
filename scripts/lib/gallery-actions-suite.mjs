@@ -50,15 +50,13 @@ export async function runGalleryActionsSuite(mod) {
 	const cloudOnly = item({ id: "d", key: "kd", state: "cloud-only" });
 
 	// ① 最危险：删掉仍被引用的云端对象（不可恢复）。
+	// ⭐ CR-05 定案（2026-10-25）：**没有**"放开"这一档 —— 原先那条
+	// `{ cloudDeleteNeedsUnreferenced: false } ⇒ available: true` 的用例已删，
+	// 连那个开关本身也一起删了（它从来没有调用点传过 false）。
 	assert.deepEqual(
 		actionAvailability(uploadedUsed, "delete-cloud", candidate),
 		{ available: false, reason: "still-referenced" },
-		"被引用的对象默认不许删云端（CR-05 默认）"
-	);
-	assert.deepEqual(
-		actionAvailability(uploadedUsed, "delete-cloud", { ...candidate, cloudDeleteNeedsUnreferenced: false }),
-		{ available: true },
-		"显式放开后，删云端才对被引用的对象可用"
+		"被引用的对象不许删云端（CR-05：永不放开）"
 	);
 
 	// ② 本地没有文件时，“删本地”不成立。

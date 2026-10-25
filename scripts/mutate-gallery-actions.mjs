@@ -15,9 +15,9 @@ await runMutations({
 		{
 			// 后果：**删掉仍被笔记引用的云端对象** ⇒ 笔记里立刻是死链，且**不可恢复**。
 			name: "★★★ 删云端不再要求“没人引用”（删掉仍被引用的对象）",
-			from: "\t\t\tconst needsUnreferenced = context.cloudDeleteNeedsUnreferenced !== false;",
-			to: "\t\t\tconst needsUnreferenced = false;",
-			expect: "被引用的对象默认不许删云端（CR-05 默认）",
+			from: '\t\t\tif (item.referenced) return unavailable("still-referenced");',
+			to: '\t\t\tif (false) return unavailable("still-referenced");',
+			expect: "被引用的对象不许删云端（CR-05：永不放开）",
 		},
 		{
 			// 后果：对“云端有本地无”的行也放行「删本地」⇒ 用户点了没反应，

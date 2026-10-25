@@ -15,10 +15,14 @@
  *
  * 1. **「删本地」对“未上传”的文件 = 删掉唯一一份**。所以它**不是**“清缓存”，
  *    必须走回收站并由界面明示“没有云端副本”（本层只回答可用性，文案在界面）。
- * 2. **「删云端」对“仍被引用”的默认禁用**（CR-05 默认档）：删完笔记里就是死链，
- *    且这是全产品唯一**不可恢复**的动作。要放开必须显式改 `cloudDeleteNeedsUnreferenced`。
- *    ⭐ **正当出口是「改为本地引用」**（`fetch-local`）：先把链接换回库内路径，那份对象于是
- *    “没人引用”，再删云端。用户 2026-10-23 定的顺序：「需要先把状态从云端转换成本地，然后才能删」。
+ * 2. **「删云端」对「仍被引用」的禁用是永久的**（CR-05 定案，2026-10-25）：
+ *    删完笔记里就是死链，且这是全产品唯一**不可恢复**的动作。
+ *    ⭐ **唯一正当出口是「改为本地引用」**（`fetch-local`）：先把链接换回库内路径，那份对象
+ *    于是"没人引用"，再删云端。用户 2026-10-23 定的顺序：「需要先把状态从云端转换成本地，然后才能删」。
+ *    ⚠️ 这里**没有**"强制删除"的开关 —— 原先有个 `cloudDeleteNeedsUnreferenced`（默认 true、
+ *    可传 false 放开），但从来没有任何调用点传过 false。留着它等于给一个不可恢复的动作
+ *    埋一个「改一个参数就上线」的口子，也等于这条定案随时可能被忘掉。
+ *    定案理由：桶里多留一个对象是**可回收**的（用户随时能回来删），死链不是。
  * 3. **「上传」只对“上传候选”成立**：`未上传 ≠ 待上传` —— 安装包、算不出 key 的都不在候选里，
  *    把它们算进按钮数字就会让“按下只处理 N 个”变成假话。
  */
@@ -44,13 +48,6 @@ export type GalleryUnavailableReason =
 export interface GalleryActionContext {
 	/** 这一项在**上传候选**里吗（由上传候选函数判定，不是“它没上传过”）。 */
 	isUploadCandidate: boolean;
-	/**
-	 * 云端删除是否要求“没人引用”。
-	 *
-	 * 默认 `true`（CR-05 的默认档）。⚠️ 传 `false` 等于放开“删掉仍被引用的对象”，
-	 * 那会让笔记里立刻出现死链 —— 只有产品明确改口径时才允许。
-	 */
-	cloudDeleteNeedsUnreferenced?: boolean;
 }
 
 export type GalleryAvailability =
@@ -86,8 +83,9 @@ export function actionAvailability(
 			if (item.key === null || item.state === "not-uploaded") {
 				return unavailable("not-in-cloud");
 			}
-			const needsUnreferenced = context.cloudDeleteNeedsUnreferenced !== false;
-			if (needsUnreferenced && item.referenced) return unavailable("still-referenced");
+			// ⭐ CR-05 定案（2026-10-25）：**永不**提供「删掉仍被引用对象」的口子。
+			// 出口是 `fetch-local`（改为本地引用）—— 链接换回库内路径后它就"没人引用"了。
+			if (item.referenced) return unavailable("still-referenced");
 			return AVAILABLE;
 		}
 
