@@ -215,5 +215,13 @@ await runMutations({
 			expect: "命令失败之后界面说了句话",
 		},
 
+		{
+			// 后果：附件改名后账本**不跟着搬** ⇒ 渲染时判「本地没有副本」，按原名再下载一份
+			// ⇒ 用户库里多出一份重复文件（不报错，只是「图多了一张」）。
+			name: "★★ 改名后索引不搬（库里悄悄多出一份重复副本）",
+			from: "\t\t\t\tconst moved = this.currentIndex().moveCachePath(oldPath, file.path, {\n\t\t\t\t\tincludeDescendants: file instanceof TFolder,\n\t\t\t\t});\n",
+			to: "\t\t\t\tconst moved = 0;\n",
+			expect: "cachePath 必须跟着搬到新路径",
+		},
 	],
 });

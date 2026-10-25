@@ -2323,6 +2323,59 @@ export async function runLoadAcceptance(options = {}) {
 				9000,
 				() => `实际提示：${JSON.stringify(mockObsidian.Notice.instances.map((n) => n.message))}`
 			);
+
+		// ============================================================
+		// 8h2. ⭐ 索引跟随**附件改名**（`vault.on("rename")` 的另一半接线）
+		//
+		// 8h 证的是"引用变化会出声"，这一段证的是同一条事件的另一半：把账本搬到新地址。
+		// 不搬的后果不是报错，是**库里多出一份重复文件** —— 渲染时判"本地没有副本"，
+		// 于是按附件目录里的原名重新下载一份（用户只会看到"图多了一张"）。
+		//
+		// ⚠️ 替身这边要按真机的时序来：`fileManager.renameFile` 先动磁盘，
+		// 然后**宿主**才发 `rename(old → new)`。所以传给处理器的是**新路径那个文件对象**
+		// （真机上宿主改完 `file.path` 才发事件），旧路径作为第二参数。
+		// ============================================================
+		{
+			const newPath = "attachments/待勾选-改名.png";
+			const before = plugin.indexStore.index.get(key);
+			assert.ok(before, "前提：这份附件在索引里（上面刚上传过它）");
+			// ⚠️ 本地副本落在哪由 `localCopy` 档位决定（keep 档就是附件目录里那份原件），
+			// 所以别假设它等于 `attachmentPath` —— 从索引里读实际的那条。
+			const oldPath = before.cachePath;
+
+			await app.fileManager.renameFile(app.vault.getAbstractFileByPath(oldPath), newPath);
+			await harness.refreshPathCache();
+			const handlers = app.vault.trigger("rename", app.vault.getAbstractFileByPath(newPath), oldPath);
+			assert.ok(handlers > 0, "★ `rename` 上必须挂着处理器（否则「账本跟着搬」这件事无声地没发生）");
+
+			assert.equal(
+				plugin.indexStore.index.findByCachePath(newPath)?.key,
+				before.key,
+				"★★ 索引条目的 cachePath 必须跟着搬到新路径（对象 key 不变）"
+			);
+			assert.equal(
+				plugin.indexStore.index.findByCachePath(oldPath),
+				undefined,
+				"★★ 旧路径上不能留影子 —— 留着会让渲染以为本地还有副本（于是不补、也不报）"
+			);
+
+			// 落盘：`persistIndex` 是 `void` 的（不阻塞改名），所以等它自己写完
+			await waitFor(
+				async () => {
+					try {
+						const raw = JSON.parse(await readFile(join(root, CACHE_INDEX_PATH), "utf8"));
+						const entries = raw?.entries ?? raw;
+						return JSON.stringify(entries).includes(newPath) && !JSON.stringify(entries).includes(oldPath);
+					} catch {
+						return false;
+					}
+				},
+				"★ 搬完要**落盘**（只改内存的话，下次启动又按旧路径找）",
+				5000,
+				diagnose
+			);
+		}
+
 		}
 
 		// ============================================================

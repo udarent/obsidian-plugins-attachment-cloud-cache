@@ -41,7 +41,9 @@ console.log(
 		"offered when they really are files — a wiki page with no file-ish tail, a player.html page and a " +
 		"server-rendered pd.jsp are never even requested, while a real .pdf/.zip download link still is — and the " +
 		"local files a note points at outside the vault only join the batch when that switch is on, while one that " +
-		"is gone is skipped and the dialog says how many were skipped; and a command that throws " +
+		"is gone is skipped and the dialog says how many were skipped; renaming an attachment carries its index row " +
+		"(and the persisted file) to the new path with no shadow left on the old one, so a rename never makes the " +
+		"plugin download a second copy; and a command that throws " +
 		"half-way still tells the user what went wrong — an async command failure must never be silence, " +
 		"which is exactly what \"the command did nothing when I clicked it\" looked like))."
 );
