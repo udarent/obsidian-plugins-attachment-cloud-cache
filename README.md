@@ -55,8 +55,8 @@ to your bucket, rendering reads the copy in your vault, the original stays with 
   selection; rename works on a single row.
 - **Offline and multi-device** — rendering uses the local copy, missing ones are back-filled on demand; canvas
   references count too.
-- **The same file twice is one object** — the key is the file name plus its content hash: one address, the original
-  name still in the link.
+- **The same file twice is one object** — deduped by content: one address, shared by every note and device that uses
+  it.
 - **What your bucket allows, at a glance** — a light next to **Test connection**: *public* / *private* /
   *unreachable*, re-checked on demand, rewriting no link.
 - **Cleanup** — the “To clean up” filter in the attachment manager: cloud objects no note links to, unreferenced
@@ -151,7 +151,7 @@ storage, and can other people open my links”, and changes nothing.
   on is consent.
 - **A web page is never stored** — `text/html` and other `text/*` are refused.
 - **The secret access key lives in the OS keychain**, never in `data.json`; the access key ID is stored in the clear —
-  it is an identifier, not a secret. File names are part of the object key, so they reach your provider's records.
+  it is an identifier, not a secret. The file names you upload end up visible to your storage provider.
 
 ## How it is verified
 
@@ -244,7 +244,7 @@ MinIO、Backblaze B2、自建服务），笔记里留下链接，文件留在库
 - **库里已有的也能一次搬完** —— 设置页**「上传全部附件」**：一次确认、没有清单；已在存储里的只改写链接，不重传字节。
 - **附件管理** —— 一个弹窗管全库：六列表格、带件数的筛选、勾选后批量处理；重命名只对单条生效。
 - **离线、多设备** —— 显示走本地副本，换设备时缺的按需补回；画布引用同样算数。
-- **同一个文件传两次只存一份** —— 对象名＝文件名 + 内容哈希：一个地址，链接里仍是原名。
+- **同一个文件传两次只存一份** —— 按内容去重：同一份内容只有一个地址，多篇笔记、多台设备共用它。
 - **桶允许什么，一眼看到** —— 「测试连接」旁一盏灯：公开 / 私有 / 连不上，随时可重测，不改任何链接。
 - **清理** —— 附件管理里的「待清理」筛选：云端没人引用的对象、没有引用的本地文件、站外缓存下来的副本；
   只删你确认的。附件失去最后一条引用时，一条通知指路到这里。
@@ -328,8 +328,7 @@ MinIO、Backblaze B2、自建服务），笔记里留下链接，文件留在库
 - **会连到库外的只有两处，默认都关：** 站外文件上传（同一开关也决定「上传全部附件」碰不碰站外图）、允许
   「上传全部附件」读这台电脑的文件。打开就是同意。
 - **网页不会被存下来** —— `text/html` 等 `text/*` 一律拒收。
-- **秘密密钥进系统钥匙串**，不写 `data.json`；密钥 ID 明文存着 —— 它是标识符，不是秘密。文件名是对象名的一部分，
-  会出现在服务商记录里。
+- **秘密密钥进系统钥匙串**，不写 `data.json`；密钥 ID 明文存着 —— 它是标识符，不是秘密。你上传时的文件名会出现在存储服务商那边。
 
 ## 验证情况
 
