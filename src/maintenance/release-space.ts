@@ -49,11 +49,7 @@
  */
 
 import type { CacheEntry } from "../cache/index";
-import { buildEvictionCandidates, planEviction } from "./eviction";
-// 路径归一用**共享**的实现（与淘汰、审计同源）：调用方要拿索引里的路径去磁盘上找，
-// 两侧必须用同一套规则，否则"索引里写着 A、磁盘上叫 B"会被判成"文件不在"。
-import { normalizeVaultPath } from "../vault-files";
-
+import { buildEvictionCandidates, planEviction, uniqueByPath } from "./eviction";
 /** 一条可清理的本地副本。 */
 export interface ReleaseSpaceCandidate {
 	/** 对象 key（桶内唯一标识）。 */
@@ -233,9 +229,9 @@ function planToLimit(input: ReleaseSpaceInput, keepBytes: number): Omit<ReleaseS
  */
 function unlinkedPresentBytes(input: ReleaseSpaceInput): number {
 	let total = 0;
-	for (const entry of input.entries) {
-		const path = normalizeVaultPath(entry.cachePath);
-		if (!path) continue;
+	// ⚠️ 先按路径去重（`uniqueByPath`，与候选共用同一份）：索引自相矛盾时
+	// 同一份文件会被算两遍，报出去的「另外还有 N MB」就虚高。
+	for (const { entry, path } of uniqueByPath(input.entries)) {
 		if (!input.uploaded.has(entry.key)) continue;
 		if (input.referencedKeys.has(entry.key)) continue;
 		if (!input.present(path)) continue;
@@ -252,14 +248,12 @@ function unlinkedPresentBytes(input: ReleaseSpaceInput): number {
  */
 function planWholeStock(input: ReleaseSpaceInput): Omit<ReleaseSpaceSelection, "keepBytes"> {
 	const candidates: ReleaseSpaceCandidate[] = [];
-	// 同一路径只算一次：索引理论上不会有两条记录指向同一份文件，
-	// 但"理论上"不是判据 —— 而**报给用户的字节数**会被重复计入。
-	const seen = new Set<string>();
+	// 同一路径只算一次（判据在 `eviction.ts::uniqueByPath`，与淘汰、占用统计共用）：
+	// 索引理论上不会有两条记录指向同一份文件，但"理论上"不是判据 ——
+	// 而**报给用户的字节数**会被重复计入。
 	let missing = 0;
 
-	for (const entry of input.entries) {
-		const path = normalizeVaultPath(entry.cachePath);
-		if (!path || seen.has(path)) continue;
+	for (const { entry, path } of uniqueByPath(input.entries)) {
 		// ① 是不是我们上传的（台账口径 —— 别借"索引里有没有条目"，见 `n11`）
 		if (!input.uploaded.has(entry.key)) continue;
 		// ② ⭐ 有没有远端链接（笔记/画布确实引用着它的远端地址）
@@ -274,7 +268,6 @@ function planWholeStock(input: ReleaseSpaceInput): Omit<ReleaseSpaceSelection, "
 		//（那份文件确实不在了，自愈该摘掉它）。
 		if (input.referencedPaths.has(path)) continue;
 
-		seen.add(path);
 		candidates.push({
 			key: entry.key,
 			cachePath: path,

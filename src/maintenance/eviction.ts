@@ -154,6 +154,41 @@ export function sumOwnedBytes(entries: readonly CacheEntry[]): number {
 	return total;
 }
 
+/**
+ * 把「索引记录」折成「**磁盘上的文件**」：同一个 `cachePath` 只留第一条。
+ *
+ * ## 为什么要有这一步
+ *
+ * 索引的语义是「一条记录 = 一份我们写下的本地副本」，而一份文件只该有一条记录 ——
+ * 但"应该"不是判据。真出现过自相矛盾的索引（同一份文件被两条记录指着，例如搬运/改名
+ * 中断、或两台设备各自的台账合并过来）。此时**按记录累加字节就会把同一份文件算两遍**：
+ *
+ * - 上限判定拿到虚高的占用 ⇒ 超出量虚高 ⇒ **多删真实副本**（`presentBytes` 那条路）；
+ * - 报给用户的"能腾多少 / 另外还有多少"同样虚高（`unlinkedPresentBytes` 那条路）。
+ *
+ * ⚠️ 两处都是"不报错的错"：界面上的数字自洽，只有用户事后发现图没了才知道。
+ *
+ * ⇒ 判据只留这一份：**凡是要把索引折成"占了多少磁盘"的地方，都先过这里**。
+ * 顺带把路径归一也做了（`normalizeVaultPath`），调用方拿到的 `path` 就是比较用的那个。
+ *
+ * 保留第一条而不是"挑最合适的"：顺序来自索引本身，稳定、可复现；而两份记录的
+ * `size` 不同时，多出来的那个字节数本来就没有真相可言（那份文件只有一个大小）。
+ */
+export function uniqueByPath<T extends { cachePath: string }>(
+	entries: readonly T[]
+): { entry: T; path: string }[] {
+	const seen = new Set<string>();
+	const out: { entry: T; path: string }[] = [];
+	for (const entry of entries) {
+		const path = normalizeVaultPath(entry.cachePath);
+		// 归一后为空 = 这条记录指不到任何库内路径（坏数据），既不算占用也不算候选
+		if (!path || seen.has(path)) continue;
+		seen.add(path);
+		out.push({ entry, path });
+	}
+	return out;
+}
+
 export interface CandidateInput {
 	entries: readonly CacheEntry[];
 	/**
@@ -224,9 +259,10 @@ export function buildEvictionCandidates(input: CandidateInput): CandidateSelecti
 	let pinned = 0;
 	let presentBytes = 0;
 
-	for (const entry of input.entries) {
-		const path = normalizeVaultPath(entry.cachePath);
-		if (!path) continue;
+	// ⭐ 先按**路径**去重（`uniqueByPath`）：索引里两条记录指着同一份文件时，
+	// 按记录累加会把那份文件算两遍 ⇒ 占用虚高 ⇒ 多删真实副本。
+	// ⚠️ 这一步必须在**所有计数之前**：连 `missing` 也不能把同一份不存在算两次。
+	for (const { entry, path } of uniqueByPath(input.entries)) {
 		// 磁盘上没有 → 没有可删的东西（这条记录该由自愈去摘，不是淘汰的事）
 		if (!input.present(path)) {
 			missing += 1;

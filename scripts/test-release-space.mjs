@@ -16,7 +16,9 @@ await withLoadedTs(["src/maintenance/release-space"], (mod) => {
 			"ledger, still linked from a note or canvas through its remote URL, and still on disk; an empty " +
 			"reference set yields nothing — the opposite default from eviction, because here \"has a remote " +
 			"link\" is the admission rule rather than a sort preference; missing files are counted but never " +
-			"offered as reclaimable, the same path is counted once, and the order is size-descending then by " +
+			"offered as reclaimable, the same path is counted once (in all three places that turn rows into " +
+			"files: the whole-stock list, the clear-to-limit path and the 'not in this batch' figure), and the " +
+			"order is size-descending then by " +
 			"key so the list is stable across runs)."
 	);
 });

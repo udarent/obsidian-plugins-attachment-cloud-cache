@@ -47,9 +47,11 @@ await runMutations({
 		},
 		{
 			// 后果：同一份文件被算两次 ⇒ 报给用户的"可释放 N MB"是虚的。
+			// ⚠️ 2026-10-25：去重判据搬到了 `eviction.ts::uniqueByPath`（淘汰与这里共用一份），
+			// 于是锚点从"那一行 if"改到**调用点** —— 绕开它就等于回到"按记录累加"。
 			name: "★ 同一路径不去重（字节被重复计入，清单也多一项）",
-			from: "\t\tif (!path || seen.has(path)) continue;",
-			to: "\t\tif (!path) continue;",
+			from: "\t// 同一路径只算一次（判据在 `eviction.ts::uniqueByPath`，与淘汰、占用统计共用）：\n\t// 索引理论上不会有两条记录指向同一份文件，但\"理论上\"不是判据 ——\n\t// 而**报给用户的字节数**会被重复计入。\n\tlet missing = 0;\n\n\tfor (const { entry, path } of uniqueByPath(input.entries)) {\n",
+			to: "\t// 同一路径只算一次（判据在 `eviction.ts::uniqueByPath`，与淘汰、占用统计共用）：\n\t// 索引理论上不会有两条记录指向同一份文件，但\"理论上\"不是判据 ——\n\t// 而**报给用户的字节数**会被重复计入。\n\tlet missing = 0;\n\n\tfor (const { entry, path } of input.entries.map((e) => ({ entry: e, path: e.cachePath }))) {\n",
 			// 同上：先说话的是"个数"那条（清单里同一份文件出现了两次）
 			expect: "同一路径只能出现一次",
 		},

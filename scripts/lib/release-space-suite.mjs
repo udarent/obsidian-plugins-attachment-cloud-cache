@@ -192,6 +192,7 @@ export function runReleaseSpaceSuite(mod) {
 		});
 		assert.equal(selection.candidates.length, 1, "★★ 同一路径只能出现一次");
 		assert.equal(selection.bytes, 100, "★★ 同一份文件的字节只能算一次");
+
 	}
 
 	// ============================================================
@@ -393,5 +394,45 @@ export function runReleaseSpaceSuite(mod) {
 		);
 		// ⚠️ 但它**仍算在这批的占用里**：目标那笔账要把不能删的也算进去，才算得出诚实的结果
 		assert.equal(trimmed.totalBytes, 200, "★ 不能删的那份也要算进'这批'的总量（否则会报一个达不到的目标）");
+
+	// ============================================================
+	// 10. 同一份文件只算一次 —— 另外两处（上限档 / 台账外占用）也要成立
+	//
+	// ⚠️ 这一组放在**最后**：它断言的是"上限档 / 台账外占用"，而那几处各自已有变异锚点
+	// （目标没传、时间没传、上限档退化成全清…）。放在前面会**抢先红**，把那些变异的
+	// `expect` 全部顶掉 —— 症状是"原因不符"，不是"漏过"，很容易误判成套件变松。
+	// 判据本体只有一处：`eviction.ts::uniqueByPath`（淘汰 / 上限档 / 台账外占用共用）。
+	// ============================================================
+
+		// ⭐ 上限档走的是 `buildEvictionCandidates`（另一条路），同一个判据也要成立 ——
+		// 否则"清到上限"会按虚高的占用去挑人，多清一份真实副本。
+		const keep = planReleaseSpace({
+			keepBytes: 150,
+			now: NOW,
+			referencedPaths: new Set(),
+			entries: [entry(key1, path1, 100), entry("副本-bbbbbbbb.png", path1, 900), entry(key2, path2, 100)],
+			uploaded: allUploaded(key1, "副本-bbbbbbbb.png", key2),
+			referencedKeys: allReferenced(key1, "副本-bbbbbbbb.png", key2),
+			present: everythingPresent,
+		});
+		// 池里其实只有**两份文件**（200 字节），超 50 字节 ⇒ 清一份就够。
+		// 若按记录算，占用会是 1100 ⇒ 超出 950 ⇒ **两份都清光**。
+		assert.equal(keep.candidates.length, 1, "★★ 上限档同样按**文件**算 ⇒ 只需清一份（按记录算会把两份都清掉）");
+		assert.equal(keep.candidates[0].cachePath, path1, "★ 清的就是那份超出的文件（稳定挑选：同一个 key）");
+		assert.equal(keep.totalBytes, 200, "★★ 上限档的总占用也按文件算（100 + 100，不是 100 + 900 + 100）");
+
+		// ⭐ 「另外还有 N MB 没算进这批」那句数字同样只算一次
+		const unlinked = planStock({
+			entries: [entry(key1, path1, 100), entry("副本-bbbbbbbb.png", path1, 900)],
+			// 在台账里、但笔记里已经不提它的云端地址 ⇒ 算「这批清不到、但确实占着磁盘」
+			uploaded: allUploaded(key1, "副本-bbbbbbbb.png"),
+			referencedKeys: allReferenced(),
+			present: everythingPresent,
+		});
+		assert.equal(
+			unlinked.unlinkedBytes,
+			100,
+			"★★ 这批清不到的占用也只按文件算一次（重复计入会让那句「另外还有」虚高）"
+		);
 	}
 }

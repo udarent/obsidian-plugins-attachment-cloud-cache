@@ -56,7 +56,7 @@ function candidateFor(key, options = {}) {
 }
 
 export function runEvictionSuite(mod) {
-	const { buildEvictionCandidates, planEviction, sumOwnedBytes, megabytesToBytes, DEFAULT_EVICTION_GRACE_MS } = mod;
+	const { buildEvictionCandidates, planEviction, sumOwnedBytes, megabytesToBytes, DEFAULT_EVICTION_GRACE_MS, uniqueByPath } = mod;
 
 	// ============================================================
 	// 1. 单位换算
@@ -312,6 +312,103 @@ export function runEvictionSuite(mod) {
 			4,
 			"★★ 总量若传索引原始和 ⇒ 4 份真副本全被删光（本次修掉的缺陷；调用方必须传 presentBytes）"
 		);
+	}
+
+	// ============================================================
+	// 2d. ⭐⭐ 索引自相矛盾（两条记录指着**同一份文件**）时，只能算一份
+	//
+	// 成因真实存在：搬运 / 改名中断、两台设备的台账合并、自愈只摘了一半。
+	// 按**记录**累加字节会把同一份文件算两遍 ⇒ 占用虚高 ⇒ 上限判定**多删真实副本**，
+	// 而界面上的数字是自洽的（只有用户事后发现图没了才知道）。
+	// ⇒ 判据：先按路径折成"磁盘上的文件"（`uniqueByPath`），再做任何计数。
+	// ============================================================
+	{
+		const samePath = "_attachment-cache/a.png";
+		const entries = [
+			entryFor("a.png", { cachePath: samePath, size: 10 * MB }),
+			// 同一个 cachePath，另一个 key（"两份台账指向同一份文件"）
+			entryFor("a-from-other-device.png", { cachePath: samePath, size: 10 * MB }),
+			entryFor("b.png", { size: 10 * MB }),
+		];
+		const present = () => true;
+		const selection = buildEvictionCandidates({ entries, present, referencedKeys: null, referencedPaths: new Set() });
+
+		assert.equal(
+			selection.presentBytes,
+			20 * MB,
+			"★★ 同一份文件只算一次（按记录累加会把 20MB 报成 30MB ⇒ 超出量虚高 ⇒ 多删）"
+		);
+		assert.equal(selection.candidates.length, 2, "★ 候选也按**文件**算，不按记录算（同一份别删两次）");
+		assert.deepEqual(
+			selection.candidates.map((c) => c.cachePath),
+			[samePath, "_attachment-cache/b.png"],
+			"保留**第一条**记录（顺序来自索引本身：稳定、可复现）"
+		);
+
+		// ⭐ 真正要紧的后果：虚高的占用会让上限多删一份真实副本
+		const limit = 15 * MB;
+		const fixed = planEviction({
+			candidates: selection.candidates,
+			totalBytes: selection.presentBytes,
+			limitBytes: limit,
+			now: NOW,
+		});
+		assert.equal(fixed.evict.length, 1, "★★ 真实占用 20MB 超 15MB ⇒ 只该删一份（腾到 10MB）");
+
+		// 反例：把索引原始和当总量 —— 那就是修复前的样子（30MB 超 15MB ⇒ 连删两份）
+		const broken = planEviction({
+			candidates: selection.candidates,
+			totalBytes: sumOwnedBytes(entries),
+			limitBytes: limit,
+			now: NOW,
+		});
+		assert.equal(broken.evict.length, 2, "★★ 总占用虚高时会连删两份真实副本（本次修掉的缺陷）");
+
+		// 幽灵记录也不能被数两次（先折叠、再计数）
+		const ghost = "_attachment-cache/gone.png";
+		const ghosts = [
+			entryFor("gone-a.png", { cachePath: ghost, size: 1024 }),
+			entryFor("gone-b.png", { cachePath: ghost, size: 1024 }),
+		];
+		const ghosted = buildEvictionCandidates({
+			entries: ghosts,
+			present: () => false,
+			referencedKeys: null,
+			referencedPaths: new Set(),
+		});
+		assert.equal(ghosted.missing, 1, "★ 同一份不存在的文件也只有一个「失效记录」");
+		assert.equal(ghosted.presentBytes, 0, "不存在的文件不占磁盘");
+
+		// 归一后为空的记录既不算候选也不算占用（坏数据不得污染上限判定）
+		// ⚠️ 用真正的空串：宿主的 `normalizePath` **不 trim**，纯空格会被当成一个路径名
+		//（那不是我们要判的事，别在这里顺手改口径）。
+		const blank = buildEvictionCandidates({
+			entries: [entryFor("blank.png", { cachePath: "", size: 5 * MB })],
+			present: () => true,
+			referencedKeys: null,
+			referencedPaths: new Set(),
+		});
+		assert.equal(blank.candidates.length, 0, "指不到库内路径的记录不进候选");
+		assert.equal(blank.presentBytes, 0, "★ 也不算占用（否则它会白白抬高超出量）");
+	}
+
+	// 2e. `uniqueByPath` 的形状（它是 2d 那个判据的唯一实现，单独钉一下）
+	{
+		const before = [
+			{ cachePath: "a/b.png" },
+			{ cachePath: "./a/b.png" },
+			{ cachePath: "/a/b.png" },
+			{ cachePath: "" },
+			{ cachePath: "c.png" },
+		];
+		const folded = uniqueByPath(before);
+		assert.deepEqual(
+			folded.map((item) => item.path),
+			["a/b.png", "c.png"],
+			"★ 归一后相同的路径只留一条（`./`、开头的 `/` 都归一到同一个），空路径直接丢"
+		);
+		assert.equal(folded[0].entry, before[0], "保留**第一条**记录本身（不是造一个副本）");
+		assert.deepEqual(uniqueByPath([]), [], "空输入 = 空输出");
 	}
 
 	// ============================================================

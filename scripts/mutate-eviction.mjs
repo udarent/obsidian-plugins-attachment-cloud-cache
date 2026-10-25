@@ -108,5 +108,15 @@ await runMutations({
 			to: "\tconst pinned = 0;",
 			expect: "被笔记直接指着",
 		},
+		{
+			// 后果：索引里两条记录指着同一份文件时，它被算两遍 ⇒ 占用虚高 ⇒ 上限
+			// **多删一份真实副本**，而界面上的数字是自洽的。
+			// ⚠️ 判据在 `uniqueByPath`（淘汰 / 上限档 / 台账外占用三处共用），
+			// 所以这一条同时守住那三处的"按文件算"。
+			name: "★★ 同一份文件被两条记录算两遍（占用虚高 ⇒ 上限多删真实副本）",
+			from: "\t\tif (!path || seen.has(path)) continue;\n",
+			to: "\t\tif (!path) continue;\n",
+			expect: "同一份文件只算一次",
+		},
 	],
 });

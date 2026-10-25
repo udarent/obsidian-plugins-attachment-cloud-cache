@@ -15,7 +15,9 @@ await withLoadedTs(["src/maintenance/eviction", "src/records"], (mod) => {
 			"delete real copies; copies living in the attachment folder count just like legacy ones, and a file the index " +
 			"does not know is never a candidate (the old 'orphan on disk' category is gone: such a file could be the user's " +
 			"own attachment); victims picked by last-use with unreferenced copies first; a freshly used copy is never a " +
-			"victim; whole files only — never a partial delete; stable ordering under ties; and the remaining overage " +
+			"victim; whole files only — never a partial delete; the same file is counted once even when two " +
+			"index rows point at it (otherwise the overage is inflated and the limit deletes a real copy); " +
+			"stable ordering under ties; and the remaining overage " +
 			"reported honestly)."
 	);
 });
