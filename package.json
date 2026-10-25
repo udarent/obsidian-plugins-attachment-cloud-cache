@@ -31,6 +31,7 @@
 		"verify:flows": "node scripts/verify-flows.mjs",
 		"verify:confirm": "node scripts/verify-confirm.mjs",
 		"verify:migrate": "node scripts/verify-migrate-real.mjs",
+		"verify:settings": "node scripts/verify-settings-real.mjs",
 		"install:demo": "node scripts/install-demo.mjs",
 		"check:demo": "node scripts/install-demo.mjs --check",
 		"check:credentials": "node scripts/check-credential-files.mjs",
