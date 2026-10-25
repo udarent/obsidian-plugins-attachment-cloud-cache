@@ -221,6 +221,8 @@ async function main() {
 	let client = null;
 	const frames = [];
 	let languageWas = null;
+	/** 收尾要把语言写回的值：读到 `en` 时按 `zh` 处理（见下面那段说明）。 */
+	let languageRestoreTo = "zh";
 	let appId = VAULT_NAME;
 
 	try {
@@ -241,6 +243,13 @@ async function main() {
 		appId = ids?.appId ?? VAULT_NAME;
 		languageWas = ids?.lang ?? null;
 		log(`· appId=${appId}｜原语言=${JSON.stringify(languageWas)}`);
+		// ⚠️ 读到 `en` 说明**上一次录制没把语言还原**（脚本崩了、或者被中断），不是用户的设置：
+		// 正常用户的界面是中文。这种情况必须按 zh 收尾 —— 否则一次崩溃会把英文界面一直留给用户
+		//（2026-10-25 实测踩到：前一轮中途报错，这一轮把 `en` 当成了"原值"原样写回）。
+		if (languageWas === "en") {
+			log("  ⚠️ 宿主当前是英文 —— 大概率上一次录制没还原，本次收尾按 zh 处理");
+		}
+		languageRestoreTo = languageWas && languageWas !== "en" ? languageWas : "zh";
 		await evaluate(
 			client,
 			`(() => {
@@ -804,7 +813,7 @@ async function main() {
 				await evaluate(
 					client,
 					`(() => {
-						localStorage.setItem("language", ${JSON.stringify(languageWas ?? "zh")});
+						localStorage.setItem("language", ${JSON.stringify(languageRestoreTo)});
 						localStorage.removeItem("enable-plugin-" + ${JSON.stringify(appId)});
 						return true;
 					})()`
