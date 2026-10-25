@@ -170,6 +170,9 @@ function fetchRequest(options = {}) {
 
 
 export async function runExternalCacheSuite(mod) {
+	// ⚠️ 这个数也写进了设计文档 §3.6 的阈值表（「站外下载超时 20 秒」）——「对方不是自己的存储，
+	// 比 GET 短」，此前同样没有任何断言看着它。
+	assert.equal(mod.DEFAULT_EXTERNAL_TIMEOUT_MS, 20_000, "站外下载超时默认值必须与 §3.6 的阈值表一致");
 	const {
 		shouldReportExternalFailure,
 		isAttachmentResponse,
