@@ -986,8 +986,10 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 
 
 	/** 抽成方法是为了让测试能替换掉它（真弹窗点不了）。 */
-	private confirmMaintenance(options: ConfirmOptions): Promise<boolean> {
-		return confirmWithModal(this.app, options);
+	private confirmMaintenance(options: Omit<ConfirmOptions, "cancel">): Promise<boolean> {
+		// ⚠️ 「不做」那颗按钮的文案在这里**单点**填（D-96）。流程层拿到的类型没有 `cancel`，
+		// 所以它既写不死一句英文，也不会各自翻译一遍 —— 判据只有一份。
+		return confirmWithModal(this.app, { cancel: this.t("maintainCancel"), ...options });
 	}
 
 	onunload(): void {

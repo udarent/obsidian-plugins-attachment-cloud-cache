@@ -328,6 +328,8 @@ export const I18N: Record<string, Locale> = {
 			"automatic handling stays off, because you had it set to do nothing automatically — you can still pick files one by one",
 		maintainMoreItems: "…and {count} more",
 		maintainCancelled: "Cancelled — nothing was changed.",
+		// 确认框里那颗"不做"的按钮（D-96）：以前是硬编码英文 "Cancel"，中文界面下也照原样显示
+		maintainCancel: "Cancel",
 		// 标题栏右侧那句（附件管理与以后的任何清单共用 —— 全选/全不选/取消各走自己的键）
 		taskListSelected: "{selected} of {total} selected",
 		fileCardOpenMissing: "That file is no longer in the vault: {path}",
@@ -700,6 +702,8 @@ export const I18N: Record<string, Locale> = {
 			"自动处理保持关闭（你原本选的是「什么都不做」）；「上传附件」仍然随时可用",
 		maintainMoreItems: "……还有 {count} 个",
 		maintainCancelled: "已取消，没有改动任何内容。",
+		// 确认框里那颗"不做"的按钮（D-96）：以前是硬编码英文 "Cancel"，中文界面下也照原样显示
+		maintainCancel: "取消",
 		// 标题栏右侧那句（附件管理与以后的任何清单共用 —— 全选/全不选/取消各走自己的键）
 		taskListSelected: "已选 {selected} / {total}",
 		fileCardOpenMissing: "文件已不在库里：{path}",

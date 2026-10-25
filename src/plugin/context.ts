@@ -58,8 +58,13 @@ export interface PluginContext {
 	readonly buildClient: () => S3Client | null;
 	/** 把候选算成"怎么展示"（缩略图 + 名字 + 类型标记）。 */
 	readonly fileCards: (items: readonly FileCardInput[], limit: number) => FileCard[];
-	/** 统一的确认框（真机探针里被替换掉的那一个）。 */
-	readonly confirmMaintenance: (options: ConfirmOptions) => Promise<boolean>;
+	/**
+	 * 统一的确认框（真机探针里被替换掉的那一个）。
+	 *
+	 * ⚠️ `Omit<…, "cancel">`：那颗"不做"的按钮由**装配点**填本地化文案（D-96），
+	 * 流程层连写死的可能都没有 —— 以前它硬编码英文 `"Cancel"`，中文界面上就这么显示出来了。
+	 */
+	readonly confirmMaintenance: (options: Omit<ConfirmOptions, "cancel">) => Promise<boolean>;
 	/**
 	 * 维护类流程共用的依赖装配（`maintenance/run.ts` 那一家）。
 	 *

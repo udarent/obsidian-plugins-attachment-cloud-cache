@@ -37,6 +37,17 @@ export interface ConfirmOptions {
 	cards?: readonly FileCard[];
 	/** 确认按钮文字。 */
 	cta: string;
+	/**
+	 * 「不做」那颗按钮的文字（**必填**）。
+	 *
+	 * ⚠️ 以前这里硬编码了英文 `"Cancel"`，于是中文界面上是「确认中文」＋「Cancel」并列 ——
+	 * 而这两颗按钮的区别正是用户在按下不可逆动作前唯一读到的选择（D-96）。
+	 * 改成必填是为了让"忘了本地化"变成编译错误，而不是靠下一个读代码的人发现。
+	 *
+	 * 由**装配点**填（`main.ts` 的 `confirmMaintenance`），流程层拿到的类型是
+	 * `Omit<ConfirmOptions, "cancel">` —— 于是谁都不必、也没法自己写死一句话。
+	 */
+	cancel: string;
 	/** 是否把确认按钮标成破坏性（宿主会把它染成警示色）。 */
 	destructive?: boolean;
 }
@@ -81,7 +92,7 @@ export function confirmWithModal(app: App, options: ConfirmOptions): Promise<boo
 				});
 			})
 			.addButton((button) =>
-				button.setButtonText("Cancel").onClick(() => {
+				button.setButtonText(options.cancel).onClick(() => {
 					finish(false);
 					modal.close();
 				})
