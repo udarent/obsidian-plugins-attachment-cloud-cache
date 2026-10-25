@@ -34,12 +34,5 @@ await runMutations({
 			to: 'export const EXTERNAL_SITE_MODES: readonly ExternalSiteMode[] = ["off", "allow", "allowlist"];',
 			expect: "站点模式的合法取值清单必须正好是 off / blocklist / allowlist",
 		},
-		{
-			// 后果：notice 档从清单里消失 ⇒ 用户选了它，加载时却被判成非法值。
-			name: "孤儿询问清单漏掉 notice 档",
-			from: 'export const ORPHAN_ASK_MODES: readonly OrphanAskMode[] = ["always", "notice", "never"];',
-			to: 'export const ORPHAN_ASK_MODES: readonly OrphanAskMode[] = ["always", "never"];',
-			expect: "孤儿询问的合法取值清单必须正好是 always / notice / never",
-		},
 	],
 });

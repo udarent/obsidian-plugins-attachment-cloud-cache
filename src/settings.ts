@@ -34,14 +34,14 @@
  *   而且遗留值该从文件里清掉 ⇒ 见 `hasLegacyObjectKeyTemplate` 与 `main.ts` 的载入流程。
  */
 
-import { EXTERNAL_SITE_MODES, LOCAL_COPY_ACTIONS, ORPHAN_ASK_MODES, isExternalSiteMode, isLocalCopyAction, isOrphanAskMode } from "./types";
-import type { ExternalSiteMode, LocalCopyAction, OrphanAskMode, PluginSettings, S3Config } from "./types";
+import { EXTERNAL_SITE_MODES, LOCAL_COPY_ACTIONS, isExternalSiteMode, isLocalCopyAction } from "./types";
+import type { ExternalSiteMode, LocalCopyAction, PluginSettings, S3Config } from "./types";
 import { CACHE_LIMIT_MB_MAX } from "./types";
 import { isPlainRecord } from "./records";
 
 // 枚举类型守卫定义在 types.ts（与枚举本身同处一地，避免两个模块各存一份）。
 // 这里转出去，让"读设置的模块"同时就是"拿守卫的模块"。
-export { isExternalSiteMode, isLocalCopyAction, isOrphanAskMode };
+export { isExternalSiteMode, isLocalCopyAction };
 
 // ─────────────────────────── 字段表 ───────────────────────────
 //
@@ -173,10 +173,6 @@ const FACTORY_SETTINGS = {
 	// ① 自动淘汰是"后台删文件"，用户没要求就不该发生；
 	// ② 它默认关着，"离线可用"这个主承诺就不会被悄悄打折。
 	cacheLimitMb: 0,
-	// ⚠️ 默认**照旧弹窗**（那个询问是需求 R17 的主场景）。但用户必须能拒绝它 ——
-	// 它是**自动出现**的模态框，而默认动作是"保留"（什么都不做）⇒ 最常见的结局是
-	// "什么都没发生，但用户被打断了一次"。所以这一项的存在本身就是"能关掉"这件事。
-	orphanAsk: "always" as OrphanAskMode,
 	// ⚠️ 默认**关**：它只写控制台，但"默认就在打日志"会让排障时无法区分
 	// "这条是本次的"还是"上次留下的"，也会让支持者收到无关的粘贴。
 	debugLogging: false,
@@ -200,7 +196,6 @@ const SETTINGS_SPEC: {
 	externalSiteList: stringListValue(),
 	uploadLocalFiles: boolValue(),
 	cacheLimitMb: numberValue({ min: 0, max: CACHE_LIMIT_MB_MAX }),
-	orphanAsk: oneOfValue(ORPHAN_ASK_MODES),
 	debugLogging: boolValue(),
 };
 

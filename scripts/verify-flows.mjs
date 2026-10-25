@@ -263,9 +263,6 @@ async function main() {
 				try {
 					app.secretStorage?.setSecret?.("acc-probe-secret", "probe-secret-value");
 				} catch {}
-				// ⚠️ 命令路只有 orphanAsk=always 时才弹**清单**（另两档只发一句通知）。
-				// 这个改动不落盘也行（命令读的是内存里的 settings），而 data.json 有备份兜底。
-				plugin.settings.orphanAsk = "always";
 				// 命令体是 fire-and-forget 的（runCommand 返回 void）⇒ 抛出的错只会进
 				// console.error。把它收进一个数组，失败诊断里就能看到"到底为什么没弹窗"。
 				window.__accErrors = [];

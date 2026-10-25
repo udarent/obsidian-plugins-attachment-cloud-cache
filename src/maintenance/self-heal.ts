@@ -140,7 +140,7 @@ export function createAbsenceConfirmer(): (path: string, absent: boolean) => boo
  * - 同一个路径只检查一次，但**它名下的每条记录都要一起摘**（否则会留下指向同一份
  *   不存在文件的另一条记录，下一轮又查到它 —— 一轮修不干净，还多付一次 I/O）；
  * - 空白路径直接跳过：那种记录连"文件在哪"都答不出来，交给适配器去猜它怎么处理
- *   是在赌一个我们不需要承担的风险（与 `planOrphanLocalRemoval` 同一条纪律）；
+ *   是在赌一个我们不需要承担的风险；
  * - 保持输入顺序（`toArray()` 已按 key 排序），让行为可预测、也让测试能穷举。
  */
 export function planSelfHeal(entries: readonly CacheEntry[]): SelfHealTarget[] {

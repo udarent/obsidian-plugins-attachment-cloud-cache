@@ -2301,7 +2301,6 @@ export async function runLoadAcceptance(options = {}) {
 
 			// ── ② 用户**把那条引用删掉**（这正是 R17 的主场景）──
 			mockObsidian.Notice.instances.length = 0;
-			plugin.settings.orphanAsk = "notice";
 			await writeFile(join(root, notePath), "没有任何引用了。\n", "utf8");
 			// ⚠️ 宿主的链接索引**跟着正文走**：真机上改写/清空之后它会重新解析，这里必须手动跟上。
 			// 不跟会怎样：判"本地副本还被正文指着"的那条会读到**旧的** resolvedLinks，
@@ -2338,7 +2337,7 @@ export async function runLoadAcceptance(options = {}) {
 			//（D-72 的生产缺陷：模板里没有 `{count}`，数字一直被静默丢掉，而套件的假 `t` 把参数拼进去了）。
 			// ⚠️ 2026-10-23：`maintainBatchCta` 随着清单一起退役，换成**一键流程确认框上的按钮**
 			//（`uploadAllCta`）—— 它同样必须在模板里带 `{count}`，否则用户看不到"这一下动几个"。
-			for (const key of ["uploadAllCta", "uploadAllSummary", "orphanLocalOnly", "orphanBoth"]) {
+			for (const key of ["uploadAllCta", "uploadAllSummary"]) {
 				assert.equal(
 					plugin.t(key, { count: 7 }).includes("7"),
 					true,

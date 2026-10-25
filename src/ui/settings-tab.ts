@@ -48,7 +48,6 @@ import {
 	connectionStateKey,
 	connectionStateTone,
 	localCopyOptions,
-	orphanAskOptions,
 	publicReachNeedsAttention,
 	probeStepFailureKey,
 	publicLinkKey,
@@ -138,7 +137,6 @@ export class SettingsTab extends PluginSettingTab {
 			{ type: "group", heading: this.t("sectionStorage"), items: this.storageItems() },
 			{ type: "group", heading: this.t("sectionUpload"), items: this.uploadItems() },
 			{ type: "group", heading: this.t("sectionOffline"), items: this.offlineItems() },
-			{ type: "group", heading: this.t("sectionCleanup"), items: this.cleanupItems() },
 			{ type: "group", heading: this.t("sectionDiagnostics"), items: this.diagnosticsItems() },
 		];
 	}
@@ -774,37 +772,6 @@ export class SettingsTab extends PluginSettingTab {
 				aliases: ["usage", "size", "occupied", "space", "占用", "多大", "空间", "容量"],
 				visible: () => shouldShowCacheLimit(this.plugin.settings.localCopy),
 				render: (setting) => this.renderLocalUsage(setting),
-			},
-		];
-	}
-
-	// ─────────────────────── 云端清理 ───────────────────────
-
-	/**
-	 * 云端清理那一段。
-	 *
-	 * 现在只有一项，但仍然**单独成组**而不是塞进「离线副本」：
-	 * 它管的是**云端对象**（删了找不回来），与"本地副本"是两件风险等级不同的事 ——
-	 * 混在一组里会让人以为它们是同一类开关。
-	 *
-	 * ⚠️ 2026-10-24：这一组**只剩这一项**（「删除记录」「调试日志」搬去了「记录与排障」）。
-	 * 仍然不撤组的理由有两个：① 它问的是一个**云端**决定，与"本地副本"不同风险等级；
-	 * ② R25 的「统一云端对象名」落地也归这里 —— 那也是"对云端对象做什么"。
-	 */
-	private cleanupItems(): SettingGroupItem[] {
-		return [
-			{
-				name: this.t("orphanAsk"),
-				// ⭐ 命令名**从 i18n 取**（不抄字面量）：命令改名的门禁只管 README 与 `addCommand`，
-				// 抄在说明里的那份不会被它发现 —— 而"指路指到一条不存在的命令"比不指路更糟。
-				desc: `${this.t("orphanAskDesc")} ${this.t("cleanupCommandHint", { command: this.t("cmdManageAttachments") })}`,
-				aliases: ["orphan", "unused", "cleanup", "delete", "孤儿", "无人引用", "清理", "删除"],
-				control: {
-					type: "dropdown",
-					key: "orphanAsk",
-					// 选项由类型清单生成（与"合法的值"同源）
-					options: orphanAskOptions((value) => this.t(`orphanAsk_${value}`)),
-				},
 			},
 		];
 	}

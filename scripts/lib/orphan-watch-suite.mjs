@@ -19,7 +19,7 @@
 import assert from "node:assert/strict";
 
 export async function runOrphanWatchSuite(mod) {
-	const { createOrphanWatcher, dropLocallyReferenced, planOrphanLocalRemoval, selectOrphanAsks } = mod;
+	const { createOrphanWatcher, dropLocallyReferenced, selectOrphanAsks } = mod;
 
 	/**
 	 * 造一个可注入的监视器。
@@ -290,63 +290,5 @@ export async function runOrphanWatchSuite(mod) {
 		}
 	}
 
-	// ============================================================
-	// 9. ⭐ 本地副本的处置清单（1.2.0 / D-17：删法**只有一种**）
-	//
-	// 用户答「连本地一起删」之后，删的是**索引里登记的副本** —— 而它同时可能就是
-	// 用户附件目录里的原件。所以这条路一律走**回收站**：判据不是「文件在哪」，
-	// 而是「能不能重新拿到」，而这条路是用户**明确确认**过的、也不需要立刻腾空间。
-	//（要立刻腾空间的是上限淘汰那条自动路径，它另有一套云端 HEAD 前置复核 ——
-	// 见 `maintenance/remove.ts` 的论证。）
-	//
-	// ⚠️ 从前这里按「在不在缓存目录里」分两个桶，那个分类随缓存目录一起删掉了。
-	// 保留下来的断言只问一件事：**清单本身对不对**（哪些 key/path 该产出、哪些不该）。
-	// ============================================================
-	{
-		const withPaths = (map) => ({ cachePathOf: (key) => map[key] });
-
-		assert.deepEqual(
-			planOrphanLocalRemoval(["a.png"], withPaths({ "a.png": "attachments/a.png" })),
-			[{ key: "a.png", path: "attachments/a.png" }],
-			"索引里记着的副本 ⇒ 产出待删目标（删法由执行层固定为回收站）"
-		);
-
-		// 没有索引记录 ⇒ 本地无可处置（不是我们上传的，或「不留副本」档没留副本）
-		assert.deepEqual(
-			planOrphanLocalRemoval(["a.png"], withPaths({})),
-			[],
-			"★ 索引里没有记录 ⇒ 一个文件都不给删（对不属于我们的东西没有处置权）"
-		);
-		assert.deepEqual(
-			planOrphanLocalRemoval(["a.png"], withPaths({ "a.png": "" })),
-			[],
-			"记录里路径是空串 ⇒ 不产出（没有可以删的路径）"
-		);
-		assert.deepEqual(
-			planOrphanLocalRemoval(["a.png"], withPaths({ "a.png": "   " })),
-			[],
-			"★ 纯空白的路径也要挡掉 —— 交给宿主去解析一个只有空格的路径是在赌它怎么处理"
-		);
-		assert.deepEqual(
-			planOrphanLocalRemoval(["  ", "a.png"], withPaths({ "a.png": "attachments/a.png" })),
-			[{ key: "a.png", path: "attachments/a.png" }],
-			"空/空白的 key 要跳过（不是合法的对象 key）"
-		);
-
-		// 同一个路径只删一次；顺序保持输入顺序（提示语里的数量要对得上）
-		assert.deepEqual(
-			planOrphanLocalRemoval(
-				["b.png", "a.png", "c.png"],
-				withPaths({
-					"b.png": "attachments/same.png",
-					"a.png": "attachments/same.png",
-					"c.png": "attachments/other.png",
-				})
-			).map((target) => target.path),
-			["attachments/same.png", "attachments/other.png"],
-			"同一路径只产出一次（清单来自外部，不假设它干净）"
-		);
-	}
-
-	return { cases: 9 };
+	return { cases: 8 };
 }

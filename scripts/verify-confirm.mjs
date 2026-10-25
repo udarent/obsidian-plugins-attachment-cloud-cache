@@ -274,7 +274,6 @@ async function main() {
 					plugin.settings.externalImageCache = false;
 					plugin.settings.uploadLocalFiles = false;
 					plugin.settings.localCopy = "keep";      // 别让"删本地副本"碰夹具
-					plugin.settings.orphanAsk = "always";
 
 					window.__accErrors = [];
 					const originalError = console.error;

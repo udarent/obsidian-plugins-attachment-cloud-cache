@@ -357,14 +357,14 @@ assert.ok(
 	/** 方法体里设置项出现的**顺序**（只认 `name: this.t("键")`）。 */
 	const itemNames = (body) => [...body.matchAll(/name: this\.t\("(\w+)"\)/g)].map((match) => match[1]);
 
-	for (const name of ["storageItems", "uploadItems", "offlineItems", "cleanupItems", "diagnosticsItems"]) {
+	for (const name of ["storageItems", "uploadItems", "offlineItems", "diagnosticsItems"]) {
 		assert.ok(methodBody(name).length > 0, `★ 找不到 ${name} 的实现（守卫自己失效了，别让它静默通过）`);
 	}
 
 	const groups = [...tab.matchAll(/type: "group", heading: this\.t\("(section\w+)"\)/g)].map((match) => match[1]);
 	assert.deepEqual(
 		groups,
-		["sectionStorage", "sectionUpload", "sectionOffline", "sectionCleanup", "sectionDiagnostics"],
+		["sectionStorage", "sectionUpload", "sectionOffline", "sectionDiagnostics"],
 		"★ 组的顺序 = 业务链的顺序（连上 → 传上来 → 本地那份怎么管 → 云端怎么清 → 出事看哪儿）；" +
 			"确实要改就先想清楚它插在哪一步之后，再改这一行"
 	);

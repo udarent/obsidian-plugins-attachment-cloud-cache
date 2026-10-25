@@ -55,21 +55,15 @@
 import { Notice, TFile } from "obsidian";
 import { debugTimed } from "../debug-log";
 import { describeError } from "../error-text";
-import { externalKeysOf, runCloudCleanup } from "../maintenance/cloud-cleanup";
-import type { CloudCleanupResult } from "../maintenance/cloud-cleanup";
-import type { DeletedObjectRecord } from "../maintenance/delete-log";
+import { externalKeysOf } from "../maintenance/cloud-cleanup";
 import {
 	createOrphanWatcher,
 	dropLocallyReferenced,
-	planOrphanLocalRemoval,
 	selectOrphanAsks,
 } from "../maintenance/orphan-watch";
-import type { NoteKind, OrphanLocalTarget } from "../maintenance/orphan-watch";
-import { removeOrphanCopies as removeCopies } from "../maintenance/orphan-removal";
-import { displayNameForKey } from "../object-key";
-import { askOrphanCloudDelete } from "../ui/cloud-delete-modal";
+import type { NoteKind } from "../maintenance/orphan-watch";
 import type { PluginContext } from "./context";
-import { extractStoredKeys, writeDeleteLog } from "./shared-flows";
+import { extractStoredKeys } from "./shared-flows";
 import { localReferencePass, UnreadableNoteError } from "./notes-query";
 
 /** 引用重算的防抖窗口。编辑途中宿主的自动保存会反复触发 `modify`。 */
@@ -83,13 +77,6 @@ const CHECK_DEBOUNCE_MS = 1500;
  */
 const ASK_DEBOUNCE_MS = 4000;
 
-/**
- * 询问框里最多列出几个对象（再多就只报数量）。
- *
- * ⚠️ 上限影响的是**展示**，不是判定：判定永远跑完整份清单。
- * 每一行现在都带一张缩略图，所以这个数也是"最多同时加载几张图"。
- */
-const LIST_MAX = 8;
 
 /**
  * 这篇文件是不是"引用的来源"（只监视笔记与画布）。
@@ -299,152 +286,16 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 		//（他可能还在整理笔记，同一条引用被删掉的原因有很多种）
 		for (const key of selection.asks) asked.add(key);
 
-		const mode = ctx.settings.orphanAsk;
-
-		// ⭐ `notice` 档：不弹窗，只给一条**不阻塞**的通知（并指路到附件管理）。
-		// 它同样吃冷却 —— 通知反复冒出来，与弹窗一样烦人。
-		// ⚠️ 指路指向的是**附件管理**（路径从 i18n 取）：它按同一批判据再列一次，
-		// 正是"想再处理一次"时该去的地方（`cleanup-cloud` 走列桶，是另一件事）。
-		if (mode === "notice") {
-			new Notice(
-				ctx.t("orphanNotice", {
-					count: selection.asks.length,
-					command: ctx.t("cmdManageAttachments"),
-				})
-			);
-			return;
-		}
-
-		// 存储没配好就**不问了**：这个弹窗的三个选项里有两个以"云端"为前提，
-		// 而只有一个能成立时，问法本身是误导（"只删本地副本"那一档由 F18 的清理承担，
-		// 跟这里的三选一不是一件事）。
-		const client = ctx.buildClient();
-		if (!client) return;
-
-		// ⭐ 清单给的是**图 + 名字**，不是一串 key：老 key 是 `<sha256>.<扩展名>`，
-		// 用户看它认不出是哪张图，而这是不可恢复动作前**唯一能核对**的东西。
-		// ⚠️ 名字的三个来源按序兜底：条目 sourceName → 从 key 反推（key 自带名字：`<名字>-<哈希>.<扩展名>`）
-		// → 退化成 key 本身；图仍然是可核对的（有副本用副本，没有就用存储里的地址）。
-		const inputs = selection.asks.map((key) => {
-			const entry = index.get(key);
-			// 「不留副本」档没有条目 ⇒ 从 key 反推（key 自带名字）
-			return {
-				id: key,
-				name: entry?.sourceName || displayNameForKey(key),
-				localPath: entry?.cachePath,
-				remoteKey: key,
-			};
-		});
-
-		/** 三档都要说清的两句（**可恢复性**与**多设备盲区**）。 */
-		const lines = [ctx.t("orphanLocalNote"), ctx.t("cloudCleanupDeviceBlindSpot")];
-
-		/**
-		 * 把用户选的那一档落到**他勾中的那些**上。
-		 *
-		 * ⚠️ 入参是**裸 key**：这条链只有一个没有界面的三选一弹窗（清单那条路 2026-10-24 已删），
-		 * 所以这里不再需要"从清单行的 id 反解 key"那一层，也没有进度可上报。
-		 */
-		const applyChoice = async (choice: "local" | "both", chosen: readonly string[]): Promise<void> => {
-			const index = ctx.currentIndex();
-			// 云端对象：删的是它在本地的那份副本（索引记的落点）
-			const localTargets = planOrphanLocalRemoval(chosen, {
-				cachePathOf: (key) => index.get(key)?.cachePath,
-			});
-
-			// 先删云端（不可恢复的那一半先做：失败时下面那句提示会如实说明"云端对象未动"）
-			let cloud: CloudCleanupResult | null = null;
-			const logRecords: DeletedObjectRecord[] = [];
-			if (choice === "both" && chosen.length > 0 && client) {
-				try {
-					cloud = await runCloudCleanup(
-						{
-							client,
-							index: () => ctx.currentIndex(),
-							persistIndex: () => ctx.hostContext().persistIndex(),
-							notify: (message) => new Notice(message),
-							t: ctx.t,
-							onRemoved: (record) => logRecords.push({ ...record, scope: "orphan" }),
-						},
-						chosen
-					);
-				} catch (error) {
-					new Notice(ctx.t("cloudDeleteFailed", { error: describeError(error) }));
-				}
-			}
-			// 留痕：这条询问可能是**自动出现**的，而删除不可恢复 ⇒ 至少要让"删过什么"事后可查
-			await writeDeleteLog(ctx, logRecords);
-
-			const removed = await removeLocalCopies(localTargets);
-
-			new Notice(
-				cloud
-					? ctx.t("orphanDeletedBoth", {
-							removed,
-							deleted: cloud.deleted,
-							alreadyGone: cloud.alreadyGone,
-							failed: cloud.failed,
-						})
-					: ctx.t("orphanLocalDeleted", { removed })
-			);
-		};
-
-		// ⭐ 自动那条路：保持**三选一弹窗**（主按钮是保守项）。它通常只摆一两个孤儿，
-		// 不是"清单"场景；而它出现时用户多半没在期待它 ⇒ 措辞与按钮顺序都按那个前提设计的
-		// （见 `cloud-delete-modal.ts` 头注释）。两条路**共用同一个执行体** `applyChoice`。
-		const cards = ctx.fileCards(inputs, LIST_MAX);
-		const choice = await askOrphanCloudDelete(ctx.app, {
-			title: ctx.t("orphanTitle"),
-			lines: [
-				ctx.t("orphanBody", { count: selection.asks.length }),
-				// ⚠️ 上面 `cards` 传的是 `LIST_MAX` ⇒ **列表被截断**，所以这一句必须说
-				//（与「上传附件」那边正好相反：那里列表是全量的，摘要里的举例已删掉）。
-				// ⭐ 判据是**列表全不全**，不是"哪个界面更好看"。
-				...(selection.asks.length > LIST_MAX
-					? [ctx.t("orphanMore", { count: selection.asks.length - LIST_MAX })]
-					: []),
-				...lines,
-			],
-			cards,
-			keepCta: ctx.t("orphanKeep"),
-			// ⚠️ 这两个模板现在带 `{count}`（D-76）：不传参数就会原样显示 `{count}`。
-			localCta: ctx.t("orphanLocalOnly", { count: selection.asks.length }),
-			bothCta: ctx.t("orphanBoth", { count: selection.asks.length }),
-		});
-		// ⚠️ `dismissed`（点背景 / ESC 关掉）与 `keep` 在**动作**上相同（都不删），
-		// 但在**沟通**上相反：误关的人需要知道"什么都没发生、想再问一次该去哪"。
-		// 用户 2026-10-14 在 Android 上报的正是这个 —— "点一下边上就不见了"，
-		// 而那个询问**只自动出现一次**（冷却记住之后不会再问）。
-		if (choice === "dismissed") {
-			new Notice(ctx.t("orphanDismissed", { command: ctx.t("cmdManageAttachments") }));
-			return;
-		}
-		if (choice === "keep") return;
-
-		await applyChoice(choice, selection.asks);
-	}
-
-	/**
-	 * 删掉孤儿对象在本地的副本（用户答"连本地一起清"之后）。
-	 *
-	 * ⚠️ 判定与执行都不在这里：分类由 `planOrphanLocalRemoval`（纯函数，套件与变异锚点都在）
-	 * 给出，删除顺序与两类文件的分工在 `maintenance/orphan-removal.ts`。
-	 * 这一层只负责把两条依赖接上去 —— 本项目的教训是"接线层里的几行"最容易
-	 * 悄悄长出没人验的分支（弹窗那层就出过一次）。
-	 */
-	function removeLocalCopies(targets: readonly OrphanLocalTarget[]): Promise<number> {
-		return removeCopies(targets, {
-			app: ctx.app,
-			forget: (key) => ctx.currentIndex().remove(key),
-			persist: () => ctx.hostContext().persistIndex(),
-			onPersistError: (error) => {
-				// 与批量清理同一条纪律：索引存不下去必须说出来，不能静默
-				new Notice(ctx.t("cloudCleanupPersistFailed", { error: describeError(error) }));
-			},
-			onDeleteError: (error, path) => {
-				console.error(`[attachment-cloud-cache] 删除孤儿的本地副本失败（${path}）`, error);
-			},
-		});
+		// ⭐ 唯一的出口（2026-10-25）：一条**不阻塞**的通知。
+		// 弹窗档（三选一：保留 / 只删本地 / 连云端一起删）已随设置项一起取消 ——
+		// 删除动作全部收在**附件管理**里（「待清理」筛选 + 批量动作），这里只负责"出声"。
+		// ⚠️ 通知同样吃冷却（`asked`）：反复冒出来与弹窗一样烦人。
+		new Notice(
+			ctx.t("orphanNotice", {
+				count: selection.asks.length,
+				command: ctx.t("cmdManageAttachments"),
+			})
+		);
 	}
 
 	/**
@@ -457,11 +308,6 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 		const batch = [...pending];
 		pending.clear();
 		if (batch.length === 0) return;
-
-		// ⭐ 用户可以直接说"别主动告诉我"。这一档在**筛选之前**就返回：
-		// 连扫一遍都省了，而且**没有任何信息丢失** —— 附件管理的「待清理」筛选
-		// 按同一批判据随时能再列一次（它算的也是"台账里有、本库看不见引用"）。
-		if (ctx.settings.orphanAsk === "never") return;
 
 		await presentOrphans(batch);
 	}

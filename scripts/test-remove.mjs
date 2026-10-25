@@ -75,8 +75,6 @@ for (const file of CACHE_MAINTENANCE) {
 //
 // 两处各自的理由：
 //   · `src/core/ingest.ts` —— `localCopy: "trash"`（上传后不留本地副本）删的是用户的原始附件；
-//   · `src/maintenance/orphan-removal.ts` —— 孤儿询问里"连本地一起清"，
-//     删的可能是 `localCopy: "keep"` 时附件目录里那份**用户自己的附件**；
 //   · `src/plugin/gallery-flow.ts` —— 附件管理里用户**逐个勾选**后点「删除本地」，
 //     删的是他点名的那份（可能是唯一一份）。⚠️ 这是 CR-04 的**默认档实现**：
 //     `gallery/actions.ts` 已按状态判定可用性，未上传的那些必须由界面明示"没有云端副本"。
@@ -85,7 +83,7 @@ for (const file of CACHE_MAINTENANCE) {
 const trashSites = listSourceFiles().filter((file) => read(file).includes("trashFile("));
 assert.deepEqual(
 	trashSites,
-	["src/core/ingest.ts", "src/maintenance/orphan-removal.ts", "src/plugin/gallery-flow.ts"],
+	["src/core/ingest.ts", "src/plugin/gallery-flow.ts"],
 	`★ \`trashFile\` 只允许出现在删**用户自己的文件**的地方（实际：${JSON.stringify(trashSites)}）。` +
 		`新出现的地点要先确认它删的不是"我们的可再生副本"—— 那些必须直接删（回收站不释放空间）`
 );
@@ -160,13 +158,12 @@ for (const file of CACHE_MAINTENANCE) {
 		assert.ok(!i18n.includes(forbidden), `★ 文案里不该再有 ${forbidden}（单一删除方式不需要分叉）`);
 	}
 	// 正向：收敛后的键必须在，否则通知/框里会显示成键名本身。
-	// ⚠️ 1.2.0（D-17）：`clean-cache` 那条命令退役了，所以这条正向检查从它改到
-	// **两条仍在的删除路径**上：上限淘汰（`cacheEvicted*`）与 R17 的本地删除（`orphan*Deleted`）。
+	// ⚠️ 1.2.0（D-17）：`clean-cache` 那条命令退役了，所以这条正向检查改到
+	// **仍在的删除路径**上：上限淘汰（`cacheEvicted*`）。
+	// ⚠️ 2026-10-25：R17 的那两条本地删除文案随「云端清理」设置组一起退役（弹窗取消）。
 	for (const required of [
 		"cacheEvicted:",
 		"cacheEvictedPartial:",
-		"orphanLocalDeleted:",
-		"orphanDeletedBoth:",
 	]) {
 		assert.ok(i18n.includes(required), `★ 文案里必须有收敛后的单键 ${required}`);
 	}

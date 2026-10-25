@@ -20,8 +20,8 @@
  * 清单完整），并**继承了它唯一的正面贡献**：**站外缓存的对象一律排除**（见下一节）。
  * 一并退役的还有 `listAllObjects`（桶内分页列举）与 `selectCleanupCandidates`。
  *
- * ⚠️ 本模块只管**云端那一半**。三档询问里"本地副本"那一半落在 `maintenance/orphan-removal.ts`
- * （删本地副本，走回收站）、判定落在 `maintenance/orphan-watch.ts`、询问界面在 `ui/cloud-delete-modal.ts`。
+ * ⚠️ 本模块只管**云端**：判定落在 `maintenance/orphan-watch.ts`，而删除动作现在全在
+ * 附件管理里（`plugin/gallery-flow.ts` 的「删除本地」走回收站）与「上传全部附件」的收尾里。
  * （历史提醒：那次询问原先挂在"删除本地文件"上，那个动作选错了 —— 见设计 §6.2.1。）
  *
  * ## ⭐ 这一层最难的地方：多设备盲区（需求里点名的约束）

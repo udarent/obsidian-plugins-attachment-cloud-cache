@@ -144,36 +144,6 @@ export function isExternalSiteMode(value: unknown): value is ExternalSiteMode {
 	return typeof value === "string" && (EXTERNAL_SITE_MODES as readonly string[]).includes(value);
 }
 
-/**
- * 「某个已上传对象**失去最后一个引用**了」（= 出现孤儿）时，插件怎么告诉用户。
- *
- * ⭐ 为什么这一项必须存在（而不是"一律弹那个三选一"）：
- * 那个询问是**自动出现**的模态框，而它的默认动作是「保留」（什么都不做）——
- * 也就是说，**最常见的结局是"什么都没发生"，但用户付出了一次打断 + 一次决策**。
- * 成本落在用户、收益为零。所以"要不要被打断"必须能由用户自己回答。
- *
- * ⚠️ 三档的行为**互不相同**，这是刻意的（"显示一个不起作用的选项比不显示更糟"）：
- * - `always`：弹三选一弹窗（出厂默认，与历史行为一致）；
- * - `notice`：不弹窗，只给一条**不阻塞**的通知，指路到「清理云端未使用对象」命令；
- * - `never`：什么都不做（信息仍然在 —— 那条命令任何时候都能列出候选）。
- *
- * ⚠️ `never` 与 `notice` 都**不影响**任何安全性：删除云端从来只能由用户在命令里显式确认。
- * 这一项管的是"要不要主动开口"，不是"能不能清理"。
- */
-export type OrphanAskMode =
-	/** 弹三选一弹窗（默认）。 */
-	| "always"
-	/** 只用一条不阻塞的通知提醒。 */
-	| "notice"
-	/** 什么都不做（仍可随时跑命令查看/清理）。 */
-	| "never";
-
-/** 下拉里能选的值。**由它生成选项**，于是"界面能选的"与"类型允许的"只有一处定义。 */
-export const ORPHAN_ASK_MODES: readonly OrphanAskMode[] = ["always", "notice", "never"];
-
-export function isOrphanAskMode(value: unknown): value is OrphanAskMode {
-	return typeof value === "string" && (ORPHAN_ASK_MODES as readonly string[]).includes(value);
-}
 
 /** S3 兼容存储的连接参数。 */
 export interface S3Config {
@@ -315,15 +285,6 @@ export interface PluginSettings {
 	 * 插件没登记过的附件既不计入上限、也绝不会被自动淘汰 —— 它只碰"我们自己造出来的副本"。
 	 */
 	cacheLimitMb: number;
-	/**
-	 * 某个已上传对象**失去最后一个引用**（出现孤儿）时，怎么告诉用户。
-	 *
-	 * ⚠️ 它管的是"要不要**主动开口**"，不是"能不能清理"：三档之下，
-	 * 「清理云端未使用对象…」那条命令都能列出候选并清理。默认 `always`（弹窗），
-	 * 因为那是这个需求（R17）的主场景；但用户必须能把它关掉 ——
-	 * 一个**自动弹出、无法拒绝**的模态框与"安全默认 / 不打扰"的作风相悖。
-	 */
-	orphanAsk: OrphanAskMode;
 	/**
 	 * 在控制台打印**排障日志**（每个阶段的输入/输出计数与耗时）。默认**关**。
 	 *

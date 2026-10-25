@@ -170,7 +170,6 @@ export function runSettingsSuite(mod) {
 	const ALTERNATIVES = {
 		localCopy: "trash",
 		externalSiteMode: "allowlist",
-		orphanAsk: "never",
 	};
 	for (const key of Object.keys(ALTERNATIVES)) {
 		assert.ok(key in SETTINGS_DEFAULTS, `ALTERNATIVES 里的 ${key} 已不在 SETTINGS_DEFAULTS 中（死键）`);

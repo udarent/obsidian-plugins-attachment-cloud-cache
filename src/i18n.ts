@@ -21,7 +21,6 @@ export const I18N: Record<string, Locale> = {
 		sectionStorage: "Storage connection",
 		sectionUpload: "Upload",
 		sectionOffline: "Offline and local copies",
-		sectionCleanup: "Cloud cleanup",
 		sectionDiagnostics: "Logs and troubleshooting",
 
 		// ── 存储连接 ──
@@ -164,12 +163,6 @@ export const I18N: Record<string, Locale> = {
 		ingestIndexPersistFailed: "The file was uploaded, but the local-copy index could not be saved: {error}",
 
 		// ── 维护命令 ──
-		// ── 云端空间清理（F15）──
-		// ⚠️ 2026-10-22（D-77）：命令名去掉了限定词（原来是“no note links to”）。
-		// 清单现在是**三类**：没人引用的云端对象 / 没有引用的本地文件 / 站外缓存副本
-		// —— 都是「可以清理的附件」，名字只说那一类就是错的（D-73 同一条教训）。
-		cloudCleanupDeviceBlindSpot:
-			"Only this device's references can be seen. Other devices (or another vault sharing this storage) may still be using some of these files — deleting cannot be undone.",
 		cloudCleanupPersistFailed: "Could not save the local-copy index: {error}",
 		cloudCleanupUnreadableNote: "Could not read {path}, so the cleanup was cancelled.",
 		// F18：清理本地副本。⚠️ 2026-10-24 起**没有独立的设置项**了（按钮取消）：
@@ -219,26 +212,8 @@ export const I18N: Record<string, Locale> = {
 			"This batch of local copies is already within your {limit} limit — nothing to clean up.",
 		releaseSpaceUnlinkedLeft:
 			"Also about {mb} MB of local copies are linked from no note — those are not part of this cleanup: they may need removing from your storage as well, so run “{command}” for them.",
-		orphanTitle: "Clean up these attachments no note links to?",
-		// ⚠️ 2026-10-22（D-74）：不再说"you uploaded" —— 本地副本也可能被这条询问清掉（「只删本地文件」那一档）。
-		orphanBody: "{count} attachment(s) are no longer linked from any note or canvas.",
-		orphanMore: "…and {count} more.",
-		orphanLocalNote:
-			"Deleting a local copy only frees space in your vault - linking it again downloads it back. Deleting from your storage cannot be undone.",
-		orphanKeep: "Keep them",
-		// ⚠️ 改叫"files"而不是"copies"（D-74）：删的是**文件本身**（不是"一份缓存"），措辞要能同时覆盖
-		// 用户自己的附件与站外缓存下来的副本。
-		// ⭐ D-76：带 `{count}` —— 两个删除档都要说清“这一下动几个”。
-		orphanLocalOnly: "Delete local files only ({count})",
-		orphanBoth: "Delete locally and from storage ({count})",
-		orphanLocalDeleted: "Removed {removed} local file(s). Your storage was left untouched.",
-		orphanDeletedBoth:
-			"Removed {removed} local file(s). Storage: {deleted} deleted, {alreadyGone} already gone, {failed} failed.",
 		orphanNotice:
 			"{count} uploaded attachment(s) are no longer linked from any note or canvas. Open “{command}” and pick the “To clean up” filter to review them.",
-		orphanDismissed:
-			"Nothing was deleted. To ask again, open “{command}” and pick the “To clean up” filter.",
-		cloudDeleteFailed: "Could not delete the object: {error}",
 		cmdManageAttachments: "Attachment manager",
 		galleryTitle: "Attachment manager",
 		galleryColName: "Name",
@@ -415,14 +390,6 @@ export const I18N: Record<string, Locale> = {
 		cacheEvictedPartial:
 			"Over the local copy limit: deleted {count} copies ({mb} MB), still {overMb} MB over the limit.",
 
-		// ── 无人引用的附件：怎么告诉你 ──
-		orphanAsk: "When an attachment is no longer linked",
-		orphanAskDesc:
-			"What happens after an uploaded file loses its last link from any note or canvas. Cleaning up always asks for confirmation; this only decides whether and how you are told.",
-		orphanAsk_always: "Ask me",
-		orphanAsk_notice: "Just show a notice",
-		orphanAsk_never: "Do nothing",
-		cleanupCommandHint: "To clean up the ones that already exist, open “{command}” and pick the “To clean up” filter.",
 		deleteLogName: "Deletion log",
 		deleteLogDesc: "Every cloud deletion is written here. After a permanent delete this is the only record.",
 		deleteLogButton: "Open",
@@ -436,7 +403,6 @@ export const I18N: Record<string, Locale> = {
 		sectionStorage: "存储连接",
 		sectionUpload: "上传",
 		sectionOffline: "离线与本地副本",
-		sectionCleanup: "云端清理",
 		sectionDiagnostics: "记录与排障",
 
 		s3Endpoint: "服务地址",
@@ -542,12 +508,6 @@ export const I18N: Record<string, Locale> = {
 		// ── 上传（粘贴 / 拖拽 / 批量迁移）──
 		ingestIndexPersistFailed: "文件已上传，但本地副本索引保存失败：{error}",
 
-		// ── 云端空间清理（F15）──
-		// ⚠️ 2026-10-22（D-77）：命令名去掉了限定词（原来是「没有笔记引用的」）。
-		// 清单现在是**三类**：没人引用的云端对象 / 没有引用的本地文件 / 站外缓存副本
-		// —— 都是「可以清理的附件」，名字只说那一类就是错的（D-73 同一条教训）。
-		cloudCleanupDeviceBlindSpot:
-			"只能看到本设备的引用情况。其他设备（或共用这个存储的另一个库）可能还在用其中一些文件 —— 删除后无法恢复。",
 		cloudCleanupPersistFailed: "本地副本索引保存失败：{error}",
 		cloudCleanupUnreadableNote: "读不到 {path}，因此取消了这次清理。",
 		// F18：清理本地副本。⚠️ 2026-10-24 起**没有独立的设置项**了（按钮取消）：
@@ -592,25 +552,7 @@ export const I18N: Record<string, Locale> = {
 			"这批本地副本已经在你设的 {limit} 上限以内，没什么可清理的。",
 		releaseSpaceUnlinkedLeft:
 			"另有约 {mb} MB 是「没有任何笔记引用」的本地副本 —— 那不属于这次清理：它们可能需要连云端对象一起处理，请用「{command}」。",
-		orphanTitle: "要清理这些没有笔记引用的附件吗？",
-		// ⚠️ 2026-10-22（D-74）：不再说"你上传过的" —— 本地副本也可能被这条询问清掉（「只删本地文件」那一档）。
-		orphanBody: "下列 {count} 个附件已经不再被任何笔记或画布引用了。",
-		orphanMore: "……还有 {count} 个。",
-		orphanLocalNote:
-			"只删本地副本只是腾出库里的空间 —— 以后笔记里再引用它，会自动重新下载；从存储里删掉就找不回来了。",
-		orphanKeep: "保留",
-		// ⚠️ 改叫"本地文件"而不是"本地副本"（D-74）：删的是**文件本身**（不是"一份缓存"），措辞要能同时覆盖
-		// 用户自己的附件与站外缓存下来的副本。
-		// ⭐ D-76：带 `{count}` —— 两个删除档都要说清“这一下动几个”。
-		orphanLocalOnly: "只删本地文件 ({count})",
-		orphanBoth: "云端和本地一起删 ({count})",
-		orphanLocalDeleted: "已删掉 {removed} 个本地文件；云端对象未动。",
-		orphanDeletedBoth:
-			"已删掉 {removed} 个本地文件；云端：删除 {deleted} 个、本来就不存在 {alreadyGone} 个、失败 {failed} 个。",
 		orphanNotice: "有 {count} 个已上传的附件不再被任何笔记或画布引用。打开「{command}」，切到「待清理」筛选查看并处理。",
-		orphanDismissed:
-			"什么都没删。想再问一次：打开「{command}」，切到「待清理」筛选。",
-		cloudDeleteFailed: "删除对象失败：{error}",
 		cmdManageAttachments: "附件管理",
 		galleryTitle: "附件管理",
 		galleryColName: "名称",
@@ -776,13 +718,6 @@ export const I18N: Record<string, Locale> = {
 			"超出本地副本上限：已删除 {count} 份最久没用过的副本（{mb} MB）。下次看到它们时会自动重新下载。",
 		cacheEvictedPartial: "超出本地副本上限：已删除 {count} 份（{mb} MB），仍超出上限 {overMb} MB。",
 
-		// ── 无人引用的附件：怎么告诉你 ──
-		orphanAsk: "附件不再被引用时",
-		orphanAskDesc: "已上传的附件失去最后一条引用（笔记或画布）之后，插件怎么做。清理永远需要你确认；这一项只决定要不要通知你、怎么通知。",
-		orphanAsk_always: "弹窗让我选",
-		orphanAsk_notice: "只给一条通知",
-		orphanAsk_never: "什么都不做",
-		cleanupCommandHint: "要处理已有的孤儿，打开「{command}」，切到「待清理」筛选。",
 		deleteLogName: "删除记录",
 		deleteLogDesc: "每次删除云端对象都会记在这里。永久删除之后，这是唯一的记录。",
 		deleteLogButton: "查看",

@@ -42,8 +42,9 @@
  * ## 一个孤儿占用的是**两份**资源，所以"清掉它"不是一个动作
  *
  * 云端对象 + 本地副本。两者的**可恢复性完全不同**（云端删了就没了；本地删掉只是
- * 以后重新下载一次），所以询问必须把这两层分开给用户选 —— 把两句话揉成一个开关，
- * 用户就没法"只做他能接受的那一半"（见 `planOrphanLocalRemoval`）。
+ * 以后重新下载一次）。⚠️ 2026-10-25（D-91）：这里只负责**判出候选**，出口是
+ * `plugin/orphan-flow.ts` 的一条通知；"删哪一半"由用户在附件管理里勾选后决定
+ * （删除云端 / 删除本地两个动作），不再有一个自动弹窗把两句话揉成一次选择。
  */
 
 
@@ -333,70 +334,3 @@ export function selectOrphanAsks(
 	return { asks, skipped };
 }
 
-/** 一个孤儿对象在**本地**那份副本的处置目标。 */
-export interface OrphanLocalTarget {
-	/** 对象 key —— 文件删掉之后要按它摘索引记录。 */
-	key: string;
-	/** 本地副本的 vault 相对路径（索引里记的那条）。 */
-	path: string;
-}
-
-/**
- * 把"用户决定连本地副本一起清掉"翻译成**待删清单**（纯函数）。
- *
- * ## ⭐ 删法只有一种（1.2.0 / D-17）
- *
- * 从前这里按"副本在不在缓存目录里"分两类：目录内直接删、目录外走回收站。
- * 缓存目录取消之后**只剩一类** —— 那份副本同时**可能就是用户的附件原件**
- *（`localCopy: "keep"` 时它就是），而删它的判据不是"文件在哪"，是
- * **"能不能重新拿到"**；这条路上用户已经**明确选了删除**、也不需要立刻腾空间
- * ⇒ 一律走 `fileManager.trashFile`（尊重用户的「删除即进回收站」设置）。
- *
- * ⚠️ 与**上限淘汰**那条路的区别是刻意的（见设计 §6.4）：那条要**立刻**释放空间
- * （上限存在的全部理由），所以它用 `vault.delete`，但代价是它必须先逐个
- * HEAD 确认云端仍有 —— 两条路对"可恢复性"的担保不同，别把它们合并。
- *
- * ## 为什么"没有记录"就什么都不做
- *
- * `cachePathOf` 给不出路径有两种情况，都不该动文件：
- * ① 索引里没有这个 key（不是我们上传的，或用户手写的另一条 URL）——
- *    对不属于我们的东西没有处置权（与 `selectOrphanAsks` 同一条纪律）；
- * ② `localCopy: "trash"` 档根本没留副本 —— 没有可删的本地文件。
- *
- * ## 边界（如实写下来）
- *
- * 这里只处理**索引登记过**的副本。一份**从未上传成功**的本地附件（笔记里是
- * `![[x.png]]` 这种库内链接 ⇒ 提取不出对象 key）变成孤儿时，这个入口**看不见它** ——
- * 那是另一类问题（本插件的职责是"围绕已上传对象"，不是通用的附件管家）。
- */
-export function planOrphanLocalRemoval(
-	keys: readonly string[],
-	context: {
-		/** 索引里这个 key 的本地副本路径（没有记录就返回空）。 */
-		cachePathOf: (key: string) => string | null | undefined;
-	}
-): OrphanLocalTarget[] {
-	const targets: OrphanLocalTarget[] = [];
-	/** 同一个路径只删一次（两个 key 不该指向同一份，但清单来自外部，不假设它干净）。 */
-	const seen = new Set<string>();
-
-	for (const key of keys ?? []) {
-		if (typeof key !== "string" || key.trim() === "") continue;
-
-		const raw = context.cachePathOf(key);
-		// 空串**与纯空白**都要挡：一个只有空格的路径交给 `getAbstractFileByPath` 是
-		// 在赌宿主怎么处理它，而我们没有任何理由为这种输入冒删错文件的风险。
-		if (typeof raw !== "string" || raw.trim() === "") continue;
-
-		const path = raw.trim();
-		if (seen.has(path)) continue;
-		seen.add(path);
-
-		// ⚠️ 1.2.0（D-17）：这里从前还带一个 `isUserFile` 分类（缓存目录内 ⇒ 直接删），
-		// 而那份文件现在**同时可能就是用户的附件原件** ⇒ 删法固定为回收站，
-		// 分类随之消失（判据不是"文件在哪"，而是"能不能重新拿到"——见设计 §6.4）。
-		targets.push({ key, path });
-	}
-
-	return targets;
-}

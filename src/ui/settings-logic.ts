@@ -6,8 +6,8 @@
  * 拆成纯函数才能穷举，也才能在不用真实 Obsidian 的情况下验证。
  */
 
-import type { ExternalSiteMode, LocalCopyAction, OrphanAskMode } from "../types";
-import { CACHE_LIMIT_MB_MAX, EXTERNAL_SITE_MODES, LOCAL_COPY_ACTIONS, ORPHAN_ASK_MODES, isCacheDisabled } from "../types";
+import type { ExternalSiteMode, LocalCopyAction } from "../types";
+import { CACHE_LIMIT_MB_MAX, EXTERNAL_SITE_MODES, LOCAL_COPY_ACTIONS, isCacheDisabled } from "../types";
 import { classifyPublicReach } from "../link-access";
 import type { ConnectionState, PublicReachKind } from "../link-access";
 
@@ -96,12 +96,6 @@ export function externalSiteModeOptions(
 	return options;
 }
 
-/** 同上，给「无人引用的附件怎么告诉你」那一档用。 */
-export function orphanAskOptions(labelOf: (value: OrphanAskMode) => string): Record<string, string> {
-	const options: Record<string, string> = {};
-	for (const value of ORPHAN_ASK_MODES) options[value] = labelOf(value);
-	return options;
-}
 
 /**
  * 「连接状态」→ 一句人话 + 语气。

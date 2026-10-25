@@ -203,17 +203,6 @@ await runMutations({
 			expect: "地址通则对象不在 = 前缀配错了",
 		},
 		{
-			// 后果：某一档从下拉里消失 ⇒ 用户**关不掉**那个自动弹出的询问。
-			// 这一项存在的全部意义就是"能关掉它"，而"界面上选不到"与"代码不支持"
-			// 看起来完全一样（功能静默不可达）。
-			name: "★ 「无人引用的附件」少一档选项（关不掉那个自动询问）",
-			from: "\tfor (const value of ORPHAN_ASK_MODES) options[value] = labelOf(value);",
-			to: '\tfor (const value of ORPHAN_ASK_MODES) if (value !== "never") options[value] = labelOf(value);',
-			// ⚠️ 实测先红的是**集合比对**那条（不是下面那句专门写给 `never` 的），
-			// 因为"少一个取值"这件事首先表现为集合不一致。按纪律如实写这一条。
-			expect: "选项集合必须与 ORPHAN_ASK_MODES 完全一致",
-		},
-		{
 			// 后果：网络不通被说成"写入被拒" ⇒ 用户去查密钥的写权限，而真正坏的是网络。
 			// 两件事的修法完全不同，而这句话是"探针回路跑不起来"时唯一的信息来源。
 			name: "★ 网络失败被说成「存储拒绝写入」（把人引去查权限）",

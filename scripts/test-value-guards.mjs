@@ -11,7 +11,7 @@ await withLoadedTs(["src/types.ts", "src/records.ts"], (mod) => {
 	const stats = runValueGuardsSuite(mod);
 	console.log(
 		`Value-guard tests passed (${stats.guards} guard families: isPlainRecord rejects null and arrays ` +
-			"before the typeof check; isCacheDisabled means exactly 'trash' and nothing else; the three " +
+			"before the typeof check; isCacheDisabled means exactly 'trash' and nothing else; the two " +
 			"*_MODES lists are the single source of legal values and are matched case-sensitively)."
 	);
 });
