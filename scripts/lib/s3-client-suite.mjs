@@ -890,6 +890,100 @@ export async function runS3ClientSuite(mod) {
 	}
 
 	// ============================================================
+	// 14. ⭐ COPY（`PUT` ＋ `x-amz-copy-source`）—— 迁移存量对象名（CR-15）用它
+	//
+	// 三件事只有**真服务**能回答：
+	// ① 源地址头拼得对不对（拼错回 `InvalidArgument` / `SignatureDoesNotMatch`，
+	//    而这两种报错完全不指向"头里的桶名漏了"）；
+	// ② 这个头**有没有进签名**（SigV4 要求所有 `x-amz-*` 参与签名；漏签时服务端只回
+	//    `SignatureDoesNotMatch`，看起来像密钥错了）；
+	// ③ 复制后的字节是否与源一致。
+	// ============================================================
+	// 14a. 先把**头发成什么样**钉住（不依赖服务端）：真机上这一项拼错时，
+	// 服务端只回 `InvalidArgument` / `NoSuchKey`，报错完全不指向"漏了桶名"。
+	{
+		const sent = [];
+		const stub = makeClient(mod, "http://127.0.0.1:1", {}, {
+			maxAttempts: 1,
+			transport: async (request) => {
+				sent.push(request);
+				const body = new TextEncoder().encode("<CopyObjectResult><ETag>&quot;x&quot;</ETag></CopyObjectResult>");
+				return { status: 200, headers: { "content-type": "application/xml" }, body };
+			},
+		});
+		await stub.copyObject("old-name.png", "new-name.png");
+		assert.equal(sent.length, 1, "一次 COPY 只发一条请求");
+		assert.equal(sent[0].method, "PUT", "S3 的 COPY 就是带一个头的 PUT");
+		assert.equal(
+			sent[0].headers["x-amz-copy-source"],
+			"/test-bucket/old-name.png",
+			"★ 源地址必须是 `/<桶>/<key>`（virtual-host 风格下路径里没有桶，但这一项永远要有）"
+		);
+		assert.equal(sent[0].body, undefined, "COPY 不传字节（传了等于白花一次上传）");
+	}
+
+	await withServer({}, async (server, endpoint) => {
+		const client = makeClient(mod, endpoint);
+		const bytes = new Uint8Array([9, 8, 7, 6, 5]);
+
+		await client.putObject("old-name.png", bytes, "image/png");
+		const copied = await client.copyObject("old-name.png", "new-name.png");
+		assert.equal(copied.key, "/test-bucket/new-name.png", "返回的是新 key（含桶名，与请求路径同源）");
+
+		const copyRequest = server.requests.find((request) => request.headers["x-amz-copy-source"] !== undefined);
+		assert.ok(copyRequest, "★ 必须真的发了带 `x-amz-copy-source` 的 PUT");
+		assert.equal(copyRequest.method, "PUT", "S3 的 COPY 就是带一个头的 PUT");
+		assert.equal(
+			copyRequest.headers["x-amz-copy-source"],
+			"/test-bucket/old-name.png",
+			"★ 源地址必须是 `/<桶>/<key>`（virtual-host 风格下路径里没有桶，但这一项永远要有）"
+		);
+		assert.equal(copyRequest.signatureOk, true, "★ 源地址头必须**进签名**（漏签只会回 SignatureDoesNotMatch）");
+
+		const back = await client.getObject("new-name.png");
+		assert.deepEqual([...back.data], [...bytes], "复制出来的字节必须与源逐字节相同");
+	});
+
+	// 14b. 源不存在 ⇒ 报错（不能静默"复制成功"）
+	await withServer({}, async (_server, endpoint) => {
+		const client = makeClient(mod, endpoint);
+		await assert.rejects(
+			() => client.copyObject("missing.png", "target.png"),
+			(error) => {
+				assert.equal(error.kind, "notFound", `源不存在应归为 notFound，实际：${error.kind}`);
+				return true;
+			}
+		);
+	});
+
+	// 14c. ⭐⭐ **200 里带 `<Error>` 必须算失败**
+	//
+	// 真实 S3 的 CopyObject 失败时会回 200 + `<Error>` 正文。只看状态码的实现会
+	// 认为"复制成功"，然后把旧对象删掉 —— 那是**数据丢失**，而且当场没有任何报错。
+	{
+		const sent = [];
+		const client = makeClient(mod, "http://127.0.0.1:1", {}, {
+			maxAttempts: 1,
+			transport: async (request) => {
+				sent.push(request);
+				const body = new TextEncoder().encode(
+					'<?xml version="1.0"?><Error><Code>AccessDenied</Code><Message>denied</Message></Error>'
+				);
+				return { status: 200, headers: { "content-type": "application/xml" }, body };
+			},
+		});
+		await assert.rejects(
+			() => client.copyObject("a.png", "b.png"),
+			(error) => {
+				assert.ok(error instanceof Error, "必须抛错");
+				return true;
+			},
+			"★★ 200 + `<Error>` 正文必须当成失败（否则会删掉还没复制成功的旧对象）"
+		);
+		assert.equal(sent.length, 1, "这种失败不该重试（权限问题重试多少次都一样）");
+	}
+
+	// ============================================================
 	// 15. ⭐⭐ 卡住的请求**必须被判死**，而且只等一次（D-78）
 	//
 	// 现场：`requestUrl` 没有中断能力，一个卡住的 GET 会永远挂着；而下载层的
@@ -938,5 +1032,5 @@ export async function runS3ClientSuite(mod) {
 		assert.ok(Date.now() - started < 5_000, "必须真的提前返回，而不是等到默认的 60 秒");
 	}
 
-	return { scenarios: 15 };
+	return { scenarios: 16 };
 }

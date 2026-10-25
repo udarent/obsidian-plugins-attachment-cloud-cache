@@ -260,6 +260,22 @@ await runMutations({
 			expect: "服务端少存了字节 ⇒ 必须报错（不许静默成功）",
 		},
 		{
+			// 后果：真实 S3 的 COPY 失败会回 **200 + `<Error>`** ⇒ 只看状态码就会认为
+			// "复制成功"，紧接着把旧对象删掉。那是**数据丢失**，且当场没有任何报错。
+			name: "★★ COPY 只看状态码（200 里的 `<Error>` 当成成功）",
+			from: '			if (!isSuccess(response.status) || !/<CopyObjectResult\\b/i.test(text)) {',
+			to: "			if (!isSuccess(response.status)) {",
+			expect: "200 + `<Error>` 正文必须当成失败",
+		},
+		{
+			// 后果：源地址里**漏掉桶名** ⇒ 服务端回 `InvalidArgument`（不是"找不到源"），
+			// 而报错完全不指向"头里的桶名漏了"。
+			name: "★★ COPY 源地址漏掉桶名",
+			from: '	return `/${uriEncode(bucket)}/${encodePath(cleanKey).slice(1)}`;',
+			to: "	return `/${encodePath(cleanKey).slice(1)}`;",
+			expect: "源地址必须是 `/<桶>/<key>`",
+		},
+		{
 			// 后果：**超时被包成普通 `network`** ⇒ `retryable` 又变回 true、`code` 丢失，
 			// 于是「卡住」与「拒绝连接」在日志里再也分不出来。
 			name: "★★ 超时被兜成普通网络错误（分不出「卡住」与「拒绝连接」）",

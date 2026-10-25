@@ -30,6 +30,7 @@
 		"verify:real-storage": "node scripts/verify-real-storage.mjs",
 		"verify:flows": "node scripts/verify-flows.mjs",
 		"verify:confirm": "node scripts/verify-confirm.mjs",
+		"verify:migrate": "node scripts/verify-migrate-real.mjs",
 		"install:demo": "node scripts/install-demo.mjs",
 		"check:demo": "node scripts/install-demo.mjs --check",
 		"check:credentials": "node scripts/check-credential-files.mjs",

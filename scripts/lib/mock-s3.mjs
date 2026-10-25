@@ -535,6 +535,45 @@ export function createMockS3(options) {
 		}
 
 		if (method === "PUT") {
+			// ⭐ **COPY**（`x-amz-copy-source`）：服务端复制，请求体是空的。
+			//
+			// CR-15 的迁移靠它。放在这里而不是另开一条路，是因为 S3 里 COPY 就是
+			// **带一个头的 PUT** —— 另开一条会让"签名是否覆盖了这个头"这件事验不到，
+			// 而那正是最容易出错的地方（漏签 ⇒ `SignatureDoesNotMatch`）。
+			const copySource = headers["x-amz-copy-source"];
+			if (typeof copySource === "string" && copySource !== "") {
+				const sourceKey = keyOfCopySource(copySource, requestBucket);
+				const source = sourceKey === null ? undefined : objects.get(sourceKey);
+				if (!source) {
+					// ⚠️ 真实 S3 对新 key 的 COPY 失败会回 404 `NoSuchKey`（源不存在）
+					const xml = errorXml("NoSuchKey", "The specified key does not exist.");
+					record.respondedStatus = 404;
+					res.writeHead(404, {
+						"content-type": "application/xml",
+						"content-length": Buffer.byteLength(xml),
+						"x-amz-request-id": "mock-request-id",
+					});
+					res.end(xml);
+					return;
+				}
+				objects.set(key, { body: source.body, contentType: source.contentType });
+				// ⚠️ 200 里必须是 `CopyObjectResult`：客户端靠它区分"成功"与
+				// "200 里塞了个 `<Error>`"（真实 S3 会那么干，见 `s3/client.ts::copyObject`）。
+				const xml =
+					'<?xml version="1.0" encoding="UTF-8"?>' +
+					"<CopyObjectResult>" +
+					`<ETag>${etagOf(source.body).replace(/&/g, "&amp;").replace(/</g, "&lt;")}</ETag>` +
+					`<LastModified>${new Date().toISOString()}</LastModified>` +
+					"</CopyObjectResult>";
+				record.respondedStatus = 200;
+				res.writeHead(200, {
+					"content-type": "application/xml",
+					"content-length": Buffer.byteLength(xml),
+					"x-amz-request-id": "mock-request-id",
+				});
+				res.end(xml);
+				return;
+			}
 			objects.set(key, { body: bodyBuffer, contentType: headers["content-type"] ?? "" });
 			record.respondedStatus = 200;
 			res.writeHead(200, { etag: etagOf(bodyBuffer), "x-amz-request-id": "mock-request-id" });
@@ -588,7 +627,24 @@ export function createMockS3(options) {
 		res.end(xml);
 	}
 
-	function respondMissing(res, record, head = false) {
+	/** `x-amz-copy-source`（`/<桶>/<编码后的 key>`）→ key；桶对不上就 `null`（当"没有这个源"）。 */
+function keyOfCopySource(value, requestBucket) {
+	const parts = String(value)
+		.replace(/^\/+/, "")
+		.split("/")
+		.map((segment) => {
+			try {
+				return decodeURIComponent(segment);
+			} catch {
+				return segment;
+			}
+		});
+	if (parts.length < 2) return null;
+	if (parts[0] !== requestBucket) return null;
+	return parts.slice(1).join("/");
+}
+
+function respondMissing(res, record, head = false) {
 		const xml = errorXml("NoSuchKey", "The specified key does not exist.");
 		record.respondedStatus = 404;
 		const headers = {
