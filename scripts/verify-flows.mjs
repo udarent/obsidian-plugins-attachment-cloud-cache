@@ -852,69 +852,138 @@ async function main() {
 		);
 
 		// 「删除（云端）」的默认档（CR-05）：没人引用的可删，仍被引用的**灰掉**
-		const cloudAction = await evaluate(
-			client,
-			`(() => {
-				const root = ${GALLERY_ROOT};
-				const rows = Array.from(root.querySelectorAll(".acc-task-row"));
-				const textOf = (row) => ({
-					name: row.querySelector(".acc-task-name")?.textContent || "",
-					state: row.querySelector(".acc-cell-state .acc-cell-text")?.textContent || "",
-					ref: row.querySelector(".acc-cell-ref .acc-cell-text")?.textContent || "",
-					box: row.querySelector(".acc-task-check"),
-				});
-				const readCloud = () => {
-					const button = Array.from(root.querySelectorAll(".acc-task-actions button")).find((b) =>
-						(b.textContent || "").trim().indexOf("删除云端") === 0
-					);
-					return button ? { text: (button.textContent || "").trim(), disabled: button.disabled === true } : null;
-				};
-				const toggle = (box, on) => {
-					if (!box) return;
-					box.checked = on;
-					box.dispatchEvent(new Event("change"));
-				};
-				const all = rows.map(textOf);
-				const free = all.find((row) => row.ref === "没人引用" && row.state.includes("云端有本地无"));
-				// ⚠️ 不用精确等号：同一个状态后面可能还缀着「· 没人引用」。
-				// 要的是“已上传 **且仍被引用**”那一行（CR-05 只对它禁用删云端）。
-				const used = all.find((row) => row.state.indexOf("已上传") === 0 && row.ref !== "没人引用");
-				let freeState = null;
-				let usedState = null;
-				if (free && !free.box.disabled) {
-					toggle(free.box, true);
-					freeState = readCloud();
-					toggle(free.box, false);
-				}
-				if (used && !used.box.disabled) {
-					toggle(used.box, true);
-					usedState = readCloud();
-					toggle(used.box, false);
-				}
-				return { freeState, usedState, hasUsed: Boolean(used) };
-			})()`
-		);
+		const readCloudAction = () =>
+			evaluate(
+				client,
+				`(() => {
+					const root = ${GALLERY_ROOT};
+					const rows = Array.from(root.querySelectorAll(".acc-task-row"));
+					const textOf = (row) => ({
+						name: row.querySelector(".acc-task-name")?.textContent || "",
+						state: row.querySelector(".acc-cell-state .acc-cell-text")?.textContent || "",
+						ref: row.querySelector(".acc-cell-ref .acc-cell-text")?.textContent || "",
+						box: row.querySelector(".acc-task-check"),
+					});
+					const readCloud = () => {
+						const button = Array.from(root.querySelectorAll(".acc-task-actions button")).find((b) =>
+							(b.textContent || "").trim().indexOf("删除云端") === 0
+						);
+						return button ? { text: (button.textContent || "").trim(), disabled: button.disabled === true } : null;
+					};
+					const toggle = (box, on) => {
+						if (!box) return;
+						box.checked = on;
+						box.dispatchEvent(new Event("change"));
+					};
+					const all = rows.map(textOf);
+					const free = all.find((row) => row.ref === "没人引用" && row.state.includes("云端有本地无"));
+					// ⚠️ 不用精确等号：同一个状态后面可能还缀着「· 没人引用」。
+					// 要的是“已上传 **且仍被引用**”那一行（CR-05 只对它禁用删云端）。
+					const used = all.find((row) => row.state.indexOf("已上传") === 0 && row.ref !== "没人引用");
+					let freeState = null;
+					let usedState = null;
+					if (free && !free.box.disabled) {
+						toggle(free.box, true);
+						freeState = readCloud();
+						toggle(free.box, false);
+					}
+					if (used && !used.box.disabled) {
+						toggle(used.box, true);
+						usedState = readCloud();
+						toggle(used.box, false);
+					}
+					return { freeState, usedState, hasUsed: Boolean(used) };
+				})()`
+			);
+
+		let cloudAction = await readCloudAction();
+		let cr05Fabricated = false;
+
+		if (!cloudAction?.hasUsed) {
+			// ⭐ 2026-10-25：演示库里可能没有「已上传 **且仍被引用**」的行 —— **造一个**。
+			//
+			// 造它比造索引轻得多：只要写一篇笔记引用某个**已上传**的附件，那一行的引用列就变了，
+			// 索引与台账一条都不用碰 ⇒ 「全部 ＝ 本地 ＋ 仅云端」那些计数完全不受影响。
+			// 用完把笔记删掉并刷新，清单回到原样（后面的断言读的是更早的快照）。
+			const target = await evaluate(
+				client,
+				`(() => {
+					const root = ${GALLERY_ROOT};
+					for (const row of Array.from(root.querySelectorAll(".acc-task-row"))) {
+						const state = (row.querySelector(".acc-cell-state .acc-cell-text")?.textContent || "").trim();
+						const name = (row.querySelector(".acc-task-name")?.textContent || "").trim();
+						if (state.indexOf("已上传") === 0 && name) return name;
+					}
+					return "";
+				})()`
+			);
+			if (target) {
+				const refPath = "acc-verify/cr05-ref.md";
+				await evaluate(
+					client,
+					`(async () => {
+						const path = ${JSON.stringify("acc-verify/cr05-ref.md")};
+						const existing = app.vault.getAbstractFileByPath(path);
+						if (existing) await app.vault.delete(existing, true);
+						await app.vault.create(path, "![[" + ${JSON.stringify(target)} + "]]");
+						return true;
+					})()`
+				);
+				await evaluate(
+					client,
+					`(() => {
+						const root = ${GALLERY_ROOT};
+						const button = root && root.querySelector(".acc-gallery-refresh");
+						if (button) button.click();
+						return Boolean(button);
+					})()`
+				);
+				await delay(1200);
+				cloudAction = await readCloudAction();
+				cr05Fabricated = Boolean(cloudAction?.hasUsed);
+				log(`  · 为 CR-05 造夹具：${refPath} 里引用「${target}」（用完删）`);
+			}
+		}
+
 		check(
 			"勾「没人引用的云端对象」⇒ 删除云端可用且数字 ≥ 1",
 			Boolean(cloudAction?.freeState) && cloudAction.freeState.disabled === false && /\([1-9]/.test(cloudAction.freeState.text),
 			JSON.stringify(cloudAction?.freeState ?? null)
 		);
-		if (!cloudAction?.hasUsed) {
-			// 这个库里所有“已上传”的都恰好没人引用 ⇒ 这条判据在这里没有样本，按原因跳过。
-			// ⚠️ 为什么不造夹具：要同时凑齐「本地文件 ＋ 笔记里引用它 ＋ 台账记着已上传」，
-			// 而行数一变，另外三十几条断言的计数口径都要跟着调 —— 代价大于收益。
-			// CR-05 的判据本身由 `gallery-actions` 套件与 `mutate-gallery-actions` 守着，
-			// 界面侧则由「按钮数字＝能作用的件数」那条间接覆盖（灰按钮就是数字归 0）。
-			skip(
-				"勾「仍被引用的已上传」⇒ 删除云端灰掉（CR-05 定案：永不放开）",
-				"这个库里没有“已上传且仍被引用”的行（造夹具会扰动其它断言的计数）—— 判据层已由套件＋变异覆盖"
-			);
-		} else {
+		if (cloudAction?.hasUsed) {
 			check(
-				"勾「仍被引用的已上传」⇒ 删除云端灰掉（CR-05 默认档）",
+				"勾「仍被引用的已上传」⇒ 删除云端灰掉（CR-05 定案：永不放开）",
 				Boolean(cloudAction?.usedState) && cloudAction.usedState.disabled === true,
 				JSON.stringify(cloudAction?.usedState ?? null)
 			);
+		} else {
+			skip(
+				"勾「仍被引用的已上传」⇒ 删除云端灰掉（CR-05 定案：永不放开）",
+				"这个库里连一个「已上传」的行都没有 ⇒ 造不出夹具（判据层仍由套件＋变异覆盖）"
+			);
+		}
+
+		if (cr05Fabricated) {
+			await evaluate(
+				client,
+				`(async () => {
+					const path = ${JSON.stringify("acc-verify/cr05-ref.md")};
+					const file = app.vault.getAbstractFileByPath(path);
+					if (file) await app.vault.delete(file, true);
+					return true;
+				})()`
+			);
+			await evaluate(
+				client,
+				`(() => {
+					const root = ${GALLERY_ROOT};
+					const button = root && root.querySelector(".acc-gallery-refresh");
+					if (button) button.click();
+					return Boolean(button);
+				})()`
+			);
+			await delay(800);
+			log("  · CR-05 夹具已删（清单回到原样）");
 		}
 
 		check(
