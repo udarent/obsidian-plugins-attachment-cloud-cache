@@ -1,9 +1,10 @@
 /**
- * 门禁：仓库里不许引用**只存在于仓库外的开发笔记**。
+ * 门禁：仓库里不许引用**只存在于仓库外的文档集**。
  *
  * ## 背景
  *
- * 这个仓库刻意**不携带开发笔记**（设计依据、范围决策、审计记录那一类）—— 它们放在仓库之外。
+ * 这个仓库刻意**不携带设计文档**（需求 / 概要 / 详设 / 决策台账 / 机制 / 手册 / 验收）—— 它们放在仓库之外
+ * （2026-10-27 起是上层工作区的 `docs/`；此前是 `dev-notes/`，那个目录已并入 `docs/` 并删除）。
  * 于是凡是引用它们的地方都是**断链**：读者会去找一个仓库里根本不存在的文件。
  *
  * 移走笔记时做过一次大扫除（代码注释、lint 报错文案、README 共 29 处），
@@ -18,7 +19,8 @@
  * ## 判据
  *
  * 扫**仓库目录下的所有文件**，逐行匹配下面这几个词之一即失败：
- * - 开发笔记的**文件名**（带路径或不带路径都算）
+ * - 外部文档集的**目录**（`dev-notes/` 已废弃但仍守着 —— 指向不存在的东西同样是死链；`../docs/` 是现行写法）
+ * - 它们的**文件名**（带路径或不带路径都算）
  * - 它们的**裸名**（历史上就是把文档名当权威来引，写成"某某的红线""某某里写明"那样）
  *
  * 与"只扫 git 跟踪的文件"的差别：这里是**扫目录**（未跟踪的草稿也会被扫到）。
@@ -34,7 +36,8 @@
  * ⇒ 所以下面 `FIXTURES` 每次运行都**先证明判据认得出样本**；判据一过时（改名、删名、
  * 换成不匹配的写法），自证会先红，而不是安静地全绿。
  *
- * ⭐ 结论：**`dev-notes/` 里新增或改名一份文档，就要回来给 `FORBIDDEN` 加一行。**
+ * ⭐ 结论：**`docs/` 里新增或改名一份文档，就要回来给 `FORBIDDEN` 加一行。**
+ * （2026-10-27 合并 `dev-notes/` → `docs/` 时正是这么做的：三份改了名，清单跟着加了三条。）
  *
  * ## ⚠️ 为什么不用 `git ls-files`（踩过）
  *
@@ -56,31 +59,37 @@ import { fileURLToPath } from "node:url";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** 这些名字属于**仓库外**的开发笔记，出现即失败。 */
+/** 这些名字属于**仓库外**的文档集，出现即失败。 */
 const FORBIDDEN = [
-	// ── 目录名：任何 `dev-notes/...` 形式的引用 ──
-	{ pattern: /dev-notes/, what: "引用了仓库外的开发笔记" },
-	// ── 现行文档的文件名（带路径或不带路径都算）──
-	// ⚠️⚠️ 这是一份**显式清单**：`dev-notes/` 新增或改名一份文档，就要回来加一行。
+	// ── 目录名 ──
+	{ pattern: /dev-notes/, what: "引用了仓库外的文档集（旧目录名，已并入 docs/）" },
+	{ pattern: /\.\.\/docs\//, what: "引用了仓库外的文档集（`../docs/` 是现行写法）" },
+	// ── 现行文档的文件名（2026-10-27 起：docs/ 下 7 份 ＋ 归档）──
+	// ⚠️⚠️ 这是一份**显式清单**：`docs/` 新增或改名一份文档，就要回来加一行。
 	// 它烂过一次，代价是这条门禁变成纯空转，详见文件头的「它为什么需要自证」。
-	{ pattern: /\brequirements\.md\b/, what: "引用了仓库外的开发笔记" },
-	{ pattern: /\bdetailed-design\.md\b/, what: "引用了仓库外的开发笔记" },
-	{ pattern: /\bverification\.md\b/, what: "引用了仓库外的开发笔记" },
-	{ pattern: /\bmaintainer-handbook\.md\b/, what: "引用了仓库外的开发笔记" },
-	// ── 已删除的开发笔记（2026-10-13 起顶层只剩五份：requirements / detailed-design / verification /
-	//    maintainer-handbook / README）。**仍然守着**：指向一份不存在的文档依然是死链。
-	//    ⚠️ 加新文档或改名时，回来把名字挪到上面那组、或在下面补一行（清单过时不会报错，只会安静地不挡）。
-	{ pattern: /\brefactor-plan\.md\b/, what: "引用了仓库外的开发笔记" },
-	{ pattern: /\brefactor-report\.md\b/, what: "引用了仓库外的开发笔记" },
-	{ pattern: /\btest-speed-plan\.md\b/, what: "引用了仓库外的开发笔记" },
-	{ pattern: /\baudit-2026-10-13-doc-consistency\.md\b/, what: "引用了仓库外的开发笔记" },
-	// ── 更早的历史名（原在开发笔记目录，2026-10-11 归档、**2026-10-13 随归档区一并删除**；仍然守着：防止有人凭记忆写回去）──
-	{ pattern: /docs\/SCOPE\.md/, what: "引用了仓库外的开发笔记" },
-	{ pattern: /docs\/INDEPENDENCE\.md/, what: "引用了仓库外的开发笔记" },
-	{ pattern: /\bSCOPE\.md\b/, what: "引用了仓库外的开发笔记" },
-	{ pattern: /\bINDEPENDENCE\.md\b/, what: "引用了仓库外的开发笔记" },
-	{ pattern: /\bSCOPE\b/, what: "把开发笔记当权威来引" },
-	{ pattern: /\bINDEPENDENCE\b/, what: "把开发笔记当权威来引" },
+	{ pattern: /01-需求文档\.md/, what: "引用了仓库外的文档集" },
+	{ pattern: /02-框架概要设计\.md/, what: "引用了仓库外的文档集" },
+	{ pattern: /03-详细设计\.md/, what: "引用了仓库外的文档集" },
+	{ pattern: /04-实现机制\.md/, what: "引用了仓库外的文档集" },
+	{ pattern: /05-操作手册\.md/, what: "引用了仓库外的文档集" },
+	{ pattern: /06-验收证据\.md/, what: "引用了仓库外的文档集" },
+	{ pattern: /需求演进与废弃方案\.md/, what: "引用了仓库外的文档集" },
+	// ── 合并前的旧文件名（2026-10-27 改名；仍然守着：指向一份不存在的文档依然是死链）──
+	{ pattern: /\brequirements\.md\b/, what: "引用了仓库外的旧文档名" },
+	{ pattern: /\bdetailed-design\.md\b/, what: "引用了仓库外的旧文档名" },
+	{ pattern: /\bverification\.md\b/, what: "引用了仓库外的旧文档名" },
+	{ pattern: /\bmaintainer-handbook\.md\b/, what: "引用了仓库外的旧文档名" },
+	// ── 更早的已删文档（2026-10-11 归档、**2026-10-13 随归档区一并删除**；仍然守着：防止有人凭记忆写回去）──
+	{ pattern: /\brefactor-plan\.md\b/, what: "引用了仓库外的旧文档名" },
+	{ pattern: /\brefactor-report\.md\b/, what: "引用了仓库外的旧文档名" },
+	{ pattern: /\btest-speed-plan\.md\b/, what: "引用了仓库外的旧文档名" },
+	{ pattern: /\baudit-2026-10-13-doc-consistency\.md\b/, what: "引用了仓库外的旧文档名" },
+	{ pattern: /docs\/SCOPE\.md/, what: "引用了仓库外的旧文档名" },
+	{ pattern: /docs\/INDEPENDENCE\.md/, what: "引用了仓库外的旧文档名" },
+	{ pattern: /\bSCOPE\.md\b/, what: "引用了仓库外的旧文档名" },
+	{ pattern: /\bINDEPENDENCE\.md\b/, what: "引用了仓库外的旧文档名" },
+	{ pattern: /\bSCOPE\b/, what: "把外部文档当权威来引" },
+	{ pattern: /\bINDEPENDENCE\b/, what: "把外部文档当权威来引" },
 ];
 
 /**
@@ -93,24 +102,38 @@ const FORBIDDEN = [
  * 反例同样重要：判据太宽（比如把裸词 `requirements` 也算上）会把人逼到关掉这条门禁。
  */
 const FIXTURES = [
-	{ sample: "边界见 `dev-notes/requirements.md` R17", want: "引用了仓库外的开发笔记" },
-	{ sample: "见 `requirements.md` R17 的边界说明。", want: "引用了仓库外的开发笔记" },
-	{ sample: "（F18，设计与需求见 `detailed-design.md` §20.10）", want: "引用了仓库外的开发笔记" },
-	{ sample: "⚠️ 条数在 `verification.md` 顶部只记一处", want: "引用了仓库外的开发笔记" },
-	{ sample: "见 `dev-notes/maintainer-handbook.md` 的「可嵌入类型表」", want: "引用了仓库外的开发笔记" },
-	{ sample: "—— 见 `refactor-plan.md` §7。", want: "引用了仓库外的开发笔记" },
-	{ sample: "见 `refactor-report.md` §9 的建议 #2", want: "引用了仓库外的开发笔记" },
-	{ sample: "（见 `test-speed-plan.md` §10.6）", want: "引用了仓库外的开发笔记" },
-	{ sample: "审计结论见 `audit-2026-10-13-doc-consistency.md` 的 C 节", want: "引用了仓库外的开发笔记" },
-	{ sample: "立项基线见 `docs/SCOPE.md`", want: "引用了仓库外的开发笔记" },
-	{ sample: "见 `INDEPENDENCE.md`", want: "引用了仓库外的开发笔记" },
-	{ sample: "SCOPE 里写明是红线", want: "把开发笔记当权威来引" },
-	{ sample: "INDEPENDENCE 承诺过", want: "把开发笔记当权威来引" },
+	// ── 目录 ──
+	{ sample: "边界见 `dev-notes/requirements.md` R17", want: "引用了仓库外的文档集（旧目录名，已并入 docs/）" },
+	{ sample: "证据在 `../docs/06-验收证据.md` §5", want: "引用了仓库外的文档集（`../docs/` 是现行写法）" },
+	// ── 现行文件名（2026-10-27 起的 7 份）──
+	{ sample: "见 `01-需求文档.md` 第 4.3 节", want: "引用了仓库外的文档集" },
+	{ sample: "分层见 `02-框架概要设计.md` §2", want: "引用了仓库外的文档集" },
+	{ sample: "契约见 `03-详细设计.md` 第 9 章", want: "引用了仓库外的文档集" },
+	{ sample: "机制见 `04-实现机制.md` §3.4", want: "引用了仓库外的文档集" },
+	{ sample: "步骤见 `05-操作手册.md` §1.1", want: "引用了仓库外的文档集" },
+	{ sample: "真机取证见 `06-验收证据.md` §5", want: "引用了仓库外的文档集" },
+	{ sample: "台账在 `需求演进与废弃方案.md` §3", want: "引用了仓库外的文档集" },
+	// ── 合并前的旧名（仍守着）──
+	{ sample: "见 `requirements.md` R17 的边界说明。", want: "引用了仓库外的旧文档名" },
+	{ sample: "（F18，设计与需求见 `detailed-design.md` §20.10）", want: "引用了仓库外的旧文档名" },
+	{ sample: "⚠️ 条数在 `verification.md` 顶部只记一处", want: "引用了仓库外的旧文档名" },
+	{ sample: "见 `dev-notes/maintainer-handbook.md` 的「可嵌入类型表」", want: "引用了仓库外的文档集（旧目录名，已并入 docs/）" },
+	{ sample: "—— 见 `refactor-plan.md` §7。", want: "引用了仓库外的旧文档名" },
+	{ sample: "见 `refactor-report.md` §9 的建议 #2", want: "引用了仓库外的旧文档名" },
+	{ sample: "（见 `test-speed-plan.md` §10.6）", want: "引用了仓库外的旧文档名" },
+	{ sample: "审计结论见 `audit-2026-10-13-doc-consistency.md` 的 C 节", want: "引用了仓库外的旧文档名" },
+	{ sample: "立项基线见 `docs/SCOPE.md`", want: "引用了仓库外的旧文档名" },
+	{ sample: "见 `INDEPENDENCE.md`", want: "引用了仓库外的旧文档名" },
+	{ sample: "SCOPE 里写明是红线", want: "把外部文档当权威来引" },
+	{ sample: "INDEPENDENCE 承诺过", want: "把外部文档当权威来引" },
 	// ── 反例：这些**不许**报 ──
 	{ sample: "npm run check:readme 只看结构", want: null },
 	{ sample: "需求里说 requirements 是活的", want: null },
 	{ sample: "detailed design 的取舍写在代码旁边", want: null },
 	{ sample: "这份 handbook 不在仓库里也能干活", want: null },
+	{ sample: "截图在 `docs/demo.gif`", want: null },
+	{ sample: "第 04 章讲的是实现机制", want: null },
+	{ sample: "按 06 号文件的速度处理", want: null },
 ];
 
 const fixtureProblems = [];
@@ -183,7 +206,7 @@ for (const file of files) {
 }
 
 if (problems.length > 0) {
-	console.error(`✗ 仓库里出现对仓库外开发笔记的引用 ${problems.length} 处：`);
+	console.error(`✗ 仓库里出现对仓库外文档集的引用 ${problems.length} 处：`);
 	for (const problem of problems) {
 		console.error(`    ${problem.file}:${problem.line}  ${problem.what}`);
 		console.error(`      ${problem.text}`);
@@ -194,6 +217,6 @@ if (problems.length > 0) {
 }
 
 console.log(
-	`引用检查通过：${files.length} 个文件里没有任何对仓库外开发笔记的引用` +
+	`引用检查通过：${files.length} 个文件里没有任何对仓库外文档集的引用` +
 		`（守 ${FORBIDDEN.length} 条写法；判据自证 ${FIXTURES.length} 条夹具全过）。`
 );
