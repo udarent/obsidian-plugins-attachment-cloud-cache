@@ -4,7 +4,7 @@
 	"rules": {
 		"no-alert": "warn",
 		"no-case-declarations": "error",
-		"no-empty": "error",
+		"no-empty": ["error", { "allowEmptyCatch": true }],
 		"no-fallthrough": "error",
 		"no-implicit-globals": "warn",
 		"no-implied-eval": "error",

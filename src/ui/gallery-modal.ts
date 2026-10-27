@@ -53,17 +53,27 @@ import { actionAvailability } from "../gallery/actions";
 import type { GalleryAction } from "../gallery/actions";
 import type { GalleryItem } from "../gallery/enumerate";
 import type { PluginContext } from "../plugin/context";
-import {
-	convertToLocalSelected,
-	deleteCloudSelected,
-	deleteLocalSelected,
-	loadGallery,
-	renameItem,
-	uploadSelected,
-} from "../plugin/gallery-flow";
 import type { GalleryModel } from "../plugin/gallery-flow";
+import type * as GalleryFlow from "../plugin/gallery-flow";
 import { mountTaskListShell } from "./task-list-shell";
 import type { TaskListAction, TaskListColumn, TaskListLabels, TaskListResult } from "./task-list-shell";
+
+/**
+ * 弹窗要用的流程动作 —— **由装配点（`main.ts`）注入**，本文件不认识 `plugin/`。
+ *
+ * ⚠️ 为什么不是直接 `import { loadGallery } from "../plugin/gallery-flow"`：依赖矩阵里
+ * `ui → plugin` 是 ⛔（类型除外），界面不许反向驱动编排。这里只借它的**类型**（`import type`），
+ * 值一律走构造参数 —— 和 `deps.onOpen` 同一种注入方式。
+ */
+type GalleryFlowApi = Pick<
+	typeof GalleryFlow,
+	| "loadGallery"
+	| "uploadSelected"
+	| "deleteLocalSelected"
+	| "deleteCloudSelected"
+	| "convertToLocalSelected"
+	| "renameItem"
+>;
 import type { FileCardOpenTarget } from "./file-cards";
 import type { TaskReporter } from "./task-list";
 
@@ -147,6 +157,8 @@ export class GalleryModal extends Modal {
 	private loading: Promise<void> | null = null;
 
 	/**
+	 * @param deps.flow 流程动作（`plugin/gallery-flow`），**由装配点注入** —— 本文件不 import 它
+	 *   （依赖矩阵：`ui → plugin` ⛔，类型除外）。见上方 `GalleryFlowApi` 的说明。
 	 * @param deps.onOpen 行尾「打开」（D-66）。**判定**（哪些行能打开、打开路径还是地址）在
 	 *   `ui/file-cards.ts`，真正的打开动作只有装配点（`main.ts`）知道怎么问宿主。
 	 *   不给就不画链接 —— 点不动的链接比没有更糟。
@@ -154,7 +166,11 @@ export class GalleryModal extends Modal {
 	 */
 	constructor(
 		private readonly ctx: PluginContext,
-		private readonly deps: { onOpen?: (target: FileCardOpenTarget) => void; onClosed?: () => void } = {}
+		private readonly deps: {
+			flow: GalleryFlowApi;
+			onOpen?: (target: FileCardOpenTarget) => void;
+			onClosed?: () => void;
+		}
 	) {
 		super(ctx.app);
 	}
@@ -185,7 +201,7 @@ export class GalleryModal extends Modal {
 
 	/** 重新读一遍全库并重画（打开时、点刷新时）。 */
 	private async refresh(): Promise<void> {
-		this.model = await loadGallery(this.ctx);
+		this.model = await this.deps.flow.loadGallery(this.ctx);
 		this.render();
 	}
 
@@ -452,7 +468,7 @@ export class GalleryModal extends Modal {
 	private async execute(selected: readonly string[], report: TaskReporter, action?: string): Promise<void> {
 		if (action === "upload") {
 			const reported = new Set<string>();
-			await uploadSelected(this.ctx, selected, (id, status) => {
+			await this.deps.flow.uploadSelected(this.ctx, selected, (id, status) => {
 				reported.add(id);
 				report(id, status);
 			});
@@ -487,7 +503,7 @@ export class GalleryModal extends Modal {
 				return;
 			}
 			const idOf = new Map(usable.map((entry) => [entry.id, entry.id]));
-			await convertToLocalSelected(
+			await this.deps.flow.convertToLocalSelected(
 				this.ctx,
 				usable.map((entry) => entry.item),
 				(id, status) => report(idOf.get(id) ?? id, status)
@@ -529,7 +545,7 @@ export class GalleryModal extends Modal {
 			const keyToId = new Map<string, string>();
 			for (const entry of usable) keyToId.set(entry.item.key as string, entry.id);
 			for (const entry of chosen) if (!keyToId.has(entry.item.key ?? "")) report(entry.id, "skipped");
-			await deleteCloudSelected(this.ctx, [...keyToId.keys()], (key, status) => {
+			await this.deps.flow.deleteCloudSelected(this.ctx, [...keyToId.keys()], (key, status) => {
 				report(keyToId.get(key) ?? key, status);
 			});
 			return;
@@ -538,7 +554,7 @@ export class GalleryModal extends Modal {
 		if (action === "delete-local") {
 			for (const id of selected) {
 				report(id, "running");
-				const result = await deleteLocalSelected(this.ctx, [id]);
+				const result = await this.deps.flow.deleteLocalSelected(this.ctx, [id]);
 				report(id, result.deleted > 0 ? "done" : "failed");
 			}
 			return;
@@ -560,7 +576,7 @@ export class GalleryModal extends Modal {
 			}
 			report(id, "running");
 			try {
-				await renameItem(this.ctx, id, next);
+				await this.deps.flow.renameItem(this.ctx, id, next);
 				report(id, "done");
 			} catch {
 				report(id, "failed");

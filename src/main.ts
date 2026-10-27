@@ -31,6 +31,9 @@ import { isSafeId, randomId } from "./s3/declaration";
 import { hashFromKey } from "./object-key";
 import { flushDeclarationNames, rememberReferences, rememberRenamedName } from "./plugin/shared-bucket-flow";
 import { unifyObjectNames } from "./plugin/migrate-flow";
+// ⚠️ 整块导入是为了**注入给弹窗**（依赖矩阵：`ui → plugin` ⛔）。弹窗自己不认识流程层，
+// 只在构造时收到这几个动作 —— 与 `deps.onOpen` 同一种注入方式，见 `ui/gallery-modal.ts`。
+import * as galleryFlow from "./plugin/gallery-flow";
 import type { LocalCopyAction, PluginSettings } from "./types";
 import { detectLocale, translate } from "./i18n";
 import { SettingsTab } from "./ui/settings-tab";
@@ -733,6 +736,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	private async openGallery(): Promise<void> {
 		if (this.galleryModal) return;
 		const modal = new GalleryModal(this.flowContext(), {
+			// ⭐ 流程动作在这里注入：`ui/` 不认识 `plugin/`（依赖矩阵 `ui → plugin` ⛔）。
+			flow: galleryFlow,
 			// ⭐ 行尾「打开」（D-66）：清单里唯一那个打开动作（`openCardTarget`），
 			// 判定在 `file-cards.ts` —— 这里只接线，不重新判一遍。
 			onOpen: (target) => this.openCardTarget(target),
