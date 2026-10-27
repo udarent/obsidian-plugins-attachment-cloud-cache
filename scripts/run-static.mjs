@@ -76,6 +76,8 @@ const GATES = [
 	"check-notice-i18n",
 	// ⭐ 移动端：加载期不许碰 Node / 桌面专属能力（`manifest.json` 对手机用户有承诺）
 	"check-mobile-api",
+	// ⭐ 分层方向：`ui → plugin` 这类反向 import 曾在没有任何门禁的情况下存在很久（2026-10-27 才发现）
+	"check-layering",
 	// ⭐ 变异锚点：每条 `from` 都还在源码里（且唯一）—— 否则那些"守卫"早就空跑了
 	"check-mutation-preflight",
 ];

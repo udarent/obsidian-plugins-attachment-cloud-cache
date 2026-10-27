@@ -26,6 +26,7 @@
 		"check:i18n-keys": "node scripts/check-i18n-keys.mjs",
 		"check:notice-i18n": "node scripts/check-notice-i18n.mjs",
 		"check:mobile-api": "node scripts/check-mobile-api.mjs",
+		"check:layering": "node scripts/check-layering.mjs",
 		"check:mutation-preflight": "node scripts/check-mutation-preflight.mjs",
 		"verify:real-storage": "node scripts/verify-real-storage.mjs",
 		"verify:flows": "node scripts/verify-flows.mjs",
