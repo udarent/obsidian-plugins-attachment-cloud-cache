@@ -214,6 +214,12 @@ export async function runSharedBucketSuite(mod) {
 		const refused = await declareRefs({ io: unreadable, self, now }, { [hash(1)]: ref("a.png") });
 		assert.equal(refused.ok, false, "★ 读不到现状必须拒绝写");
 		assert.equal(refused.reason, "read-failed", "原因要说成「读不到」，不是「写失败」");
+		// ⭐ 2026-10-28：说明**不许为空**。真机踩过：通知里是「读不到本设备的引用记录（）」，
+		// 括号空着 ⇒ 权限、离线、声明坏了三种完全不同的病因，用户和我们看到的都是同一句空话。
+		assert.ok(
+			String(refused.detail ?? "").includes("403"),
+			`★ 失败说明要带上真实原因（实际：${JSON.stringify(refused.detail)}）—— 空串等于让用户去猜`
+		);
 		assert.equal(unreadable.ops.length, 0, "一个写动作都不许发生");
 
 		// 5d. 写失败 ⇒ 如实回报（调用方据此中止本批上传）

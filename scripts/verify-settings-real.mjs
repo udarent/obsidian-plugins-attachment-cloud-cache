@@ -137,7 +137,14 @@ const READ_STRUCTURE = `(() => {
 		test: at(labels.test),
 		desc: row ? (row.querySelector(".setting-item-description")?.textContent ?? "").trim() : null,
 		hasToggle: Boolean(toggle),
-		toggleOn: input ? Boolean(input.checked) : null,
+		// ⭐ **状态看容器的 is-enabled 类，不看隐藏 input.checked**（2026-10-28 修正）。
+		//
+		// 宿主（1.14 声明式设置页）把开关状态标在 .checkbox-container 上，里面那个
+		// input 的 checked **不跟随设置**（恒为 false）。照 input.checked 读的后果很隐蔽：
+		// 默认值是 false 时"控件 false == 设置 false"**碰巧对**，一旦设置是 true 就全错，
+		// 而且下一步会照着错的 before 去点 —— 把已经开着的开关**关掉**，
+		// 后面每一条断言都在验证相反的状态（本轮就是这样连挂 4 条）。
+		toggleOn: toggle ? toggle.classList.contains("is-enabled") : null,
 		toggleClass: toggle ? toggle.className : null,
 		unifyButton: (() => {
 			const index = at(labels.unify);
@@ -156,6 +163,8 @@ const READ_STRUCTURE = `(() => {
  *
  * ⚠️ 点的是 `.checkbox-container`（宿主自己监听的元素），不是里面的 `input` ——
  * 点 `input` 时事件不会冒到容器上，开关看着动了、绑定却不跑（一类"点了没反应"的老坑）。
+ * ⚠️ **读状态也读容器**（`is-enabled` 类），不是 `input.checked`：后者不跟随设置，
+ * 恒为 false ⇒ `before` 永远是 false ⇒ 已经开着的开关会被"再点一下"关掉（2026-10-28）。
  */
 const toggleShared = (on) => `(async () => {
 	const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -168,8 +177,8 @@ const toggleShared = (on) => `(async () => {
 	if (!row) return { error: "设置页里找不到「" + label + "」这一行" };
 	const box = row.querySelector(".checkbox-container");
 	if (!box) return { error: "那一行没有开关控件" };
-	const input = box.querySelector("input");
-	const before = input ? Boolean(input.checked) : box.classList.contains("is-enabled");
+	const isOn = () => box.classList.contains("is-enabled");
+	const before = isOn();
 	if (before !== ${Boolean(on)}) box.click();
 	const deadline = Date.now() + 6000;
 	while (Date.now() < deadline) {
@@ -177,11 +186,10 @@ const toggleShared = (on) => `(async () => {
 		await sleep(100);
 	}
 	await sleep(400);
-	const input2 = box.querySelector("input");
 	return {
 		before,
 		clicked: before !== ${Boolean(on)},
-		after: input2 ? Boolean(input2.checked) : box.classList.contains("is-enabled"),
+		after: isOn(),
 		pluginShared: plugin.settings.contentAddressed,
 	};
 })()`;

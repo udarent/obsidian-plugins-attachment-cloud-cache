@@ -581,27 +581,59 @@ export async function loadDeclarations(io: DeclarationIo): Promise<DeclarationLo
  * 读不到就返回 `null`（首次使用、权限不足、形状坏了都落在这一支）——
  * 调用方必须把它当"读失败"，**不能**当成"空的现状"：真按空的来写，
  * 会覆盖掉 head 里已有的几百条引用，那些对象失去保护，下一次清理就会被删。
+ *
+ * ⚠️ 这只是 `readDeviceState` 的薄包装，**拿不到失败原因**。要给用户提示"为什么读不到"
+ * 的调用方用 `readDeviceState`（2026-10-28：原来所有失败都只回一个 `null`，
+ * 于是通知里出现「读不到本设备的引用记录（）」——括号里空着，什么都查不出来）。
  */
 export async function loadDeviceState(
 	io: DeclarationIo,
 	vaultId: string,
 	deviceId: string
 ): Promise<DeclarationState | null> {
+	const { state } = await readDeviceState(io, vaultId, deviceId);
+	return state;
+}
+
+/** 读失败的原因分类（只用于**说明**，不参与判据）。 */
+export type DeviceStateReason = "no-identity" | "list-failed" | "corrupt" | "too-many-pages";
+
+/**
+ * 读本设备声明，**连失败原因一起返回**。
+ *
+ * `detail` 是给用户看的一句话（会进通知的括号）。它**必须**能区分"权限/网络"与"数据坏了"：
+ * 前者要用户去改密钥，后者要人来看声明 —— 混成一句"读不到"，两种都治不了。
+ */
+export async function readDeviceState(
+	io: DeclarationIo,
+	vaultId: string,
+	deviceId: string
+): Promise<{ state: DeclarationState | null; reason: DeviceStateReason | null; detail: string }> {
 	const prefix = devicePrefix(vaultId, deviceId);
-	if (prefix === "") return null;
+	if (prefix === "") {
+		return { state: null, reason: "no-identity", detail: "库或设备标识不合法" };
+	}
 	try {
 		const page = await io.list(`${prefix}/`, null, DECLARATION_PAGE_LIMIT);
 		// 本设备自己就超过一页 ⇒ 写坏了，别在坏数据上继续写
-		if (page.nextToken !== null && page.nextToken !== "") return null;
+		if (page.nextToken !== null && page.nextToken !== "") {
+			return { state: null, reason: "too-many-pages", detail: `本设备声明超过一页（${prefix}/）` };
+		}
 		let head: Declaration | null = null;
 		const segments: SegmentState[] = [];
 		for (const file of page.files) {
 			if (!isDeclarationKey(file.key)) continue;
 			const text = await io.get(file.key);
-			if (text === null) return null;
+			if (text === null) {
+				return { state: null, reason: "corrupt", detail: `读不出 ${file.key}` };
+			}
 			const declaration = parseDeclaration(text);
-			if (!declaration) return null;
-			if (declaration.vault !== vaultId || declaration.device !== deviceId) return null;
+			if (!declaration) {
+				return { state: null, reason: "corrupt", detail: `${file.key} 内容不合法` };
+			}
+			if (declaration.vault !== vaultId || declaration.device !== deviceId) {
+				return { state: null, reason: "corrupt", detail: `${file.key} 里的身份与请求不符` };
+			}
 			if (isHeadKey(file.key)) {
 				head = declaration;
 				continue;
@@ -610,9 +642,11 @@ export async function loadDeviceState(
 			if (number === null) continue;
 			segments.push({ number, decl: declaration });
 		}
-		return { head, segments };
-	} catch {
-		return null;
+		return { state: { head, segments }, reason: null, detail: "" };
+	} catch (error) {
+		// ⚠️ 把原始信息带出去：`403` / `AccessDenied` / 超时 / DNS 各不相同，
+		// 只回一句"读不到"会让人去猜（本项目真实踩过：通知里括号是空的）。
+		return { state: null, reason: "list-failed", detail: messageOf(error) };
 	}
 }
 

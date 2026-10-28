@@ -46,6 +46,7 @@ export async function runDeclarationSuite(mod) {
 		scanDeclarations,
 		loadDeclarations,
 		loadDeviceState,
+		readDeviceState,
 		applyDeclarationSteps,
 	} = mod;
 
@@ -453,6 +454,42 @@ export async function runDeclarationSuite(mod) {
 				"d1"
 			);
 			assert.equal(broken, null, "★ 读不懂现状必须返回 null（退化成空现状会覆盖已有引用）");
+
+			// ⭐ 6g-2（2026-10-28）：失败时**必须带得出去原因**。
+			//
+			// 真机踩到：通知里出现「读不到本设备的引用记录（）」—— 括号空着。
+			// 原因是 `declareRefs` 一直回 `detail: ""`，于是权限、离线、声明坏了这三种
+			// 完全不同的事，用户和我们看到的都是同一句空话，谁都治不了。
+			const corruptRead = await readDeviceState(
+				fakeIo(fileMap([["_acc/v1/v1/d1/head.json", { text: "{ 坏", lastModified: "" }]])),
+				"v1",
+				"d1"
+			);
+			assert.equal(corruptRead.state, null, "读不懂 ⇒ 没有现状");
+			assert.equal(corruptRead.reason, "corrupt", "★ 要能区分「数据坏了」");
+			assert.ok(corruptRead.detail.includes("head.json"), `★ 说明里要指出是哪份文件（实际：${corruptRead.detail}）`);
+
+			// 网络 / 权限失败：原始信息必须原样带出来（`403` 与签名错要分得清）
+			const listBoom = {
+				list: async () => {
+					throw new Error("403 AccessDenied");
+				},
+				get: async () => null,
+				put: async () => undefined,
+				remove: async () => undefined,
+			};
+			const failed = await readDeviceState(listBoom, "v1", "d1");
+			assert.equal(failed.state, null, "列不出来 ⇒ 没有现状");
+			assert.equal(failed.reason, "list-failed", "★ 要能区分「列不出来」（权限 / 网络）");
+			assert.ok(
+				failed.detail.includes("403 AccessDenied"),
+				`★ 原始错误必须带出来（实际：${failed.detail}）—— 只回空串时用户只能猜`
+			);
+
+			// 身份不合法：不应该发任何请求
+			const noId = await readDeviceState(listBoom, "", "d1");
+			assert.equal(noId.reason, "no-identity", "身份不合法要单独一类");
+			assert.ok(noId.detail !== "", "★ 任何失败原因都要有说明（通知里的括号不能是空的）");
 		}
 
 		// 6h. ⭐ 先全部写、再全部删（压缩先写新段再删旧段 —— 反过来有一瞬间少保护）

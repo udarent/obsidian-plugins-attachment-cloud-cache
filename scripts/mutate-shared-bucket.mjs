@@ -81,8 +81,10 @@ await runMutations({
 			// 后果：读不到现状时"不写但报成功" ⇒ 调用方照常上传 ⇒ 这一批对象
 			// **没有任何保护**，下一次清理会把它们当孤儿删掉（而且没人知道）。
 			name: "★★ 读不到现状却报成功（这一批对象没有保护）",
-			from: '\tif (!state) return { ok: false, reason: "read-failed", detail: "" };',
-			to: "\tif (!state) return { ok: true, steps: 0 };",
+			// ⚠️ 锚点跟着 2026-10-28 的改动走：`declareRefs` 改用 `readDeviceState`，
+			// 早退条件从 `!state` 变成 `!read.state`（顺带把失败原因带出去）。
+			from: '\tif (!read.state) return { ok: false, reason: "read-failed", detail: read.detail };',
+			to: "\tif (!read.state) return { ok: true, steps: 0 };",
 			expect: "读不到现状必须拒绝写",
 		},
 	],

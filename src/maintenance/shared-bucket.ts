@@ -33,6 +33,7 @@ import {
 	loadDeviceState,
 	mergeRefs,
 	planUpdates,
+	readDeviceState,
 	scanDeclarations,
 } from "../s3/declaration";
 import { displayNameForKey, hashFromKey } from "../object-key";
@@ -280,8 +281,12 @@ export async function declareRefs(
 	const { io, self } = options;
 	const now = (options.now ?? (() => new Date()))().toISOString();
 
-	const state: DeclarationState | null = await loadDeviceState(io, self.vault, self.device);
-	if (!state) return { ok: false, reason: "read-failed", detail: "" };
+	// ⚠️ 用 `readDeviceState` 而不是 `loadDeviceState`：失败原因要**带得出去**。
+	// 原来这里回 `detail: ""`，于是通知里出现「读不到本设备的引用记录（）」——
+	// 括号里空着，用户和我们都查不出是权限、网络还是声明坏了。
+	const read = await readDeviceState(io, self.vault, self.device);
+	if (!read.state) return { ok: false, reason: "read-failed", detail: read.detail };
+	const state: DeclarationState = read.state;
 
 	let steps;
 	try {

@@ -26,7 +26,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 /**
@@ -63,18 +63,42 @@ async function fetchJson(url, { timeoutMs = PORT_PROBE_TIMEOUT_MS } = {}) {
  * 读不到就返回空数组 —— 这只是提示，不该因为它让验证失败。
  */
 export function knownVaultNames() {
+	return [...new Set(knownVaultEntries().map((entry) => entry.name))].sort();
+}
+
+/**
+ * 本机 Obsidian 认得的库：`{ name, path }` 列表。
+ *
+ * ⚠️ **名字不唯一**（2026-10-28 实测踩到）：本机同时登记了
+ * `E:\svn\obsidian-plugins\ObsidianVault` 和 `E:\svn\obsidian-plugins-codebuddy\ObsidianVault`，
+ * 而 `obsidian://open?vault=ObsidianVault` 打开的是**后者**（`open: true` 那个）。
+ * 只核对 `app.vault.getName()` 会**通过** —— 于是整轮探针都在验证另一份旧版插件
+ * （症状：命令数 8 条、`plugin.sampleObjectKey` 不存在、设置页 0 个分组，全像插件坏了）。
+ * ⇒ 名字只能用来**提示**，判据必须是目录：`adapter.basePath`。
+ */
+export function knownVaultEntries() {
 	if (!process.env.APPDATA) return [];
 	const configPath = join(process.env.APPDATA, "obsidian", "obsidian.json");
 	if (!existsSync(configPath)) return [];
 	try {
 		const config = JSON.parse(readFileSync(configPath, "utf8"));
-		const names = Object.values(config.vaults ?? {})
-			.map((entry) => (typeof entry?.path === "string" ? entry.path.split(/[\\/]/).filter(Boolean).pop() : null))
+		return Object.values(config.vaults ?? {})
+			.map((entry) => {
+				if (typeof entry?.path !== "string" || entry.path === "") return null;
+				const name = entry.path.split(/[\\/]/).filter(Boolean).pop();
+				return name ? { name, path: entry.path } : null;
+			})
 			.filter(Boolean);
-		return [...new Set(names)].sort();
 	} catch {
 		return [];
 	}
+}
+
+/** 名字 → 目录（同名多份时返回多条，调用方必须自己判歧义）。 */
+export function vaultPathsFor(name) {
+	return knownVaultEntries()
+		.filter((entry) => entry.name === name)
+		.map((entry) => entry.path);
 }
 
 /**
@@ -281,6 +305,17 @@ export async function evaluate(client, expression) {
 export async function launchAndAttach({ exe, port, vault, path, waitSeconds, log = () => {} }) {
 	if (!existsSync(exe)) throw new Error(`找不到 Obsidian：${exe}`);
 
+	/**
+	 * 我们**期望**打开的目录。
+	 *
+	 * - 显式给了 `path` ⇒ 就是它；
+	 * - 否则看 `OBSIDIAN_VAULT_DIR`（多个脚本已经用它指库目录）⇒ 就按它核对；
+	 * - 都没有 ⇒ 从 `obsidian.json` 反查出唯一那个目录（同名多份时下面会直接报错）。
+	 * ⇒ 之后无论走哪条路，判据都是 `adapter.basePath`，不是名字。
+	 */
+	const envDir = String(process.env.OBSIDIAN_VAULT_DIR ?? "").trim();
+	let expectedPath = path ?? (envDir === "" ? null : resolve(envDir));
+
 	// ⭐ 名字不对时**立刻**失败，别等 60 秒超时（2026-10-25）。
 	//
 	// 起因：两个脚本的默认值还是早已不存在的 `TestVault`，而 Obsidian 在名字对不上时
@@ -298,6 +333,18 @@ export async function launchAndAttach({ exe, port, vault, path, waitSeconds, log
 					"  用 OBSIDIAN_VAULT=<上面其中一个> 重跑。"
 			);
 		}
+		// ⭐ 名字撞车时必须当场拦住（2026-10-28 实测）。见 `knownVaultEntries` 的说明：
+		// 同名两份库时，按名字打开会拿到**另一个目录**，而名字核对仍然通过 ⇒ 整轮白跑。
+		// ⚠️ 已经拿到期望目录（`OBSIDIAN_VAULT_DIR` / `path`）时不报错 —— 那条路会用 basePath 核对。
+		const candidates = vaultPathsFor(vault);
+		if (!expectedPath && candidates.length > 1) {
+			throw new Error(
+				`OBSIDIAN_VAULT=「${vault}」在本机对应 **${candidates.length} 个目录**，按名字打开分不清：\n` +
+					candidates.map((item) => `    · ${item}`).join("\n") +
+					"\n  用 OBSIDIAN_VAULT_DIR=<上面某个**完整路径**> 重跑（目录模式会用 `adapter.basePath` 核对）。"
+			);
+		}
+		if (!expectedPath && candidates.length === 1) expectedPath = candidates[0];
 	}
 
 	// ⚠️ 参数缺一不可：只给 remote-debugging-port 会因 GPU 进程崩溃而退出。
@@ -309,8 +356,10 @@ export async function launchAndAttach({ exe, port, vault, path, waitSeconds, log
 			`--remote-debugging-port=${port}`,
 			"--disable-gpu",
 			"--no-sandbox",
-			...(path
-				? [`obsidian://open?path=${encodeURIComponent(path)}`]
+			// ⚠️ 有期望目录时**一律按目录打开**（2026-10-28）：同名库并存时
+			// `?vault=<名字>` 会挑错目录，而 `?path=` 是唯一的。
+			...(expectedPath
+				? [`obsidian://open?path=${encodeURIComponent(expectedPath)}`]
 				: [`obsidian://open?vault=${encodeURIComponent(vault)}`]),
 		],
 		{ stdio: "ignore", detached: false }
@@ -413,22 +462,30 @@ export async function launchAndAttach({ exe, port, vault, path, waitSeconds, log
 	}
 	log("  ✓ 宿主已就绪（app.plugins 可用）");
 
-	// ⚠️ 给了 `path` 时它还没有名字（首次打开 ⇒ 名字＝目录名），
-	// 所以改成核对 `adapter.basePath`：那才是「真的打开了这个目录」的直接证据。
-	if (path) {
+	// ⭐⭐ 判据是**目录**，不是名字（2026-10-28）。
+	//
+	// 这个名字对得上、目录却是另一个库的组合真实存在（本机就有两个 `ObsidianVault`），
+	// 而症状极具误导性：插件是旧版 ⇒ 命令少/多、设置页空、字段不存在，看起来像"新代码坏了"。
+	// ⇒ 只核对 `app.vault.getName()` 是一句**必然会假绿**的断言。
+	const normalizePath = (value) => String(value).split("\\").join("/").replace(/\/$/, "").toLowerCase();
+	if (expectedPath) {
 		const basePath = await evaluate(client, `String(app?.vault?.adapter?.basePath ?? "")`);
-		const normalize = (value) => String(value).split("\\").join("/").replace(/\/$/, "").toLowerCase();
-		if (!normalize(basePath).endsWith(normalize(path))) {
+		const actual = normalizePath(basePath);
+		const want = normalizePath(expectedPath);
+		if (actual !== want && !actual.endsWith(want) && !want.endsWith(actual)) {
 			killOnFailure();
-		throw new Error(`请求打开目录 ${path}，实际打开的是 ${basePath}`);
+			throw new Error(
+				`请求打开的目录是 ${expectedPath}，实际打开的是 ${basePath || "（空）"}。\n` +
+					"  ⚠️ 名字相同的库可能有好几个 —— 用 OBSIDIAN_VAULT=<完整路径> 指定，别用名字。"
+			);
 		}
-		log(`  ✓ 打开的确实是指定的目录：${path}`);
-		return { client, child };
+		log(`  ✓ 打开的确实是指定的目录：${basePath}`);
 	}
 
 	// ⭐ 实际打开的是不是我们**请求**的那个 vault？（见文件头第 4 点）
+	// ⚠️ 名字这一层只在**没有目录可比**时才单独用；目录已经核对过的话它只是附注。
 	const actualVault = await evaluate(client, `app?.vault?.getName?.() ?? null`);
-	if (actualVault !== vault) {
+	if (vault && actualVault !== vault) {
 		const available = knownVaultNames();
 		const availableHint =
 			available.length > 0 ? `本机 Obsidian 认得这些 vault：${available.join("、")}。` : "";
