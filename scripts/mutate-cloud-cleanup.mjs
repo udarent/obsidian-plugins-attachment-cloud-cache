@@ -75,5 +75,14 @@ await runMutations({
 			to: "\t\t\tif (store.remove(key)) removed.push(key);\n\t\t\tconst name = store.get(key)?.sourceName ?? \"\";",
 			expect: "名字要在摘记录**之前**读到",
 		},
+		{
+			// 后果：没有守卫也照删 ⇒ 拿不到设备身份时，"本机台账"成了唯一依据，
+			// 同桶里别的设备还在用的对象会被当孤儿删掉（**不可恢复**）。
+			// 这正是 2026-10-28 修掉的那条暗道：把"没有跨设备判据"当成"不启用"。
+			name: "★★ 没有守卫也照删（身份缺失时按本机台账误删别人的对象）",
+			from: '\tif (!deps.guard) {\n\t\tresult.blocked = "no-identity";',
+			to: '\tif (false) {\n\t\tresult.blocked = "no-identity";',
+			expect: "★★ 没有守卫时不许抛（早退就是全部动作）",
+		},
 	],
 });

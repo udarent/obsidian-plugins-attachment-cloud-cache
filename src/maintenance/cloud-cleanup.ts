@@ -106,12 +106,13 @@ export interface CloudCleanupDeps {
 	/**
 	 * ⭐ 共享桶（R25）：删之前先读全桶的引用声明，被**别的设备/别的库**占着的对象跳过。
 	 *
-	 * 未注入 = 不启用（功能关着，或者身份没生成）。此时行为与从前逐字节相同。
-	 *
-	 * ⚠️ 它是**唯一**的跨库判据，判据本身在 `maintenance/shared-bucket.ts`；
-	 * 这一层只负责"开始前问一次、每 20 个再看一眼、被占就跳过"。
+	 * ⚠️ **必填**（可以是 `null`，但必须显式写出来）。2026-10-28 之前它是可选的，
+	 * 而"没注入"被当成"不启用"且**行为与从前逐字节相同** ⇒ 那就是一条**静默关掉保护**的暗道：
+	 * 只要身份拿不到（`sharedBucketGuardFor` 回 `null`），清理就会按"本机台账"照删，
+	 * 同桶里别的设备还在用的对象被当孤儿删掉 —— 正是本功能要防的那件事。
+	 * ⇒ 现在 `null` 的含义是「我知道没有跨设备判据」，后果是**一个都不删**（`blocked: "no-identity"`）。
 	 */
-	guard?: CleanupGuard;
+	guard: CleanupGuard | null;
 	/**
 	 * 某个对象**因为被别的设备占用而跳过**时回调（供汇报列出是谁占着）。
 	 * ⚠️ 与 `onItem({status:"skipped"})` 不重复：那个是进度，这个是**原因**。
@@ -149,7 +150,7 @@ export interface CloudCleanupResult {
 	 * `no-declaration` ⇒ 桶里还没有声明（首次使用 / 别的设备都是旧版）；
 	 * 其余是读声明失败（权限、网络、形状）。⚠️ **都不许说成"没人引用"**。
 	 */
-	blocked?: "no-declaration" | "too-many" | "failed" | "corrupt" | "unstable";
+	blocked?: "no-declaration" | "too-many" | "failed" | "corrupt" | "unstable" | "no-identity";
 	/** 被挡下时的原始错误（`blocked === "failed"` 时有值）。 */
 	blockedDetail?: string;
 	/**
@@ -198,8 +199,19 @@ export async function runCloudCleanup(
 
 	// ⭐ 共享桶：**开始前读一次全桶声明**（与候选数量无关）。读不到就一个都不删 ——
 	// 把"没读到"当成"没人引用"是这一层唯一不可接受的错。
+	//
+	// ⚠️⚠️ **连守卫都没有时同样一个都不删**（2026-10-28 修）。这一支原来是"跳过判据、照删"，
+	// 而守卫为 `null` 的唯一原因就是**拿不到设备身份**（`sharedBucketGuardFor` 回 `null`）——
+	// 那时"本机台账"是唯一的依据，同桶里别的设备还在用的对象会被当孤儿删掉。
+	// 把它当"不启用"是**静默关掉保护**，与"保护不是可选功能"直接冲突。
 	let start: Extract<GuardStart, { ok: true }> | null = null;
-	if (deps.guard) {
+	if (!deps.guard) {
+		result.blocked = "no-identity";
+		result.blockedDetail = "本机没有设备身份";
+		for (const key of keys ?? []) deps.onItem?.({ key, status: "skipped" });
+		return result;
+	}
+	{
 		const begun = await deps.guard.begin();
 		if (!begun.ok) {
 			result.blocked = begun.reason;
@@ -213,10 +225,12 @@ export async function runCloudCleanup(
 	/** 处理完一件之后数一个：每 20 件重算一次声明指纹（见下面的检查点）。 */
 	let processed = 0;
 	const CHECKPOINT_EVERY = 20;
+	// 上面已经排除了 `null`；这里取一次，闭包里不用再判（判了也永远为假）。
+	const guard = deps.guard;
 	const afterItem = async (): Promise<boolean> => {
 		processed += 1;
-		if (!deps.guard || processed % CHECKPOINT_EVERY !== 0) return true;
-		const verdict = await deps.guard.checkpoint();
+		if (processed % CHECKPOINT_EVERY !== 0) return true;
+		const verdict = await guard.checkpoint();
 		if (verdict === "same") return true;
 		// 声明集合变了（或读不到了）⇒ 停剩余批次，原因如实带回去
 		result.stopped = verdict;

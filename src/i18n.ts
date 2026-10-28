@@ -179,6 +179,10 @@ export const I18N: Record<string, Locale> = {
 		sharedBucketDenied: "Skipped {count}: another device or vault still uses them.",
 		sharedBucketNoDeclaration: "Nothing is listed: this bucket has no reference record yet. Upload something first.",
 		sharedBucketBlocked: "Nothing is deleted: the cross-device reference record could not be read ({error}). Sharing a bucket needs the ListBucket permission.",
+		// ⚠️ 与上一条分开：这一条的病因是**本机没有设备身份**，不是桶读不到 ——
+		// 混成一句会让人去查权限（而他真正要做的是重载插件 / 看本机存储是否可用）。
+		sharedBucketBlockedNoIdentity:
+			"Nothing is deleted: this device has no identity yet. Reload the plugin and try again.",
 		sharedBucketStopped: "Stopped after {count}: the reference record changed while deleting. Nothing else was deleted.",
 		sharedBucketCheckpointFailed: "Stopped after {count}: the reference record became unreadable. Nothing else was deleted.",
 		// ── 统一对象名（CR-15）──
@@ -565,6 +569,7 @@ export const I18N: Record<string, Locale> = {
 		sharedBucketDenied: "跳过 {count} 个：别的设备或别的库还在用。",
 		sharedBucketNoDeclaration: "没有列出任何对象：这个桶里还没有引用记录。先传一次再试。",
 		sharedBucketBlocked: "一个都没删：跨设备引用记录读不到（{error}）。共用桶需要 ListBucket 权限。",
+		sharedBucketBlockedNoIdentity: "一个都没删：本机还没有设备身份。重载插件后再试。",
 		sharedBucketStopped: "删到 {count} 个就停了：期间引用记录被改动过，剩下的没删。",
 		sharedBucketCheckpointFailed: "删到 {count} 个就停了：引用记录读不到了，剩下的没删。",
 		// ── 统一对象名（CR-15）──

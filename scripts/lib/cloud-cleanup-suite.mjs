@@ -18,6 +18,35 @@
 
 import assert from "node:assert/strict";
 
+/**
+ * 「放行」守卫：读得到声明，且没有任何别的设备占用。
+ *
+ * ⚠️ 2026-10-28 起 `guard` 在 `runCloudCleanup` 里是**必填**的（可以是 `null`），
+ * 因为「没注入」曾经等价于**静默关掉跨设备判据**：身份拿不到时清理会照删。
+ * ⇒ 这些与跨设备无关的用例也必须显式给一个守卫 —— 它们验的是「删不删、摘不摘台账」，
+ * 不是「要不要保护」。
+ */
+/**
+ * 夹具 key：`<名字>-<64 位哈希><扩展名>` —— 与真机上的形状一致。
+ *
+ * ⚠️ **裸名（`a.png`）不是合法 key**：`cloud-cleanup` 要用 `hashFromKey` 取哈希去问跨设备判据，
+ * 取不出来就"无法判断 ⇒ 跳过"。用它当夹具会让这些组悄悄变成"一条都没删"，
+ * 而断言仍在数「删了几个」—— 2026-10-28 把 `guard` 改成必填后才暴露出来。
+ */
+const keyOf = (name) => {
+	const matched = /\.[^.]+$/.exec(name);
+	const base = matched ? name.slice(0, -matched[0].length) : name;
+	const ext = matched ? matched[0] : "";
+	let hash = 0;
+	for (const ch of base) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+	return `${base}-${hash.toString(16).padStart(8, "0").repeat(8)}${ext}`;
+};
+
+const openGuard = () => ({
+	begin: async () => ({ ok: true, isDenied: () => false, occupantsOf: () => [], declarationCount: 1 }),
+	checkpoint: async () => "same",
+});
+
 export async function runCloudCleanupSuite(mod) {
 	const {
 		referencedKeysFromUrls,
@@ -63,12 +92,21 @@ export async function runCloudCleanupSuite(mod) {
 		const notified = [];
 		const deleted = [];
 		const recorded = [];
+		// ⚠️ key 必须是**真实形状**（含哈希）：`cloud-cleanup` 会用 `hashFromKey` 取哈希去问
+		// 跨设备判据，取不出来就"无法判断 ⇒ 跳过"。裸名（`a.png`）在真机上不存在，
+		// 用它当夹具会让这一组验的东西变成"全都跳过"（2026-10-28 补 guard 后暴露）。
+		const hashA = "a".repeat(64);
+		const hashBoom = "c".repeat(64);
+		const hashB = "b".repeat(64);
+		const keyA = `报告,1-${hashA}.png`;
+		const keyBoom = `boom-${hashBoom}.png`;
+		const keyB = `b-${hashB}.png`;
 		const result = await runCloudCleanup(
 			{
 				client: {
 					deleteObject: async (key) => {
 						deleted.push(key);
-						if (key === "boom.png") throw new Error("500");
+						if (key === keyBoom) throw new Error("500");
 						return true;
 					},
 				},
@@ -81,9 +119,7 @@ export async function runCloudCleanupSuite(mod) {
 						remove: (key) => (removed.push(key), gone.add(key), true),
 						forgetUploaded: (key) => (forgotten.push(key), true),
 						get: (key) =>
-							!gone.has(key) && key === "a.png"
-								? { key, sourceName: "报告,1.png", cachePath: "c/a.png" }
-								: undefined,
+							!gone.has(key) && key === keyA ? { key, sourceName: "报告,1.png", cachePath: "c/a.png" } : undefined,
 					};
 				},
 				persistIndex: async () => {
@@ -93,29 +129,30 @@ export async function runCloudCleanupSuite(mod) {
 				t: (key) => key,
 				// 留痕：只有"对象真的不在了"才回调（失败的不算 —— 它还在桶里）
 				onRemoved: (record) => recorded.push(record),
+				guard: openGuard(),
 			},
-			["a.png", "boom.png", "b.png"]
+			[keyA, keyBoom, keyB]
 		);
 
-		assert.deepEqual(deleted, ["a.png", "boom.png", "b.png"], "★ 中间一个失败不能中断整批");
+		assert.deepEqual(deleted, [keyA, keyBoom, keyB], "★ 中间一个失败不能中断整批");
 		assert.equal(result.deleted, 2, "成功数要如实统计");
 		assert.equal(result.failed, 1, "失败数也要如实统计");
-		assert.deepEqual(removed, ["a.png", "b.png"], "★ 只有**删成功**的对象才摘索引（失败的摘了会以为远端也没有）");
+		assert.deepEqual(removed, [keyA, keyB], "★ 只有**删成功**的对象才摘索引（失败的摘了会以为远端也没有）");
 		assert.deepEqual(
 			forgotten,
-			["a.png", "b.png"],
+			[keyA, keyB],
 			"★ 上传台账同样只在删成功时忘掉（失败时对象还在云端，忘掉就等于以后不再认领它）"
 		);
 		// ⭐ 留痕：**名字要在摘记录之前读到**（摘掉之后就没地方取了），
-		// 且失败的那个（`boom.png`）**不许出现**在留痕里 —— 它还在桶里。
+		// 且失败的那个（`boom`）**不许出现**在留痕里 —— 它还在桶里。
 		assert.deepEqual(
 			recorded.map((record) => record.key),
-			["a.png", "b.png"],
+			[keyA, keyB],
 			"★ 留痕只记真的不在桶里的对象（失败的那个还在，记它会让人以为已经删了）"
 		);
 		assert.equal(recorded[0].name, "报告,1.png", "★ 名字要在摘记录**之前**读到（含逗号的也要原样带出来）");
 		assert.equal(recorded[0].outcome, "deleted", "真的删掉了");
-		assert.equal(recorded[0].key, "a.png", "key 原样带出（留痕要能对上对象）");
+		assert.equal(recorded[0].key, keyA, "key 原样带出（留痕要能对上对象）");
 		assert.equal(result.unindexed, 2, "摘掉的记录数要报出来");
 		assert.equal(persisted.length, 1, "整批结束**只落盘一次**（不是每删一个写一次索引）");
 		assert.equal(notified.length, 0, "都成功了就不该打扰用户");
@@ -144,13 +181,14 @@ export async function runCloudCleanupSuite(mod) {
 				persistIndex: async () => {},
 				notify: () => {},
 				t: (key) => key,
+				guard: openGuard(),
 			},
-			["gone.png"]
+			[keyOf("gone.png")]
 		);
 		assert.equal(result.deleted, 0, "★ 本来就不存在的，不能算进「已删除」（提示语不许撒谎）");
 		assert.equal(result.alreadyGone, 1, "★ 要单独计数：用户需要知道「有一个本来就不在」");
 		assert.equal(result.failed, 0, "★ 404 不是失败 —— 目标状态已经达成（两个入口的解释必须一致）");
-		assert.deepEqual(removed, ["gone.png"], "★ 对象确定不在 ⇒ 记录照摘（留着会被 audit/淘汰当有效记录）");
+		assert.deepEqual(removed, [keyOf("gone.png")], "★ 对象确定不在 ⇒ 记录照摘（留着会被 audit/淘汰当有效记录）");
 	}
 
 	// 5e. ⭐ 台账单独变化也要落盘
@@ -167,8 +205,9 @@ export async function runCloudCleanupSuite(mod) {
 				persistIndex: async () => persisted.push(true),
 				notify: () => {},
 				t: (key) => key,
+				guard: openGuard(),
 			},
-			["no-local-copy.png"]
+			[keyOf("no-local-copy.png")]
 		);
 		assert.equal(result.deleted, 1, "云端删掉了");
 		assert.equal(result.unindexed, 0, "这一档没有条目可摘");
@@ -187,8 +226,9 @@ export async function runCloudCleanupSuite(mod) {
 				},
 				notify: (message) => notified.push(message),
 				t: (key) => key,
+				guard: openGuard(),
 			},
-			["a.png"]
+			[keyOf("a.png")]
 		);
 		assert.equal(result.deleted, 1, "删除本身是成功的");
 		assert.equal(notified.length, 1, "★ 落盘失败必须提示");
@@ -212,6 +252,7 @@ export async function runCloudCleanupSuite(mod) {
 				},
 				notify: () => {},
 				t: (key) => key,
+				guard: openGuard(),
 			},
 			[]
 		);
@@ -291,6 +332,45 @@ export async function runCloudCleanupSuite(mod) {
 		assert.equal(result.denied, 1, "跳过要单独计数（不是 failed）");
 		assert.equal(denied.length, 1, "要报出被跳过的那一条");
 		assert.deepEqual(denied[0].occupants.map((who) => who.device), ["d2"], "汇报里要说清是谁占着");
+	}
+
+	// ============================================================
+	// 10b. ⭐⭐ 没有守卫 ⇒ **一个都不删**（2026-10-28）
+	//
+	// 守卫为 `null` 的唯一原因是「拿不到设备身份」（`sharedBucketGuardFor` 回 null）。
+	// 这一支原来是"**跳过判据、照删**" —— 那时本机台账是唯一依据，同桶里别的设备还在用的对象
+	// 会被当孤儿删掉。把"没有守卫"当"不启用"就是**静默关掉保护**，与「保护不是可选功能」直接冲突。
+	// ============================================================
+	{
+		const asked = [];
+		const items = [];
+		// ⚠️ 先钉「不许抛」：早退就是全部动作。少这一条的话，把 `!deps.guard` 改成 `false`
+		// 的变异会崩在 `deps.guard.begin()` 上，套件报的是"读不到 null 的属性"——
+		// 那不是这条规则的失败原因（本项目的老坑：`expect` 必须与**最先失败的那条**逐字相符）。
+		let result;
+		await assert.doesNotReject(async () => {
+			result = await runCloudCleanup(
+				{
+					client: {
+						deleteObject: async (key) => {
+							asked.push(key);
+							return true;
+						},
+					},
+					index: () => ({ remove: () => true, forgetUploaded: () => true, get: () => undefined }),
+					persistIndex: async () => {},
+					notify: () => {},
+					t: (key) => key,
+					guard: null,
+					onItem: (event) => items.push(event.status),
+				},
+				[keyOf("a.png"), keyOf("b.png")]
+			);
+		}, "★★ 没有守卫时不许抛（早退就是全部动作）");
+		assert.equal(asked.length, 0, "★★ 没有跨设备判据 ⇒ 一个都不删（不许按本机台账照删）");
+		assert.equal(result.blocked, "no-identity", "原因要说成「本机没有设备身份」，不是「桶读不到」");
+		assert.equal(result.deleted, 0, "成功数必须是 0");
+		assert.deepEqual(items, ["skipped", "skipped"], "每一件都要报「跳过」，不能报成功");
 	}
 
 	// ============================================================

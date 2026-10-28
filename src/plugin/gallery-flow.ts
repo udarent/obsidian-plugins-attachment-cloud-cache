@@ -271,8 +271,10 @@ export async function deleteCloudSelected(
 	// ⚠️ 失败不阻断删除（它只影响别设备看到的名字）。
 	await flushDeclarationNames(ctx, client);
 
-	// ⭐ 共享桶（R25）：功能关着就是 `null` —— 一次多余的请求都不发
-	const guard = sharedBucketGuardFor(ctx, client) ?? undefined;
+	// ⭐ 跨设备判据（R25）：拿不到身份时它是 `null` —— 那**不是**"关掉保护、照删"，
+	// 而是"一个都不删"（`cloud-cleanup` 对 `null` 的处理是 `blocked: "no-identity"`）。
+	// ⚠️ 2026-10-28 之前这里写的是 `?? undefined`，而那一路会**跳过判据照删**。
+	const guard = sharedBucketGuardFor(ctx, client);
 	const result = await runCloudCleanup(
 		{
 			client,
@@ -299,11 +301,15 @@ export async function deleteCloudSelected(
 	// ① 被别的设备占着（跳过是**设计如此**）；② 整批被挡（没声明 / 读不到）；
 	// ③ 跑到一半声明变了（停剩余批次）。三种都不许说成"清理完成"。
 	if (result.blocked) {
-		new Notice(
-			ctx.t(result.blocked === "no-declaration" ? "sharedBucketNoDeclaration" : "sharedBucketBlocked", {
-				error: result.blockedDetail ?? "",
-			})
-		);
+		// ⚠️ 三种病因各说一句：「桶里还没有声明」/「本机没有设备身份」/「读不到声明」。
+		// 合成一句会让人去改没坏的东西（身份缺失时提示"查 ListBucket 权限"就是误导）。
+		const key =
+			result.blocked === "no-declaration"
+				? "sharedBucketNoDeclaration"
+				: result.blocked === "no-identity"
+					? "sharedBucketBlockedNoIdentity"
+					: "sharedBucketBlocked";
+		new Notice(ctx.t(key, { error: result.blockedDetail ?? "" }));
 	}
 	// ⭐ 被别的设备占着的那几条：附件的"跳过"计数里看不出**为什么**，这里补一句。
 	// ⚠️ 与 `blocked`（整批没读成）分开：那是一条对象都没删，这是删了别的、只跳过这几条。
