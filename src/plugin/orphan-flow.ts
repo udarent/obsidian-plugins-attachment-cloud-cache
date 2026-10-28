@@ -296,7 +296,7 @@ export function createOrphanFlow(ctx: PluginContext): OrphanFlow {
 		//
 		// ⚠️ `void`：它内部三个失败方向都是"什么都不改"（读不到笔记/现状/身份），不抛；
 		// 而且它是**收口**不是主事 —— 别让它拖慢这条通知。
-		if (ctx.settings.sharedBucket) {
+		{
 			const client = ctx.buildClient();
 			if (client) void syncDeclaration(ctx, client);
 		}

@@ -695,6 +695,22 @@ function respondMissing(res, record, head = false) {
 		countByMethod(method) {
 			return requests.filter((r) => r.method === method.toUpperCase()).length;
 		},
+		/**
+		 * **对象** PUT 次数 —— 不含 `_acc/` 上的引用声明。
+		 *
+		 * ⚠️ 跨设备保护 2026-10-28 起不是可选功能 ⇒ 每次上传都会多出 1~2 次声明写入。
+		 * "上传了几个对象"必须按对象数，否则断言会随声明实现细节假红。
+		 * 要连声明一起数就用 `countByMethod("PUT")`（"一个字节都不该写"那类断言用它）。
+		 */
+		countObjectPuts() {
+			return requests.filter(
+				(r) =>
+					r.method === "PUT" &&
+					!String(r.key ?? "").includes("_acc/") &&
+					!String(r.path ?? "").includes("/_acc/") &&
+					!String(r.rawUrl ?? "").includes("_acc")
+			).length;
+		},
 		stored(key) {
 			const found = objects.get(key);
 			return found ? found.body : null;

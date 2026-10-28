@@ -468,7 +468,7 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 				ext,
 				filename: normalized.keyName,
 			},
-			{ contentAddressed: deps.settings.sharedBucket }
+			{ contentAddressed: deps.settings.contentAddressed }
 		);
 	} catch (error) {
 		// `objectKeyFor` 是纯函数、不该抛；真抛了说明**哈希那一步**出了问题

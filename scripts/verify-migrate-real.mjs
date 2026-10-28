@@ -237,7 +237,10 @@ try {
 			app,
 			// 插件目录给临时库里的一个空目录：删除留痕会真写一份，但写在临时库里
 			manifest: { dir: ".obsidian/plugins/acc-e2e" },
-			settings: { debugLogging: false, sharedBucket: true, s3: { ...config } },
+			settings: { debugLogging: false, contentAddressed: true, s3: { ...config } },
+			// ⚠️ 设备身份在上下文顶层（1.12.0 起不在 settings 上）。这里用独立的值：
+			// 它不是共享桶那一段要断言的身份（那一段自己另给 `dev-a`），混用会让失败指向错的地方。
+			deviceId: "dev-migrate",
 			t: (key) => key,
 			currentIndex: () => index,
 			hostContext: () => ({ persistIndex: async () => undefined }),
@@ -312,7 +315,9 @@ try {
 
 		const sharedCtx = {
 			...ctx,
-			settings: { ...ctx.settings, sharedBucket: true, vaultId: e2eVault, deviceId: e2eDevice },
+			settings: { ...ctx.settings, contentAddressed: true, vaultId: e2eVault },
+			// ⚠️ 设备身份在上下文顶层；这一段的身份是**它自己**的（`dev-a`），不是上面那份
+			deviceId: e2eDevice,
 		};
 
 		const remembered = await rememberReferences(sharedCtx, client, [{ hash: refHash, name: "photo.png", ext: "png" }]);

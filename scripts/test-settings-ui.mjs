@@ -381,7 +381,7 @@ assert.ok(
 	// ⭐ 共享桶（R25）是**决策项**：它决定"要不要多要一项 ListBucket 权限、要不要写 _acc/"。
 	// 必须在「测试连接」之前 —— 那一组最后一项永远是动作（用户填完才去点）。
 	assert.ok(
-		storage.includes("sharedBucket") && storage.indexOf("sharedBucket") < storage.indexOf("testConnection"),
+		storage.includes("contentAddressed") && storage.indexOf("contentAddressed") < storage.indexOf("testConnection"),
 		"★ 「共享桶」必须排在「测试连接」之前（动作永远是这一组的最后一项）"
 	);
 

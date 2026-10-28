@@ -492,10 +492,11 @@ async function main() {
 				`(async () => {
 					try {
 						const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
-						// 打开开关 + 固定身份（身份本由首次启动生成，这里固定住才好断言）
-						plugin.settings.sharedBucket = true;
+						// 固定身份（身份本由首次启动生成，这里固定住才好断言）
+						// ⚠️ 设备身份不在 settings 上（1.12.0 起存宿主本机存储）；
+						// 跨设备保护也不再是开关，所以这里不用"打开"任何东西。
 						plugin.settings.vaultId = "probevault";
-						plugin.settings.deviceId = "probedev";
+						plugin.deviceId = "probedev";
 						const body = new TextEncoder().encode(${JSON.stringify(sharedText)});
 						const prior = app.vault.getAbstractFileByPath(${JSON.stringify(sharedPath)});
 						if (prior) await app.vault.delete(prior, true);

@@ -78,15 +78,25 @@ function isNotFound(error: unknown): boolean {
 }
 
 /**
- * 本设备的身份；拿不到（设置为空或非法）返回 `null`。
+ * 本设备的身份；拿不到（为空或非法）返回 `null`。
  *
  * ⚠️ 拿不到时**不猜**：空串拼出来的前缀会让所有设备写到同一处、声明互相覆盖 ——
  * 症状是"某台设备的引用悄悄消失"，而那正是会误删的那种错。
+ *
+ * ⚠️ 两个值的**来源不同**，这是 2026-10-28 分开的：
+ * - `vaultId` 在 `settings` 里（跟着 `data.json` 同步，同一批设备本来就该共用）；
+ * - `deviceId` 在宿主本机存储（**不能跟着同步** —— 同步过去就成了同一个 ID，
+ *   多台设备写同一份声明互相覆盖）。
  */
-export function identityOf(settings: { vaultId: string; deviceId: string }): SelfIdentity | null {
-	const { vaultId, deviceId } = settings;
+export function identityOf(source: { vaultId: string; deviceId: string }): SelfIdentity | null {
+	const { vaultId, deviceId } = source;
 	if (!isSafeId(vaultId) || !isSafeId(deviceId)) return null;
 	return { vault: vaultId, device: deviceId };
+}
+
+/** 从上下文拼出身份来源（`deviceId` 不在 settings 上，见 `types.ts` 的说明）。 */
+function selfSource(ctx: PluginContext): { vaultId: string; deviceId: string } {
+	return { vaultId: ctx.settings.vaultId, deviceId: ctx.deviceId };
 }
 
 /**
@@ -100,8 +110,8 @@ export async function rememberReferences(
 	client: Pick<S3Client, "listObjects" | "getObject" | "putObject" | "deleteObject">,
 	refs: readonly DeclaredRefInput[]
 ): Promise<boolean> {
-	if (!ctx.settings.sharedBucket || refs.length === 0) return true;
-	const self = identityOf(ctx.settings);
+	if (refs.length === 0) return true;
+	const self = identityOf(selfSource(ctx));
 	if (!self) {
 		// 身份缺失是**配置坏了**（不是网络）：说清是"没生成身份"，别让用户去查网络
 		new Notice(ctx.t("sharedBucketNoIdentity"));
@@ -134,8 +144,7 @@ export async function rememberRenamedName(
 	client: Pick<S3Client, "listObjects" | "getObject" | "putObject" | "deleteObject">,
 	ref: { readonly hash: string; readonly name: string; readonly ext: string }
 ): Promise<"written" | "queued" | "off"> {
-	if (!ctx.settings.sharedBucket) return "off";
-	const self = identityOf(ctx.settings);
+	const self = identityOf(selfSource(ctx));
 	if (!self) return "off";
 
 	let outcome: Awaited<ReturnType<typeof renameReference>>;
@@ -189,8 +198,7 @@ export async function flushDeclarationNames(
 	ctx: PluginContext,
 	client: Pick<S3Client, "listObjects" | "getObject" | "putObject" | "deleteObject">
 ): Promise<number> {
-	if (!ctx.settings.sharedBucket) return 0;
-	const self = identityOf(ctx.settings);
+	const self = identityOf(selfSource(ctx));
 	if (!self) return 0;
 	const backlog = ctx.settings.declarationNameBacklog ?? {};
 	if (backlogCount(backlog) === 0) return 0;
@@ -236,8 +244,7 @@ export async function syncDeclaration(
 	ctx: PluginContext,
 	client: Pick<S3Client, "listObjects" | "getObject" | "putObject" | "deleteObject">
 ): Promise<boolean> {
-	if (!ctx.settings.sharedBucket) return false;
-	const self = identityOf(ctx.settings);
+	const self = identityOf(selfSource(ctx));
 	if (!self) return false;
 
 	let referenced: Set<string>;
@@ -279,8 +286,8 @@ export async function forgetReferences(
 	client: Pick<S3Client, "listObjects" | "getObject" | "putObject" | "deleteObject">,
 	hashes: readonly string[]
 ): Promise<boolean> {
-	if (!ctx.settings.sharedBucket || hashes.length === 0) return true;
-	const self = identityOf(ctx.settings);
+	if (hashes.length === 0) return true;
+	const self = identityOf(selfSource(ctx));
 	if (!self) return false;
 	const result = await declareRefs({ io: declarationIoFor(client), self }, {}, hashes);
 	if (result.ok) return true;
@@ -302,8 +309,7 @@ export function sharedBucketGuardFor(
 	ctx: PluginContext,
 	client: Pick<S3Client, "listObjects" | "getObject" | "putObject" | "deleteObject">
 ): CleanupGuard | null {
-	if (!ctx.settings.sharedBucket) return null;
-	const self = identityOf(ctx.settings);
+	const self = identityOf(selfSource(ctx));
 	if (!self) return null;
 	return createSharedBucketGuard({ io: declarationIoFor(client), self });
 }

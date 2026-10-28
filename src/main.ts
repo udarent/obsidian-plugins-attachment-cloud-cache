@@ -26,7 +26,15 @@
 
 import { Component, MarkdownRenderer, Notice, Platform, Plugin, TFile, TFolder, getLanguage } from "obsidian";
 
-import { SETTINGS_DEFAULTS, hasLegacyExternalImageDefault, hasLegacyObjectKeyTemplate, legacyAutoCacheEnabled, mergePluginSettings } from "./settings";
+import {
+	SETTINGS_DEFAULTS,
+	hasLegacyExternalImageDefault,
+	hasLegacyObjectKeyTemplate,
+	hasLegacySharedBucket,
+	legacyContentAddressed,
+	legacyAutoCacheEnabled,
+	mergePluginSettings,
+} from "./settings";
 import { isSafeId, randomId } from "./s3/declaration";
 import { hashFromKey } from "./object-key";
 import { flushDeclarationNames, rememberReferences, rememberRenamedName } from "./plugin/shared-bucket-flow";
@@ -160,6 +168,15 @@ const SIGNED_URL_CACHE_LIMIT = 512;
 
 export default class AttachmentCloudCachePlugin extends Plugin {
 	settings: PluginSettings = { ...SETTINGS_DEFAULTS };
+
+	/**
+	 * 本设备身份 —— **宿主本机存储**，不随库同步（见 `types.ts::PluginSettings` 的长说明）。
+	 *
+	 * ⚠️ 为什么不能放 `settings`：那个对象会被 `saveData` 写进 `data.json`，
+	 * 而 `data.json` 在 `.obsidian/` 里、**同步软件会把它推到其他设备** ⇒ 多台设备拿到同一个
+	 * `deviceId` ⇒ 写同一份声明互相覆盖 ⇒ 先写那台的引用消失 ⇒ 它上传的对象被当孤儿删掉。
+	 */
+	private deviceId = "";
 	locale = "en";
 
 	/**
@@ -633,7 +650,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				// ⭐ 改名要更新云端声明里的显示名（CR-16）—— 所以**先**按旧路径找到那条记录，
 				// 搬完就只剩新路径了。目录改名（`includeDescendants`）没有自己的条目 ⇒ 自然跳过，
 				// 这正是"**移动不写云端**"那条边界的实现方式（声明只存 hash，不存路径）。
-				const renamedKey = this.settings.sharedBucket ? this.currentIndex().findByCachePath(oldPath)?.key ?? "" : "";
+				const renamedKey = this.currentIndex().findByCachePath(oldPath)?.key ?? "";
 
 				const moved = this.currentIndex().moveCachePath(oldPath, file.path, {
 					includeDescendants: file instanceof TFolder,
@@ -837,7 +854,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * ⚠️ 移动（换目录）不会走到这里：`findByCachePath(旧目录)` 找不到条目。
 	 */
 	private async noteRenamedAttachment(key: string, name: string, extension: string): Promise<void> {
-		if (!this.settings.sharedBucket) return;
 		const client = this.buildClient();
 		if (!client) return;
 		const hash = hashFromKey(key);
@@ -851,7 +867,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	}
 
 	private async declareReference(ref: { hash: string; name: string; ext: string }): Promise<boolean> {
-		if (!this.settings.sharedBucket) return true;
 		const client = this.buildClient();
 		// 没有客户端时上传本来也走不通；这里不额外发通知（上传那条路会自己报）
 		if (!client) return false;
@@ -1677,6 +1692,7 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			app: this.app,
 			manifest: this.manifest,
 			settings: this.settings,
+			deviceId: this.deviceId,
 			t: (key, params) => this.t(key, params),
 			currentIndex: () => this.currentIndex(),
 			hostContext: () => this.hostContext(),
@@ -1753,8 +1769,19 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			this.settings.vaultId = randomId();
 			needsRewrite = true;
 		}
-		if (!isSafeId(this.settings.deviceId)) {
-			this.settings.deviceId = randomId();
+		// ⚠️ 本设备身份**不进 `data.json`**（会把同步软件变成"复制设备 ID 的工具"，见字段声明处）。
+		// ⚠️ 旧值**沿用不重生**：守卫没有过期规则（`occupantsOtherThan` 只看身份、不看时间），
+		// 换一个 ID 就等于让升级前写的声明全部变成"别的设备还在用" ⇒ 那些对象**永久**删不掉。
+		const device = this.loadDeviceId(stored);
+		this.deviceId = device.id;
+		if (device.migrated) needsRewrite = true;
+
+		// ⭐ 一次性兼容升级（1.12.0）：「共享桶」开关取消了，但它的**另一半**语义还在。
+		//
+		// 老开关同时管两件事：跨设备保护（已改成无条件）+ 新上传的 key 形状（还留着）。
+		// 所以遗留值要折算进 `contentAddressed`，否则开了几年的人升级后 key 形状会静默变回去。
+		if (hasLegacySharedBucket(stored)) {
+			this.settings.contentAddressed = legacyContentAddressed(stored, this.settings.contentAddressed);
 			needsRewrite = true;
 		}
 
@@ -1780,6 +1807,29 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 				console.error("[attachment-cloud-cache] 清理遗留设置失败（不影响本次运行）", error);
 			}
 		}
+	}
+
+	/**
+	 * 读本设备身份；没有（首次 / 换了设备 / 清过缓存）就生成一个并**立刻写回本机存储**。
+	 *
+	 * ⚠️ 必须当场写：不写的话每次启动都是新身份，上一轮写的声明会被当成"别的设备"
+	 * ⇒ 永远保护着、谁也删不掉（安全，但会挡死清理）。
+	 * ⚠️ 用随机串而不是库路径 / 主机名：用户改目录名不该让所有声明失效。
+	 */
+	private loadDeviceId(legacy: unknown): { id: string; migrated: boolean } {
+		const key = "attachment-cloud-cache:device-id";
+		const saved: unknown = this.app.loadLocalStorage(key);
+		if (isSafeId(saved)) return { id: saved, migrated: false };
+		// 一次性迁移：1.11.0 及更早把它存在 `data.json` 的 `deviceId` 里。
+		// ⚠️ 沿用不重生（理由见调用处）；迁移完让调用方重写一次设置，把那个键从文件里清掉。
+		const raw = typeof legacy === "object" && legacy !== null ? (legacy as Record<string, unknown>) : {};
+		if (isSafeId(raw.deviceId)) {
+			this.app.saveLocalStorage(key, raw.deviceId);
+			return { id: raw.deviceId, migrated: true };
+		}
+		const generated = randomId();
+		this.app.saveLocalStorage(key, generated);
+		return { id: generated, migrated: false };
 	}
 
 	async saveSettings(): Promise<void> {

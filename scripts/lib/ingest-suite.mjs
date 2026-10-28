@@ -1326,7 +1326,7 @@ export async function runIngestSuite(mod) {
 	// ============================================================
 	await withHarness(mod, {}, async (h) => {
 		const expectedHash = sha256Hex(HOSTILE_BYTES);
-		h.deps.settings.sharedBucket = true;
+		h.deps.settings.contentAddressed = true;
 		try {
 			const first = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "photo.png", mime: "image/png" });
 			assert.equal(first.key, `${expectedHash}.png`, "★ 共享桶档的 key 里没有名字（同内容必同 key）");
@@ -1341,7 +1341,7 @@ export async function runIngestSuite(mod) {
 				"★ 同内容换名字**不再多传一个对象**（带名 key 时代会多一个）"
 			);
 		} finally {
-			h.deps.settings.sharedBucket = false;
+			h.deps.settings.contentAddressed = false;
 		}
 	});
 

@@ -185,7 +185,7 @@ async function main() {
 	// ⚠️ 声明在 try **之外**：Node 侧复核与清理要用它 —— 写在 try 里出了块就没了
 	let noteText = "";
 	let actualKey = "";
-	let identity = { vaultId: "", deviceId: "", sharedBucket: false, localCopy: "keep" };
+	let identity = { vaultId: "", deviceId: "", localCopy: "keep" };
 	let headKey = "";
 	/** 跑前 `head.json` 是否存在：决定清理时"删掉"还是"恢复"。 */
 	let headExistedBefore = false;
@@ -212,36 +212,22 @@ async function main() {
 		identity = await evaluate(
 			client,
 			`(() => {
-				const settings = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]?.settings ?? {};
+				const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+				const settings = plugin?.settings ?? {};
 				return {
 					vaultId: String(settings.vaultId ?? ""),
-					deviceId: String(settings.deviceId ?? ""),
-					sharedBucket: settings.sharedBucket === true,
+					// ⚠️ 设备身份**不在 settings 上**（1.12.0 起存在宿主本机存储，不随库同步）
+					deviceId: String(plugin?.deviceId ?? ""),
 					localCopy: String(settings.localCopy ?? "keep"),
 				};
 			})()`
 		);
 		if (!identity.vaultId || !identity.deviceId) {
-			throw new Error("读不到库/设备标识（settings.vaultId / deviceId）—— 声明路径算不出来");
+			throw new Error("读不到库/设备标识（settings.vaultId / plugin.deviceId）—— 声明路径算不出来");
 		}
 		headKey = `_acc/v1/${identity.vaultId}/${identity.deviceId}/head.json`;
-		log(`  档位：localCopy=${identity.localCopy}／共享桶=${identity.sharedBucket ? "开" : "关"}`);
+		log(`  档位：localCopy=${identity.localCopy}／跨设备保护：常开（1.12.0 起不是可选）`);
 		log(`  声明：${headKey}`);
-
-		// ⭐ 共享桶必须是开的：这条链要在"先登记、后上传"下才走到声明
-		if (!identity.sharedBucket) {
-			const turnedOn = await evaluate(
-				client,
-				`(async () => {
-					const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
-					if (!plugin) return false;
-					plugin.settings.sharedBucket = true;
-					return plugin.settings.sharedBucket === true;
-				})()`
-			);
-			if (!turnedOn) throw new Error("打不开共享桶开关（settings.sharedBucket 改不动）");
-			log("  ⚠️ 本次**只在内存里**打开共享桶（不写你的 data.json）");
-		}
 
 		// 跑前把声明**原样抄一份** —— 跑完要还原，脚本不许改用户的状态。
 		// ⚠️ 不能只记"在不在"：临时打开共享桶会让插件顺手做一次整份引用对账，

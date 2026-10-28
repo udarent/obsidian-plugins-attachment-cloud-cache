@@ -59,6 +59,32 @@ const ROOT = resolve(HERE, "..", "..");
 
 const ACCESS_KEY_ID = "AKIDEXAMPLE";
 const SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
+
+/**
+ * 这次请求是不是**引用声明**（写的是 `_acc/v1/...`，不是附件对象）。
+ *
+ * ⚠️ 为什么需要：跨设备保护 2026-10-28 起**不是可选功能** ⇒ 每次上传都会多出 1~2 次
+ * 声明 PUT / GET。凡是"上传了几个对象"的断言都必须按**对象**数，否则
+ * 它们会随着声明的实现细节假红（而这正是本项目的老坑：计数断言被无关的东西满足或破坏）。
+ */
+const isDeclarationRequest = (request) =>
+	String(request.key ?? "").includes("_acc/") ||
+	String(request.path ?? "").includes("/_acc/") ||
+	String(request.rawUrl ?? "").includes("_acc");
+
+/** 对象 PUT 次数（不含 `_acc/` 上的声明写入）。 */
+const objectPutCount = (server) =>
+	server.requests.filter((request) => request.method === "PUT" && !isDeclarationRequest(request)).length;
+
+/**
+ * 夹具里的**遗留**设备身份（1.11.0 及更早把它写在 `data.json` 的 `deviceId` 里）。
+ *
+ * 值必须像真的随机身份：`isSafeId` 只放行小写字母 / 数字 / 连字符 `-` 的组合，
+ * 换成一个带下划线或大写的串会让这条迁移断言**静默走成"没有旧值 ⇒ 重新生成"**，
+ * 于是它测的东西根本不是迁移。
+ */
+const LEGACY_DEVICE_ID = "mvs0xncf-09oh54v0rzpwc52x03";
+
 const BUCKET = "acceptance-bucket";
 
 /**
@@ -509,6 +535,17 @@ export async function runLoadAcceptance(options = {}) {
 		localCopy: "cache",
 		cacheFolder: "_attachment-cache",
 		fallbackDownload: true,
+		// ⚠️ 这两条是**1.12.0 的遗留值**（当时它们都躺在 `data.json` 里）：
+		// `sharedBucket` 是已取消的「共享桶」开关，`deviceId` 是本设备身份。
+		// 前者要折进 `contentAddressed`（那一半语义还在），后者要**搬去宿主本机存储**
+		// —— 它跟着 `data.json` 走会让同步软件把两台设备变成同一个 ID。
+		//
+		// ⚠️ 这里**故意写 false 而不是 true**：折成 true 会让整套件的对象 key 变成纯
+		// 内容寻址（`<sha256>.<ext>`），而后面几十条断言都是按「原名-哈希」写的 ——
+		// 一条迁移断言不该把整个套件的前提改掉。真值表（true / false / 没有这个键）
+		// 在 `settings-suite` 里按纯函数逐条钉。
+		sharedBucket: false,
+		deviceId: LEGACY_DEVICE_ID,
 		s3: {
 			endpoint,
 			region: "auto",
@@ -628,6 +665,33 @@ export async function runLoadAcceptance(options = {}) {
 		assert.equal(plugin.settings.localCopy, "keep", '★ 老 data.json 里的 "cache" 必须折成 "keep"');
 		assert.ok(!("cacheFolder" in plugin.settings), "★ 已取消的 cacheFolder 不得再出现在设置里");
 
+		// ⭐ 1.12.0：「共享桶」开关取消了，但它的**另一半**语义还在 —— 新上传的 key 形状。
+		//
+		// 判据必须两头都钉：折算进去（否则开了几年的人升级后 key 静默变回「原名-哈希」，
+		// 桶里平白多出一代 key）＋ 遗留键从文件里消失（否则每次启动都要再折一次，
+		// 用户手动关掉 contentAddressed 会被它按回去）。
+		assert.equal(
+			plugin.settings.contentAddressed,
+			false,
+			"★ 遗留的 sharedBucket:false 折成 contentAddressed:false（真值表在 settings 套件）"
+		);
+		assert.ok(!("sharedBucket" in saveDataCalls[0]), "★ 重写后的设置里不得再有已取消的 sharedBucket 键");
+
+		// ⭐ 1.12.0：本设备身份**必须离开 `data.json`**。
+		//
+		// 它跟着文件走 ⇒ 同步软件把 `data.json` 推到另一台设备 ⇒ 两台设备同一个 `deviceId`
+		// ⇒ 往 `_acc/v1/<vault>/<device>/` 的**同一份**声明里写 ⇒ 后写覆盖先写
+		// ⇒ 先写那台的引用消失 ⇒ 它上传的对象被当成孤儿删掉。
+		//
+		// ⚠️ 三条一起钉：旧值**沿用**（重生会让升级前的声明全变成「别的设备」，
+		// 而守卫没有过期规则 ⇒ 那些对象**永久**删不掉）、搬进本机存储、文件里不再有它。
+		assert.equal(
+			app.loadLocalStorage("attachment-cloud-cache:device-id"),
+			LEGACY_DEVICE_ID,
+			"★ 遗留的 deviceId 必须**沿用**着搬进本机存储（重生 = 旧对象永久删不掉）"
+		);
+		assert.ok(!("deviceId" in saveDataCalls[0]), "★ deviceId 不得留在 data.json 里（同步软件会复制它）");
+
 		// ⭐ 后台自动轮换必须**真的接上了**：轮换器存在（忘了 new 就等于没有这个功能），
 		// 而它依赖的两个定时器必须**登记了清理回调** —— 后者放在第 9b 节按**效果**验
 		//（这里原本是一条 `登记数 >= 3` 的阈值断言，被一次新增 register 撑破而失效，见 9b 的说明）。
@@ -677,9 +741,21 @@ export async function runLoadAcceptance(options = {}) {
 			diagnose
 		);
 
-		const put = server.countByMethod("PUT");
-		assert.equal(put, 1, `★ 恰好 1 次 PUT（实际 ${put} 次）`);
-		assert.equal(server.countByMethod("GET"), 0, "上传路径上不该有 GET");
+		// ⚠️ 2026-10-28：跨设备保护不再可选 ⇒ 上传后**一定会写一次声明**（`_acc/...`）。
+		// 所以这里数的是**对象** PUT：声明那一次不算（它写的是 `_acc/v1/...`，不是附件对象）。
+		// ⚠️ 声明那一侧的请求要按 `rawUrl` 一起判：列桶（`GET /bucket?prefix=_acc/...`）的
+		// 路径只有桶名，`key` 解析出来是空串，只按 `key` 过滤会把它误算成"对象请求"。
+		const puts = server.requests.filter((r) => r.method === "PUT");
+		const objectPuts = puts.filter((r) => !isDeclarationRequest(r));
+		const declarationPuts = puts.length - objectPuts.length;
+		assert.equal(objectPuts.length, 1, `★ 恰好 1 次**对象** PUT（实际 ${objectPuts.length} 次）`);
+		assert.equal(declarationPuts, 1, `★ 且恰好 1 次声明 PUT（实际 ${declarationPuts} 次）—— 跨设备保护是默认的，不是可选的`);
+		// 同上：声明是"读-改-写"，写之前要先读本设备那一份 ⇒ 允许 1 次 `_acc/` 上的 GET。
+		// 对象本身仍然**一次 GET 都不该有**（那才说明没把刚传的字节又拉回来）。
+		const gets = server.requests.filter((r) => r.method === "GET");
+		const objectGets = gets.filter((r) => !isDeclarationRequest(r));
+		assert.equal(objectGets.length, 0, `★ 对象本身不该有 GET（实际 ${objectGets.length} 次：${objectGets.map((r) => r.key).join(" | ")}）`);
+		assert.equal(gets.length - objectGets.length, 1, "声明那条路只读一次：列本设备前缀（桶里还没有 head，所以没有额外的 get）");
 
 		const text = editor.replaced[0];
 		assert.match(text, /^!\[.*\]\(https?:\/\//, `插入的应是远端图片链接，实际：${text}`);
@@ -712,12 +788,12 @@ export async function runLoadAcceptance(options = {}) {
 		//
 		// ⚠️ 必须用**同一个文件名**：1.2.0 起名字是对象身份的一部分（key = `名字-哈希.扩展名`），
 		// 换个名字就是另一个 key、另一份对象 —— 那测的就不是"缓存命中"了。
-		const before = server.countByMethod("PUT");
+		const before = server.countObjectPuts();
 		const editor2 = makeEditor();
 		app.workspace.trigger("editor-paste", makePasteEvent([makeFile("shot.png", HOSTILE_BYTES)]), editor2, info);
 		await waitFor(() => editor2.replaced.length > 0, "第二次粘贴插入链接", 5000, diagnose);
 		assert.equal(
-			server.countByMethod("PUT"),
+			server.countObjectPuts(),
 			before,
 			"★ 内容相同应命中缓存，不得再 PUT 一次"
 		);
@@ -980,7 +1056,7 @@ export async function runLoadAcceptance(options = {}) {
 			};
 		}
 
-		const putsBefore = server.countByMethod("PUT");
+		const putsBefore = server.countObjectPuts();
 		/** 一键流程的确认框（**没有清单**）：文案全在这里，所以断言也落在这里。 */
 		const confirms = [];
 		plugin.confirmMaintenance = async (options) => {
@@ -999,7 +1075,7 @@ export async function runLoadAcceptance(options = {}) {
 		// ⚠️ 失败时把 PUT 的对象路径列出来 —— 只说"PUT 了 2 次"没法判断多出来的是哪一个
 		//（本项目踩过：计数断言被别的东西满足/破坏）。
 		assert.equal(
-			server.countByMethod("PUT"),
+			server.countObjectPuts(),
 			putsBefore + 1,
 			`★ 批量上传应恰好 PUT 一次（实际这些对象：${JSON.stringify(server.requests.filter((r) => r.method === "PUT").map((r) => r.path))}）`
 		);
@@ -1117,7 +1193,7 @@ export async function runLoadAcceptance(options = {}) {
 			5000,
 			diagnose
 		);
-		const putsAfterFirst = server.countByMethod("PUT");
+		const putsAfterFirst = server.countObjectPuts();
 
 		// 把那一行**改回本地写法**（含 `%20` 与成对括号：正是用户笔记里的形状）
 		await writeFile(join(root, pdfNote), "[FPGA工程师](../assets/报告%20(1).pdf)\n");
@@ -1136,7 +1212,7 @@ export async function runLoadAcceptance(options = {}) {
 			`★★ 重修必须把本地路径换掉（含括号与 %20 编码）：${repairedText}`
 		);
 		assert.equal(
-			server.countByMethod("PUT"),
+			server.countObjectPuts(),
 			putsAfterFirst,
 			`★★ 重修**不许重传字节**（云端已有同一份）：${JSON.stringify(server.requests.filter((r) => r.method === "PUT").map((r) => r.path))}`
 		);
@@ -1176,7 +1252,7 @@ export async function runLoadAcceptance(options = {}) {
 			// 打开功能（默认关）= 用户同意自动处理
 			plugin.settings.externalImageCache = true;
 			externalHostRequests.length = 0;
-			const putsBefore = server.countByMethod("PUT");
+			const putsBefore = server.countObjectPuts();
 
 			for (const processor of plugin.postProcessors) {
 				processor(makeFakeContainer([makeFakeImage(externalUrl)]), { sourcePath: notePath });
@@ -1191,7 +1267,7 @@ export async function runLoadAcceptance(options = {}) {
 				diagnose
 			);
 
-			assert.equal(server.countByMethod("PUT"), putsBefore + 1, "★ 恰好一次 PUT");
+			assert.equal(server.countObjectPuts(), putsBefore + 1, "★ 恰好一次 PUT");
 
 			const rewritten = await readFile(join(root, notePath), "utf8");
 			assert.equal(rewritten.includes(externalUrl), false, "★ 笔记里的站外链接必须被改写");
@@ -1235,6 +1311,7 @@ export async function runLoadAcceptance(options = {}) {
 			plugin.settings.externalSiteMode = "blocklist";
 			plugin.settings.externalSiteList = [externalHost];
 			externalHostRequests.length = 0;
+			// ⚠️ 这一条数**全部** PUT（含 `_acc/` 声明）：被名单挡住时连声明都不该写。
 			const putsBefore = server.countByMethod("PUT");
 
 			for (const processor of plugin.postProcessors) {
@@ -1298,7 +1375,7 @@ export async function runLoadAcceptance(options = {}) {
 
 			// ── ① 默认档（关）──
 			assert.equal(plugin.settings.externalImageCache, false, "前提：这一段从默认档开始");
-			const putsBefore = server.countByMethod("PUT");
+			const putsBefore = server.countObjectPuts();
 			externalHostRequests.length = 0;
 			mockObsidian.Notice.instances.length = 0;
 			runUpload();
@@ -1315,7 +1392,7 @@ export async function runLoadAcceptance(options = {}) {
 				"★★ 那篇笔记里的外链必须原样留着（这一趟连请求都不该发）"
 			);
 			assert.equal(
-				server.countByMethod("PUT"),
+				server.countObjectPuts(),
 				putsBefore,
 				"★★ 没有任何笔记引用的附件也不该被上传（传上去没有笔记会指向它）"
 			);
@@ -1323,7 +1400,7 @@ export async function runLoadAcceptance(options = {}) {
 			// ── ② 打开开关 ⇒ 同一段正文这次要真被处理 ──
 			plugin.settings.externalImageCache = true;
 			externalHostRequests.length = 0;
-			const putsWithExternal = server.countByMethod("PUT");
+			const putsWithExternal = server.countObjectPuts();
 			runUpload();
 			await waitFor(
 				async () => !(await readFile(join(root, externalNote), "utf8")).includes(externalUrl),
@@ -1333,9 +1410,9 @@ export async function runLoadAcceptance(options = {}) {
 			);
 			assert.equal(externalHostRequests.length, 1, "★ 站外图只该下载一次");
 			assert.equal(
-				server.countByMethod("PUT"),
+				server.countObjectPuts(),
 				putsWithExternal + 1,
-				`★ 站外图上传恰好一次（跑前 ${putsWithExternal}，跑后 ${server.countByMethod("PUT")}；通知：${JSON.stringify(
+				`★ 站外图上传恰好一次（跑前 ${putsWithExternal}，跑后 ${server.countObjectPuts()}；通知：${JSON.stringify(
 					mockObsidian.Notice.instances.map((n) => n.message)
 				)}）`
 			);
@@ -1368,11 +1445,11 @@ export async function runLoadAcceptance(options = {}) {
 
 			// ── ① 默认档（关）⇒ 不碰 ──
 			assert.equal(plugin.settings.uploadLocalFiles, false, "前提：这一段从默认档开始");
-			const beforeLocal = server.countByMethod("PUT");
+			const beforeLocal = server.countObjectPuts();
 			mockObsidian.Notice.instances.length = 0;
 			runUpload();
 			await waitFor(async () => mockObsidian.Notice.instances.length > 0, "这一趟给出了结论", 10000, diagnose);
-			assert.equal(server.countByMethod("PUT"), beforeLocal, "★★ 设置里没允许 ⇒ 本机文件一个都不传");
+			assert.equal(server.countObjectPuts(), beforeLocal, "★★ 设置里没允许 ⇒ 本机文件一个都不传");
 			assert.ok(
 				(await readFile(join(root, localNote), "utf8")).includes(localUrl),
 				"★★ 那条本机链接必须原样留着"
@@ -1380,7 +1457,7 @@ export async function runLoadAcceptance(options = {}) {
 
 			// ── ② 打开开关 ⇒ 上传 ＋ 改写 ──
 			plugin.settings.uploadLocalFiles = true;
-			const beforeLocalOn = server.countByMethod("PUT");
+			const beforeLocalOn = server.countObjectPuts();
 			runUpload();
 			await waitFor(
 				async () => !(await readFile(join(root, localNote), "utf8")).includes(localUrl),
@@ -1389,9 +1466,9 @@ export async function runLoadAcceptance(options = {}) {
 				diagnose
 			);
 			assert.equal(
-				server.countByMethod("PUT"),
+				server.countObjectPuts(),
 				beforeLocalOn + 1,
-				`★ 本机文件上传恰好一次（跑前 ${beforeLocalOn}，跑后 ${server.countByMethod("PUT")}）`
+				`★ 本机文件上传恰好一次（跑前 ${beforeLocalOn}，跑后 ${server.countObjectPuts()}）`
 			);
 			assert.ok(
 				(await readFile(join(root, localNote), "utf8")).includes(PUBLIC_BASE),
@@ -2196,7 +2273,7 @@ export async function runLoadAcceptance(options = {}) {
 			harness.setResolvedLinks({ [notePath]: { [duplicatePath]: 1 } });
 			await harness.refreshPathCache();
 
-			const putsBefore = server.countByMethod("PUT");
+			const putsBefore = server.countObjectPuts();
 			const headsBefore = server.countByMethod("HEAD");
 			plugin.confirmMaintenance = async () => true;
 			runUpload();
@@ -2232,7 +2309,7 @@ export async function runLoadAcceptance(options = {}) {
 			// **完全相同** —— 上面那条按"这一份内容"过滤，万一 key 算错了就筛不到东西（假绿）；
 			// 总量不变才是"一个字节都没重传"的正面表述。
 			assert.equal(
-				server.countByMethod("PUT"),
+				server.countObjectPuts(),
 				putsBefore,
 				"★ 这一趟的 PUT 总数没有增加（连一次重传都没有）"
 			);
@@ -2513,7 +2590,7 @@ export async function runLoadAcceptance(options = {}) {
 
 		return {
 			registrations: plugin.registrations.map((r) => r.kind),
-			putCount: server.countByMethod("PUT"),
+			putCount: server.countObjectPuts(),
 		};
 	} finally {
 		// 模拟卸载：真实宿主在卸载时会调用这些清理函数。

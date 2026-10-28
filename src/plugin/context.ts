@@ -48,6 +48,11 @@ export interface PluginContext {
 	readonly manifest: PluginManifest;
 	/** 当前设置（**可写**：有的流程就是来改设置的）。 */
 	readonly settings: PluginSettings;
+	/**
+	 * 本设备身份 —— **来自宿主本机存储，不随库同步**（见 `types.ts::PluginSettings` 的说明）。
+	 * ⚠️ 取它请从这里，不要去 `settings` 上找：那个字段已经不存在了。
+	 */
+	readonly deviceId: string;
 	/** 文案查询（语种已定）。 */
 	readonly t: (key: string, params?: Record<string, unknown>) => string;
 	/** 当前索引（懒建、可能为空）。 */

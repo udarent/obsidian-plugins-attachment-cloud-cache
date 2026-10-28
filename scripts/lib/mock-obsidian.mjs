@@ -1050,10 +1050,24 @@ export function createAppMock(rootDir, opts = {}) {
 		}
 	}
 
+	/** 本机存储的内容（见 `app.loadLocalStorage` 的说明）。每个 app 替身各一份。 */
+	const localStorageMap = new Map();
 	const app = {
 		vault,
 		workspace,
 		secretStorage: createSecretStorage(),
+		/**
+		 * 宿主**本机**存储（`App.loadLocalStorage` / `saveLocalStorage`，`obsidian.d.ts` 里就有）。
+		 *
+		 * ⚠️ 它必须与 `data.json` **分开存在**：`data.json` 在 `.obsidian/` 里、会跟着同步软件
+		 * 跑到别的设备；而这里存的东西（本设备身份）一旦被复制过去，多台设备就会写同一份声明、
+		 * 互相覆盖 ⇒ 先写那台的引用消失 ⇒ 它上传的对象被当孤儿删掉。替身照真机语义做成"本机内存"。
+		 */
+		loadLocalStorage: (key) => (localStorageMap.has(key) ? localStorageMap.get(key) : null),
+		saveLocalStorage: (key, value) => {
+			if (value === null || value === undefined) localStorageMap.delete(key);
+			else localStorageMap.set(key, value);
+		},
 		/**
 		 * 宿主的链接索引。形状取自**真机取证**（2026-10-09）：
 		 * `{ 来源文件路径: { 目标文件路径: 引用次数(number) } }`。

@@ -243,14 +243,16 @@ export class SettingsTab extends PluginSettingTab {
 			},
 
 			{
-				// ⭐ 共享桶（R25 / CR-13）：一项**决策**，放在「测试连接」这个**动作**之前 ——
+				// ⭐ 内容寻址 key（R25 / CR-14）：一项**决策**，放在「测试连接」这个**动作**之前 ——
 				// 动作永远是这一组的最后一项（D-89：动作不夹在参数之间）。
-				// ⚠️ 描述是**纯文本**（`**` 会原样显示），且只讲"做什么 + 关键影响"：
-				// 要不要多一项 `ListBucket` 权限，是打开它之前唯一必须知道的事实。
-				name: this.t("sharedBucket"),
-				desc: this.t("sharedBucketDesc"),
-				aliases: ["shared", "multiple devices", "several vaults", "ListBucket", "多设备", "共用", "共享", "权限"],
-				control: { type: "toggle", key: "sharedBucket" },
+				// ⚠️ 它**不再是"共享桶开关"**（2026-10-28）：跨设备保护已改为无条件生效 ——
+				// 那个开关关着时，删除链会整块跳过跨库判据，同桶里别的设备还在用的对象会被当孤儿删掉。
+				// 留下这一项只因为纯 hash key 的显示名要靠声明还原，而读声明需要 `ListBucket`。
+				// ⚠️ 描述是**纯文本**（`**` 会原样显示），且只讲"做什么 + 关键影响"。
+				name: this.t("contentAddressed"),
+				desc: this.t("contentAddressedDesc"),
+				aliases: ["shared", "content addressed", "hash key", "ListBucket", "内容寻址", "哈希", "权限"],
+				control: { type: "toggle", key: "contentAddressed" },
 			},
 			{
 				// ⭐ 统一对象名（R25 / CR-15）：这是**动作**，收在同一组参数的末尾
@@ -545,11 +547,11 @@ export class SettingsTab extends PluginSettingTab {
 				return [{ key: "testFail_bucketMissing", tone: "error" }];
 			}
 
-			// ⭐ 共享桶（R25）：打开它就需要 `ListBucket` —— 密钥常常只给了对象读写，
-			// 而缺这一项的症状是"打开开关之后清理一个都不列"，那时用户已经踩了坑。
-			// 所以在连接自检里**当场试一次列声明前缀**（空桶也回 200，所以只看能不能列）。
-			// ⚠️ 关着开关时不试：没打开共享桶的人不该为多出来的一项权限被卡在自检里。
-			if (this.plugin.settings.sharedBucket) {
+			// ⭐ 声明前缀（R25）：**每次自检都试**（2026-10-28 起无条件）。
+			// 密钥常常只给了对象读写，而缺 `ListBucket` 的症状是"清理一个都不列 / 改名写不进声明"，
+			// 那时用户已经踩了坑。空桶也回 200，所以这里只看能不能列。
+			// ⚠️ 以前"开关关着就不试" —— 那个开关已经没有了，因为跨设备保护不再可选。
+			{
 				try {
 					await client.listObjects({ prefix: `${DECLARATION_ROOT}/`, maxKeys: 1 });
 				} catch (error) {

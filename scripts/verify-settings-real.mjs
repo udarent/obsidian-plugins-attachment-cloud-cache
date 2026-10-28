@@ -1,5 +1,5 @@
 /**
- * 真机探针：设置页那两项（R25 的「共享桶」开关与「统一对象名」按钮）。
+ * 真机探针：设置页那两项（R25 的「内容寻址 key」开关与「统一对象名」按钮）。
  *
  * ## 它补的是哪个洞
  *
@@ -7,7 +7,7 @@
  *
  * | 入口 | 此前只有 | 真机回答不了的问题 |
  * |---|---|---|
- * | 「共享桶」开关 | `settings-ui-suite` 的**结构**守卫 | 真点一下会不会落盘？开关打开时「测试连接」会不会当场列 `_acc/v1/`（`ListBucket` 权限不够时那句原因只有在真桶上才可能出来）？ |
+ * | 「内容寻址 key」开关 | `settings-ui-suite` 的**结构**守卫 | 真点一下会不会落盘？⭐ 2026-10-28 起「测试连接」**无条件**列 `_acc/v1/`（跨设备保护不再可选）⇒ 缺 `ListBucket` 权限会在这里就红，不等用户点了清理才发现 |
  * | 「统一对象名」按钮 | `migrate-flow` 的**替身**确认框 | 按钮在不在、点下去弹不弹、弹出来的**数字与句子**对不对、"不做"那颗按钮是不是本地化的（D-96）？ |
  *
  * 单测能证明"传进去的 `confirmMaintenance` 被调用了"，证明不了"用户看到的是这几句话"。
@@ -25,7 +25,7 @@
  *
  * ## 会动什么
  *
- * - `data.json` 里 `sharedBucket` 会被写两次（打开 → 关回去）—— 这正是要被证明的事。
+ * - `data.json` 里 `contentAddressed` 会被写两次（打开 → 关回去）—— 这正是要被证明的事。
  *   结束时**必须**回到开始时的值：先按原值点回去，再读盘复核；读到不一致就把备份盖回去并报失败。
  * - 设置页会被打开、导航到本插件那一页；跑完关掉。
  *
@@ -74,7 +74,7 @@ function readDataJson() {
 	}
 }
 
-/** 等**盘上**的 `sharedBucket` 变成 `want`（宿主的 `saveSettings` 是异步的）。 */
+/** 等**盘上**的 `contentAddressed` 变成 `want`（宿主的 `saveSettings` 是异步的）。 */
 async function waitDataJson(key, want, ms = 8000) {
 	const deadline = Date.now() + ms;
 	let last = null;
@@ -111,7 +111,7 @@ const OPEN_SETTINGS = `(async () => {
 	return { ok: true, tabName };
 })()`;
 
-/** 结构：三项都在、顺序是「共享桶 → 统一对象名 → 测试连接」。 */
+/** 结构：三项都在、顺序是「内容寻址 key → 统一对象名 → 测试连接」。 */
 const READ_STRUCTURE = `(() => {
 	const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
 	const root = app.setting.modalEl;
@@ -120,11 +120,11 @@ const READ_STRUCTURE = `(() => {
 	const at = (label) => names.indexOf(label);
 
 	const labels = {
-		sharedBucket: plugin.t("sharedBucket"),
+		contentAddressed: plugin.t("contentAddressed"),
 		unify: plugin.t("unifyNamesName"),
 		test: plugin.t("testConnection"),
 	};
-	const shared = at(labels.sharedBucket);
+	const shared = at(labels.contentAddressed);
 	const row = shared >= 0 ? rows[shared] : null;
 	const toggle = row ? row.querySelector(".checkbox-container") : null;
 	const input = toggle ? toggle.querySelector("input") : null;
@@ -147,12 +147,12 @@ const READ_STRUCTURE = `(() => {
 			);
 			return button ? { text: (button.textContent ?? "").trim(), disabled: button.disabled } : null;
 		})(),
-		pluginShared: plugin.settings.sharedBucket,
+		pluginShared: plugin.settings.contentAddressed,
 	};
 })()`;
 
 /**
- * 点「共享桶」那一行的开关，等内存与盘上都变。
+ * 点「内容寻址 key」那一行的开关，等内存与盘上都变。
  *
  * ⚠️ 点的是 `.checkbox-container`（宿主自己监听的元素），不是里面的 `input` ——
  * 点 `input` 时事件不会冒到容器上，开关看着动了、绑定却不跑（一类"点了没反应"的老坑）。
@@ -161,7 +161,7 @@ const toggleShared = (on) => `(async () => {
 	const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 	const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
 	const root = app.setting.modalEl;
-	const label = plugin.t("sharedBucket");
+	const label = plugin.t("contentAddressed");
 	const row = Array.from(root.querySelectorAll(".setting-item")).find(
 		(r) => (r.querySelector(".setting-item-name")?.textContent ?? "").trim() === label
 	);
@@ -173,7 +173,7 @@ const toggleShared = (on) => `(async () => {
 	if (before !== ${Boolean(on)}) box.click();
 	const deadline = Date.now() + 6000;
 	while (Date.now() < deadline) {
-		if (plugin.settings.sharedBucket === ${Boolean(on)}) break;
+		if (plugin.settings.contentAddressed === ${Boolean(on)}) break;
 		await sleep(100);
 	}
 	await sleep(400);
@@ -182,7 +182,7 @@ const toggleShared = (on) => `(async () => {
 		before,
 		clicked: before !== ${Boolean(on)},
 		after: input2 ? Boolean(input2.checked) : box.classList.contains("is-enabled"),
-		pluginShared: plugin.settings.sharedBucket,
+		pluginShared: plugin.settings.contentAddressed,
 	};
 })()`;
 
@@ -370,11 +370,11 @@ async function main() {
 	const original = JSON.parse(readFileSync(DATA_JSON, "utf8"));
 
 	log("═".repeat(84));
-	log("真机探针：设置页两项（共享桶开关 / 统一对象名按钮）");
+	log("真机探针：设置页两项（内容寻址 key 开关 / 统一对象名按钮）");
 	log("═".repeat(84));
 	log(`  库   ${VAULT_DIR}`);
 	log(`  桶   ${original?.s3?.bucket ?? "?"} @ ${original?.s3?.endpoint ?? "?"}`);
-	log(`  起始 sharedBucket=${original.sharedBucket}，migrationState=${original.migrationState ?? "idle"}`);
+	log(`  起始 contentAddressed=${original.contentAddressed}，migrationState=${original.migrationState ?? "idle"}`);
 	log();
 
 	let client = null;
@@ -391,15 +391,15 @@ async function main() {
 			`(async () => {
 				for (let i = 0; i < 90; i += 1) {
 					const p = app?.plugins?.plugins?.[${JSON.stringify(PLUGIN_ID)}];
-					if (p?._loaded) return { ok: true, shared: p.settings.sharedBucket, state: p.settings.migrationState };
+					if (p?._loaded) return { ok: true, shared: p.settings.contentAddressed, state: p.settings.migrationState };
 					await new Promise((r) => setTimeout(r, 500));
 				}
 				return { ok: false };
 			})()`
 		);
 		if (!loaded.ok) throw new Error("插件没有加载成功");
-		check("插件已加载，内存里的设置与盘上一致", loaded.shared === original.sharedBucket, `内存 ${loaded.shared} / 盘上 ${original.sharedBucket}`);
-		if (loaded.shared !== original.sharedBucket) throw new Error("盘上与内存不一致，先别测 —— 说明上一轮留下了脏状态");
+		check("插件已加载，内存里的设置与盘上一致", loaded.shared === original.contentAddressed, `内存 ${loaded.shared} / 盘上 ${original.contentAddressed}`);
+		if (loaded.shared !== original.contentAddressed) throw new Error("盘上与内存不一致，先别测 —— 说明上一轮留下了脏状态");
 
 		const opened = await evaluate(client, OPEN_SETTINGS);
 		if (opened.error) throw new Error(opened.error);
@@ -409,34 +409,34 @@ async function main() {
 		const structure = await evaluate(client, READ_STRUCTURE);
 		if (structure.error) throw new Error(structure.error);
 		const { labels } = structure;
-		check("① 「共享桶」那一行在（开关控件也在）", structure.shared >= 0 && structure.hasToggle, labels.sharedBucket);
+		check("① 「内容寻址 key」那一行在（开关控件也在）", structure.shared >= 0 && structure.hasToggle, labels.contentAddressed);
 		check(
 			"② 「统一对象名」那一行的按钮在且可用",
 			Boolean(structure.unifyButton) && structure.unifyButton.disabled === false,
 			JSON.stringify(structure.unifyButton)
 		);
 		check(
-			"③ 顺序是「共享桶 → 统一对象名 → 测试连接」（动作不夹在参数之间）",
+			"③ 顺序是「内容寻址 key → 统一对象名 → 测试连接」（动作不夹在参数之间）",
 			structure.shared >= 0 && structure.unify > structure.shared && structure.test > structure.unify,
 			`下标 shared=${structure.shared} unify=${structure.unify} test=${structure.test}`
 		);
 		check(
-			"④ 共享桶的说明是纯文本（没有残留的 ** 标记）",
+			"④ 内容寻址 key 的说明是纯文本（没有残留的 ** 标记）",
 			Boolean(structure.desc) && !structure.desc.includes("**"),
 			structure.desc ?? "（空）"
 		);
 		check(
 			"⑤ 开关的初始状态与设置值一致",
-			structure.toggleOn === original.sharedBucket,
-			`控件 ${structure.toggleOn} / 设置 ${original.sharedBucket}`
+			structure.toggleOn === original.contentAddressed,
+			`控件 ${structure.toggleOn} / 设置 ${original.contentAddressed}`
 		);
 
 		// ── §2 开关：点一下真的落到盘上 ──
 		const turnedOn = await evaluate(client, toggleShared(true));
 		if (turnedOn.error) throw new Error(turnedOn.error);
-		const persistedOn = await waitDataJson("sharedBucket", true);
+		const persistedOn = await waitDataJson("contentAddressed", true);
 		check("⑥ 点开关后内存里变成 true", turnedOn.pluginShared === true, JSON.stringify(turnedOn));
-		check("⑦ ★ 点开关后 **data.json 里**也是 true（绑定真的跑了）", persistedOn.ok, `盘上 ${persistedOn.data?.sharedBucket}`);
+		check("⑦ ★ 点开关后 **data.json 里**也是 true（绑定真的跑了）", persistedOn.ok, `盘上 ${persistedOn.data?.contentAddressed}`);
 		check("⑧ 开关的视觉状态跟着变（控件勾上了）", turnedOn.after === true, `控件 ${turnedOn.after}`);
 
 		// ── §3 开关打开时「测试连接」：ListBucket 自检在这一轮里跑过 ──
@@ -557,14 +557,14 @@ async function main() {
 		}
 
 		// ── §6 关回去，并读盘复核 ──
-		const turnedOff = await evaluate(client, toggleShared(original.sharedBucket));
+		const turnedOff = await evaluate(client, toggleShared(original.contentAddressed));
 		if (turnedOff.error) throw new Error(turnedOff.error);
-		const persistedOff = await waitDataJson("sharedBucket", original.sharedBucket);
+		const persistedOff = await waitDataJson("contentAddressed", original.contentAddressed);
 		restored = persistedOff.ok;
 		check(
 			"㉑ ★ 开关关回去后 data.json 恢复原值（可重跑）",
 			persistedOff.ok,
-			`盘上 ${persistedOff.data?.sharedBucket} / 原始 ${original.sharedBucket}`
+			`盘上 ${persistedOff.data?.contentAddressed} / 原始 ${original.contentAddressed}`
 		);
 
 		await evaluate(client, "app.setting.close()").catch(() => undefined);
@@ -575,7 +575,7 @@ async function main() {
 		// 兜底：崩在中途时先把设置点回去（内存），再把盘上的备份盖回来
 		if (client && !restored) {
 			try {
-				await evaluate(client, toggleShared(original.sharedBucket));
+				await evaluate(client, toggleShared(original.contentAddressed));
 				await delay(800);
 			} catch {
 				/* 尽力而为 */
@@ -597,10 +597,10 @@ async function main() {
 		}
 		await delay(1200);
 		const onDisk = readDataJson();
-		if (!restored && onDisk && onDisk.sharedBucket !== original.sharedBucket) {
+		if (!restored && onDisk && onDisk.contentAddressed !== original.contentAddressed) {
 			try {
 				copyFileSync(backup, DATA_JSON);
-				log(`  · 盘上仍是 ${onDisk.sharedBucket}，已用备份盖回（${original.sharedBucket}）`);
+				log(`  · 盘上仍是 ${onDisk.contentAddressed}，已用备份盖回（${original.contentAddressed}）`);
 			} catch (error) {
 				log(`  ⚠️ 还原 data.json 失败：${error.message}（备份在 ${backup}）`);
 			}
