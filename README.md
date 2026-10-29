@@ -73,6 +73,9 @@ to your bucket, rendering reads the copy in your vault, the original stays with 
 
 - **Obsidian 1.13.0+**, desktop and mobile.
 - **A bucket you control** (S3-compatible), plus an access key pair.
+- **`ListBucket` on that bucket** — before every upload the plugin records which files this vault uses, and a cloud
+  delete reads the other devices' records first. Without it the plugin **refuses to upload** rather than risk deleting
+  something another device still uses. (R2's *Object Read & Write* includes it; on MinIO add `s3:ListBucket`.)
 - **The bucket does not have to be public** — that only matters when you share links out; otherwise the plugin fetches
   with your keys and shows the local copy. **Test connection** tells you which case you are in.
 
@@ -94,8 +97,7 @@ In **Settings → Attachment Cloud Cache** (Chinese names are in the [中文版]
 | | **Access key ID · Secret access key** | The secret goes into the OS keychain, never `data.json`; **Import from a credentials file** reads MinIO's JSON. |
 | | **Compatibility mode** | Addresses files as `endpoint/bucket/key`; keep it on for R2, MinIO and most self-hosted services. |
 | | **Public link address (optional)** | Empty uses the address built above; fill it in for a CDN or your own domain. |
-| | **Shared bucket** | Off by default: several devices or vaults can share one bucket — each upload records what this vault uses before the file is sent, and cloud deletes skip anything another device still uses. Names of new uploads become pure content hashes (still shown as the original name in notes). Needs the `ListBucket` permission. |
-| | **Unify object names** | Turns the objects already in your bucket into pure content hashes and points the notes at them. Run it once after switching the shared bucket on; running it again is safe. Needs the `CopyObject` permission. |
+| | **Unify object names** | Turns the objects already in your bucket into pure content hashes and points the notes at them. Optional — new uploads are already content-addressed; run it once if your bucket still holds names from an older version. Running it again is safe. Needs the `CopyObject` permission. |
 | | **Test connection** | A light (*checking* / *public* / *private* / *unreachable*) + a button: re-checks upload, read-back, delete and outside reach. |
 | **Upload** | **Upload new attachments automatically** | On by default; off leaves new files local only. |
 | | **Upload files from other sites** | Off by default. The site list only narrows the **automatic** path; picking by hand is never restricted. |
@@ -122,8 +124,8 @@ In **Settings → Attachment Cloud Cache** (Chinese names are in the [中文版]
 
 - **A deleted local copy comes back on the next open, under its original name** — as long as the plugin recognizes the
   link as yours. After a storage-address change, links written *before* it still open online, never offline.
-- **One file, one object**, shared by several notes and devices; a storage deletion cannot be undone, and cleanup sees
-  **this device's** references only.
+- **One file, one object**, shared by several notes and devices; a storage deletion cannot be undone, and a cloud delete
+  reads **every device's** records first — anything another device still uses is skipped and reported.
 - **`tiff`, `heic` and `ico` are inserted as plain links** — the host cannot preview them in an embed.
 - **A dropped file's link lands at the caret, not at the pointer** — no public API maps coordinates to an editor
   position.
@@ -174,6 +176,16 @@ Reproduce: `npm run verify:real-storage` (storage), `node scripts/verify-connect
 
 ## Upgrading
 
+- **1.12.0 — two settings are gone, and neither needs any action from you.**
+  - **Shared bucket** is no longer a switch: recording what this vault uses (and checking other devices before a cloud
+    delete) now happens **always**. That is a safety change — with it off, a cleanup could delete an object another
+    device still used. ⚠️ It needs `ListBucket`; without it uploads are refused (see *Requirements*).
+  - **Content-addressed keys** is gone too: new uploads are **always** named `<sha256>.<ext>`, so the same file is one
+    object across every device, even when the names differ. Names still show as the original file name in your notes.
+    Objects you already have keep their old names and keep working — **Unify object names** converts them if you want
+    the bucket to look tidy.
+  - **Upload all attachments now shows a progress bar** while it runs, and never says "upload N" for files that are
+    already in your storage (those only get their links rewritten).
 - **One command in the panel.** `Upload files your notes link to…`, `Upload off-site or local files…`, `Pick files to
   cache…`, `Upload attachments`, `Clean up attachments` — all gone: uploading and cleaning are filters and actions in
   **Attachment manager**, and the whole vault goes up via **Upload all attachments** in the settings.
@@ -252,8 +264,8 @@ MinIO、Backblaze B2、自建服务），笔记里留下链接，文件留在库
 - **桶允许什么，一眼看到** —— 「测试连接」旁一盏灯：公开 / 私有 / 连不上，随时可重测，不改任何链接。
 - **清理** —— 附件管理里的「待清理」筛选：云端没人引用的对象、没有引用的本地文件、站外缓存下来的副本；
   只删你确认的。附件失去最后一条引用时，一条通知指路到这里。
-- **多台设备共用同一个桶**（可选）—— 每次上传先记下本库引用了什么，清理时跳过别的设备还在用的对象；
-  默认关，关着时一个请求都不多发。
+- **多台设备共用同一个桶** —— 一直生效：每次上传先记下本库引用了什么，清理时跳过别的设备还在用的对象；
+  需要 `ListBucket` 权限，没有就拒绝上传（而不是冒着删掉别人文件的风险）。
 - **两个可选项，默认都关** —— 站外文件按普通附件处理（可配站点名单）；本地副本上限，超限先清最久没用的。
 - **想离开的时候** —— 「把链接改回本地路径」把链接指回库里的文件：上传的逆操作，什么都不删。
 
@@ -261,6 +273,9 @@ MinIO、Backblaze B2、自建服务），笔记里留下链接，文件留在库
 
 - **Obsidian 1.13.0+**，桌面与手机。
 - **你自己的 S3 兼容存储桶**，一对访问密钥。
+- **桶上要有 `ListBucket` 权限** —— 每次上传前插件会记下本库引用了哪些文件，删除云端对象时先读其它设备的记录。
+  没有这个权限时插件**拒绝上传**（而不是冒着删掉别人还在用的文件的风险）。R2 的 *Object Read & Write* 已含它；
+  MinIO 需要显式加 `s3:ListBucket`。
 - **桶不必公开** —— 只有把链接分享出去时才用得上公开读；否则插件用你的密钥取回、显示本地副本。「测试连接」会说明属于哪种。
 
 ## 安装
@@ -281,8 +296,7 @@ MinIO、Backblaze B2、自建服务），笔记里留下链接，文件留在库
 | | **访问密钥 ID · 秘密访问密钥** | 秘密密钥进系统钥匙串，不写 `data.json`；**从凭据文件导入** 可直接读 MinIO 的 JSON。 |
 | | **兼容模式** | 地址按 `服务地址/桶/键` 拼；R2、MinIO 和多数自建服务要开。 |
 | | **公开链接地址（可选）** | 留空用上面拼出的地址；用 CDN 或自己域名时填。 |
-| | **共享桶** | 默认关：多台设备或多个库共用一个桶时，上传前先记下本库引用了什么，删除云端时跳过别的设备还在用的对象；新上传的对象名变成纯内容哈希（笔记里仍显示原名）。需要 ListBucket 权限。 |
-| | **统一对象名** | 把桶里已有的对象改成纯内容哈希，并把笔记里的链接指过去。打开共享桶之后跑一次即可，重复跑是安全的。需要 CopyObject 权限。 |
+| | **统一对象名** | 把桶里已有的对象改成纯内容哈希，并把笔记里的链接指过去。可选 —— 新上传的对象名本来就是纯哈希；桶里还留着旧版带名字的对象时跑一次即可，重复跑是安全的。需要 CopyObject 权限。 |
 | | **测试连接** | 状态灯（检测中 / 公开 / 私有 / 无法访问）+ 按钮：重测上传、读回、删除、对外访问。 |
 | **上传** | **新附件自动上传** | 默认开；关掉后新文件只留本地。 |
 | | **站外文件也上传到云端** | 默认关。站点名单只约束**自动**这一路，手动挑不受限。 |
@@ -309,7 +323,8 @@ MinIO、Backblaze B2、自建服务），笔记里留下链接，文件留在库
 
 - **删掉的本地副本，下次打开笔记会按原文件名补回来** —— 前提是插件认得出那条链接是你的存储。改过存储地址后，
   改**之前**写下的链接在线能开，离线不显示。
-- **一个文件只存一份**，可能被多篇笔记、多台设备共用；云端删除不可撤销，清理只能看见**这台设备**的引用。
+- **一个文件只存一份**，可能被多篇笔记、多台设备共用；云端删除不可撤销，但删除前会先读**每台设备**的记录 ——
+  别的设备还在用的那些会被跳过并逐个报出来。
 - **`tiff`、`heic`、`ico` 插入的是普通链接** —— 宿主不能在嵌入里预览。
 - **拖入的文件，链接落在光标处而非指针落点** —— 公开 API 没有「坐标 → 编辑器位置」的映射。
 - **换设备可复制插件目录，但先删 `.cache-index.json`** —— 它记的是**这台设备**的副本位置。秘密密钥不在目录里。
@@ -353,6 +368,14 @@ MinIO、Backblaze B2、自建服务），笔记里留下链接，文件留在库
 
 ## 从旧版本升级
 
+- **1.12.0 —— 两个设置项没了，都不需要你动手。**
+  - **共享桶** 不再是一个开关：上传前记下本库引用了什么、删除云端前先看别的设备的记录，现在**一直生效**。
+    这是安全修正 —— 关着的时候一次清理可能删掉另一台设备还在用的对象。⚠️ 它需要 `ListBucket`；
+    没有这个权限时**拒绝上传**（见「环境要求」）。
+  - **内容寻址 key** 也没了：新上传的对象名**一律**是 `<sha256>.<ext>`，于是同一个文件在所有设备上是同一个对象，
+    哪怕各自的名字不同。笔记里显示的仍是原来的文件名。桶里已有的对象保持旧名字、照常工作 ——
+    想让桶里整齐就点一次**「统一对象名」**。
+  - **「上传全部附件」跑的时候有进度条了**，而且不会把"已经在你的存储里"的那些算成"上传 N 个"（它们只改链接）。
 - **命令面板只剩一条。** `上传笔记引用的文件…`、`上传站外或本机文件…`、`挑选要缓存的外链…`、`上传附件`、
   `清理附件` 全部取消：上传与清理变成「附件管理」里的筛选与动作，整库一次传完用设置页的**「上传全部附件」**。
 - ⚠️ **快捷键绑的是命令 id，这次 id 变了** —— 需重绑到**「附件管理」**。

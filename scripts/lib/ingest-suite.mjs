@@ -429,6 +429,33 @@ export async function runIngestSuite(mod) {
 		assert.ok(h.server.stored(first.key) !== null, "第一个对象还在原地");
 	});
 
+	// 3b-2. ⭐⭐ 存量**带名**对象（1.11.0 传过的）仍然复用 —— 升级不该为同一份内容再传一遍
+	//
+	// ⚠️ 这条守的是 `uploadedKeys().find(candidate !== key && hashFromKey(candidate) === contentHash)`
+	// 那一段。1.12.0 起 key 由内容决定，所以它**只在台账里还躺着旧版带名 key 时**才起作用
+	//（同内容 ⇒ 新 key 就是 `<hash>.png`；台账里若有它，第 2 步就命中了，走不到这里）。
+	//
+	// ⚠️ 没有这条用例，那段代码可以被整段删掉而全套件照样绿 —— `mutate-ingest` 的
+	// 「跨名复用失效」正是这么**漏过**的（2026-10-29 发版前的全量变异发现）。
+	// 它守的用户场景很具体：升到 1.12.0 之后第一次重传一张旧图，**不该**在桶里多出一份。
+	await withHarness(mod, {}, async (h) => {
+		const legacyKey = `老照片-${sha256Hex(HOSTILE_BYTES)}.png`;
+		// 只记台账、不建索引条目 —— 正是「不留副本」档在 1.11.0 留下的状态。
+		h.index.markUploaded(legacyKey);
+		const result = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "老照片.png", mime: "image/png" });
+		assert.equal(
+			result.key,
+			legacyKey,
+			"★ 复用的是**旧版带名**那个对象（另传一份就是桶里两份同内容）"
+		);
+		assert.equal(h.server.countByMethod("PUT"), 0, "★ 零字节 —— 升级之后不该为存量内容重传一遍");
+		assert.equal(
+			h.server.countByMethod("HEAD"),
+			0,
+			"★ 台账已经答上来了，不必再问云端（`reuseCloudObject` 让第 2c 步整段跳过）"
+		);
+	});
+
 	// 3c. ⭐⭐ 宿主撞名另落的那一份（`photo 1.png`）⇒ 显示名与记录都落在**主干**那份上
 	//
 	// 现场（用户 2026-10-14 Android 直报）：同一张图插第二次，宿主发现 `photo.png` 已在，
