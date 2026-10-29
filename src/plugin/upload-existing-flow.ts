@@ -66,6 +66,94 @@ import type { PluginContext } from "./context";
 /** 确认框里最多列几个站点 / 几条本机路径；再多只报个数（一行文字装得下的量）。 */
 const SAMPLE_MAX = 6;
 
+/** 进度条最多更新多少次 —— 几百件的批量每件都动一次 DOM，"更新"本身就会拖慢跑批。 */
+const PROGRESS_UPDATES_MAX = 100;
+
+/**
+ * 进度条每次前进几件（`total` 小于 `PROGRESS_UPDATES_MAX` 时恒为 1：一件一更新）。
+ *
+ * 抽成纯函数是为了能被套件钉住 —— 它只在 `total` 很大时才不是 1，而那种规模跑不出来。
+ */
+export function progressStepFor(total: number): number {
+	const safe = Number.isFinite(total) ? Math.max(1, Math.floor(total)) : 1;
+	return Math.max(1, Math.ceil(safe / PROGRESS_UPDATES_MAX));
+}
+
+/**
+ * 跑批期间的进度：**一条常驻通知 ＋ 原生 `<progress>`**，跑完原地变成结果。
+ *
+ * ## 为什么是通知，不是弹窗
+ *
+ * 这条链**没有清单**（一次确认就开跑，见文件头），而"清单类界面只有一份"（附件管理弹窗）
+ * 是全项目的纪律。为一个不可交互的进度条再开一个弹窗，等于把那条纪律破了。
+ * 通知在桌面与移动端都显示，是这里唯一"不新增容器"的选择。
+ *
+ * ## 为什么用原生 `<progress>`
+ *
+ * `Notice` 只收一句纯文本（`setMessage` 是 textContent），做不到条形进度；而 `noticeEl`
+ * 本身就是普通 DOM 容器 ⇒ 塞一个 `<progress>` 进去，零依赖、跟着主题走、移动端也在。
+ *
+ * ## 为什么进度满了之后还要再改一次文字
+ *
+ * `runBatchUpload` 的逐项回调**只报"真正处理到的候选"**，而后面还有一趟**改写笔记链接**
+ * 是全局的、不在回调里（`BatchOptions.onItem` 的注释写明了）。所以最后一件处理完时进度
+ * 就满了、命令却还没完 —— 不补一句「正在改写链接…」，用户盯着 100% 会以为卡死。
+ *
+ * ## 为什么收尾是"原地换文字"而不是"关掉再发一条"
+ *
+ * D-80：多条通知会叠成一摞，而只有第一条是结论。这条从头到尾只占一个位置，
+ * 跑批期间是进度、结束那一刻变成结果 —— 用户不会看到两条。
+ *
+ * ## 为什么导出、且参数只收 `t`
+ *
+ * 它是"进度条怎么随计数动"的唯一实现，套件要直接驱动它（真机验不了：演示库的
+ * `localCopy` 是 `trash`，跑一次会把本地附件送进回收站 —— 拿用户的库换一次截图不值得）。
+ * 只用 `t` 就该只声明 `t`：这样套件不必造一个完整的 `PluginContext` 就能测。
+ */
+export function openProgress(ctx: Pick<PluginContext, "t">, total: number) {
+	const notice = new Notice(ctx.t("uploadAllProgressTitle"), 0);
+	const step = progressStepFor(total);
+	let processed = 0;
+	let failed = 0;
+	const bar = notice.noticeEl.createEl("progress", {
+		cls: "acc-upload-progress",
+		attr: { max: String(Math.max(1, total)), value: "0" },
+	});
+	const label = notice.noticeEl.createDiv({
+		cls: "acc-upload-progress-label",
+		text: ctx.t("uploadAllProgressCount", { done: 0, total }),
+	});
+
+	return {
+		/** 每处理完一件调一次（`onItem` 的三种终态都算"处理过了"）。 */
+		tick(status: "done" | "skipped" | "failed"): void {
+			processed += 1;
+			// ⚠️ 失败要**当场**看得出来：一整批都在失败时，进度条照样在往前跑，
+			// 只报 N/M 会让人以为一切顺利（结论要到最后一刻才有）。
+			if (status === "failed") failed += 1;
+			if (processed % step !== 0) return;
+			bar.value = Math.min(processed, total);
+			if (processed >= total) {
+				label.setText(ctx.t("uploadAllProgressRewriting"));
+			} else if (failed > 0) {
+				label.setText(ctx.t("uploadAllProgressCountFailed", { done: processed, total, failed }));
+			} else {
+				label.setText(ctx.t("uploadAllProgressCount", { done: processed, total }));
+			}
+		},
+		/** 收尾：把这条通知原地换成结果（失败也走这里 —— 不能留一条永远停在 3/50 的僵尸）。 */
+		finish(message: string): void {
+			bar.value = bar.max;
+			label.remove();
+			notice.setMessage(message);
+			// ⚠️ `duration: 0` 的 Notice **永不**自动消失 ⇒ 结果读完要自己收，
+			// 否则它就一直挂在界面上（用户以为还在跑）。
+			setTimeout(() => notice.hide(), 12000);
+		},
+	};
+}
+
+
 /**
  * 把附件（库内 ＋ 按设置允许的库外）传到云端，并把笔记里的链接改成远端地址。
  *
@@ -266,8 +354,12 @@ export async function uploadExistingAttachments(ctx: PluginContext): Promise<voi
 
 	const state: { summary: BatchResult | null } = { summary: null };
 	let failure = "";
+	// ⚠️ 进度只在**真有东西要传**时开：`total === 0` 那支是纯清理，
+	// 删除那一步是逐条 HEAD 复核、很快，而且它有自己的结果句。
+	let progress: ReturnType<typeof openProgress> | null = null;
 	// ⚠️ 只在这一趟**真有东西要传**时才跑上传：`total === 0` 那一支是纯清理。
 	if (total > 0) {
+		progress = openProgress(ctx, total);
 		try {
 			state.summary = await runBatchUpload(deps, {
 				// ⭐ 库外那批整份交给执行层（它自己按 `cacheExternal` 决定怎么下载/读）
@@ -281,7 +373,11 @@ export async function uploadExistingAttachments(ctx: PluginContext): Promise<voi
 				// 执行层那个开关时，行为一点没变 —— 候选里本来就没有未引用的文件）。
 				// ⭐ 范围就是**上面算出来的那一批**：没有清单，也就没有"用户的取舍"这一层。
 				onlyPaths: new Set(selection.paths),
-				// 没有清单也就没有行，没有逐项进度可言 ⇒ 不给 `onItem`
+				// ⭐ 2026-10-29 补：**没有清单也要有进度**。这条链以前一个回调都不传，
+				// 用户点完确认就对着不动的界面等到结束（本机 100 个附件约几十秒到几分钟）。
+				// `onItem` 报的是"这一件处理完了"，正好够画进度条；它不报改写那一趟，
+				// 所以满进度之后还会多一句「正在改写链接…」（见 `openProgress` 的说明）。
+				onItem: (event) => progress?.tick(event.status),
 			});
 		} catch (error) {
 			// 执行层内部逐件兜了错，走到这里说明是意料之外的（如实说出，不静默）
@@ -290,7 +386,9 @@ export async function uploadExistingAttachments(ctx: PluginContext): Promise<voi
 		if (failure) {
 			// ⚠️ 上传失败就**不再往下清**：此刻用户要看的是这条错误，
 			// 而不是"顺手又删掉一批本地副本"（那会让现场更难收拾）。
-			new Notice(failure);
+			// ⚠️ 错误写进那条进度通知里（原地变），否则它会永远停在 3/50 挂着。
+			if (progress) progress.finish(failure);
+			else new Notice(failure);
 			return;
 		}
 	}
@@ -347,7 +445,13 @@ export async function uploadExistingAttachments(ctx: PluginContext): Promise<voi
 
 	// ⚠️ 分隔符用空格而不是中文标点：文案本身已经以句号结尾，且这一层不许写死标点
 	//（`check:notice-i18n` 的判据）。
-	if (parts.length > 0) new Notice(parts.join(" "));
+	// ⭐ 结论**写进那条已经在界面上的通知**（跑批期间它是进度）—— 收尾只占一个位置，不会叠成两条。
+	// ⚠️ 兜底：`progress` 非空时**必须**有结论，否则那条 `duration: 0` 的通知会永远停在 N/M
+	// 挂着（用户以为还在跑）。走到下面那个 `else` 分支理论上不可能（`total > 0` 时
+	// `runBatchUpload` 一定返回 summary ⇒ `parts` 至少有一条），但"不可能"不值得赌一条僵尸通知。
+	const message = parts.length > 0 ? parts.join(" ") : ctx.t("maintainBatchNothing");
+	if (progress) progress.finish(message);
+	else if (parts.length > 0) new Notice(message);
 	// ⚠️ 清理算不出来（有笔记读不到）时**明说**：否则用户切到"不保留"、跑了这一趟，
 	// 发现本地副本一份没少，会以为是这个开关坏了。
 	if (cleanupFailure) new Notice(ctx.t("uploadAllCleanupSkipped", { reason: cleanupFailure }));

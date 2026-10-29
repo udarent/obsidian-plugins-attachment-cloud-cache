@@ -1647,7 +1647,20 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * （`flowContext()` 本身仍是 private，装配细节不外泄）。
 	 */
 	async runUploadAttachments(): Promise<void> {
-		await uploadExistingAttachments(this.flowContext());
+		// ⚠️ 并发保护（2026-10-29 补）：设置页那颗按钮**没有自锁**，连点两次会跑两遍 ——
+		// 第二遍会把刚传完的再走一次候选判定（字节不会重传，但链接改写与本地副本清理会重复），
+		// 而两条进度通知会同时挂在界面上。与「统一对象名」的 `unifying` 同一个做法：
+		// 这是"本进程此刻有没有在跑"，不是跨进程的闸门，所以用内存标志而不是状态位。
+		if (this.uploadingExisting) {
+			new Notice(this.t("uploadAllRunning"));
+			return;
+		}
+		this.uploadingExisting = true;
+		try {
+			await uploadExistingAttachments(this.flowContext());
+		} finally {
+			this.uploadingExisting = false;
+		}
 	}
 
 	/**
@@ -1660,6 +1673,9 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 而"这一刻是不是已经有一次在跑"只有本进程知道。
 	 */
 	private unifying = false;
+
+	/** 「上传全部附件」正在跑（见 `runUploadAttachments` 的并发保护）。 */
+	private uploadingExisting = false;
 
 	async runUnifyObjectNames(): Promise<void> {
 		if (this.unifying) {

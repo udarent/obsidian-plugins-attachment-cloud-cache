@@ -12,7 +12,7 @@ import { runTaskListSuite } from "./lib/task-list-suite.mjs";
  * 所以"进度怎么算、勾中项怎么交出去、按钮上那句文案怎么来"都在这个纯模块里，
  * 由这条套件与 `mutate-task-list.mjs` 一起钉住。
  */
-await withLoadedTs("src/ui/task-list", (mod) => {
+await withLoadedTs(["src/ui/task-list", "src/plugin/upload-existing-flow"], (mod) => {
 	const stats = runTaskListSuite(mod);
 	console.log(
 		`Task-list tests passed (${stats.cases} cases: the progress denominator is the number of items ` +

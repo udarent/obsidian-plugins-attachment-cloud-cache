@@ -10,7 +10,7 @@ import { runTaskListSuite } from "./lib/task-list-suite.mjs";
  */
 await runMutations({
 	source: "src/ui/task-list.ts",
-	entries: ["src/ui/task-list"],
+	entries: ["src/ui/task-list", "src/plugin/upload-existing-flow"],
 	suite: runTaskListSuite,
 	mutations: [
 		{

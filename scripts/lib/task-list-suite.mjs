@@ -21,6 +21,10 @@
 
 import assert from "node:assert/strict";
 
+// ⚠️ 与 `load-ts` 打进 bundle 的那份**是同一个实例**（`obsidian` 被映射到这里），
+// 所以能通过 `Notice.instances` 观察"进度条到底往通知里放了什么"。
+import { Notice } from "./mock-obsidian.mjs";
+
 export function runTaskListSuite(mod) {
 	const { setTaskStatus, foldTaskProgress, selectionInOrder } = mod;
 
@@ -88,6 +92,59 @@ export function runTaskListSuite(mod) {
 		assert.deepEqual(selectionInOrder([], selected), [], "清单为空 ⇒ 什么都不交");
 		assert.deepEqual(selectionInOrder([{ id: "" }], selected), [], "空 id 的行不算一行");
 	}
+
+	// ============================================================
+	// N. 「上传全部附件」进度条的**步长**（`plugin/upload-existing-flow.ts`）
+	//
+	// 为什么放在这个套件里：它和 `foldTaskProgress` 是同一类东西（进度的算术），
+	// 而它守的风险也很具体 —— 步长算错时进度条**看着卡住**（节流过头，50 件只动一两次），
+	// 或者干脆为 0（`% 0` 得 NaN ⇒ 一次都不更新，用户对着 0/50 等到结束）。
+	// ⚠️ 那条链以前**一个逐项回调都不传**，界面上什么都没有（用户 2026-10-29 报的）。
+	// ============================================================
+	const stepFor = mod.progressStepFor;
+	assert.ok(typeof stepFor === "function", "★ `progressStepFor` 必须能从这里拿到（拿不到说明接线断了，别让这组断言空转）");
+	assert.equal(stepFor(0), 1, "★ 0 件也要给 1 —— 步长为 0 时 `%` 得 NaN ⇒ 进度一次都不更新");
+	assert.equal(stepFor(1), 1, "1 件：每件都更新");
+	assert.equal(stepFor(50), 1, "★ 少于上限时必须 1 件一更新（否则一小批也只会动一两次，看着像卡住）");
+	assert.equal(stepFor(100), 1, "正好等于上限（100）时仍是 1 件一更新");
+	assert.equal(stepFor(250), 3, "250 件 ⇒ 每 3 件一次（约 83 次更新）");
+	assert.equal(stepFor(1000), 10, "1000 件 ⇒ 每 10 件一次（正好 100 次）");
+	assert.ok(stepFor(9999) >= 1, "★ 再大也不许返回 0");
+
+	// ── 进度条本身（DOM 序列）：真机验不了，只能在这一层钉住 ──
+	//
+	// ⚠️ 为什么不跑真机：演示库的 `localCopy` 是 `trash`，跑一次真实上传会把库里的
+	// 附件送进回收站 —— 拿用户的库换一次"进度条长什么样"不值得。所以这里驱动
+	// `openProgress`（它只依赖 `t`），断言它往通知里放了什么、随计数怎么动、收尾怎么变。
+	const t = (key, params) => (params ? `${key}:${JSON.stringify(params)}` : key);
+	const before = Notice.instances.length;
+	const progress = mod.openProgress({ t }, 4);
+	const notice = Notice.instances.at(-1);
+	assert.equal(Notice.instances.length, before + 1, "★ 进度**只占一条**通知（D-80：多条会叠成一摞）");
+	assert.equal(notice.timeout, 0, "★ 必须是常驻（`duration: 0`）—— 5 秒自动消失的进度条等于没有");
+
+	const bar = notice.noticeEl.children.find((child) => child.tag === "progress");
+	const label = notice.noticeEl.children.find((child) => child.tag === "div");
+	assert.ok(bar, "★ 通知里必须真的挂了一个 <progress>（没有它，用户看到的就只是一行字）");
+	assert.equal(bar.attrs.max, "4", "进度条上限 = 这一趟的件数");
+	assert.equal(bar.attrs.value, "0", "开跑前是 0");
+	assert.ok(label?.textContent.includes("uploadAllProgressCount"), `★ 初始文案要说清「N / M」，实际 ${label?.textContent}`);
+
+	// 一件一件走到满：`step` 在 4 件时是 1 ⇒ 每一件都该推动进度条
+	progress.tick("done");
+	assert.equal(bar.value, 1, "第 1 件 ⇒ 1");
+	progress.tick("failed");
+	assert.equal(bar.value, 2, "★ 失败也算「处理过了」（否则一整批都在失败时进度永远不动）");
+	assert.ok(label.textContent.includes("uploadAllProgressCountFailed"), `★ 有失败要当场说出来，实际 ${label.textContent}`);
+	progress.tick("skipped");
+	progress.tick("done");
+	assert.equal(bar.value, 4, "满进度");
+	assert.ok(label.textContent.includes("uploadAllProgressRewriting"), `★ 满了之后必须说「正在改写链接」，实际 ${label.textContent}`);
+
+	// 收尾：同一条通知原地变结果，进度文字让位
+	progress.finish("已上传 3 个");
+	assert.equal(notice.message, "已上传 3 个", "★ 结论写进**同一条**通知（不另发，否则界面上会有两条）");
+	assert.equal(label.removed, true, "结果出来之后那行 N/M 要让位（留着会读成「还在跑」）");
 
 	// ⚠️ 2026-10-24：原第 4 段（`buildTaskLabels` 造一套界面文字）随弹窗容器一起退役。
 	// 它守的两条判据**没有丢**，只是搬到了生产调用点各自的守门人上：

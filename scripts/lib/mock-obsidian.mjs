@@ -66,6 +66,14 @@ export class Notice {
 	constructor(message, timeout) {
 		this.message = message;
 		this.timeout = timeout;
+		/**
+		 * 宿主的 `noticeEl` —— 它是 `Notice` 上的**公开容器**，我们往里塞了一个
+		 * `<progress>`（「上传全部附件」跑批期间的进度条，见 `plugin/upload-existing-flow.ts`）。
+		 *
+		 * ⚠️ 替身少了它，那条链在任何套件里一跑就抛 `Cannot read properties of undefined`
+		 * —— 而真机完全正常。这正是"替身要反映真实形状"那条老教训的又一次现场。
+		 */
+		this.noticeEl = fakeDomElement("div");
 		/** 所有创建过的提示，供测试断言"失败时是否明确报错"。 */
 		Notice.instances.push(this);
 	}
@@ -182,7 +190,10 @@ export function fakeDomElement(tag = "div") {
 			return child;
 		},
 		addEventListener: () => {},
-		remove: () => {},
+		/** 记一笔 —— 有断言要确认"收尾时那一行进度文字真的让位了"。 */
+		remove: () => {
+			element.removed = true;
+		},
 		/** Obsidian 给 `HTMLElement` 补的两个方法（`show/hide` 各返回 void）。 */
 		show: () => {
 			element.hidden = false;

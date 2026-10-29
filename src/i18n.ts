@@ -396,6 +396,14 @@ export const I18N: Record<string, Locale> = {
 			"It will also trim the local copies down to your {limit} limit: {count} to delete, about {mb} MB, for good.",
 		uploadAllCleanupSkipped: "Local copies were left alone: {reason}",
 		uploadAllCta: "Upload {count}",
+		// ── 跑批期间的进度（一条常驻通知，跑完原地变结果）──
+		// ⚠️ 三条缺一不可：没有第一条，用户不知道"点完之后在等什么"；
+		// 没有第三条，进度条满了却没结束会像卡死（改写那一趟不在逐项回调里）。
+		uploadAllProgressTitle: "Uploading to your storage",
+		uploadAllProgressCount: "Uploading {done} of {total}",
+		uploadAllProgressCountFailed: "Uploading {done} of {total} — {failed} failed so far",
+		uploadAllProgressRewriting: "Rewriting the links in your notes…",
+		uploadAllRunning: "This is already running. Let it finish first.",
 		// ⭐ 2026-10-24：本机文件是**另一个**开关（站外那组管的是"别人的服务器"）。
 		uploadLocalFiles: "Also upload files on this computer",
 		uploadLocalFilesDesc:
@@ -765,6 +773,12 @@ export const I18N: Record<string, Locale> = {
 		uploadAllCleanupToLimit: "另外会把本地副本清到上限 {limit} 以内：这次删除 {count} 份，约 {mb} MB，永久删除。",
 		uploadAllCleanupSkipped: "本地副本没有清理：{reason}",
 		uploadAllCta: "上传 {count} 个",
+		// ── 跑批期间的进度（一条常驻通知，跑完原地变结果）──
+		uploadAllProgressTitle: "正在上传到你的存储",
+		uploadAllProgressCount: "正在上传 {done} / {total}",
+		uploadAllProgressCountFailed: "正在上传 {done} / {total}（已失败 {failed} 个）",
+		uploadAllProgressRewriting: "正在改写笔记里的链接…",
+		uploadAllRunning: "上一次还在跑，等它结束再点。",
 		// ⭐ 2026-10-24：本机文件是**另一个**开关（站外那组管的是"别人的服务器"）。
 		uploadLocalFiles: "同时上传本机文件",
 		uploadLocalFilesDesc:
