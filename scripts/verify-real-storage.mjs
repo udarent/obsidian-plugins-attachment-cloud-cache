@@ -48,12 +48,16 @@
 
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { crc32 } from "node:zlib";
 
 import { createHostClient } from "./lib/host-s3-client.mjs";
 import { countObsidianProcesses, evaluate, launchAndAttach } from "./lib/obsidian-host.mjs";
+
+/** 仓库根 —— 默认库路径按「仓库的同级目录」算，不写死某台机器的绝对路径。 */
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const PLUGIN_ID = "attachment-cloud-cache";
 
@@ -63,7 +67,17 @@ const PORT = Number(
 		: (process.env.OBSIDIAN_DEBUG_PORT ?? 9333)
 );
 const OBSIDIAN = process.env.OBSIDIAN_EXE ?? "C:/Program Files/Obsidian/Obsidian.exe";
-const VAULT = process.env.OBSIDIAN_VAULT ?? "TestVault";
+/**
+ * 库的**目录** —— 按它打开（`obsidian://open?path=`），也是 Node 侧找落盘附件的根。
+ *
+ * ⚠️ 为什么是目录而不是名字：本机可以有两个同名 `ObsidianVault`
+ *（`…\obsidian-plugins\` 与 `…\obsidian-plugins-codebuddy\`），`?vault=` 挑哪个取决于
+ * 注册表里的 `open` 标记 —— 挑错了会拿另一份旧插件跑完一轮还全绿。目录模式下
+ * `launchAndAttach` 用 `adapter.basePath` 逐字核对。
+ */
+const VAULT_DIR = process.env.OBSIDIAN_VAULT_DIR ?? resolve(REPO, "..", "ObsidianVault");
+/** vault 名字 —— 从目录名推，必须与目录**同源**（回读 `getName()` 时要逐字相等）。 */
+const VAULT = process.env.OBSIDIAN_VAULT ?? (VAULT_DIR.split(/[\\/]/).filter(Boolean).pop() || "ObsidianVault");
 /** 测试笔记：跑完删掉 —— 它连同远端对象一起清，留着就是一条死链。 */
 const NOTE = "_acc-realcheck.md";
 const WAIT_SECONDS = Number(process.env.OBSIDIAN_DEBUG_WAIT ?? 60);
@@ -149,7 +163,7 @@ function keyFromUrl(url) {
 }
 
 async function main() {
-	const vaultDir = process.env.OBSIDIAN_VAULT_DIR ?? join(process.cwd(), "..", VAULT);
+	const vaultDir = VAULT_DIR;
 
 	const others = await countObsidianProcesses();
 	if (others === null || others > 0) {
@@ -176,6 +190,7 @@ async function main() {
 		exe: OBSIDIAN,
 		port: PORT,
 		vault: VAULT,
+		path: VAULT_DIR,
 		waitSeconds: WAIT_SECONDS,
 		log,
 	});

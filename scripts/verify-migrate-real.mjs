@@ -44,7 +44,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { createHostClient, readS3Settings } from "./lib/host-s3-client.mjs";
 import { withLoadedTs } from "./lib/load-ts.mjs";
@@ -53,7 +54,16 @@ import { countObsidianProcesses, evaluate, launchAndAttach } from "./lib/obsidia
 
 const env = process.env;
 const OBSIDIAN = env.OBSIDIAN_EXE ?? "C:/Program Files/Obsidian/Obsidian.exe";
-const VAULT = env.OBSIDIAN_VAULT ?? "ObsidianVault";
+/**
+ * 库的**目录** —— 按它打开（`obsidian://open?path=`）。
+ *
+ * ⚠️ 为什么不用名字：本机可以有两个同名 `ObsidianVault`（`…\obsidian-plugins\` 与
+ * `…\obsidian-plugins-codebuddy\`），`?vault=` 挑哪个取决于注册表里的 `open` 标记 ——
+ * 挑错了会拿另一份旧插件跑完一轮还全绿。目录模式下 `launchAndAttach` 用
+ * `adapter.basePath` 逐字核对。默认取**仓库的同级目录**（与 `install:demo` 同一约定）。
+ */
+const VAULT_DIR = env.OBSIDIAN_VAULT_DIR ?? resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "ObsidianVault");
+const VAULT = env.OBSIDIAN_VAULT ?? (VAULT_DIR.split(/[\\/]/).filter(Boolean).pop() || "ObsidianVault");
 const PORT = Number(env.OBSIDIAN_DEBUG_PORT ?? 9222);
 const WAIT_SECONDS = Number(env.OBSIDIAN_DEBUG_WAIT ?? 90);
 
@@ -147,7 +157,14 @@ try {
 			console.error(`已有 ${running} 个 Obsidian 在跑（单实例）—— 先全部关掉，探针要独占调试端口。`);
 			process.exit(2);
 		}
-		const attached = await launchAndAttach({ exe: OBSIDIAN, port: PORT, vault: VAULT, waitSeconds: WAIT_SECONDS, log });
+		const attached = await launchAndAttach({
+			exe: OBSIDIAN,
+			port: PORT,
+			vault: VAULT,
+			path: VAULT_DIR,
+			waitSeconds: WAIT_SECONDS,
+			log,
+		});
 		hostChild = attached.child;
 		hostCdp = attached.client;
 

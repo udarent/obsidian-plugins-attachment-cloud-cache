@@ -327,7 +327,18 @@ async function main() {
 	let child = null;
 
 	try {
-		const attached = await launchAndAttach({ exe: OBSIDIAN, port: PORT, vault: VAULT, waitSeconds: WAIT_SECONDS, log });
+		// ⭐ 按**目录**打开（`path`），不是按名字 —— 本机可能有两个同名 `ObsidianVault`
+		//（`…\obsidian-plugins\` 与 `…\obsidian-plugins-codebuddy\`），而 `?vault=` 挑哪个
+		// 取决于注册表里的 `open` 标记，会静默打开另一份、跑完还全绿。目录模式用
+		// `adapter.basePath` 逐字核对，认错了当场报错。
+		const attached = await launchAndAttach({
+			exe: OBSIDIAN,
+			port: PORT,
+			vault: VAULT,
+			path: VAULT_DIR,
+			waitSeconds: WAIT_SECONDS,
+			log,
+		});
 		client = attached.client;
 		child = attached.child;
 
@@ -373,7 +384,8 @@ async function main() {
 			`下标 unify=${structure.unify} test=${structure.test}`
 		);
 
-		// ── §3 连接自检：ListBucket 探测**无条件**跑（跨设备保护默认生效）──		const conn = await evaluate(client, RUN_CONNECTION_TEST);
+		// ── §3 连接自检：ListBucket 探测**无条件**跑（跨设备保护默认生效）──
+		const conn = await evaluate(client, RUN_CONNECTION_TEST);
 		if (conn.error) throw new Error(conn.error);
 		check("⑨ 测试连接跑完了（按钮回到可用）", conn.settled);
 		check(

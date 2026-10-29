@@ -49,8 +49,13 @@
 // 宿主启动 / 调试端口 / 挑主窗 / 等就绪 / vault 回读 —— 与真实存储回环脚本共用同一份。
 // 那些坑（GPU 崩溃、连错窗口、静默退回别的 vault）只写一遍，避免两边逐渐分叉。
 import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { evaluate, launchAndAttach } from "./lib/obsidian-host.mjs";
+
+/** 仓库根 —— 用来把默认库路径算成「仓库的同级目录」（不写死某台机器的绝对路径）。 */
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const PORT = Number(
 	process.argv.includes("--port")
@@ -60,21 +65,30 @@ const PORT = Number(
 /** Obsidian 可执行文件位置；换机器/换安装位置时用环境变量覆盖。 */
 const OBSIDIAN = process.env.OBSIDIAN_EXE ?? "C:/Program Files/Obsidian/Obsidian.exe";
 /**
- * 要打开的 vault 名字（**必须显式指定**）。
+ * 库的**目录** —— 按它打开（`obsidian://open?path=`）。
  *
- * 为什么不能省：不指定就依赖 `obsidian.json` 里那个 vault 的 `open: true` 标记，
- * 而那个标记**会消失**（手动关掉 Obsidian 之后就没了）。届时 Obsidian 会停在
- * vault 选择界面 —— `app` 在、`app.plugins` 不在，本脚本报出来的却是
- * "宿主 60 秒内没有就绪"，与真实原因（没打开 vault）毫无关系。
+ * ⚠️ 为什么是目录而不是名字：本机可以有两个**同名** `ObsidianVault`
+ *（`…\obsidian-plugins\` 与 `…\obsidian-plugins-codebuddy\`），而 `?vault=` 挑哪个
+ * 取决于注册表里的 `open` 标记 —— 挑错了会拿另一份旧插件跑完一轮**还全绿**
+ *（只核对 `app.vault.getName()` 会通过）。目录模式下 `launchAndAttach` 用
+ * `adapter.basePath` 逐字核对。
  *
- * ⚠️ 名字要**与 Obsidian 里显示的完全一致**（大小写敏感）。写错了同样会停在选择界面，
- * 所以下面的报错里会把用到的名字打出来。
- *
- * 默认值是**中性名字** `TestVault`，刻意不写开发者自己的 vault 目录名 —— 脚本会进仓库、
- * 也会在别的机器上跑，默认值不该带上某个人的本地环境。你自己的库用
- * `OBSIDIAN_VAULT=<你的 vault 名>` 指定；名字不对时报错会列出本机已知的 vault。
+ * 默认指向**仓库的同级目录**（`../ObsidianVault`）—— 与 `install:demo`、`verify-flows`
+ * 用的是同一个约定，不写某台机器的绝对路径。别处用 `OBSIDIAN_VAULT_DIR=<绝对路径>`。
  */
-const VAULT = process.env.OBSIDIAN_VAULT ?? "TestVault";
+const VAULT_DIR = process.env.OBSIDIAN_VAULT_DIR ?? resolve(REPO, "..", "ObsidianVault");
+
+/**
+ * 要打开的 vault 名字 —— **从目录名推**，随 `VAULT_DIR` 一起变。
+ *
+ * 为什么还要它：`launchAndAttach` 除了按目录打开，还会回读 `app.vault.getName()`
+ * 与这个名字比对（两条判据互相兜底）。所以它必须与目录**同源**，否则会像下面这样
+ * 自相矛盾：目录模式已经打开了正确的库，却因为名字是旧的 `TestVault` 而报
+ * "请求打开的 vault 是 TestVault，实际打开的是 ObsidianVault"。
+ *
+ * 别处用自己的库：`OBSIDIAN_VAULT=<vault 名>` ＋ `OBSIDIAN_VAULT_DIR=<绝对路径>`。
+ */
+const VAULT = process.env.OBSIDIAN_VAULT ?? (VAULT_DIR.split(/[\\/]/).filter(Boolean).pop() || "ObsidianVault");
 
 /**
  * 等调试端口的秒数。
@@ -101,6 +115,8 @@ async function main() {
 		exe: OBSIDIAN,
 		port: PORT,
 		vault: VAULT,
+		// ⭐ 按目录打开（见 `VAULT_DIR` 的说明）：本机有两个同名库时，按名字会挑错。
+		path: VAULT_DIR,
 		waitSeconds: WAIT_SECONDS,
 		log,
 	});
