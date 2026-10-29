@@ -1,5 +1,5 @@
 /**
- * 真机探针：设置页那两项（R25 的「内容寻址 key」开关与「统一对象名」按钮）。
+ * 真机探针：设置页（「统一对象名」按钮 ＋ 连接自检，外加一条"那一项已删"的否定式守卫）。
  *
  * ## 它补的是哪个洞
  *
@@ -7,7 +7,8 @@
  *
  * | 入口 | 此前只有 | 真机回答不了的问题 |
  * |---|---|---|
- * | 「内容寻址 key」开关 | `settings-ui-suite` 的**结构**守卫 | 真点一下会不会落盘？⭐ 2026-10-28 起「测试连接」**无条件**列 `_acc/v1/`（跨设备保护不再可选）⇒ 缺 `ListBucket` 权限会在这里就红，不等用户点了清理才发现 |
+ * | 「内容寻址 key」那一项 | `settings-ui-suite` 的**结构**守卫 | ⚠️ 1.12.0 已删（key 形状固定纯哈希）⇒ 现在钉的是**它不许回来** |
+ * | 「测试连接」 | 单测里的替身客户端 | 真密钥够不够列 `_acc/v1/`？⭐ 2026-10-28 起**无条件**列（跨设备保护不再可选）⇒ 缺 `ListBucket` 会在这里就红，不等用户点了清理才发现 |
  * | 「统一对象名」按钮 | `migrate-flow` 的**替身**确认框 | 按钮在不在、点下去弹不弹、弹出来的**数字与句子**对不对、"不做"那颗按钮是不是本地化的（D-96）？ |
  *
  * 单测能证明"传进去的 `confirmMaintenance` 被调用了"，证明不了"用户看到的是这几句话"。
@@ -25,8 +26,8 @@
  *
  * ## 会动什么
  *
- * - `data.json` 里 `contentAddressed` 会被写两次（打开 → 关回去）—— 这正是要被证明的事。
- *   结束时**必须**回到开始时的值：先按原值点回去，再读盘复核；读到不一致就把备份盖回去并报失败。
+ * - **不改任何设置项**（那个开关已删）。唯一可能落盘的是 `migrationState`，
+ *   结束时用备份还原并复核 —— 不还原会让下一次跑撞上"上一轮留下脏状态"。
  * - 设置页会被打开、导航到本插件那一页；跑完关掉。
  *
  * 用法：`npm run verify:settings`（`node scripts/verify-settings-real.mjs [--port 9242]`）
@@ -74,19 +75,6 @@ function readDataJson() {
 	}
 }
 
-/** 等**盘上**的 `contentAddressed` 变成 `want`（宿主的 `saveSettings` 是异步的）。 */
-async function waitDataJson(key, want, ms = 8000) {
-	const deadline = Date.now() + ms;
-	let last = null;
-	while (Date.now() < deadline) {
-		const data = readDataJson();
-		last = data;
-		if (data && data[key] === want) return { ok: true, data };
-		await delay(150);
-	}
-	return { ok: false, data: last };
-}
-
 /**
  * 打开设置页并落到本插件那一页。
  *
@@ -111,7 +99,7 @@ const OPEN_SETTINGS = `(async () => {
 	return { ok: true, tabName };
 })()`;
 
-/** 结构：三项都在、顺序是「内容寻址 key → 统一对象名 → 测试连接」。 */
+/** 结构：「统一对象名」在「测试连接」之前；已删的「内容寻址 key」不许出现。 */
 const READ_STRUCTURE = `(() => {
 	const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
 	const root = app.setting.modalEl;
@@ -120,32 +108,19 @@ const READ_STRUCTURE = `(() => {
 	const at = (label) => names.indexOf(label);
 
 	const labels = {
-		contentAddressed: plugin.t("contentAddressed"),
 		unify: plugin.t("unifyNamesName"),
 		test: plugin.t("testConnection"),
 	};
-	const shared = at(labels.contentAddressed);
-	const row = shared >= 0 ? rows[shared] : null;
-	const toggle = row ? row.querySelector(".checkbox-container") : null;
-	const input = toggle ? toggle.querySelector("input") : null;
 
 	return {
 		labels,
 		names,
-		shared,
+		// ⚠️ 1.12.0：「内容寻址 key」那一项**已删**（key 形状固定纯哈希，不再是决策）。
+		// 这条是**否定式守卫** —— 它回来就意味着"一个实现机制又被摆成用户要判断的选择题"。
+		contentAddressedRow:
+			at("内容寻址 key") >= 0 || at("Content-addressed keys") >= 0 || at("contentAddressed") >= 0,
 		unify: at(labels.unify),
 		test: at(labels.test),
-		desc: row ? (row.querySelector(".setting-item-description")?.textContent ?? "").trim() : null,
-		hasToggle: Boolean(toggle),
-		// ⭐ **状态看容器的 is-enabled 类，不看隐藏 input.checked**（2026-10-28 修正）。
-		//
-		// 宿主（1.14 声明式设置页）把开关状态标在 .checkbox-container 上，里面那个
-		// input 的 checked **不跟随设置**（恒为 false）。照 input.checked 读的后果很隐蔽：
-		// 默认值是 false 时"控件 false == 设置 false"**碰巧对**，一旦设置是 true 就全错，
-		// 而且下一步会照着错的 before 去点 —— 把已经开着的开关**关掉**，
-		// 后面每一条断言都在验证相反的状态（本轮就是这样连挂 4 条）。
-		toggleOn: toggle ? toggle.classList.contains("is-enabled") : null,
-		toggleClass: toggle ? toggle.className : null,
 		unifyButton: (() => {
 			const index = at(labels.unify);
 			if (index < 0) return null;
@@ -154,51 +129,14 @@ const READ_STRUCTURE = `(() => {
 			);
 			return button ? { text: (button.textContent ?? "").trim(), disabled: button.disabled } : null;
 		})(),
-		pluginShared: plugin.settings.contentAddressed,
-	};
-})()`;
-
-/**
- * 点「内容寻址 key」那一行的开关，等内存与盘上都变。
- *
- * ⚠️ 点的是 `.checkbox-container`（宿主自己监听的元素），不是里面的 `input` ——
- * 点 `input` 时事件不会冒到容器上，开关看着动了、绑定却不跑（一类"点了没反应"的老坑）。
- * ⚠️ **读状态也读容器**（`is-enabled` 类），不是 `input.checked`：后者不跟随设置，
- * 恒为 false ⇒ `before` 永远是 false ⇒ 已经开着的开关会被"再点一下"关掉（2026-10-28）。
- */
-const toggleShared = (on) => `(async () => {
-	const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-	const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
-	const root = app.setting.modalEl;
-	const label = plugin.t("contentAddressed");
-	const row = Array.from(root.querySelectorAll(".setting-item")).find(
-		(r) => (r.querySelector(".setting-item-name")?.textContent ?? "").trim() === label
-	);
-	if (!row) return { error: "设置页里找不到「" + label + "」这一行" };
-	const box = row.querySelector(".checkbox-container");
-	if (!box) return { error: "那一行没有开关控件" };
-	const isOn = () => box.classList.contains("is-enabled");
-	const before = isOn();
-	if (before !== ${Boolean(on)}) box.click();
-	const deadline = Date.now() + 6000;
-	while (Date.now() < deadline) {
-		if (plugin.settings.contentAddressed === ${Boolean(on)}) break;
-		await sleep(100);
-	}
-	await sleep(400);
-	return {
-		before,
-		clicked: before !== ${Boolean(on)},
-		after: isOn(),
-		pluginShared: plugin.settings.contentAddressed,
 	};
 })()`;
 
 /**
  * 点「测试连接」并读结果（一次点击 + 等按钮回到可用）。
  *
- * 开关打开时这一步顺带跑 `_acc/v1/` 的 `ListBucket` 自检 —— 权限不够会多出一行原因
- * （`testFail_listPermission`），所以"**只有一句结论**"本身就是自检通过的证据。
+ * 1.12.0 起自检**无条件**跑 `_acc/v1/` 的 `ListBucket` 探测（跨设备保护默认生效）——
+ * 权限不够会多出一行原因（`testFail_listPermission`），所以"**只有一句结论**"本身就是自检通过的证据。
  */
 const RUN_CONNECTION_TEST = `(async () => {
 	const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -378,16 +316,15 @@ async function main() {
 	const original = JSON.parse(readFileSync(DATA_JSON, "utf8"));
 
 	log("═".repeat(84));
-	log("真机探针：设置页两项（内容寻址 key 开关 / 统一对象名按钮）");
+	log("真机探针：设置页（那一项已删 ⇒ 否定式守卫 / 统一对象名 / 连接自检）");
 	log("═".repeat(84));
 	log(`  库   ${VAULT_DIR}`);
 	log(`  桶   ${original?.s3?.bucket ?? "?"} @ ${original?.s3?.endpoint ?? "?"}`);
-	log(`  起始 contentAddressed=${original.contentAddressed}，migrationState=${original.migrationState ?? "idle"}`);
+	log(`  起始 migrationState=${original.migrationState ?? "idle"}`);
 	log();
 
 	let client = null;
 	let child = null;
-	let restored = false;
 
 	try {
 		const attached = await launchAndAttach({ exe: OBSIDIAN, port: PORT, vault: VAULT, waitSeconds: WAIT_SECONDS, log });
@@ -399,56 +336,44 @@ async function main() {
 			`(async () => {
 				for (let i = 0; i < 90; i += 1) {
 					const p = app?.plugins?.plugins?.[${JSON.stringify(PLUGIN_ID)}];
-					if (p?._loaded) return { ok: true, shared: p.settings.contentAddressed, state: p.settings.migrationState };
+					if (p?._loaded) return { ok: true, state: p.settings.migrationState };
 					await new Promise((r) => setTimeout(r, 500));
 				}
 				return { ok: false };
 			})()`
 		);
 		if (!loaded.ok) throw new Error("插件没有加载成功");
-		check("插件已加载，内存里的设置与盘上一致", loaded.shared === original.contentAddressed, `内存 ${loaded.shared} / 盘上 ${original.contentAddressed}`);
-		if (loaded.shared !== original.contentAddressed) throw new Error("盘上与内存不一致，先别测 —— 说明上一轮留下了脏状态");
+		check("插件已加载（migrationState 可读）", typeof loaded.state === "string", `migrationState=${loaded.state}`);
 
 		const opened = await evaluate(client, OPEN_SETTINGS);
 		if (opened.error) throw new Error(opened.error);
 		log(`  设置页已打开（导航项「${opened.tabName}」）`);
 
-		// ── §1 结构：三项都在、顺序对、说明是纯文本 ──
+		// ── §1 结构：那一项已删、统一对象名的按钮在、顺序对 ──
+		//
+		// ⚠️ 2026-10-29：①–⑧ 里有六条是「内容寻址 key 开关点一下真落盘」，而那一项已删
+		// （key 形状固定纯哈希）⇒ 整段作废。后面 ⑨–⑫ 的编号**故意不重排**：
+		// 它们与验收证据里记录的编号一一对应，重排会让历史记录对不上当前脚本。
 		const structure = await evaluate(client, READ_STRUCTURE);
 		if (structure.error) throw new Error(structure.error);
 		const { labels } = structure;
-		check("① 「内容寻址 key」那一行在（开关控件也在）", structure.shared >= 0 && structure.hasToggle, labels.contentAddressed);
+		check(
+			"① ★ 「内容寻址 key」那一项**不存在**（形状固定，不该是给用户的选择题）",
+			structure.contentAddressedRow === false,
+			`设置页共 ${structure.names.length} 行，未命中该标题`
+		);
 		check(
 			"② 「统一对象名」那一行的按钮在且可用",
 			Boolean(structure.unifyButton) && structure.unifyButton.disabled === false,
 			JSON.stringify(structure.unifyButton)
 		);
 		check(
-			"③ 顺序是「内容寻址 key → 统一对象名 → 测试连接」（动作不夹在参数之间）",
-			structure.shared >= 0 && structure.unify > structure.shared && structure.test > structure.unify,
-			`下标 shared=${structure.shared} unify=${structure.unify} test=${structure.test}`
-		);
-		check(
-			"④ 内容寻址 key 的说明是纯文本（没有残留的 ** 标记）",
-			Boolean(structure.desc) && !structure.desc.includes("**"),
-			structure.desc ?? "（空）"
-		);
-		check(
-			"⑤ 开关的初始状态与设置值一致",
-			structure.toggleOn === original.contentAddressed,
-			`控件 ${structure.toggleOn} / 设置 ${original.contentAddressed}`
+			"③ 顺序是「统一对象名 → 测试连接」（动作排在组尾）",
+			structure.unify >= 0 && structure.test > structure.unify,
+			`下标 unify=${structure.unify} test=${structure.test}`
 		);
 
-		// ── §2 开关：点一下真的落到盘上 ──
-		const turnedOn = await evaluate(client, toggleShared(true));
-		if (turnedOn.error) throw new Error(turnedOn.error);
-		const persistedOn = await waitDataJson("contentAddressed", true);
-		check("⑥ 点开关后内存里变成 true", turnedOn.pluginShared === true, JSON.stringify(turnedOn));
-		check("⑦ ★ 点开关后 **data.json 里**也是 true（绑定真的跑了）", persistedOn.ok, `盘上 ${persistedOn.data?.contentAddressed}`);
-		check("⑧ 开关的视觉状态跟着变（控件勾上了）", turnedOn.after === true, `控件 ${turnedOn.after}`);
-
-		// ── §3 开关打开时「测试连接」：ListBucket 自检在这一轮里跑过 ──
-		const conn = await evaluate(client, RUN_CONNECTION_TEST);
+		// ── §3 连接自检：ListBucket 探测**无条件**跑（跨设备保护默认生效）──		const conn = await evaluate(client, RUN_CONNECTION_TEST);
 		if (conn.error) throw new Error(conn.error);
 		check("⑨ 测试连接跑完了（按钮回到可用）", conn.settled);
 		check(
@@ -564,31 +489,17 @@ async function main() {
 			cancelChecked = true;
 		}
 
-		// ── §6 关回去，并读盘复核 ──
-		const turnedOff = await evaluate(client, toggleShared(original.contentAddressed));
-		if (turnedOff.error) throw new Error(turnedOff.error);
-		const persistedOff = await waitDataJson("contentAddressed", original.contentAddressed);
-		restored = persistedOff.ok;
-		check(
-			"㉑ ★ 开关关回去后 data.json 恢复原值（可重跑）",
-			persistedOff.ok,
-			`盘上 ${persistedOff.data?.contentAddressed} / 原始 ${original.contentAddressed}`
-		);
+		// ── §6 收尾：本脚本**不改任何设置**（那个开关已删）──
+		//
+		// ⚠️ 1.12.0 之前这里要"把开关关回去并读盘复核"，因为脚本改过它。
+		// 现在唯一可能落盘的是 `migrationState`（统一对象名留下的），由 finally 里的备份还原兜住。
 
 		await evaluate(client, "app.setting.close()").catch(() => undefined);
 
 		log("");
 		log(`  · 取消路径${cancelChecked ? "已验证" : "**本轮未覆盖**（见 ⑬ 的原因）"}`);
 	} finally {
-		// 兜底：崩在中途时先把设置点回去（内存），再把盘上的备份盖回来
-		if (client && !restored) {
-			try {
-				await evaluate(client, toggleShared(original.contentAddressed));
-				await delay(800);
-			} catch {
-				/* 尽力而为 */
-			}
-		}
+		// 兜底：本脚本不再改设置，只有 `migrationState` 可能被动过 ⇒ 靠备份还原
 		if (client) {
 			try {
 				await evaluate(client, "app.quit()");
@@ -604,11 +515,13 @@ async function main() {
 			}
 		}
 		await delay(1200);
+		// ⭐ 只有「统一对象名」可能改盘（`migrationState` / 索引）。脚本不动任何设置项，
+		// 所以判据从"contentAddressed 值变了没"改成"migrationState 回到 idle 了没"。
 		const onDisk = readDataJson();
-		if (!restored && onDisk && onDisk.contentAddressed !== original.contentAddressed) {
+		if (onDisk && (onDisk.migrationState ?? "idle") !== (original.migrationState ?? "idle")) {
 			try {
 				copyFileSync(backup, DATA_JSON);
-				log(`  · 盘上仍是 ${onDisk.contentAddressed}，已用备份盖回（${original.contentAddressed}）`);
+				log(`  · 盘上 migrationState 仍是 ${onDisk.migrationState}，已用备份盖回`);
 			} catch (error) {
 				log(`  ⚠️ 还原 data.json 失败：${error.message}（备份在 ${backup}）`);
 			}

@@ -115,17 +115,18 @@ export interface IngestResult {
 	 */
 	name: string;
 	/**
-	 * 链接里该显示的**名字**（`![这里](url)`）—— 从 key 反推，于是与链接**目标**里的
-	 * 文件名逐字一致；取不到时退回 {@link name}。
+	 * 链接里该显示的**名字**（`![这里](url)`）—— 从 key 反推；**key 里没有名字时**
+	 * （1.12.0 起 key 固定纯哈希）退回**归一化后的名字**（`nameForHostDuplicate` 的 `keyName`），
+	 * 再退一步才用 {@link name}。
 	 *
 	 * ⚠️ 为什么不能直接用 {@link name}（用户 2026-10-14 在 Android 上报的第五件事）：
-	 * 宿主撞名另落的重复副本叫 `照片 1.png`，而 key 用的是**主干名字**（`照片-<哈希>.png`）
-	 * ⇒ 显示位写 `照片 1.png` 时，笔记里就成了 `![照片 1.png](…/照片-<哈希>.png)`：
-	 * 同一个链接里两个名字不一样，而且那个 ` 1` 是宿主的去重序号、不是用户的东西。
+	 * 宿主撞名另落的重复副本叫 `照片 1.png`，而真正该显示的是**主干名字**（`照片.png`）
+	 * ⇒ 显示位写 `照片 1.png` 时，笔记里就成了 `![照片 1.png](…)`：
+	 * 那个 ` 1` 是宿主的去重序号、不是用户的东西。
 	 *
-	 * 反推（而不是把 keyName 一路传下来）的理由与 `download-target` 取本地副本名一致：
-	 * key 是名字的**唯一**真相，清洗（`sanitizeFilename`）也在那一层做 ——
-	 * 两处各留一份名字，迟早会出现"显示的名字与地址里的名字不是一个"。
+	 * ⚠️ 1.12.0 的连带改动：以前 key 里带名字，所以"从 key 反推"就等于"拿到归一化后的名字"，
+	 * 兜底几乎用不到。纯哈希后反推恒为空串，**兜底成了主路** —— 所以它必须取
+	 * `normalized.keyName` 而不是原始的 {@link name}，否则上面那个「 1」的缺陷会原地复活。
 	 */
 	displayName: string;
 	/** 写进笔记的远端 URL；`fallback` 时为空串。 */
@@ -442,7 +443,12 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 	 * 链接里该显示的名字（见 {@link IngestResult.displayName}）：从 key 反推，
 	 * 取不到（key 为空，或不是默认形状）时退回调用方给的文件名。
 	 */
-	const displayFor = (candidate: string): string => displayNameForKey(candidate) || fileName;
+	/**
+	 * 显示名的兜底。1.12.0 起 key 里没有名字 ⇒ `displayNameForKey` 恒为空串，
+	 * 这个兜底就是**主路**，所以它取归一化后的名字（见 `normalized.keyName` 的赋值处）。
+	 */
+	let displayFallback = fileName;
+	const displayFor = (candidate: string): string => displayNameForKey(candidate) || displayFallback;
 	let key: string;
 	/**
 	 * 宿主撞名另落的那一份对应的**主干文件**路径（不是这一份）。
@@ -452,24 +458,27 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 	/** 内容哈希：算 key 与"这份内容传过吗"共用一次。 */
 	let contentHash = "";
 	try {
-		// ⭐ 1.2.0：key 的形状不再可配置（模板设置已取消）——
-		// 固定 `<名字>-<完整哈希>.<扩展名>`，两个分量分别给人看与给机器判身份。
 		contentHash = await hashBytes(bytes);
-		// ⭐ 2026-10-14：宿主为撞名另落的那一份（`照片 1.png`）用**主干名字**算 key ——
-		// 否则同一份内容会因为名字不同而多存一个对象，笔记里两处引用各指一处。
+		// ⭐ 2026-10-14：宿主为撞名另落的那一份（`照片 1.png`）要能认出**主干**那份 ——
+		// 它的 `twinPath` 决定后面要不要先问一句云端（第 2c 步），`keyName` 决定显示名。
 		const normalized = await nameForHostDuplicate(deps, fileName, contentHash, hashBytes, existingPath);
 		twinPath = normalized.twinPath;
-		// ⭐ R25 / CR-14：共享桶打开时用**纯内容寻址**（key 里没有名字）。
+		// ⭐ 1.12.0：key 的形状固定 **纯内容寻址**（那个设置项已取消）。
 		// 代价如实记：桶里不再能按名字找文件、链接里也不会带名字 ——
 		// 名字改由引用声明承载（`refs[hash].name`），所以改名不搬对象、也不改 key。
+		// ⚠️ `filename` 仍然要传：`objectKeyFor` 在纯 hash 档下不用它，但它同时是
+		// 撞名副本归一化后的名字来源，别的形状（存量数据校验）还要用。
 		key = objectKeyFor(
 			{
 				hash: contentHash,
 				ext,
 				filename: normalized.keyName,
 			},
-			{ contentAddressed: deps.settings.contentAddressed }
+			{ contentAddressed: true }
 		);
+		// ⭐ 纯哈希后 key 里没有名字 ⇒ 显示名的主路就是这里：用**归一化后**的名字
+		//（`photo 1.png` ⇒ `photo.png`），而不是宿主给的序号名。
+		displayFallback = normalized.keyName || fileName;
 	} catch (error) {
 		// `objectKeyFor` 是纯函数、不该抛；真抛了说明**哈希那一步**出了问题
 		return { status: "fallback", key: "", ext, name: fileName, displayName: fileName, remoteUrl: "", localPath: "", etag: "", error: asError(error) };

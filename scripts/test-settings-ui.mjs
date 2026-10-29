@@ -378,11 +378,12 @@ assert.ok(
 		"testConnection",
 		"★ 「存储连接」组最后一项必须是「测试连接」—— 校验项排在要校验的字段之前，用户会填一半就去点"
 	);
-	// ⭐ 共享桶（R25）是**决策项**：它决定"要不要多要一项 ListBucket 权限、要不要写 _acc/"。
-	// 必须在「测试连接」之前 —— 那一组最后一项永远是动作（用户填完才去点）。
+	// ⚠️ 2026-10-29：「内容寻址 key」那个决策项已删（key 形状固定纯哈希，不再是可配项）。
+	// 保留一条**否定式**守卫：它不许以任何名字回来 —— 一个"机制"重新变成用户设置项，
+	// 就意味着又要把 `ListBucket` 权限、显示名来源这些代价重新解释给用户。
 	assert.ok(
-		storage.includes("contentAddressed") && storage.indexOf("contentAddressed") < storage.indexOf("testConnection"),
-		"★ 「共享桶」必须排在「测试连接」之前（动作永远是这一组的最后一项）"
+		!storage.includes("contentAddressed"),
+		"★ 「内容寻址 key」已删除，不得以设置项形式回归（形状是固定的）"
 	);
 
 	assert.ok(

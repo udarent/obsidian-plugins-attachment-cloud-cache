@@ -30,8 +30,6 @@ import {
 	SETTINGS_DEFAULTS,
 	hasLegacyExternalImageDefault,
 	hasLegacyObjectKeyTemplate,
-	hasLegacySharedBucket,
-	legacyContentAddressed,
 	legacyAutoCacheEnabled,
 	mergePluginSettings,
 } from "./settings";
@@ -1776,14 +1774,9 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		this.deviceId = device.id;
 		if (device.migrated) needsRewrite = true;
 
-		// ⭐ 一次性兼容升级（1.12.0）：「共享桶」开关取消了，但它的**另一半**语义还在。
-		//
-		// 老开关同时管两件事：跨设备保护（已改成无条件）+ 新上传的 key 形状（还留着）。
-		// 所以遗留值要折算进 `contentAddressed`，否则开了几年的人升级后 key 形状会静默变回去。
-		if (hasLegacySharedBucket(stored)) {
-			this.settings.contentAddressed = legacyContentAddressed(stored, this.settings.contentAddressed);
-			needsRewrite = true;
-		}
+		// ⚠️ 老 `data.json` 里的 `sharedBucket` / `contentAddressed` 两个键现在**都不读**了
+		//（1.12.0：跨设备保护改为无条件，key 形状固定为纯内容寻址）。遗留键会在下一次
+		// `saveSettings` 把整份设置写回时自然消失，不需要专门迁移一次。
 
 		if (hasLegacyObjectKeyTemplate(stored)) {
 			this.legacyKeyTemplateUpgraded = true;

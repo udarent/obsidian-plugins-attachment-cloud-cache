@@ -272,11 +272,12 @@ export async function runIngestSuite(mod) {
 		});
 
 		const expectedHash = sha256Hex(HOSTILE_BYTES);
-		// ⭐ 1.2.0：形状固定 = `<原名>-<内容哈希>.<扩展名>`（独立算出的哈希，不读实现）
-		const expectedKey = `photo-${expectedHash}.png`;
+		// ⭐ 1.12.0：形状固定 = `<内容哈希>.<扩展名>`（独立算出的哈希，不读实现）。
+		// 名字**不进 key** —— 改名不搬对象，跨设备同内容也必同 key（不需要本机台账）。
+		const expectedKey = `${expectedHash}.png`;
 
 		assert.equal(result.status, "uploaded", `应上传成功，实际 ${result.status}`);
-		assert.equal(result.key, expectedKey, "key 应由**独立算出的**内容哈希与原始文件名决定");
+		assert.equal(result.key, expectedKey, "key 应由**独立算出的**内容哈希决定（不含原始文件名）");
 		assert.equal(
 			result.remoteUrl,
 			`${h.endpoint}/${BUCKET}/${expectedKey}`,
@@ -341,7 +342,11 @@ export async function runIngestSuite(mod) {
 	});
 
 	// ============================================================
-	// 2b. 非 ASCII 名字进 key：**不编码**（编码会让链接 404）
+	// 2b. 非 ASCII 文件名：名字**不进 key**（纯哈希），但仍要能传、能正确显示
+	//
+	// 1.2.0–1.11.0 这条用例钉的是"名字进 key 且不编码"（编码会让链接 404）。
+	// 1.12.0 起 key 只由内容决定 ⇒ 那个编码问题从形状上消失，但**行为**仍要钉：
+	// 中文名不能让它传失败，也不能让本地副本改名。
 	// ============================================================
 	await withHarness(mod, {}, async (h) => {
 		const result = await ingestAttachment(h.deps, {
@@ -352,21 +357,23 @@ export async function runIngestSuite(mod) {
 
 		const expectedHash = sha256Hex(HOSTILE_BYTES);
 		assert.equal(result.status, "uploaded", `应上传成功，实际 ${result.status}`);
-		assert.equal(result.key, `报告 扫描-${expectedHash}.png`, "新默认模板的 key 应自带文件名（非 ASCII 不编码）");
-		assert.equal(h.server.countByMethod("PUT"), 1, "带名字的 key 也应一次 PUT 成功");
+		assert.equal(result.key, `${expectedHash}.png`, "★ key 里只有内容哈希，非 ASCII 名字不参与");
+		assert.equal(result.displayName, "报告 扫描.png", "★ 链接里仍显示原文件名");
+		assert.equal(result.localPath, "报告 扫描.png", "本地副本用原文件名");
+		assert.equal(h.server.countByMethod("PUT"), 1, "中文名的文件也应一次 PUT 成功");
 		assert.equal(
 			Buffer.compare(h.server.stored(result.key), Buffer.from(HOSTILE_BYTES)),
 			0,
-			"服务端按带名字的 key 收到的字节必须逐字节一致"
+			"服务端按哈希 key 收到的字节必须逐字节一致"
 		);
 	});
 
 	// ============================================================
-	// 3. 同内容**同名**重复粘贴 → 跳过上传（零网络请求）
+	// 3. 同内容重复粘贴 → 跳过上传（零网络请求）
 	//
-	// ⚠️ 1.2.0 起"去重"的口径收窄了一格（key = `<名字>-<哈希>.<扩展名>` ⇒ 只有**名字也相同**
-	// 才落回同一个 key）。这条用例钉的是那一格；**跨名**那两格（宿主撞名另落 `名字 1.ext`、
-	// 同内容换了别的名字）由 §3b-§3f 钉住 —— 2026-10-14（D-24）起，跨名不再必然 = 跨对象。
+	// ⚠️ 去重口径在 1.12.0 又放宽了一格：key 只由内容决定 ⇒ **名字不同也落回同一个 key**。
+	// 1.2.0–1.11.0 时"只有名字也相同才同 key"，跨名那几格要靠台账按内容认亲（§3b-§3f）；
+	// 现在跨名从**形状**上就不可能分叉，那几组仍在，只是判据从"台账认亲"变成"key 直接相撞"。
 	// ============================================================
 	await withHarness(mod, {}, async (h) => {
 		const first = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "photo.png", mime: "image/png" });
@@ -416,27 +423,23 @@ export async function runIngestSuite(mod) {
 		assert.equal(renamed.key, first.key, "★ 复用的是**同一个** key（否则笔记里两处引用会指着两个对象）");
 		assert.equal(renamed.remoteUrl, first.remoteUrl, "两处引用必须指向同一个地址");
 		assert.equal(h.server.countByMethod("PUT"), 1, "★ 只上传一次 —— 第二次是零网络");
-		// 桶里只有一份对象：那个"本会新建"的 key 下面什么都没有
-		const wouldBeKey = `另一个名字-${sha256Hex(HOSTILE_BYTES)}.png`;
-		assert.notEqual(wouldBeKey, first.key, "前提：新名字确实会推出另一个 key");
-		assert.equal(h.server.stored(wouldBeKey), null, "★ 桶里没有第二个对象（不再多占一份空间）");
+		// ⚠️ 1.12.0：纯哈希形状下"换个名字会推出另一个 key"这件事**不可能发生**，
+		// 所以这里不再拿一个想象中的 key 去查空 —— 判据改成"桶里只有一份对象"。
+		assert.equal(h.server.countByMethod("PUT"), 1, "★ 桶里只该有一个对象（第二次上传是零网络）");
 		assert.ok(h.server.stored(first.key) !== null, "第一个对象还在原地");
 	});
 
-	// 3c. ⭐⭐ 宿主撞名另落的那一份（`photo 1.png`）⇒ 用**主干名字**算 key
+	// 3c. ⭐⭐ 宿主撞名另落的那一份（`photo 1.png`）⇒ 显示名与记录都落在**主干**那份上
 	//
 	// 现场（用户 2026-10-14 Android 直报）：同一张图插第二次，宿主发现 `photo.png` 已在，
-	// 就把新文件叫 `photo 1.png` 并写回笔记。名字不同 ⇒ key 不同 ⇒
-	// 云端多存一份**完全相同**的内容，笔记里两处引用指着两个对象。
+	// 就把新文件叫 `photo 1.png` 并写回笔记。
 	//
-	// ⚠️ 这一条用**空索引**（正是真机现场：`.cache-index.json` 丢了/被覆盖/首装）——
-	// 上一版修法靠 `uploaded` 台账（"这份内容传过吗"）在真机上失效，就因为它是**本机状态**。
-	// 这里靠的是 **vault 里的事实**：同目录下有个同内容的 `photo.png`。
-	//
-	// 期望：key 落在主干名字上 ⇒ 地址与首次**完全相同** ⇒ 桶里只有一个对象。
-	// ⚠️ 而这一份**必须真的传**：云端确实没有这个对象（上面那两个文件都还没上传过）。
-	// "不把正确性押在本机状态上"不等于"闭着眼不传" —— 而是**传之前先问一句云端**
-	//（第 2c 步）。云端有的那种情形见 §3g；这一条守住的是"问完发现没有 ⇒ 照传"。
+	// ⚠️ 这一条用**空索引**（正是真机现场：`.cache-index.json` 丢了/被覆盖/首装）。
+	// 1.12.0 起 key 由内容决定 ⇒ 「两个名字推出两个 key」的根因从形状上消失，
+	// 但这一组仍然要钉住**另外三件事**：显示名用主干名、回报 `redundantDuplicateOf`、
+	// 索引的副本记在留下来的那份上。少了任一条，用户看到的就是「同一个链接里两个名字不一样」。
+	// `nameForHostDuplicate` 现在的职责收窄为：给出 `twinPath`（决定要不要问云端 2c）
+	// 与 `keyName`（只用于显示），**不再参与 key 的生成**。
 	await withHarness(mod, {}, async (h) => {
 		await h.write("attachments/photo.png", Buffer.from(HOSTILE_BYTES));
 		await h.write("attachments/photo 1.png", Buffer.from(HOSTILE_BYTES));
@@ -453,8 +456,8 @@ export async function runIngestSuite(mod) {
 		);
 		assert.equal(
 			result.key,
-			`photo-${sha256Hex(HOSTILE_BYTES)}.png`,
-			"★ 宿主撞名另落的那一份要用主干名字算 key —— 台账为空也必须得出同一个 key（判据不能押在本机状态上）"
+			`${sha256Hex(HOSTILE_BYTES)}.png`,
+			"★ key 只由内容决定：宿主的序号名不参与（台账为空也必须得出同一个 key）"
 		);
 		// ⭐ 显示名必须跟着**主干名字**走（用户 2026-10-14 Android 报的第五件事）：
 		// 显示位若用宿主给的名字，笔记里就成了 `![photo 1.png](…/photo-<哈希>.png)`
@@ -467,7 +470,7 @@ export async function runIngestSuite(mod) {
 		assert.equal(
 			h.server.stored(`photo 1-${sha256Hex(HOSTILE_BYTES)}.png`),
 			null,
-			"★ 桶里只有一份对象（那份「 1」的名字根本不该被用来命名对象）"
+			"★ 桶里只有一份对象（宿主的序号名从来就不该被用来命名对象）"
 		);
 		assert.equal(
 			h.server.countByMethod("PUT"),
@@ -516,11 +519,14 @@ export async function runIngestSuite(mod) {
 		);
 	});
 
-	// 3e. ⚠️ 名字带序号、兄弟文件也在、但**内容不同** ⇒ 绝不归一
+	// 3e. ⚠️ 名字带序号、兄弟文件也在、但**内容不同** ⇒ 两份内容绝不能并到一个对象上
 	//
 	// 那意味着用户真的有两个不同的文件（`photo.png` 与 `photo 1.png`）。
 	// 把它们并到同一个对象上 = 覆盖，不可逆 —— 与 `download-target` 的
 	// "先比内容，再加序号"是同一条纪律的两个方向。
+	//
+	// ⚠️ 1.12.0：判据从"名字里的「 1」留着"换成"key 由内容决定" —— 纯哈希下名字不参与，
+	// 这条用例守的仍是那件事：**不同内容 ⇒ 不同 key ⇒ 不会互相覆盖**。
 	await withHarness(mod, {}, async (h) => {
 		const other = new Uint8Array(HOSTILE_BYTES);
 		other[0] = 0x11;
@@ -535,13 +541,18 @@ export async function runIngestSuite(mod) {
 		});
 		assert.equal(
 			result.key,
-			`photo 1-${sha256Hex(other)}.png`,
-			"★ 内容不同 ⇒ 名字里的「 1」必须留着（两份不同的东西不能并到一个对象上）"
+			`${sha256Hex(other)}.png`,
+			"★ 内容不同 ⇒ key 必须不同（两份不同的东西不能并到一个对象上）"
 		);
+		assert.notEqual(result.key, `${sha256Hex(HOSTILE_BYTES)}.png`, "★ 与兄弟那份的 key 必须不同");
+		assert.equal(result.displayName, "photo 1.png", "内容不同 ⇒ 它**就是**用户自己的命名，显示名不许被归一化");
 		assert.equal(result.redundantDuplicateOf, undefined, "★ 内容不同 ⇒ 更不许被当成'重复副本'（那会被删掉）");
 	});
 
 	// 3f. 名字带序号但**没有**兄弟文件 ⇒ 那是用户自己的命名，不许改写
+	//
+	// 纯哈希下 key 里本来就没有名字，所以这一组守的是**显示名**：
+	// 没有兄弟文件 ⇒ `nameForHostDuplicate` 不归一 ⇒ 显示名原样（`report 1.pdf`）。
 	await withHarness(mod, {}, async (h) => {
 		await h.write("attachments/report 1.pdf", Buffer.from(HOSTILE_BYTES));
 		const result = await ingestAttachment(h.deps, {
@@ -553,9 +564,10 @@ export async function runIngestSuite(mod) {
 		});
 		assert.equal(
 			result.key,
-			`report 1-${sha256Hex(HOSTILE_BYTES)}.pdf`,
-			"★ 没有兄弟文件 ⇒ 名字原样进 key（用户的命名不是我们的事）"
+			`${sha256Hex(HOSTILE_BYTES)}.pdf`,
+			"key 只由内容决定（名字不参与）"
 		);
+		assert.equal(result.displayName, "report 1.pdf", "★ 没有兄弟文件 ⇒ 显示名原样（用户的命名不是我们的事）");
 		assert.equal(result.redundantDuplicateOf, undefined, "★ 没有兄弟文件 ⇒ 不是重复副本（不许删）");
 	});
 
@@ -572,7 +584,7 @@ export async function runIngestSuite(mod) {
 	// ⚠️ 判据是**云端的事实**（HEAD 的回应），不是"名字看起来像重复" ——
 	// 后者在 §3e（内容不同）与 §3h（云端真没有）里各有一条反向守护。
 	await withHarness(mod, {}, async (h) => {
-		const key = `photo-${sha256Hex(HOSTILE_BYTES)}.png`;
+		const key = `${sha256Hex(HOSTILE_BYTES)}.png`;
 		// 先让对象在云端 —— 模拟"这台设备上一次插入已经把它传上去了"
 		await h.client.putObject(key, HOSTILE_BYTES, "image/png");
 		const putsBefore = h.server.countByMethod("PUT");
@@ -706,7 +718,7 @@ export async function runIngestSuite(mod) {
 	// 而多出来的那份会被「本地副本上限」按最久未用淘汰 —— 用一点可回收的空间
 	// 换"任何情况下都不会认错文件"，这个交换是划算的。
 	await withHarness(mod, {}, async (h) => {
-		const key = `photo-${sha256Hex(HOSTILE_BYTES)}.png`;
+		const key = `${sha256Hex(HOSTILE_BYTES)}.png`;
 		const occupied = "photo.png";
 		await h.write(occupied, Buffer.from(HOSTILE_BYTES)); // 只放文件，不登记索引
 
@@ -1322,27 +1334,24 @@ export async function runIngestSuite(mod) {
 	});
 
 	// ============================================================
-	// 24. ⭐ 共享桶（CR-14）：key 变成纯内容寻址 ⇒ 同内容换名字不再多一个对象
+	// 24. ⭐ key 固定纯内容寻址（CR-14 落地，1.12.0 起不再可切）——
+	//     同内容换名字不再多一个对象，且**不需要**任何设置项配合
 	// ============================================================
 	await withHarness(mod, {}, async (h) => {
 		const expectedHash = sha256Hex(HOSTILE_BYTES);
-		h.deps.settings.contentAddressed = true;
-		try {
-			const first = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "photo.png", mime: "image/png" });
-			assert.equal(first.key, `${expectedHash}.png`, "★ 共享桶档的 key 里没有名字（同内容必同 key）");
-			assert.equal(first.displayName, "photo.png", "链接里仍显示原来的文件名（不是哈希）");
-			assert.equal(h.server.countByMethod("PUT"), 1, "照常上传一次");
+		// ⚠️ 这一组**故意不碰任何设置**：形状是固定的，谁都不该能把它切回去。
+		const first = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "photo.png", mime: "image/png" });
+		assert.equal(first.key, `${expectedHash}.png`, "★ key 里没有名字（同内容必同 key）");
+		assert.equal(first.displayName, "photo.png", "链接里仍显示原来的文件名（不是哈希）");
+		assert.equal(h.server.countByMethod("PUT"), 1, "照常上传一次");
 
-			const again = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "另一个名字.png", mime: "image/png" });
-			assert.equal(again.key, `${expectedHash}.png`, "换个名字仍是同一个 key");
-			assert.equal(
-				h.server.countByMethod("PUT"),
-				1,
-				"★ 同内容换名字**不再多传一个对象**（带名 key 时代会多一个）"
-			);
-		} finally {
-			h.deps.settings.contentAddressed = false;
-		}
+		const again = await ingestAttachment(h.deps, { bytes: HOSTILE_BYTES, name: "另一个名字.png", mime: "image/png" });
+		assert.equal(again.key, `${expectedHash}.png`, "换个名字仍是同一个 key");
+		assert.equal(
+			h.server.countByMethod("PUT"),
+			1,
+			"★ 同内容换名字**不再多传一个对象**（带名 key 时代会多一个）"
+		);
 	});
 
 	// ⚠️ 这是**手工维护**的规模数（按 `// N.` 用例块数），不是运行时统计 ——

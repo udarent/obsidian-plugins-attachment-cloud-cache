@@ -25,8 +25,6 @@ export function runSettingsSuite(mod) {
 		mergePluginSettings,
 		isLocalCopyAction,
 		hasLegacyObjectKeyTemplate,
-		hasLegacySharedBucket,
-		legacyContentAddressed,
 	} = mod;
 
 	// ============================================================
@@ -465,41 +463,25 @@ export function runSettingsSuite(mod) {
 	);
 
 	// ============================================================
-	// 11.（1.12.0）「共享桶」开关取消 ⇒ 遗留值折进 `contentAddressed`
+	// 11.（1.12.0）`sharedBucket` / `contentAddressed` 两个键都已作废
 	//
-	// 老开关**同时**管两件事：① 跨设备保护开不开（已是无条件）；② 新上传的 key 形状。
-	// 只有后者还在，所以遗留值必须折算过去 —— 不折算的话，开了几年的人升级后
-	// 新上传会静默换回「原名-哈希」，桶里平白多出一代 key，而他不知道发生了什么。
+	// 老 `sharedBucket` 管两件事：① 跨设备保护开不开（已改成无条件）；② 新上传的 key 形状。
+	// ② 后来独立成 `contentAddressed`，到 1.12.0 也删了 —— key 形状**固定**纯内容寻址，
+	// 不再有"用户可切"这一档。于是两个键都只是**遗留**：既不识别、也不折算、也不保留。
 	// ============================================================
-	assert.equal(hasLegacySharedBucket({ sharedBucket: true }), true, "带开关的旧设置应被识别");
-	assert.equal(
-		hasLegacySharedBucket({ sharedBucket: false }),
-		true,
-		"★ 值是 false 也**是**遗留键（判据是 `hasOwnProperty`，不是值真假）—— 否则关着的人永远清不掉这个键"
-	);
-	assert.equal(hasLegacySharedBucket({}), false, "没有那个键就不是遗留设置");
-	assert.equal(hasLegacySharedBucket(null), false, "坏输入（null）不该让它抛错");
-	assert.equal(hasLegacySharedBucket("nope"), false, "坏输入（字符串）不该让它抛错");
-	assert.equal(hasLegacySharedBucket({ contentAddressed: true }), false, "新字段不是遗留键");
-
-	assert.equal(legacyContentAddressed({ sharedBucket: true }, false), true, "★ 开过共享桶 ⇒ key 形状照搬（纯内容寻址）");
-	assert.equal(legacyContentAddressed({ sharedBucket: false }, true), false, "关着 ⇒ 折成 false，别把现在的值留着");
-	assert.equal(legacyContentAddressed({ sharedBucket: "yes" }, false), false, "★ 只认严格 true（脏值一律按关处理）");
-	assert.equal(
-		legacyContentAddressed({}, true),
-		true,
-		"★ 没有遗留键 ⇒ **不动现值**（否则每次启动都会把它按回默认，用户关不掉）"
-	);
+	assert.ok(!("sharedBucket" in SETTINGS_DEFAULTS), "默认值里没有 sharedBucket");
+	assert.ok(!("contentAddressed" in SETTINGS_DEFAULTS), "★ 默认值里不再有 contentAddressed（设置项已删）");
 
 	// 合并后**不得**把遗留字段带进设置对象：它已经不参与任何行为，
 	// 留在对象里会让设置页的字段表与"实际字段"两处对不上。
 	const merged = mergePluginSettings(SETTINGS_DEFAULTS, {
 		sharedBucket: true,
+		contentAddressed: true,
 		deviceId: "mvs0xncf-09oh54v0rzpwc52x03",
 	});
 	assert.ok(!("sharedBucket" in merged), "★ 合并结果里不得再有 sharedBucket");
+	assert.ok(!("contentAddressed" in merged), "★ 合并结果里不得再有 contentAddressed（遗留键在写回时自然消失）");
 	assert.ok(!("deviceId" in merged), "★ 合并结果里不得再有 deviceId（它已搬到宿主本机存储）");
-	assert.equal(merged.contentAddressed, false, "合并本身不折算（折算在载入流程里做，见 main.ts）");
 
 	// ============================================================
 	// 10.（已删除）扩展名列表的清洗细节

@@ -167,11 +167,8 @@ export const I18N: Record<string, Locale> = {
 		// ── 维护命令 ──
 		cloudCleanupPersistFailed: "Could not save the local-copy index: {error}",
 		// ── 跨设备保护（R25 / CR-13）──
-		// ⚠️ 2026-10-28：「共享桶」开关已去掉 —— 写声明、读声明、删除时的跨库判据现在**无条件生效**。
-		// 这一项只剩「新上传的 key 用不用纯内容寻址」，标题与描述必须与它相符，别再写成开关。
-		contentAddressed: "Content-addressed keys",
-		contentAddressedDesc:
-			"New uploads are named after their content (sha256) instead of the original file name. Showing original names then needs reading the bucket's reference records, which requires the ListBucket permission. Deleting safely across devices works either way.",
+		// ⚠️ 写声明、读声明、删除时的跨库判据**无条件生效**；「共享桶」与「内容寻址 key」
+		// 两个开关都已删除（1.12.0）—— key 形状固定为纯内容寻址，不再是可配项。
 		sharedBucketNoIdentity: "Not uploaded: this vault has no identity yet. Reload the plugin and try again.",
 		sharedBucketStateUnreadable:
 			"Not uploaded: could not read this device's reference record ({error}). The key probably lacks the ListBucket permission, which recording references needs.",
@@ -557,11 +554,8 @@ export const I18N: Record<string, Locale> = {
 
 		cloudCleanupPersistFailed: "本地副本索引保存失败：{error}",
 		// ── 跨设备保护（R25 / CR-13）──
-		// ⚠️ 2026-10-28：「共享桶」开关已去掉 —— 写声明、读声明、删除时的跨库判据现在**无条件生效**。
-		// 这一项只剩「新上传的 key 用不用纯内容寻址」，标题与描述必须与它相符，别再写成开关。
-		contentAddressed: "内容寻址 key",
-		contentAddressedDesc:
-			"新上传的对象按内容命名（sha256），不再带原文件名。要显示原文件名就得读桶里的引用记录，那需要 ListBucket 权限。跨设备安全删除两条路都一样。",
+		// ⚠️ 写声明、读声明、删除时的跨库判据**无条件生效**；「共享桶」与「内容寻址 key」
+		// 两个开关都已删除（1.12.0）—— key 形状固定为纯内容寻址，不再是可配项。
 		sharedBucketNoIdentity: "没有上传：本库还没有身份标识。重载插件后再试。",
 		sharedBucketStateUnreadable:
 			"没有上传：读不到本设备的引用记录（{error}）。多半是密钥没有 ListBucket 权限（登记引用要用它）。",

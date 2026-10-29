@@ -690,8 +690,8 @@ export async function runTransferSuite(mod) {
 		assert.equal(calls.selection.length, 1, "应插入一次文本（一次撤销就能回退）");
 		assert.match(
 			calls.selection[0],
-			/^!\[shot\.png\]\(http:\/\/127\.0\.0\.1:\d+\/test-bucket\/shot-[0-9a-f]{64}\.png\)$/,
-			`插入的应是远端嵌入链接（显示名＝原文件名），实际：${calls.selection[0]}`
+			/^!\[shot\.png\]\(http:\/\/127\.0\.0\.1:\d+\/test-bucket\/[0-9a-f]{64}\.png\)$/,
+			`插入的应是远端嵌入链接（显示名＝原文件名，地址里只有内容哈希），实际：${calls.selection[0]}`
 		);
 		assert.equal(outcome.text, calls.selection[0], "返回的文本应与插入的一致");
 		// 缓存文件真的落盘
@@ -909,16 +909,18 @@ export async function runTransferSuite(mod) {
 		assert.equal(h.server.countByMethod("PUT"), 1, "★ 只 PUT 一次（字节一样 ⇒ 同一个对象）");
 		assert.equal(calls.selection[0].split("\n").length, 2, "⭐ 两张图都要插入链接（不能因为复用就少插一条）");
 
-		// ⭐⭐ 2026-10-14（用户第五份真机报告）：两条链接**逐字相同**才对 ——
-		// 同一个地址，且显示名都是 `a.png`（不是 `a-copy.png`：那是宿主撞名另落的序号，
-		// 显示位用它就会变成"链接文字与地址里的名字不一样"）。
+		// ⭐⭐ 2026-10-14（用户第五份真机报告）当时的结论是"两条链接逐字相同"：
+		// 同名、同地址。**理由在 1.12.0 变了** —— 地址里已经没有名字（纯哈希），
+		// 于是"链接文字与地址里的名字不一样"这种难看不再可能发生。
+		// 现在两处引用**同址**（同一份对象），显示名**各用各的文件真名**：
+		// `a.png` 显示 `a.png`，`a-copy.png` 显示 `a-copy.png`。
+		// ⚠️ 这是刻意的：编造一个不属于这一处的名字，比"两处名字不同"更容易误导
+		//（R25 的口径是"取不到名字就显示 key，绝不编造"）。
 		const lines = calls.selection[0].split("\n");
-		assert.equal(
-			lines[0],
-			lines[1],
-			`★ 两处引用必须同址、同显示名（实际 ${JSON.stringify(lines)}）`
-		);
-		assert.ok(lines[0].startsWith("![a.png]("), `★ 显示名用主干名字，实际 ${lines[0]}`);
+		const addressOf = (line) => line.slice(line.indexOf("](") + 2, -1);
+		assert.equal(addressOf(lines[0]), addressOf(lines[1]), `★ 两处引用必须**同址**（实际 ${JSON.stringify(lines)}）`);
+		assert.ok(lines[0].startsWith("![a.png]("), `★ 第一处用自己那份的名字，实际 ${lines[0]}`);
+		assert.ok(lines[1].startsWith("![a-copy.png]("), `★ 第二处也用自己那份的名字（不编造主干名），实际 ${lines[1]}`);
 	});
 
 	// 7f-3. 同一个文件的**两个包装**（名字/大小/类型全一样）⇒ 只插一条链接
@@ -949,12 +951,13 @@ export async function runTransferSuite(mod) {
 		assert.equal(h.server.countByMethod("PUT"), 1, "⭐ 重复粘贴同一张图不得再发 PUT");
 	});
 
-	// 7h. ⭐ 非 ASCII 文件名不得被**双重编码**（P0 验收标准之一）
+	// 7h. ⭐ 非 ASCII 文件名：URL 里**不可能**出现需要编码的字符（P0 验收标准之一）
 	//
-	// ⚠️ 1.2.0 之前这条必须靠 `{filename}` 自定义模板才能让中文名进 URL
-	//（默认模板是纯哈希，测不到编码路径 —— 那是个"看着在测其实没测"的假断言）。
-	// 现在形状固定成 `<原名>-<哈希>.<扩展名>`，中文名**必然**进 key，这条用例不再需要
-	// 任何设置配合，而且测的就是出厂行为本身。
+	// ⚠️ 这条用例的口径随形状变过两次，记下来免得下一代再推一遍：
+	// 1.2.0 之前默认模板是纯哈希，中文名根本进不了 URL ⇒ 那是一条"看着在测其实没测"的假断言；
+	// 1.2.0–1.11.0 名字进 key ⇒ 必须钉"恰好编码一次"（双编码会让链接 404）；
+	// 1.12.0 起 key 又回到纯哈希 ⇒ 编码问题从形状上消失，改钉"URL 只含哈希"。
+	// ⚠️ 但 alt 文字仍要保留中文名 —— 那是用户能看见的东西，不能跟着一起丢掉。
 	await withHarness(mod, {}, async (h) => {
 		const { editor, calls } = makeEditor();
 		await processTransfer(h.deps, editor, [makeFile("中文 名字.png", "image/png")]);
@@ -970,14 +973,15 @@ export async function runTransferSuite(mod) {
 		assert.ok(!url.includes("%25"), `⭐ URL 里不得出现二次编码：${url}`);
 		// ⚠️ 期望值必须**独立算出来**（内容是固定字节 ⇒ 哈希可算），
 		// 而不是从服务端解出的 key 反推 —— 那样断言就变成了"我用我自己验我自己"。
+		assert.ok(markdown.startsWith("![中文 名字.png]("), `★ alt 文字仍要保留原文件名，实际 ${markdown}`);
 		const contentHash = createHash("sha256").update(Buffer.from(IMAGE_BYTES)).digest("hex");
-		const expectedKey = `中文 名字-${contentHash}.png`;
+		const expectedKey = `${contentHash}.png`;
 		assert.ok(
-			url.endsWith(`/${encodeURIComponent(expectedKey)}`),
-			`⭐ 非 ASCII 与空格必须**恰好编码一次**，实际 ${url}`
+			url.endsWith(`/${expectedKey}`),
+			`★ URL 里只该有内容哈希（不含任何需要编码的字符），实际 ${url}`
 		);
 		// 服务端解出来的 key 应与写入笔记的那串一致（否则链接指向一个不存在的对象）
-		assert.equal(h.server.requests[0].key, expectedKey, "服务端解出的 key 应是原名 + 内容哈希（编码只发生在 URL 层）");
+		assert.equal(h.server.requests[0].key, expectedKey, "服务端解出的 key 就是内容哈希");
 	});
 
 	// 7i. 空文件列表 → 不插入、不发请求

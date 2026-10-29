@@ -537,14 +537,12 @@ export async function runLoadAcceptance(options = {}) {
 		fallbackDownload: true,
 		// ⚠️ 这两条是**1.12.0 的遗留值**（当时它们都躺在 `data.json` 里）：
 		// `sharedBucket` 是已取消的「共享桶」开关，`deviceId` 是本设备身份。
-		// 前者要折进 `contentAddressed`（那一半语义还在），后者要**搬去宿主本机存储**
-		// —— 它跟着 `data.json` 走会让同步软件把两台设备变成同一个 ID。
-		//
-		// ⚠️ 这里**故意写 false 而不是 true**：折成 true 会让整套件的对象 key 变成纯
-		// 内容寻址（`<sha256>.<ext>`），而后面几十条断言都是按「原名-哈希」写的 ——
-		// 一条迁移断言不该把整个套件的前提改掉。真值表（true / false / 没有这个键）
-		// 在 `settings-suite` 里按纯函数逐条钉。
+		// 两者现在都**只当遗留键丢掉** —— 跨设备保护已是无条件、key 形状已固定纯内容寻址
+		//（`contentAddressed` 也在 1.12.0 删了），所以 `sharedBucket` 既不需要折算也不需要保留。
+		// `deviceId` 则要**搬去宿主本机存储** —— 它跟着 `data.json` 走会让同步软件
+		// 把两台设备变成同一个 ID。
 		sharedBucket: false,
+		contentAddressed: false,
 		deviceId: LEGACY_DEVICE_ID,
 		s3: {
 			endpoint,
@@ -665,17 +663,15 @@ export async function runLoadAcceptance(options = {}) {
 		assert.equal(plugin.settings.localCopy, "keep", '★ 老 data.json 里的 "cache" 必须折成 "keep"');
 		assert.ok(!("cacheFolder" in plugin.settings), "★ 已取消的 cacheFolder 不得再出现在设置里");
 
-		// ⭐ 1.12.0：「共享桶」开关取消了，但它的**另一半**语义还在 —— 新上传的 key 形状。
+		// ⭐ 1.12.0：`sharedBucket` 与 `contentAddressed` **两个键都已作废**。
 		//
-		// 判据必须两头都钉：折算进去（否则开了几年的人升级后 key 静默变回「原名-哈希」，
-		// 桶里平白多出一代 key）＋ 遗留键从文件里消失（否则每次启动都要再折一次，
-		// 用户手动关掉 contentAddressed 会被它按回去）。
-		assert.equal(
-			plugin.settings.contentAddressed,
-			false,
-			"★ 遗留的 sharedBucket:false 折成 contentAddressed:false（真值表在 settings 套件）"
-		);
+		// 判据是"一个都不许活下来"：它们既不参与行为，也不该出现在设置对象里 ——
+		// 留下了会让设置页凭空长出早已删掉的开关，而字段表与"实际字段"两处对不上
+		// 正是这类遗留最典型的症状。
+		assert.ok(!("sharedBucket" in plugin.settings), "★ 已取消的 sharedBucket 不得出现在设置里");
+		assert.ok(!("contentAddressed" in plugin.settings), "★ 已删除的 contentAddressed 不得出现在设置里");
 		assert.ok(!("sharedBucket" in saveDataCalls[0]), "★ 重写后的设置里不得再有已取消的 sharedBucket 键");
+		assert.ok(!("contentAddressed" in saveDataCalls[0]), "★ 重写后的设置里不得再有已删除的 contentAddressed 键");
 
 		// ⭐ 1.12.0：本设备身份**必须离开 `data.json`**。
 		//
@@ -2063,12 +2059,14 @@ export async function runLoadAcceptance(options = {}) {
 				1,
 				`★ 同一份内容只应 PUT 一次（实际这些对象：${JSON.stringify(putPaths)}）`
 			);
+			// ⚠️ 1.12.0：key 只由内容决定 ⇒ 带「 1」的对象**根本不可能被生成**
+			//（名字不参与 key），这条否定式断言留着当形状守卫。
 			assert.equal(
 				server.stored(`dup 1-${dupHash}.png`),
 				null,
-				"★ 桶里不许出现带「 1」名字的对象（两份必须落在同一个 key 上）"
+				"★ 桶里不许出现带「 1」名字的对象（名字不进 key）"
 			);
-			assert.ok(server.stored(`dup-${dupHash}.png`) !== null, "★ 那个对象确实在桶里");
+			assert.ok(server.stored(`${dupHash}.png`) !== null, "★ 那个对象确实在桶里（纯哈希 key）");
 			assert.equal(await existsOnDisk(root, twinPath), true, "★ 留下来的那一份必须还在（它才是本地副本）");
 			// ⭐ 索引里**不许留下指着那份被删文件的条目**。
 			// 用户 2026-10-14 在 Android 上报"索引指向的文件已不在 1 条"，第一件要排除的
@@ -2261,7 +2259,7 @@ export async function runLoadAcceptance(options = {}) {
 			const duplicatePath = "attachments/dup4 1.png";
 			const DUP4_BYTES = new Uint8Array([...BATCH_BYTES, 0x81]);
 			const dup4Hash = createHash("sha256").update(Buffer.from(DUP4_BYTES)).digest("hex");
-			const remoteKey = `dup4-${dup4Hash}.png`;
+			const remoteKey = `${dup4Hash}.png`;
 			const notePath = "notes/重复戊.md";
 			// ⭐ 云端**已经有**它 —— 模拟"这台设备上一次插入已经把它传上去了"。
 			// 而插件**本机索引里没有这一笔**（这份内容从没在本机上传过 ⇒ 台账也答不上来）——
@@ -2363,7 +2361,7 @@ export async function runLoadAcceptance(options = {}) {
 				diagnose
 			);
 			const uploadedKey = createHash("sha256").update(Buffer.from(ORPHAN_BYTES)).digest("hex");
-			const key = `待勾选-${uploadedKey}.png`;
+			const key = `${uploadedKey}.png`;
 			assert.equal(
 				plugin.indexStore.index.wasUploaded(key),
 				true,

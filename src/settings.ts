@@ -223,9 +223,6 @@ const FACTORY_SETTINGS = {
 	// ⚠️ 默认**关**：它只写控制台，但"默认就在打日志"会让排障时无法区分
 	// "这条是本次的"还是"上次留下的"，也会让支持者收到无关的粘贴。
 	debugLogging: false,
-	// ⚠️ 默认**关**：打开它要给密钥加 `ListBucket` 权限，而且"保护成立"要求所有在用设备
-	// 都升级并打开（旧版不写声明）⇒ 出厂就开着等于给了半个承诺。
-	contentAddressed: false,
 	// 空串 = 还没生成（`loadSettings` 会补一次随机值并落盘）。空串**不能**当成身份用：
 	// 那会让所有设备写出同一个前缀，声明互相覆盖。
 	vaultId: "",
@@ -255,7 +252,6 @@ const SETTINGS_SPEC: {
 	uploadLocalFiles: boolValue(),
 	cacheLimitMb: numberValue({ min: 0, max: CACHE_LIMIT_MB_MAX }),
 	debugLogging: boolValue(),
-	contentAddressed: boolValue(),
 	vaultId: idValue(),
 	migrationState: oneOfValue(MIGRATION_STATES),
 	declarationNameBacklog: nameBacklogValue(),
@@ -330,32 +326,6 @@ export function hasLegacyObjectKeyTemplate(loaded: unknown): boolean {
  * **清理**（把遗留值从文件里写掉）、**告知**（旧的两档并成了一个开关，得说一声）。
  * ⚠️ 同样只看这一个键，不顺手清理更早版本砍掉的东西。
  */
-/**
- * 老 `data.json` 里还有没有「共享桶」那个开关（1.12.0 起取消）。
- *
- * ⚠️ 它不是"改名"那么轻 —— 那个开关以前**同时**决定两件事：
- * ① 跨设备保护开不开；② 新上传用不用纯内容寻址 key。
- * 前者已经不是可选（关着时删除链会整块跳过跨库判据 ⇒ 同桶里别的设备还在用的对象被当孤儿删掉），
- * 所以遗留值**只折算到 `contentAddressed`**，别的什么都不继承。
- */
-export function hasLegacySharedBucket(loaded: unknown): boolean {
-	const raw = isPlainRecord(loaded) ? loaded : {};
-	return Object.prototype.hasOwnProperty.call(raw, "sharedBucket");
-}
-
-/**
- * 把遗留开关的值折算成 `contentAddressed`。
- *
- * 判据只有一条：老用户当初打开"共享桶"，实际得到的就是**纯内容寻址 key**，所以照搬。
- * ⚠️ 不折算的话，开了几年的人升级后新上传会**静默**换回「原名-哈希」，桶里平白多出一代 key，
- * 而他不知道发生了什么。
- */
-export function legacyContentAddressed(loaded: unknown, current: boolean): boolean {
-	const raw = isPlainRecord(loaded) ? loaded : {};
-	if (!Object.prototype.hasOwnProperty.call(raw, "sharedBucket")) return current;
-	return raw.sharedBucket === true;
-}
-
 export function hasLegacyExternalImageDefault(loaded: unknown): boolean {
 	const raw = isPlainRecord(loaded) ? loaded : {};
 	return Object.prototype.hasOwnProperty.call(raw, "externalImageDefault");
