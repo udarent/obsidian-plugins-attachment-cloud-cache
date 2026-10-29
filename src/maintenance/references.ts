@@ -82,7 +82,7 @@
  *    唯一会动用户内容的地方；属性区"认但不改"。
  */
 
-import { PLAUSIBLE_EXTENSION } from "../vault-files";
+import { PLAUSIBLE_EXTENSION, extensionOfName, isEmbeddable } from "../vault-files";
 
 /** 一处待替换的链接：`start`/`end` 是**路径部分**在原文中的下标（左闭右开）。 */
 export interface LinkSpan {
@@ -759,7 +759,25 @@ export function planLinkRewrites(text: string, rules: readonly RewriteRule[]): R
 			out += text.slice(cursor, span.linkStart) + wikilinkToMarkdown(span, replacement, resolved.display);
 			cursor = span.linkEnd;
 		} else {
-			out += text.slice(cursor, span.start) + replacement;
+			// ⭐ 只换路径时也要看一眼 `!`：原文写了 `!`、但这个类型**不能预览**
+			//（`![](报告.docx)`、`![](包.zip)`）⇒ 顺手降级成普通链接。
+			// 不动的话用户拿到 `![](https://…/hash.zip)` —— 一个打不开的坏图，而且**看不出是我们改的**。
+			// 判据与 `wikilinkToMarkdown` 同源（`isEmbeddable`），两条路只写一次。
+			// ⚠️ 只在**确定不可嵌入**时动：`extensionOfName` 取到值且 `isEmbeddable` 为假。
+			// 取不到扩展名一律不动 —— 擅自去掉 `!` 会把用户的图片嵌入变成一行链接。
+			// ⚠️ `html` 的 `embed` 恒为 true（那是标签、不是 `!`）⇒ 必须排除，
+			// 否则 `linkStart + 1` 会把标签的 `<` 吃掉。
+			const newExt = extensionOfName(replacement);
+			const dropBang = span.kind !== "html" && span.embed && newExt !== "" && !isEmbeddable(newExt);
+			if (dropBang) {
+				// ⚠️ 不能只把 `from` 往前挪一格：`linkStart + 1` 会连 `[alt](` 一起吞掉
+				// （`![](a.zip)` 会变成 `!https://…`）。要的是"去掉首个 `!`、其余原样" ——
+				// 所以把 `linkStart..start` 这段（`![]( ` 的前半）作为一个整体，切掉第一个字符再拼。
+				const head = text.slice(span.linkStart, span.start);
+				out += text.slice(cursor, span.linkStart) + head.replace(/^!/, "") + replacement;
+			} else {
+				out += text.slice(cursor, span.start) + replacement;
+			}
 			cursor = span.end;
 		}
 		count += 1;
@@ -852,7 +870,15 @@ function wikilinkToMarkdown(span: LinkSpan, url: string, display?: string): stri
 	const fallback = named === "" ? baseNameOf(span.raw) : named;
 	const alt = (alias === "" ? fallback : alias).replace(/[[\]]/g, "");
 	const target = span.subpath === null || span.subpath === "" ? url : `${url}#${span.subpath}`;
-	return `${span.embed ? "!" : ""}[${alt}](${target})`;
+	// ⭐ `!` 要**两个条件同时成立**才保留：原文写了 `!`，**且**这个类型宿主真能预览
+	//（判据与插入那条链同源：`isEmbeddable`，也就是 `buildRemoteLink` 用的同一张表）。
+	// ⚠️ 只照抄原文的 `!` 是不够的：`![[包.zip]]` 在库里本来就显示不出来，改写后
+	// `![包.zip](https://…)` 同样是一个**坏图** —— 用户会以为是我们弄坏的。
+	// 扩展名从**改写后的地址**取（那才是链接将来的目标，扩展名一定在里面）。
+	// ⚠️ 取不到扩展名时**不动**（保守）：宁可留一个原文的 `!`，也不要擅自把图片降级成链接。
+	const ext = extensionOfName(url);
+	const keepBang = span.embed && (ext === "" || isEmbeddable(ext));
+	return `${keepBang ? "!" : ""}[${alt}](${target})`;
 }
 
 /** 取路径的最后一段（目录名不参与短名匹配）。 */

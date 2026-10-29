@@ -128,6 +128,40 @@ export async function runMaintenanceSuite(mod) {
 		"★ 无别名时 alt 取文件名"
 	);
 
+	// ⭐⭐ `!` 只在「原文写了 `!`」**且**「这个类型宿主真能预览」时保留。
+	//
+	// 用户报的原话：「不支持预览的文件,修改链接应该是"[]()"而不是"![]()",不应该有"!"」。
+	// `![[包.zip]]` 在库里本来就显示不出来（宿主不认 zip），改写后 `![包.zip](https://…)`
+	// 同样是个坏图 —— 而用户会以为是插件弄坏的。
+	// ⚠️ 判据与插入那条链同源（`isEmbeddable`），两条路只写一份。
+	const ZIP_RULES = [{ from: "包.zip", to: "https://img.example.com/aa.zip" }];
+	const zipEmbed = planLinkRewrites("![[包.zip]]", ZIP_RULES);
+	assert.equal(
+		zipEmbed.text,
+		"[包.zip](https://img.example.com/aa.zip)",
+		"★ 不可预览的类型：换形态时**必须去掉**原文的 `!`，产出普通链接"
+	);
+	// ⚠️ 这条的 alt 是空的（`![]` 原本就没写 alt）⇒ 结果是 `[](url)`，一个空链接。
+	// 这是**刻意的**：补名字只能补出哈希名（`a1b2….zip`），比空更误导 ——
+	// 与 R25「取不到名字就显示 key，绝不编造」同一条口径。
+	const zipMd = planLinkRewrites("![](包.zip)", ZIP_RULES);
+	assert.equal(
+		zipMd.text,
+		"[](https://img.example.com/aa.zip)",
+		"★ Markdown 写法同理：只换路径那条路也要去掉 `!`"
+	);
+	// ⚠️ 反向守护：不能为了修上面两条，把图片降级成链接
+	const pngStill = planLinkRewrites("![](photo2.png)", RULES);
+	assert.equal(pngStill.text, "![](https://img.example.com/abc.png)", "★ 可预览的类型仍保留 `!`");
+	// ⚠️ 取不到扩展名时**不动**（保守）：宁可留原文的 `!`，也不要擅自把内容降级
+	const NOEXT_RULES = [{ from: "noext", to: "https://img.example.com/abcdef" }];
+	const noExt = planLinkRewrites("![](noext)", NOEXT_RULES);
+	assert.equal(
+		noExt.text,
+		"![](https://img.example.com/abcdef)",
+		"★ 新地址里取不到扩展名 ⇒ 不动 `!`（认不出就别猜）"
+	);
+
 	// ⭐ `RewriteRule.display` ⇒ 整条换形态时，alt 用**规则给的名字**（= 链接目标里的名字）。
 	//
 	// 用户 2026-10-14 在 Android 上报的第五件事：重复插图时宿主另落的那一份叫
