@@ -379,9 +379,9 @@ async function main() {
 			JSON.stringify(structure.unifyButton)
 		);
 		check(
-			"③ 顺序是「统一对象名 → 测试连接」（动作排在组尾）",
-			structure.unify >= 0 && structure.test > structure.unify,
-			`下标 unify=${structure.unify} test=${structure.test}`
+			"③ 两个动作的先后：测试连接在前、统一对象名在后（先验证能连、再动桶）",
+			structure.unify >= 0 && structure.unify > structure.test,
+			`下标 test=${structure.test} unify=${structure.unify}`
 		);
 
 		// ── §3 连接自检：ListBucket 探测**无条件**跑（跨设备保护默认生效）──

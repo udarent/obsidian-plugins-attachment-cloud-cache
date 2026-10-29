@@ -243,28 +243,31 @@ export class SettingsTab extends PluginSettingTab {
 			},
 
 			{
-				// ⭐ 统一对象名（R25 / CR-15）：这是**动作**，收在同一组参数的末尾
-				//（D-89：动作不夹在参数之间）。
-				// ⚠️ 1.12.0 起「内容寻址 key」那个开关已删 —— key 形状固定为纯内容寻址，
-				// 于是这一项只剩「把存量旧 key 升级成新形状」这一个作用，不再是"某个开关的配套动作"。
-				// ⚠️ 为什么不放命令面板：它会**批量改写笔记**（复制 → 改链接 → 删旧），
-				// 而"一搜就能对全库动手"的入口形状不适合这类动作。
-				// ⚠️ 必须排在「测试连接」**之前**：那一项是"填完再去点"的最后一颗，
-				// 组尾必须是它（`test-settings-ui` 有结构守卫）。
-				name: this.t("unifyNamesName"),
-				desc: this.t("unifyNamesDesc"),
-				aliases: ["unify", "migrate", "rename", "hash", "copyobject", "统一", "迁移", "改名", "对象名", "哈希"],
-				render: (setting) => this.renderUnifyNames(setting),
-			},
-			{
 				// ⭐ 状态与按钮**在同一项里**（2026-10-18）：用户问的是"现在通不通"，
 				// 而按钮就是让这个答案变成"刚才"的那个动作 —— 分成两项，用户得在两处
 				// 之间来回对照，还会以为它们是两件不相干的事。
+				//
+				// ⭐ 2026-10-29：**排在「统一对象名」之前**（原先在它后面）。判据是操作的先后：
+				// 先验证连得上、再动桶里的东西 —— 反过来读就是"先动刀、再确认刀快不快"。
+				// ⚠️ 两个都是动作、都在参数之后（D-89 判据③"动作只在组尾"仍然成立）；
+				// 这一条只排**动作之间**的相对顺序，由 `test-settings-ui` 的结构守卫钉着。
 				name: this.t("testConnection"),
 				desc: this.t("testConnectionDesc"),
 				// 别名覆盖用户会搜的词：他们要的是"能不能给别人看"，不一定知道"ACL / 匿名读"
 				aliases: ["status", "test", "link", "share", "public", "private", "acl", "permission", "公开", "私有", "权限", "外链", "分享", "别人", "状态"],
 				render: (setting) => this.renderConnectionTest(setting),
+			},
+			{
+				// ⭐ 统一对象名（R25 / CR-15）：组尾的维护动作。
+				// ⚠️ 1.12.0 起「内容寻址 key」那个开关已删 —— key 形状固定为纯内容寻址，
+				// 于是这一项只剩「把存量旧 key 升级成新形状」这一个作用，不再是"某个开关的配套动作"。
+				// ⚠️ 为什么不放命令面板：它会**批量改写笔记**（复制 → 改链接 → 删旧），
+				// 而"一搜就能对全库动手"的入口形状不适合这类动作。
+				// ⚠️ 它必须在「测试连接」**之后**：看到灯是绿的才敢对桶动手。
+				name: this.t("unifyNamesName"),
+				desc: this.t("unifyNamesDesc"),
+				aliases: ["unify", "migrate", "rename", "hash", "copyobject", "统一", "迁移", "改名", "对象名", "哈希"],
+				render: (setting) => this.renderUnifyNames(setting),
 			},
 		];
 	}

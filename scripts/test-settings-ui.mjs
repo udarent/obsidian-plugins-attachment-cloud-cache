@@ -365,7 +365,7 @@ assert.ok(
 	assert.deepEqual(
 		groups,
 		["sectionStorage", "sectionUpload", "sectionOffline", "sectionDiagnostics"],
-		"★ 组的顺序 = 业务链的顺序（连上 → 传上来 → 本地那份怎么管 → 云端怎么清 → 出事看哪儿）；" +
+		"★ 组的顺序 = 业务链的顺序（连上 → 传上来 → 本地那份怎么管 → 出事看哪儿）；" +
 			"确实要改就先想清楚它插在哪一步之后，再改这一行"
 	);
 
@@ -373,10 +373,11 @@ assert.ok(
 	const upload = itemNames(methodBody("uploadItems"));
 	const offline = itemNames(methodBody("offlineItems"));
 
-	assert.equal(
-		storage.at(-1),
-		"testConnection",
-		"★ 「存储连接」组最后一项必须是「测试连接」—— 校验项排在要校验的字段之前，用户会填一半就去点"
+	assert.deepEqual(
+		storage.slice(-2),
+		["testConnection", "unifyNamesName"],
+		"★ 「存储连接」组的两个动作：先「测试连接」（验证连得上）、再「统一对象名」（确认能连才动桶里的东西）。" +
+			"顺序反过来就是「先动刀、再确认刀快不快」；参数一律排在它们之前（D-89 判据③：动作只在组尾）"
 	);
 	// ⚠️ 2026-10-29：「内容寻址 key」那个决策项已删（key 形状固定纯哈希，不再是可配项）。
 	// 保留一条**否定式**守卫：它不许以任何名字回来 —— 一个"机制"重新变成用户设置项，
