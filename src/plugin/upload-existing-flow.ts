@@ -222,6 +222,17 @@ export async function uploadExistingAttachments(ctx: PluginContext): Promise<voi
 	const localCount = kept.length - remoteCount;
 	/** 这一趟要处理的总数（库内 ＋ 库外）。 */
 	const total = selection.paths.length + kept.length;
+	/**
+	 * 其中「云端已经有、这次**只改链接**」的件数 —— 它们**不会传字节**。
+	 *
+	 * ⚠️ 必须与"要传的"分开报（用户 2026-10-29：「云端已经有的文件就不用再次上传了」）：
+	 * 行为本来就对（索引命中 / 台账认亲 / 批量预检三条路都会跳过字节），但确认框那句
+	 * 「将上传 N 个」用的是 `total`，于是把只改链接的也数成了"要传" —— 用户看到的是
+	 * "明明云端有了，为什么还说上传 N 个"，第一反应就是去重坏了。
+	 */
+	const repairCount = selection.repairPaths.length;
+	/** 真正要传字节的件数（总数的另一半）。 */
+	const transferCount = total - repairCount;
 
 	debugTimed(debug, "上传候选", startedAt, {
 		库内文件: files.length,
@@ -284,8 +295,10 @@ export async function uploadExistingAttachments(ctx: PluginContext): Promise<voi
 	const lines: string[] = [];
 	// ⚠️ 只有真有东西要传时才说"要传几件"：`total === 0` 那一支是**纯清理**
 	//（档位是"不保留"、而这一趟没有新附件可传）—— 那时候说"上传 0 个"只会让人困惑。
-	if (total > 0) {
-		lines.push(ctx.t("uploadAllSummary", { count: total }));
+	// ⭐ 2026-10-29：用 `transferCount` 而不是 `total` —— 后者含"只改链接"的那些，
+	// 说成"上传 N 个"就是假话（用户会以为去重坏了）。
+	if (transferCount > 0) {
+		lines.push(ctx.t("uploadAllSummary", { count: transferCount }));
 	}
 	if (remoteCount > 0) {
 		lines.push(ctx.t("uploadAllExternal", { count: remoteCount, sites: siteSummary(ctx, external.sites) }));
@@ -299,8 +312,15 @@ export async function uploadExistingAttachments(ctx: PluginContext): Promise<voi
 		// ⚠️ 它们**不在**总数里（会被跳过），所以单独一句 —— 混进总数会让"几件"变成假话。
 		lines.push(ctx.t("uploadAllMissingLocal", { count: missing.length }));
 	}
-	if (selection.repairPaths.length > 0) {
-		lines.push(ctx.t("uploadAllRepairOnly", { count: selection.repairPaths.length }));
+	// ⭐ 「已经在你的存储里」那一半：与上面那句**互斥地**说清 ——
+	// 有别的要传时用「其中 N 个」（`uploadAllRepairOnly`），整批都是这种时用单独一句
+	//（`uploadAllRepairOnlyAll`）—— 否则"其中"两个字会指不到任何人。
+	if (repairCount > 0) {
+		lines.push(
+			transferCount > 0
+				? ctx.t("uploadAllRepairOnly", { count: repairCount })
+				: ctx.t("uploadAllRepairOnlyAll")
+		);
 	}
 	if (total > 0) lines.push(ctx.t("uploadAllKeeps"));
 
@@ -337,7 +357,12 @@ export async function uploadExistingAttachments(ctx: PluginContext): Promise<voi
 			? {
 					title: ctx.t("uploadAllTitle"),
 					lines,
-					cta: ctx.t("uploadAllCta", { count: total }),
+					// ⚠️ 按钮上的数字只数**真要传的**：整批都是"只改链接"时，
+					// 「上传 0 个」既看不懂也不像话 ⇒ 换成「改写 N 个链接」。
+					cta:
+						transferCount > 0
+							? ctx.t("uploadAllCta", { count: transferCount })
+							: ctx.t("uploadAllCtaRepair", { count: repairCount }),
 					destructive: cleanupCount > 0,
 				}
 			: {

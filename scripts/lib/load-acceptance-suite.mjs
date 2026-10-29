@@ -1219,11 +1219,27 @@ export async function runLoadAcceptance(options = {}) {
 		// ⚠️ 2026-10-23：这条信息从"那一行的行内标签"搬到**确认框的第二行** ——
 		// 没有清单了，而"其中 n 个只改链接、不重传字节"必须让用户在按确认**之前**看到。
 		const repairConfirm = (confirms.at(-1)?.lines ?? []).join(" ｜ ");
+		// ⚠️ 用**译文**比，不写死中文：套件跑的是英文语种（`plugin.t` 的默认档），
+		// 写死"只改链接"会在这里永远假红。
+		// ⭐ 2026-10-29：这一整批**都是** repair（只有 1 个文件，且它已在云端）⇒ 走的是
+		// 「这些文件都已经在你的存储里」那句（`uploadAllRepairOnlyAll`，无数量）。
+		// 有别的要传时才用「其中 N 个」（`uploadAllRepairOnly`）—— 否则"其中"指不到任何人。
 		assert.ok(
-			// ⚠️ 用**译文**比，不写死中文：套件跑的是英文语种（`plugin.t` 的默认档），
-			// 写死"只改链接"会在这里永远假红。
-			repairConfirm.includes(plugin.t("uploadAllRepairOnly", { count: 1 })),
-			`★★ 确认框要说明其中几件只改链接（否则用户以为在重传一遍）：${repairConfirm}`
+			repairConfirm.includes(plugin.t("uploadAllRepairOnlyAll")),
+			`★★ 确认框要说明「这些已经在你的存储里、只改链接」（否则用户以为在重传一遍）：${repairConfirm}`
+		);
+		// ⭐⭐ 配合的反向守卫（用户 2026-10-29：「云端已经有的文件就不用再次上传了」）：
+		// 满屏都是"只改链接"的时候，**不许**再说"将上传 N 个附件" —— 那句话把 repair
+		// 也算进了"要传"，用户看到"明明云端有了，为什么还说上传"的第一反应就是去重坏了。
+		assert.ok(
+			!repairConfirm.includes(plugin.t("uploadAllSummary", { count: 1 })),
+			`★★ 全都已在云端时不许说「将上传 N 个」：${repairConfirm}`
+		);
+		// 按钮同理：不许出现「Upload 0」，应换成「改写 N 个链接」。
+		assert.equal(
+			confirms.at(-1)?.cta,
+			plugin.t("uploadAllCtaRepair", { count: 1 }),
+			`★★ 全是 repair 时按钮应是「改写 N 个链接」，实际 ${confirms.at(-1)?.cta}`
 		);
 
 		// ============================================================

@@ -388,6 +388,8 @@ export const I18N: Record<string, Locale> = {
 		uploadAllLocal: "{count} of them are files on this computer (outside your vault): {paths}",
 		uploadAllMissingLocal: "{count} local file(s) are gone and will be skipped.",
 		uploadAllRepairOnly: "{count} of them are already in your storage — only their links are rewritten, no bytes are uploaded again.",
+		uploadAllRepairOnlyAll: "These files are already in your storage — this run only rewrites the links in your notes.",
+		uploadAllCtaRepair: "Rewrite {count} link(s)",
 		uploadAllKeeps: "Your files stay where they are and keep their names. Nothing in your storage is deleted.",
 		// ⭐ 2026-10-24：本地副本按档位顺手清（设置页那个按钮取消后，这里是唯一的说明处）。
 		uploadAllCleanupAll:
@@ -399,9 +401,9 @@ export const I18N: Record<string, Locale> = {
 		// ── 跑批期间的进度（一条常驻通知，跑完原地变结果）──
 		// ⚠️ 三条缺一不可：没有第一条，用户不知道"点完之后在等什么"；
 		// 没有第三条，进度条满了却没结束会像卡死（改写那一趟不在逐项回调里）。
-		uploadAllProgressTitle: "Uploading to your storage",
-		uploadAllProgressCount: "Uploading {done} of {total}",
-		uploadAllProgressCountFailed: "Uploading {done} of {total} — {failed} failed so far",
+		uploadAllProgressTitle: "Working on your attachments",
+		uploadAllProgressCount: "Processed {done} of {total}",
+		uploadAllProgressCountFailed: "Processed {done} of {total} — {failed} failed so far",
 		uploadAllProgressRewriting: "Rewriting the links in your notes…",
 		uploadAllRunning: "This is already running. Let it finish first.",
 		// ⭐ 2026-10-24：本机文件是**另一个**开关（站外那组管的是"别人的服务器"）。
@@ -767,6 +769,8 @@ export const I18N: Record<string, Locale> = {
 		uploadAllLocal: "其中 {count} 个是这台电脑上的文件（库外）：{paths}",
 		uploadAllMissingLocal: "另有 {count} 个本机文件已经不在，会跳过。",
 		uploadAllRepairOnly: "其中 {count} 个已经在你的存储里，这次只改链接、不重传。",
+		uploadAllRepairOnlyAll: "这些文件都已经在你的存储里，这次只改写笔记里的链接，不会再传一遍。",
+		uploadAllCtaRepair: "改写 {count} 个链接",
 		uploadAllKeeps: "文件留在原处、名字不变；云端那份不会被删除。",
 		// ⭐ 2026-10-24：本地副本按档位顺手清（设置页那个按钮取消后，这里是唯一的说明处）。
 		uploadAllCleanupAll: "另外会永久删除 {count} 份已上传文件的本地副本（约 {mb} MB），把空间腾出来。",
@@ -774,9 +778,9 @@ export const I18N: Record<string, Locale> = {
 		uploadAllCleanupSkipped: "本地副本没有清理：{reason}",
 		uploadAllCta: "上传 {count} 个",
 		// ── 跑批期间的进度（一条常驻通知，跑完原地变结果）──
-		uploadAllProgressTitle: "正在上传到你的存储",
-		uploadAllProgressCount: "正在上传 {done} / {total}",
-		uploadAllProgressCountFailed: "正在上传 {done} / {total}（已失败 {failed} 个）",
+		uploadAllProgressTitle: "正在处理附件",
+		uploadAllProgressCount: "已处理 {done} / {total}",
+		uploadAllProgressCountFailed: "已处理 {done} / {total}（已失败 {failed} 个）",
 		uploadAllProgressRewriting: "正在改写笔记里的链接…",
 		uploadAllRunning: "上一次还在跑，等它结束再点。",
 		// ⭐ 2026-10-24：本机文件是**另一个**开关（站外那组管的是"别人的服务器"）。
