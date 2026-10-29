@@ -1458,10 +1458,22 @@ export async function runLoadAcceptance(options = {}) {
 			// ── ① 默认档（关）⇒ 不碰 ──
 			assert.equal(plugin.settings.uploadLocalFiles, false, "前提：这一段从默认档开始");
 			const beforeLocal = server.countObjectPuts();
+			const confirmsBefore = confirms.length;
 			mockObsidian.Notice.instances.length = 0;
 			runUpload();
 			await waitFor(async () => mockObsidian.Notice.instances.length > 0, "这一趟给出了结论", 10000, diagnose);
 			assert.equal(server.countObjectPuts(), beforeLocal, "★★ 设置里没允许 ⇒ 本机文件一个都不传");
+			// ⭐⭐ 比 PUT 计数更直接的一条（2026-10-29 补）：这一趟**唯一的候选**就是那个本机文件，
+			// 所以开关关着时 `total === 0` ⇒ 直接走「没有需要处理的附件」那条早退，**连确认框都不该弹**。
+			// ⚠️ 为什么必须补：原先只比 PUT 数，而 `mutate-upload-existing-flow` 的
+			// 「本机文件不看设置开关」把 `includeLocalFiles` 改成 `true` 之后**照样绿**
+			// （PUT 数没变，因为确认框我们没点、上传根本没开始）—— 那条变异因此长期"漏过"。
+			// 有了这条，候选一旦混进本机文件就会多弹一次确认框 ⇒ 当场红。
+			assert.equal(
+				confirms.length,
+				confirmsBefore,
+				"★★ 设置里没允许 ⇒ 连确认框都不该弹（这一趟唯一的候选就是那个本机文件）"
+			);
 			assert.ok(
 				(await readFile(join(root, localNote), "utf8")).includes(localUrl),
 				"★★ 那条本机链接必须原样留着"
