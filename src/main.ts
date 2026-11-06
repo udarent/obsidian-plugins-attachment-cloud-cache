@@ -50,7 +50,6 @@ import { createEditorHandlers } from "./host/editor-bridge";
 import { createAnnounceGate } from "./host/intercept";
 import { runBatchUpload, runEviction, scanReferences } from "./maintenance/run";
 import type { MaintenanceDeps } from "./maintenance/run";
-import { listRemoteContentHashes } from "./maintenance/remote-inventory";
 import { createCacheRotator } from "./maintenance/rotation";
 import type { CacheRotator } from "./maintenance/rotation";
 import { createAttachWatcher, createSelfWriteLedger } from "./maintenance/attach-watch";
@@ -814,14 +813,6 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			// ⭐ 淘汰本地副本前的**云端复核**（HEAD）：确认对象此刻真的还在。
 			// 删文件前的安全线 —— 答不上来（离线、出错）一律当作"没有"，于是不删。
 			confirmRemote: (key) => this.isObjectInCloud(key),
-			// ⭐ 批量上传前的云端盘点：列桶 → 内容哈希集合（见 `remote-inventory.ts`）。
-			// 拿不到客户端 / 列不到（无 ListBucket 权限、翻不完、网络错）⇒ 返回 null，
-			// `runBatchUpload` 据此退回逐文件 HEAD —— 上传本身照常，绝不因为盘不动而失败。
-			listRemoteHashes: async () => {
-				const client = this.buildClient();
-				if (!client) return null;
-				return listRemoteContentHashes(client);
-			},
 			// ⭐⭐ 整批一次写云端声明：身份判据只有 `planAttachmentRef` 一份，
 			// 声明写入复用现成的 `rememberReferences(refs[])`（它本来就收数组）。
 			planAttachmentRef: (bytes, request) => planAttachmentRef(bytes, request),

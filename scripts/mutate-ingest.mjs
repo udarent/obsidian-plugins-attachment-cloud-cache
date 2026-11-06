@@ -192,15 +192,6 @@ await runMutations({
 			expect: "云端已有 ⇒ 直接复用（不许再传一遍）",
 		},
 		{
-			// 后果：列桶已经给出"这个哈希在云端"，却仍去 PUT —— 查表这半边失效，
-			// 批量预检从"零网络"退回"重传整份字节"（与上面那条的差别：这条只伤查表那一步，
-			// HEAD 那条老路还在，所以症状是"列桶白列、照样传"）。
-			name: "★ 列桶命中却被忽略（哈希在集合里仍重传）",
-			from: "if (request.remoteHashes.has(contentHash)) reuseCloudObject = true;",
-			to: "if (false) reuseCloudObject = true;",
-			expect: "哈希在云端集合里 ⇒ 直接复用",
-		},
-		{
 			// 后果：整批声明已经写好，`ingest` 仍每个文件各做一次「列声明 → 读 → PUT → 校验」，
 			// 优化完全失效（用户看到的还是 1s/文件）。
 			name: "★★ 忽略整批声明结果（每个文件仍逐次写声明）",

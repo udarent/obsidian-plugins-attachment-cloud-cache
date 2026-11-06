@@ -718,48 +718,6 @@ export async function runIngestSuite(mod) {
 		assert.equal(h.server.countByMethod("PUT"), 1, "★ 没开预检时不该省掉这次 PUT");
 	});
 
-	// ⭐ 批量预检的「列桶」形态：调用方已盘好云端哈希集合 ⇒ 查表，零网络。
-	// 用「会抛错」的 probeRemote 当探针：若误走回逐 key HEAD，抛错被吞 ⇒ 当作"不在" ⇒
-	// 走 PUT ⇒ 下面 reused/PUT=0 就会红 —— 精确钉住"查表、没走 HEAD"这件事本身。
-	await withHarness(mod, { probeRemote: async () => { throw new Error("不该走 HEAD 预检"); } }, async (h) => {
-		const result = await ingestAttachment(h.deps, {
-			bytes: HOSTILE_BYTES,
-			name: "batch-preflight.png",
-			mime: "image/png",
-			preflight: true,
-			remoteHashes: new Set([sha256Hex(HOSTILE_BYTES)]),
-		});
-		assert.equal(result.status, "reused", "★ 哈希在云端集合里 ⇒ 直接复用（查表，不走逐 key HEAD）");
-		assert.equal(h.server.countByMethod("PUT"), 0, "★ 列桶命中时一次 PUT 都不该发");
-	});
-
-	// 对照：哈希**不在**集合里 ⇒ 照常上传。用「返回 etag」的 probeRemote 当探针：
-	// 若空 Set 被误当成"没盘过"走回 HEAD，会拿到 etag ⇒ reused ⇒ 下面 uploaded 就红。
-	await withHarness(mod, { probeRemote: async () => "etag-from-cloud" }, async (h) => {
-		const result = await ingestAttachment(h.deps, {
-			bytes: HOSTILE_BYTES,
-			name: "batch-preflight.png",
-			mime: "image/png",
-			preflight: true,
-			remoteHashes: new Set(),
-		});
-		assert.equal(result.status, "uploaded", "★ 空 Set 也是'盘过了'：哈希不在 ⇒ 照常上传，不走 HEAD 预检");
-		assert.equal(h.server.countByMethod("PUT"), 1, "★ 必须真的传一次（查表判'不在'≠跳过）");
-	});
-
-	// 对照：`remoteHashes: null`（没盘到）⇒ 退回逐文件 HEAD（现状那条老路）。
-	await withHarness(mod, { probeRemote: async () => "etag-from-cloud" }, async (h) => {
-		const result = await ingestAttachment(h.deps, {
-			bytes: HOSTILE_BYTES,
-			name: "batch-preflight.png",
-			mime: "image/png",
-			preflight: true,
-			remoteHashes: null,
-		});
-		assert.equal(result.status, "reused", "★ 没做批量盘点（null）⇒ 退回逐文件 HEAD，行为与现状一致");
-		assert.equal(result.etag, "etag-from-cloud", "★ HEAD 那条路仍要把云端 etag 记下来");
-	});
-
 	await withHarness(mod, { probeRemote: null }, async (h) => {
 		await h.write("attachments/photo.png", Buffer.from(HOSTILE_BYTES));
 		await h.write("attachments/photo 1.png", Buffer.from(HOSTILE_BYTES));

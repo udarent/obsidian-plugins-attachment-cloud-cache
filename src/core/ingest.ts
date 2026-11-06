@@ -191,17 +191,6 @@ export interface IngestRequest {
 	 */
 	preflight?: boolean;
 	/**
-	 * 调用方**已经批量盘过一遍云端**的结果：桶里现有对象的**内容哈希集合**。
-	 *
-	 * 有值（含空 Set）⇒ 第 2d 步**不再逐 key HEAD**，直接 `has(contentHash)` 查表，
-	 * 零网络。`null` / 缺省 ⇒ 没做批量盘点（列桶拿不到权限 / 翻不完），退回逐文件 HEAD。
-	 *
-	 * ⚠️ 只有配合 `preflight: true` 才有意义（第 2d 步受它前置）；单独传是空转。
-	 * ⚠️ 拿它复用的对象**没有 etag**（列桶不返回 etag）—— 与台账那条路一样留空，
-	 * etag 只供展示与复核、不参与任何判据（见 {@link IngestResult.etag}）。
-	 */
-	remoteHashes?: ReadonlySet<string> | null;
-	/**
 	 * 调用方**已经整批写进云端声明**的内容哈希集合（见 `IngestRequest.declaredHashes`
 	 * 的装配处：`maintenance/run.ts` 的整批声明阶段）。
 	 *
@@ -707,17 +696,10 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 	// ⚠️ 只问"索引里没有这条 key"的：索引命中的那些会走 `decide` 的复用分支，零请求。
 	// ⚠️ 探测抛错仍当作"不在"（多一次 PUT 是幂等的，反过来会留下打不开的图）。
 	if (!reuseCloudObject && request.preflight && !index.get(key)) {
-		if (request.remoteHashes) {
-			// ⭐ 调用方已批量盘过云端（列桶 → 内容哈希集合）⇒ 查表即可，零网络。
-			// etag 拿不到（列桶不返回）⇒ 留空，见 `IngestRequest.remoteHashes` 的说明。
-			if (request.remoteHashes.has(contentHash)) reuseCloudObject = true;
-		} else {
-			// 没做批量盘点（列桶拿不到权限 / 翻不完）⇒ 退回逐文件 HEAD。
-			const probedEtag = await askCloud();
-			if (probedEtag !== null) {
-				reuseCloudObject = true;
-				etag = probedEtag;
-			}
+		const probedEtag = await askCloud();
+		if (probedEtag !== null) {
+			reuseCloudObject = true;
+			etag = probedEtag;
 		}
 	}
 

@@ -76,16 +76,6 @@ export interface MaintenanceDeps {
 	 */
 	confirmRemote?: (key: string) => Promise<boolean>;
 	/**
-	 * ⭐ 批量上传前的**云端盘点**：列桶 → 反推内容哈希集合（见 `remote-inventory.ts`）。
-	 *
-	 * `runBatchUpload` 在库内循环**之前**调一次，把结果传给每个 `ingest` 的
-	 * `remoteHashes`，让「这个文件传过没有」从逐 key HEAD 变成一次列桶 + 查表。
-	 *
-	 * 返回 `null` = 列不到（拿不到 `ListBucket` 权限 / 翻不完 / 网络错）⇒ 退回逐文件
-	 * HEAD（`ingest` 原有的 `preflight` 那条路）。未提供 ⇒ 同 `null`。
-	 */
-	listRemoteHashes?: () => Promise<Set<string> | null>;
-	/**
 	 * ⭐ 由字节推导出云端声明要登记的三件事（= `core/ingest.ts::planAttachmentRef`）。
 	 *
 	 * 批量编排层在库内循环**之前**用它攒整批引用。⚠️ 只经 deps 注入而不直接 import
@@ -626,17 +616,6 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 	const fileRules: RewriteRule[] = [];
 
 	/**
-	 * ⭐ 批量云端盘点（一次列桶换掉 N 次逐 key HEAD）。
-	 *
-	 * 在库内循环**之前**做一次：列桶 → 内容哈希集合，然后每个 `ingest` 用 `contentHash`
-	 * 查表判断"传过没有"，零网络。列不到（`null`）就退回逐文件 HEAD —— 上传本身照常。
-	 *
-	 * ⚠️ 只在**真有库内候选要传**时才列：候选为空（纯清理 / 纯改链接）时列桶是纯浪费，
-	 * 而且没有消费方（`ingest` 根本不会被调）。缺了 `listRemoteHashes` 注入同样不列。
-	 */
-	const remoteHashes = chosenPaths.length > 0 && deps.listRemoteHashes ? await deps.listRemoteHashes() : null;
-
-	/**
 	 * ⭐⭐ **整批一次**写云端引用声明（D-86「按意图批次整份写」）。
 	 *
 	 * 逐文件那条路给每个真新文件平白加了 3~4 次串行往返（列声明 → 读 → PUT → 校验），
@@ -721,8 +700,6 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 					// ⭐ 只在这一条路上预检（见 `IngestRequest.preflight`）：批量要处理的
 					// 正是"历史上传过、这台设备答不上来"的那一批，一次 HEAD 能省整份字节。
 					preflight: true,
-					// ⭐ 上面盘好的云端哈希集合：有值 ⇒ 查表（零网络）；`null` ⇒ 退回逐文件 HEAD。
-					remoteHashes,
 					// ⭐ 上面整批写好的声明：有值 ⇒ 按 hash 查表跳过逐文件声明；
 					// `undefined` ⇒ 没写成（或缺注入），退回现状逐文件写。
 					declaredHashes,
