@@ -718,6 +718,48 @@ export async function runIngestSuite(mod) {
 		assert.equal(h.server.countByMethod("PUT"), 1, "★ 没开预检时不该省掉这次 PUT");
 	});
 
+	// ⭐ 批量预检的「列桶」形态：调用方已盘好云端哈希集合 ⇒ 查表，零网络。
+	// 用「会抛错」的 probeRemote 当探针：若误走回逐 key HEAD，抛错被吞 ⇒ 当作"不在" ⇒
+	// 走 PUT ⇒ 下面 reused/PUT=0 就会红 —— 精确钉住"查表、没走 HEAD"这件事本身。
+	await withHarness(mod, { probeRemote: async () => { throw new Error("不该走 HEAD 预检"); } }, async (h) => {
+		const result = await ingestAttachment(h.deps, {
+			bytes: HOSTILE_BYTES,
+			name: "batch-preflight.png",
+			mime: "image/png",
+			preflight: true,
+			remoteHashes: new Set([sha256Hex(HOSTILE_BYTES)]),
+		});
+		assert.equal(result.status, "reused", "★ 哈希在云端集合里 ⇒ 直接复用（查表，不走逐 key HEAD）");
+		assert.equal(h.server.countByMethod("PUT"), 0, "★ 列桶命中时一次 PUT 都不该发");
+	});
+
+	// 对照：哈希**不在**集合里 ⇒ 照常上传。用「返回 etag」的 probeRemote 当探针：
+	// 若空 Set 被误当成"没盘过"走回 HEAD，会拿到 etag ⇒ reused ⇒ 下面 uploaded 就红。
+	await withHarness(mod, { probeRemote: async () => "etag-from-cloud" }, async (h) => {
+		const result = await ingestAttachment(h.deps, {
+			bytes: HOSTILE_BYTES,
+			name: "batch-preflight.png",
+			mime: "image/png",
+			preflight: true,
+			remoteHashes: new Set(),
+		});
+		assert.equal(result.status, "uploaded", "★ 空 Set 也是'盘过了'：哈希不在 ⇒ 照常上传，不走 HEAD 预检");
+		assert.equal(h.server.countByMethod("PUT"), 1, "★ 必须真的传一次（查表判'不在'≠跳过）");
+	});
+
+	// 对照：`remoteHashes: null`（没盘到）⇒ 退回逐文件 HEAD（现状那条老路）。
+	await withHarness(mod, { probeRemote: async () => "etag-from-cloud" }, async (h) => {
+		const result = await ingestAttachment(h.deps, {
+			bytes: HOSTILE_BYTES,
+			name: "batch-preflight.png",
+			mime: "image/png",
+			preflight: true,
+			remoteHashes: null,
+		});
+		assert.equal(result.status, "reused", "★ 没做批量盘点（null）⇒ 退回逐文件 HEAD，行为与现状一致");
+		assert.equal(result.etag, "etag-from-cloud", "★ HEAD 那条路仍要把云端 etag 记下来");
+	});
+
 	await withHarness(mod, { probeRemote: null }, async (h) => {
 		await h.write("attachments/photo.png", Buffer.from(HOSTILE_BYTES));
 		await h.write("attachments/photo 1.png", Buffer.from(HOSTILE_BYTES));
@@ -1358,6 +1400,45 @@ export async function runIngestSuite(mod) {
 		);
 		assert.equal(accepted.status, "uploaded", "登记成功 ⇒ 照常上传");
 		assert.equal(h.server.countByMethod("PUT"), 1, "只传了这一份");
+	});
+
+	// ============================================================
+	// 23b. ⭐⭐ 整批声明已覆盖这个 hash ⇒ **不再逐文件**写声明
+	//      （判据按 hash 查表：阶段一之后文件被改动也能自动兜底）
+	// ============================================================
+	const declaredHash = sha256Hex(HOSTILE_BYTES);
+
+	await withHarness(mod, {}, async (h) => {
+		const seen = [];
+		const result = await ingestAttachment(
+			{ ...h.deps, declareRef: async (ref) => { seen.push(ref); return true; } },
+			{ bytes: HOSTILE_BYTES, name: "photo.png", mime: "image/png", declaredHashes: new Set([declaredHash]) }
+		);
+		assert.equal(result.status, "uploaded", "★ 整批已登记 ⇒ 照常传对象（不是降级）");
+		assert.equal(seen.length, 0, "★★ hash 命中整批声明 ⇒ 一次逐文件声明都不该再发");
+		assert.equal(h.server.countByMethod("PUT"), 1, "★ 跳过的只是声明，对象 PUT 仍在");
+	});
+
+	// 对照①：集合里**没有**它 ⇒ 必须补一次逐文件声明（阶段一之后文件被改动就走这条）
+	await withHarness(mod, {}, async (h) => {
+		const seen = [];
+		const result = await ingestAttachment(
+			{ ...h.deps, declareRef: async (ref) => { seen.push(ref); return true; } },
+			{ bytes: HOSTILE_BYTES, name: "photo.png", mime: "image/png", declaredHashes: new Set(["别的hash"]) }
+		);
+		assert.equal(result.status, "uploaded", "没命中 ⇒ 照常上传");
+		assert.equal(seen.length, 1, "★ 没命中必须补一次声明（否则对象传上去却没有保护）");
+	});
+
+	// 对照②：整批声明没做成 ⇒ 与改动前一字不差，逐文件写
+	await withHarness(mod, {}, async (h) => {
+		const seen = [];
+		const result = await ingestAttachment(
+			{ ...h.deps, declareRef: async (ref) => { seen.push(ref); return true; } },
+			{ bytes: HOSTILE_BYTES, name: "photo.png", mime: "image/png" }
+		);
+		assert.equal(result.status, "uploaded", "没传集合 ⇒ 现状行为");
+		assert.equal(seen.length, 1, "★ 没传集合 ⇒ 逐文件声明（粘贴 / 站外那两条路仍走它）");
 	});
 
 	// ============================================================

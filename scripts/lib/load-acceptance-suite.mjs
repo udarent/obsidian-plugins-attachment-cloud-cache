@@ -2569,6 +2569,71 @@ export async function runLoadAcceptance(options = {}) {
 		// 由 8b2' 那段的 `PUT` 计数断言钉着。`selectUploadCandidates` 里那个口子本身没删
 		//（`maintenance` 套件还在测它），只是**没有任何调用方打开它**了。
 		// ============================================================
+		// 8k. ⭐⭐ 整批上传只写**一次**云端声明（P0：把逐文件的读-改-写收成整批一次）
+		//
+		// 改造前每个新文件都要「列声明 → 读 → PUT → 校验」，N 个文件 = N 次读-改-写；
+		// 现在整批引用在**所有 PUT 之前**一次写完。
+		// ⚠️ 必须**多个**新文件才测得出来：单文件时两条路都恰好 1 次声明 PUT。
+		// ⚠️ 这条同时守着 `main.ts` 的装配 —— 少了 `declareRefBatch` 注入就退回逐文件，
+		//    声明 PUT 立刻变成 N 次（"层对了但没人调用"，本项目踩过多次）。
+		// ============================================================
+		{
+			const batchPaths = ["attachments/batch-p0-a.png", "attachments/batch-p0-b.png", "attachments/batch-p0-c.png"];
+			for (let i = 0; i < batchPaths.length; i += 1) {
+				await writeFile(join(root, batchPaths[i]), Buffer.from([...BATCH_BYTES, 0xa0 + i]));
+			}
+			const batchNote = "notes/整批声明.md";
+			await writeFile(join(root, batchNote), batchPaths.map((p) => `![x](${p})`).join("\n") + "\n", "utf8");
+			// ⚠️ 合并而不是覆盖：前面几节还依赖自己那份 resolvedLinks 的结论。
+			const links = {};
+			for (const p of batchPaths) links[p] = 1;
+			harness.setResolvedLinks({ ...app.metadataCache.resolvedLinks, [batchNote]: links });
+			await harness.refreshPathCache();
+
+			plugin.confirmMaintenance = async () => true;
+			const reqBefore = server.requests.length;
+			const objBefore = objectPutCount(server);
+			runUpload();
+			await waitFor(
+				() => objectPutCount(server) >= objBefore + batchPaths.length,
+				"整批声明后三个新对象都上传完",
+				8000,
+				diagnose
+			);
+
+			const round = server.requests.slice(reqBefore);
+			const declPuts = round.filter((r) => r.method === "PUT" && isDeclarationRequest(r));
+			const objPuts = round.filter((r) => r.method === "PUT" && !isDeclarationRequest(r));
+			assert.ok(objPuts.length >= batchPaths.length, `★ 这一轮至少传了 ${batchPaths.length} 个新对象（实际 ${objPuts.length}）`);
+			assert.equal(
+				declPuts.length,
+				1,
+				`★★ 整批一次声明：${batchPaths.length} 个新文件只该有 1 次声明 PUT，实际 ${declPuts.length} 次 ` +
+					`（退回逐文件写了？检查 declareRefBatch 装配与 run.ts 的传参）`
+			);
+			const firstDecl = round.findIndex((r) => r.method === "PUT" && isDeclarationRequest(r));
+			const firstObj = round.findIndex((r) => r.method === "PUT" && !isDeclarationRequest(r));
+			assert.ok(firstDecl >= 0 && firstDecl < firstObj, "★★ 声明必须先于任何对象 PUT（否则有一段没有保护的窗口）");
+
+			// ⭐⭐ P1（R14 重评）：**并发真的打开**的结构证据。
+			// 看请求序列而不是耗时（耗时对本机负载敏感，会假红）：串行必然是
+			// 「PUT → 传后校验 HEAD → 下一个 PUT」，第一个 HEAD 之前只会有 1 个对象 PUT；
+			// 有限并发下同一批 worker 的 PUT 会先一起到达 ⇒ 第一个 HEAD 之前有 ≥2 个对象 PUT。
+			// 这条同时守着装配层：整批声明没注入 ⇒ 闸门关着 ⇒ 退回串行 ⇒ 这里立刻红。
+			const objPutAt = [];
+			round.forEach((r, i) => {
+				if (r.method === "PUT" && !isDeclarationRequest(r)) objPutAt.push(i);
+			});
+			const firstHeadAfterFirstPut = round.findIndex((r, i) => i > objPutAt[0] && r.method === "HEAD");
+			const putsBeforeFirstHead = firstHeadAfterFirstPut < 0
+				? objPutAt.length
+				: objPutAt.filter((at) => at < firstHeadAfterFirstPut).length;
+			assert.ok(
+				putsBeforeFirstHead >= 2,
+				`★★ 有限并发上传没生效：第一个校验 HEAD 之前只有 ${putsBeforeFirstHead} 个对象 PUT ` +
+					"（仍是「传完一个、校验完一个」的串行节奏 —— 检查 declaredHashes 闸门与并发池）"
+			);
+		}
 
 		// ============================================================
 		// 9. 卸载：事件引用必须能被宿主注销（否则热重载后每粘一次插两条）

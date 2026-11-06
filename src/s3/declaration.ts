@@ -35,7 +35,7 @@ import { hexEncode, sha256Pure, utf8Bytes } from "./hash";
 /** 声明前缀。**以下划线开头**：与对象命名空间隔开；`v1` 是格式版本。 */
 export const DECLARATION_ROOT = "_acc/v1";
 
-/** 一个段的容量。500 条 ≈ 50KB —— 这就是"每次上传只多写一份声明"的成本上限。 */
+/** 一个段的容量。500 条 ≈ 50KB —— 这就是"每批上传只多写一份声明"的成本上限。 */
 export const SEGMENT_LIMIT = 500;
 
 /**
@@ -338,15 +338,28 @@ export function planUpdates(input: PlanInput): DeclarationStep[] {
 		touched.add(owner.number);
 	}
 
+	/**
+	 * 「重复确认」不该改写声明：只有显示名 / 扩展名真的变了才要重写。
+	 * ⚠️ 故意**不比 `addedAt`**：`rememberReferences` 每次登记都取当前时间，
+	 *    把它算进去会让同一条引用永远判「变了」⇒ `head.json` 每轮无条件重写
+	 *    （多一次 PUT ＋ 传后校验 HEAD）。沿用它还保住封存切块的排序键
+	 *    （见 `renameReference`：改名不是重新加入，不能让 addedAt 跳到最新）。
+	 */
+	const sameRef = (a: DeclarationRef | undefined, b: DeclarationRef): boolean =>
+		a !== undefined && a.name === b.name && a.ext === b.ext;
+
 	// ② 新增 / 改名：已在某个段里 ⇒ 重写那一段（**不能**在 head 里再存一份）
 	for (const [hash, ref] of Object.entries(input.adds ?? {})) {
 		const owner = segmentHolding(hash);
 		if (owner) {
+			if (sameRef(owner.refs[hash], ref)) continue; // 幂等：不重写这一段
 			owner.refs[hash] = ref;
 			touched.add(owner.number);
 			continue;
 		}
-		// head 里已有同 hash（改名或重复确认）⇒ 覆盖，不新增条目
+		// head 里已有同 hash 且内容一致（重复确认）⇒ 一个字节都不写
+		if (sameRef(headRefs[hash], ref)) continue;
+		// 改名或首次登记 ⇒ 覆盖 / 新增条目
 		headRefs[hash] = ref;
 		headTouched = true;
 	}

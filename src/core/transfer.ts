@@ -90,6 +90,9 @@ async function readBytes(file: TransferFileLike): Promise<Uint8Array> {
  *
  * 逐个而不是并发：粘贴多张图时顺序插入更符合直觉，且并发上传会同时占满上行
  * （移动端在这一步体验很差）。串行的代价可以接受 —— 粘贴多图的场景本来就少。
+ *
+ * ⚠️ 这条理由**只管粘贴**：「上传附件」那条批量命令自 R14 重评（D-103）起已是
+ * 4 路有限并发，只是结果仍按清单顺序提交。别把这里的「串行」读成全项目约束。
  */
 export async function processTransfer(
 	deps: TransferDeps,

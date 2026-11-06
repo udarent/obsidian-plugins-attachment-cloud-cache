@@ -108,13 +108,15 @@ function selfSource(ctx: PluginContext): { vaultId: string; deviceId: string } {
 export async function rememberReferences(
 	ctx: PluginContext,
 	client: Pick<S3Client, "listObjects" | "getObject" | "putObject" | "deleteObject">,
-	refs: readonly DeclaredRefInput[]
+	refs: readonly DeclaredRefInput[],
+	/** `silent` 只给**整批声明**用：它失败时编排层会退回逐文件写，通知由那条路发，别重复刷屏。 */
+	options: { readonly silent?: boolean } = {}
 ): Promise<boolean> {
 	if (refs.length === 0) return true;
 	const self = identityOf(selfSource(ctx));
 	if (!self) {
 		// 身份缺失是**配置坏了**（不是网络）：说清是"没生成身份"，别让用户去查网络
-		new Notice(ctx.t("sharedBucketNoIdentity"));
+		if (!options.silent) new Notice(ctx.t("sharedBucketNoIdentity"));
 		return false;
 	}
 	const adds: Record<string, { name: string; ext: string; addedAt: string }> = {};
@@ -122,11 +124,13 @@ export async function rememberReferences(
 	for (const ref of refs) adds[ref.hash] = { name: ref.name, ext: ref.ext, addedAt: now };
 	const result = await declareRefs({ io: declarationIoFor(client), self }, adds);
 	if (result.ok) return true;
-	new Notice(
-		ctx.t(result.reason === "read-failed" ? "sharedBucketStateUnreadable" : "sharedBucketDeclareFailed", {
-			error: result.detail,
-		})
-	);
+	if (!options.silent) {
+		new Notice(
+			ctx.t(result.reason === "read-failed" ? "sharedBucketStateUnreadable" : "sharedBucketDeclareFailed", {
+				error: result.detail,
+			})
+		);
+	}
 	return false;
 }
 

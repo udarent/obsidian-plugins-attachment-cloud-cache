@@ -43,7 +43,7 @@ import { canvasStillMentionsPath, keysInCanvasText, keysInText, stillMentionsPat
 import type { RewriteRule } from "./references";
 import { selectUploadCandidates } from "./batch";
 import type { ExternalSelection, VaultFileLike } from "./batch";
-import type { IngestRequest, IngestResult } from "../core/ingest";
+import type { AttachmentRef, IngestRequest, IngestResult } from "../core/ingest";
 import type { ExternalCacheOutcome } from "../core/external-cache";
 import { describeError } from "../error-text";
 import { normalizeVaultPath } from "../vault-files";
@@ -75,6 +75,31 @@ export interface MaintenanceDeps {
 	 * 未提供 ⇒ 一律当作"确认不了" ⇒ **不淘汰**（安全的一侧）。
 	 */
 	confirmRemote?: (key: string) => Promise<boolean>;
+	/**
+	 * ⭐ 批量上传前的**云端盘点**：列桶 → 反推内容哈希集合（见 `remote-inventory.ts`）。
+	 *
+	 * `runBatchUpload` 在库内循环**之前**调一次，把结果传给每个 `ingest` 的
+	 * `remoteHashes`，让「这个文件传过没有」从逐 key HEAD 变成一次列桶 + 查表。
+	 *
+	 * 返回 `null` = 列不到（拿不到 `ListBucket` 权限 / 翻不完 / 网络错）⇒ 退回逐文件
+	 * HEAD（`ingest` 原有的 `preflight` 那条路）。未提供 ⇒ 同 `null`。
+	 */
+	listRemoteHashes?: () => Promise<Set<string> | null>;
+	/**
+	 * ⭐ 由字节推导出云端声明要登记的三件事（= `core/ingest.ts::planAttachmentRef`）。
+	 *
+	 * 批量编排层在库内循环**之前**用它攒整批引用。⚠️ 只经 deps 注入而不直接 import
+	 * 实现，是为了守住这一层的窄接口；身份判据本身仍然只有 `ingest` 那一份。
+	 */
+	planAttachmentRef?: (bytes: Uint8Array, request: { name?: string; mime?: string }) => Promise<AttachmentRef>;
+	/**
+	 * ⭐ **整批一次**写云端引用声明。顺序是安全边界：声明必须先于任何 PUT，
+	 * 否则有一段时间对象传上去了却没有任何引用保护，清理会把它当孤儿删掉。
+	 *
+	 * 返回 `true` = 整批引用已落云端 ⇒ 循环里把这些 hash 交给 `ingest` 查表跳过逐文件声明。
+	 * 返回 `false` / 未提供 ⇒ **退回逐文件声明**（现状），上传照常，不放大失败面。
+	 */
+	declareRefBatch?: (refs: readonly AttachmentRef[]) => Promise<boolean>;
 	/**
 	 * ⭐⭐ 笔记 / 画布的链接**直接指着的** vault 路径集合（= `referencedVaultPaths` 那一份）。
 	 *
@@ -600,7 +625,117 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 	 */
 	const fileRules: RewriteRule[] = [];
 
-	for (const path of chosenPaths) {
+	/**
+	 * ⭐ 批量云端盘点（一次列桶换掉 N 次逐 key HEAD）。
+	 *
+	 * 在库内循环**之前**做一次：列桶 → 内容哈希集合，然后每个 `ingest` 用 `contentHash`
+	 * 查表判断"传过没有"，零网络。列不到（`null`）就退回逐文件 HEAD —— 上传本身照常。
+	 *
+	 * ⚠️ 只在**真有库内候选要传**时才列：候选为空（纯清理 / 纯改链接）时列桶是纯浪费，
+	 * 而且没有消费方（`ingest` 根本不会被调）。缺了 `listRemoteHashes` 注入同样不列。
+	 */
+	const remoteHashes = chosenPaths.length > 0 && deps.listRemoteHashes ? await deps.listRemoteHashes() : null;
+
+	/**
+	 * ⭐⭐ **整批一次**写云端引用声明（D-86「按意图批次整份写」）。
+	 *
+	 * 逐文件那条路给每个真新文件平白加了 3~4 次串行往返（列声明 → 读 → PUT → 校验），
+	 * 而且 `head.json` 越积越多、每份都要重读。这里在**任何 PUT 之前**把整批引用
+	 * 一次写完，循环里 `ingest` 按 hash 查表跳过（见 `IngestRequest.declaredHashes`）。
+	 *
+	 * ⚠️ 二次读盘是有意的：阶段一读完即释放字节，绝不把整批附件留在内存（移动端 OOM）。
+	 *    本地读盘 + 一次 sha256 远比一次 RTT 便宜。
+	 * ⚠️ 失败一律退回逐文件声明：`declaredHashes` 保持 undefined ⇒ 现状行为一字不变。
+	 * ⚠️ 集合按 **hash** 而不是路径：阶段一之后文件被改动，`ingest` 当场算出的新 hash
+	 *    不在集合里 ⇒ 自动补一次逐文件声明，不会出现「对象传上去了却没保护」。
+	 */
+	let declaredHashes: ReadonlySet<string> | undefined;
+	if (chosenPaths.length > 0 && deps.planAttachmentRef && deps.declareRefBatch) {
+		try {
+			/** hash → ref：同内容的多份候选只登记一条（声明本来就是按 hash 索引的）。 */
+			const refs = new Map<string, AttachmentRef>();
+			for (const path of chosenPaths) {
+				const file = deps.app.vault.getAbstractFileByPath(path);
+				if (!(file instanceof TFile)) continue;
+				let bytes: ArrayBuffer;
+				try {
+					bytes = await deps.app.vault.readBinary(file);
+				} catch {
+					continue; // 这份不进集合 ⇒ 循环里若又能读，会自己逐文件声明
+				}
+				const ref = await deps.planAttachmentRef(new Uint8Array(bytes), { name: file.name });
+				if (ref.hash) refs.set(ref.hash, ref);
+			}
+			if (refs.size > 0 && (await deps.declareRefBatch([...refs.values()]))) {
+				declaredHashes = new Set(refs.keys());
+			}
+		} catch {
+			// 整批阶段任何异常都当作「没写成」⇒ 逐文件声明，上传照常
+			declaredHashes = undefined;
+		}
+	}
+
+	/**
+	 * ⭐⭐ **有限并发上传**（R14 重评，见归档 D-103）。
+	 *
+	 * 串行原本是刻意设计：失败要定位到具体一件、进度要逐项、上限淘汰要按序评估。
+	 * 这里**只把「读盘 + 网络往返」并行**，所有共享状态的变更仍按清单顺序逐件提交
+	 * ⇒ 上面三条一字不变，变的只是 N 个串行 RTT 变成 N÷并发 个。
+	 *
+	 * ⚠️ **闸门**：只有整批声明成功（`declaredHashes` 有值）才并发。降级到逐文件声明时，
+	 *    循环里每个 `ingest` 都要读-改-写同一份 `head.json` —— 并发会丢引用（D-86）。
+	 * ⚠️ **索引写盘**不用管：`persistIndex` 走 `makeSerializer()` 链式队列，`store.save()`
+	 *    每次重取当前索引 ⇒ 交错写盘不会丢条目；`ingest` 的 client 每次现造，请求彼此隔离。
+	 * ⚠️ 并发度写死而不做成设置项：设置页五组顺序是契约（D-89），不为一个内部上限动结构。
+	 */
+	const UPLOAD_CONCURRENCY = 4;
+	const concurrency = declaredHashes !== undefined ? Math.min(UPLOAD_CONCURRENCY, chosenPaths.length) : 1;
+	/** 单件结果。失败方向只有"没成"，与串行版的 `failed()` 一一对应。 */
+	type VaultOutcome = { ok: false } | { ok: true; result: IngestResult };
+
+	/** 单件的**无副作用**阶段：读盘 + `ingest`（网络），只如实回报，不碰任何计数/进度/规则。 */
+	const processOne = async (path: string): Promise<VaultOutcome> => {
+		const file = deps.app.vault.getAbstractFileByPath(path);
+		if (!(file instanceof TFile)) return { ok: false };
+
+		let bytes: ArrayBuffer;
+		try {
+			bytes = await deps.app.vault.readBinary(file);
+		} catch {
+			return { ok: false };
+		}
+
+		try {
+			return {
+				ok: true,
+				result: await deps.ingest({
+					bytes: new Uint8Array(bytes),
+					name: file.name,
+					sourcePath: path,
+					// ⭐ 明确指出"字节已经在这个文件里"。没有它，编排层会走"先落盘"那条路，
+					// 于是附件目录里会凭空多出一个 `xxx 1.png`（原文件占着名字 ⇒ 另取序号），
+					// 上传后再把它搬进缓存 —— 而原文件仍在。结果是：用户传了 N 张老图，
+					// 附件目录里就多出 N 个中转文件（搬移失败时永久残留），
+					// 而他要的只是"把这些图传上去"。
+					existingPath: path,
+					// ⭐ 只在这一条路上预检（见 `IngestRequest.preflight`）：批量要处理的
+					// 正是"历史上传过、这台设备答不上来"的那一批，一次 HEAD 能省整份字节。
+					preflight: true,
+					// ⭐ 上面盘好的云端哈希集合：有值 ⇒ 查表（零网络）；`null` ⇒ 退回逐文件 HEAD。
+					remoteHashes,
+					// ⭐ 上面整批写好的声明：有值 ⇒ 按 hash 查表跳过逐文件声明；
+					// `undefined` ⇒ 没写成（或缺注入），退回现状逐文件写。
+					declaredHashes,
+				}),
+			};
+		} catch {
+			return { ok: false };
+		}
+	};
+
+	/** 单件的**提交**阶段：全同步、按清单顺序 —— 进度、计数、改写规则都只在这里落地。 */
+	const applyOne = (index: number, outcome: VaultOutcome): void => {
+		const path = chosenPaths[index];
 		/** 这一份传完还要不要改笔记（= 被引用着）。未引用的只传字节（D-68）。 */
 		const rewritable = options.referencedPaths.has(path);
 		/** 这一份没成 ⇒ 计数 + 让界面那一行变红（两件事必须成对，见 `BatchOptions.onItem`）。 */
@@ -608,44 +743,14 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 			result.failed += 1;
 			options.onItem?.({ kind: "vault", path, status: "failed" });
 		};
-		const file = deps.app.vault.getAbstractFileByPath(path);
-		if (!(file instanceof TFile)) {
+		if (!outcome.ok) {
 			failed();
-			continue;
+			return;
 		}
-
-		let bytes: ArrayBuffer;
-		try {
-			bytes = await deps.app.vault.readBinary(file);
-		} catch {
-			failed();
-			continue;
-		}
-
-		let ingestResult: IngestResult;
-		try {
-			ingestResult = await deps.ingest({
-				bytes: new Uint8Array(bytes),
-				name: file.name,
-				sourcePath: path,
-				// ⭐ 明确指出"字节已经在这个文件里"。没有它，编排层会走"先落盘"那条路，
-				// 于是附件目录里会凭空多出一个 `xxx 1.png`（原文件占着名字 ⇒ 另取序号），
-				// 上传后再把它搬进缓存 —— 而原文件仍在。结果是：用户传了 N 张老图，
-				// 附件目录里就多出 N 个中转文件（搬移失败时永久残留），
-				// 而他要的只是"把这些图传上去"。
-				existingPath: path,
-				// ⭐ 只在这一条路上预检（见 `IngestRequest.preflight`）：批量要处理的
-				// 正是"历史上传过、这台设备答不上来"的那一批，一次 HEAD 能省整份字节。
-				preflight: true,
-			});
-		} catch {
-			failed();
-			continue;
-		}
-
+		const ingestResult = outcome.result;
 		if (!ingestResult.remoteUrl) {
 			failed();
-			continue;
+			return;
 		}
 		if (ingestResult.status === "reused") result.reused += 1;
 		else result.uploaded += 1;
@@ -686,6 +791,33 @@ export async function runBatchUpload(deps: MaintenanceDeps, options: BatchOption
 		if (ingestResult.redundantDuplicateOf) {
 			redundantCopies.push({ path, twinPath: ingestResult.redundantDuplicateOf });
 		}
+	};
+
+	const outcomes = new Array<VaultOutcome | undefined>(chosenPaths.length);
+	let nextIndex = 0;
+	let cursor = 0;
+	/** 只提交「从游标起**连续**已完成」的那些 ⇒ 进度条仍按清单顺序逐项推进。 */
+	const flush = (): void => {
+		while (cursor < chosenPaths.length) {
+			const ready = outcomes[cursor];
+			if (ready === undefined) break;
+			applyOne(cursor, ready);
+			cursor += 1;
+		}
+	};
+	const worker = async (): Promise<void> => {
+		for (;;) {
+			const index = nextIndex;
+			if (index >= chosenPaths.length) return;
+			nextIndex += 1;
+			outcomes[index] = await processOne(chosenPaths[index]);
+			flush();
+		}
+	};
+	await Promise.all(Array.from({ length: concurrency }, () => worker()));
+	// 兜底：worker 若中途退出，剩下的仍按序提交，不能让进度条静默停住。
+	for (; cursor < chosenPaths.length; cursor += 1) {
+		applyOne(cursor, outcomes[cursor] ?? { ok: false });
 	}
 
 	// 没有库内候选时**也要**走完赋值：站外那一趟可能已经改过笔记了

@@ -177,6 +177,64 @@ export async function runDeclarationSuite(mod) {
 	}
 
 	{
+		// ⭐⭐ 重复确认必须幂等（2026-11-06 真机 D-57「零上传」回归）：
+		// 整批声明阶段会把「本批全部候选」再登记一次，其中有些早就在云端声明里。
+		// `addedAt` 每次取当前时间 ⇒ 只比全等会永远判「变了」⇒ head.json 每轮重写。
+		const A = hash(1);
+		const state = { head: decl("v1", "d1", { [A]: ref("a.png", "2026-10-25T00:00:00.000Z") }), segments: [] };
+		assert.deepEqual(
+			planUpdates({
+				vault: "v1",
+				device: "d1",
+				state,
+				adds: { [A]: ref("a.png", "2026-11-06T07:00:00.000Z") },
+				now: "2026-11-06T07:00:00.000Z",
+			}),
+			[],
+			"★ 重复确认同一条引用 ⇒ 零写入（不重写 head.json）"
+		);
+
+		// 对照：显示名真的变了 ⇒ 仍要写（改名不能被幂等吃掉）
+		const renamed = planUpdates({
+			vault: "v1",
+			device: "d1",
+			state,
+			adds: { [A]: ref("b.png", "2026-11-06T07:00:00.000Z") },
+			now: "2026-11-06T07:00:00.000Z",
+		});
+		assert.equal(writes(renamed).length, 1, "★ 显示名变了仍要重写（改名不能被幂等吃掉）");
+		assert.equal(writes(renamed)[0].decl.refs[A].name, "b.png", "改写的是新名字");
+
+		// 对照：全新 hash ⇒ 仍要写（幂等不许吃掉首次登记）
+		const freshOne = planUpdates({
+			vault: "v1",
+			device: "d1",
+			state,
+			adds: { [hash(2)]: ref("new.png") },
+			now: "2026-11-06T07:00:00.000Z",
+		});
+		assert.equal(writes(freshOne).length, 1, "★ 首次登记仍要写（幂等不许吃掉新引用）");
+		assert.ok(hash(2) in writes(freshOne)[0].decl.refs, "新引用确实进了 head");
+
+		// 对照：段里的重复确认也不该重写那一段
+		const inSegment = {
+			head: decl("v1", "d1", {}),
+			segments: [{ number: 3, decl: decl("v1", "d1", { [A]: ref("a.png") }) }],
+		};
+		assert.deepEqual(
+			planUpdates({
+				vault: "v1",
+				device: "d1",
+				state: inSegment,
+				adds: { [A]: ref("a.png", "2026-11-06T07:00:00.000Z") },
+				now: "2026-11-06T07:00:00.000Z",
+			}),
+			[],
+			"★ 段里的重复确认也不重写那一段"
+		);
+	}
+
+	{
 		// 减引用：在段里 ⇒ 只重写那一段（head 不动）
 		const A = hash(1);
 		const B = hash(2);

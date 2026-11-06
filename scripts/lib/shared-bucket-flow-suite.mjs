@@ -12,6 +12,7 @@
  */
 
 import assert from "node:assert/strict";
+import { Notice } from "./mock-obsidian.mjs";
 
 /** 造一个假 S3 客户端：记录调用、按需返回/抛错。 */
 function fakeClient(options = {}) {
@@ -155,6 +156,25 @@ export async function runSharedBucketFlowSuite(mod) {
 		const failCtx = { settings: settings(), deviceId: "d1", t: (key) => key };
 		const failClient = fakeClient({ putError: new Error("AccessDenied") });
 		assert.equal(await rememberReferences(failCtx, failClient, [ref]), false, "★ 写失败 ⇒ 返回 false（调用方据此中止上传）");
+
+		// ⭐⭐ `silent` 只给**整批声明**用：它失败时编排层会退回逐文件写，通知由那条路发。
+		// ⚠️ 必须给出「默认会通知」这条对照窗口，否则「两条路都静默」也测不出来。
+		{
+			const loudBefore = Notice.instances.length;
+			assert.equal(await rememberReferences(failCtx, fakeClient({ putError: new Error("AccessDenied") }), [ref]), false, "默认失败仍返回 false");
+			assert.ok(Notice.instances.length > loudBefore, "★ 默认失败要发一条通知（silent 的对照窗口）");
+
+			const quietBefore = Notice.instances.length;
+			assert.equal(
+				await rememberReferences(failCtx, fakeClient({ putError: new Error("AccessDenied") }), [ref], { silent: true }),
+				false,
+				"静默失败仍返回 false（调用方据此降级）"
+			);
+			assert.equal(Notice.instances.length, quietBefore, "★★ 整批声明失败不发通知（否则退回逐文件会刷 N+1 条）");
+
+			assert.equal(await rememberReferences(okCtx, fakeClient(), [ref], { silent: true }), true, "静默成功照常登记");
+			assert.equal(Notice.instances.length, quietBefore, "成功本来就不发通知");
+		}
 	}
 
 	// ============================================================

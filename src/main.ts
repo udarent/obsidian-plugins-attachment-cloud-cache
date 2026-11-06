@@ -50,6 +50,7 @@ import { createEditorHandlers } from "./host/editor-bridge";
 import { createAnnounceGate } from "./host/intercept";
 import { runBatchUpload, runEviction, scanReferences } from "./maintenance/run";
 import type { MaintenanceDeps } from "./maintenance/run";
+import { listRemoteContentHashes } from "./maintenance/remote-inventory";
 import { createCacheRotator } from "./maintenance/rotation";
 import type { CacheRotator } from "./maintenance/rotation";
 import { createAttachWatcher, createSelfWriteLedger } from "./maintenance/attach-watch";
@@ -58,7 +59,7 @@ import { createAbsenceConfirmer, runSelfHeal } from "./maintenance/self-heal";
 import type { SelfHealResult } from "./maintenance/self-heal";
 
 import { describeError } from "./error-text";
-import { ingestAttachment } from "./core/ingest";
+import { ingestAttachment, planAttachmentRef } from "./core/ingest";
 import { confirmWithModal } from "./ui/confirm-modal";
 import type { ConfirmOptions } from "./ui/confirm-modal";
 import type { FileCardOpenTarget } from "./ui/file-cards";
@@ -813,6 +814,30 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 			// ⭐ 淘汰本地副本前的**云端复核**（HEAD）：确认对象此刻真的还在。
 			// 删文件前的安全线 —— 答不上来（离线、出错）一律当作"没有"，于是不删。
 			confirmRemote: (key) => this.isObjectInCloud(key),
+			// ⭐ 批量上传前的云端盘点：列桶 → 内容哈希集合（见 `remote-inventory.ts`）。
+			// 拿不到客户端 / 列不到（无 ListBucket 权限、翻不完、网络错）⇒ 返回 null，
+			// `runBatchUpload` 据此退回逐文件 HEAD —— 上传本身照常，绝不因为盘不动而失败。
+			listRemoteHashes: async () => {
+				const client = this.buildClient();
+				if (!client) return null;
+				return listRemoteContentHashes(client);
+			},
+			// ⭐⭐ 整批一次写云端声明：身份判据只有 `planAttachmentRef` 一份，
+			// 声明写入复用现成的 `rememberReferences(refs[])`（它本来就收数组）。
+			planAttachmentRef: (bytes, request) => planAttachmentRef(bytes, request),
+			declareRefBatch: (refs) => this.serialize(async () => {
+				try {
+					const client = this.buildClient();
+					if (!client) return false;
+					// ⭐ 待补显示名：整批只补一次（原来挂在每文件的 `declareReference` 里）。
+					await flushDeclarationNames(this.flowContext(), client);
+					// ⚠️ 静默失败 ⇒ 编排层退回逐文件声明，通知由那条路发，别重复刷屏。
+					return rememberReferences(this.flowContext(), client, refs, { silent: true });
+				} catch {
+					// 写不成不抛：调用方据此退回逐文件声明，上传照常
+					return false;
+				}
+			}),
 			// ⭐⭐ "这份副本还有人在用吗"的**另一半**：笔记/画布**直接指着**的库内路径。
 			// ⚠️ 缺了它，笔记正在显示的那份副本会被报成"没有任何笔记引用"
 			//（占用报告会骗人）、后台淘汰还会把它排到最前面（见 `audit.ts` 的 `referencedPaths`）。
@@ -840,7 +865,8 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 	 * 返回 `false` ⇒ 这一次**不传**（`core/ingest.ts` 第 3b 步据此降级成本地链接）。
 	 * 失败原因在 `plugin/shared-bucket-flow.ts` 里发通知（它知道是身份、权限还是网络）。
 	 *
-	 * ⚠️ 功能关着时**一次请求都不发**：这里先看开关，再看有没有客户端。
+	 * ⚠️ 批量上传那条路现在**整批一次**写（见 `maintenanceDeps.declareRefBatch`）；
+	 * 这里保留给粘贴 / 站外，以及整批写失败后的逐文件降级 —— 仍是「一份一条」。
 	 */
 	/**
 	 * 附件改名之后，把新名字写进**云端声明**（CR-16）。
@@ -864,14 +890,29 @@ export default class AttachmentCloudCachePlugin extends Plugin {
 		}
 	}
 
-	private async declareReference(ref: { hash: string; name: string; ext: string }): Promise<boolean> {
-		const client = this.buildClient();
-		// 没有客户端时上传本来也走不通；这里不额外发通知（上传那条路会自己报）
-		if (!client) return false;
-		// ⭐ 上传前先把待补的显示名补上（CR-16）：上传是"本来就要联网"的时刻，
-		// 在这里补最不打扰；失败不影响这次上传（`flushDeclarationNames` 不抛）。
-		await flushDeclarationNames(this.flowContext(), client);
-		return rememberReferences(this.flowContext(), client, [ref]);
+	/**
+	 * ⚠️ **声明写入必须走同一条串行队列**（D-86 / D-103）。
+	 *
+	 * 声明是本设备一份 `head.json` 的读-改-写。不同设备各写各的、互不冲突，
+	 * 但**同一设备内并发上传**会同时读同一份、各自写回 ⇒ 后写的覆盖先写的，
+	 * 丢掉的恰好是「谁引用了什么」。并发上传开启后（R14 重评），整批声明阶段
+	 * 已把循环内的逐文件写清掉；这里再兜住「阶段一之后文件被改动 ⇒ `ingest` 补声明」
+	 * 以及粘贴攒批这类剩余的并发来源。
+	 *
+	 * 复用 `serialize` 而不是另起一条：项目字段区那条注释（两条队列分开会让不同
+	 * 数据的写入重新互相插队）同样适用于网络写。⚠️ `flushDeclarationNames` 内部
+	 * 的 `persistSettings` → `saveSettings` 不进这条队列，所以不会自锁。
+	 */
+	private declareReference(ref: { hash: string; name: string; ext: string }): Promise<boolean> {
+		return this.serialize(async () => {
+			const client = this.buildClient();
+			// 没有客户端时上传本来也走不通；这里不额外发通知（上传那条路会自己报）
+			if (!client) return false;
+			// ⭐ 上传前先把待补的显示名补上（CR-16）：上传是"本来就要联网"的时刻，
+			// 在这里补最不打扰；失败不影响这次上传（`flushDeclarationNames` 不抛）。
+			await flushDeclarationNames(this.flowContext(), client);
+			return rememberReferences(this.flowContext(), client, [ref]);
+		});
 	}
 
 	private cacheExternalImage(url: string, notePath: string | undefined, report = false) {

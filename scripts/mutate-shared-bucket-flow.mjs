@@ -74,5 +74,13 @@ await runMutations({
 			to: "\tconst result = await declareRefs({ io: declarationIoFor(client), self }, adds);\n\tif (true) return true;",
 			expect: "写失败 ⇒ 返回 false",
 		},
+		{
+			// 后果：整批声明失败也弹通知 ⇒ 编排层随即退回逐文件写，每个文件再弹一条
+			// ⇒ 一次批量上传刷 N+1 条一模一样的通知。`silent` 就是为这条降级路径留的。
+			name: "★★ 整批声明失败也发通知（退回逐文件后刷 N+1 条）",
+			from: "\tif (!options.silent) {\n\t\tnew Notice(",
+			to: "\tif (true) {\n\t\tnew Notice(",
+			expect: "整批声明失败不发通知",
+		},
 	],
 });

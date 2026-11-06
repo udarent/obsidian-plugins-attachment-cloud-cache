@@ -190,6 +190,29 @@ export interface IngestRequest {
 	 * 直接走已有的"命中即复用"分支 —— 那是零请求。
 	 */
 	preflight?: boolean;
+	/**
+	 * 调用方**已经批量盘过一遍云端**的结果：桶里现有对象的**内容哈希集合**。
+	 *
+	 * 有值（含空 Set）⇒ 第 2d 步**不再逐 key HEAD**，直接 `has(contentHash)` 查表，
+	 * 零网络。`null` / 缺省 ⇒ 没做批量盘点（列桶拿不到权限 / 翻不完），退回逐文件 HEAD。
+	 *
+	 * ⚠️ 只有配合 `preflight: true` 才有意义（第 2d 步受它前置）；单独传是空转。
+	 * ⚠️ 拿它复用的对象**没有 etag**（列桶不返回 etag）—— 与台账那条路一样留空，
+	 * etag 只供展示与复核、不参与任何判据（见 {@link IngestResult.etag}）。
+	 */
+	remoteHashes?: ReadonlySet<string> | null;
+	/**
+	 * 调用方**已经整批写进云端声明**的内容哈希集合（见 `IngestRequest.declaredHashes`
+	 * 的装配处：`maintenance/run.ts` 的整批声明阶段）。
+	 *
+	 * 命中 ⇒ 第 3b 步**不再逐文件**写声明（那是一次完整的「列声明 → 读 → PUT → 校验」，
+	 * 一个小文件里它比对象上传本身还贵）。未命中 / 缺省 ⇒ 照现状逐文件写。
+	 *
+	 * ⚠️ 判据按 **hash** 查表，不按路径：阶段一算完 hash 之后文件若被改动，
+	 * `ingest` 当场算出的新 hash 不在这个集合里 ⇒ 自动退回逐文件声明，不会漏保护。
+	 * ⚠️ 集合只在**整批声明确实成功**时才传；写失败一律退回逐文件（见编排层）。
+	 */
+	declaredHashes?: ReadonlySet<string>;
 }
 
 export interface IngestDeps extends NotifySink {
@@ -263,6 +286,46 @@ const FALLBACK_EXTENSION = "bin";
  */
 function resolveKeyExtension(name: unknown, mime: unknown): string {
 	return resolveExtension(name, mime) || FALLBACK_EXTENSION;
+}
+
+/** 云端声明要登记的三件事：内容哈希 + 显示名 + 扩展名。 */
+export interface AttachmentRef {
+	readonly hash: string;
+	readonly name: string;
+	readonly ext: string;
+}
+
+/**
+ * 名字与扩展名的**唯一**推导（纯同步，不碰磁盘/网络）。
+ *
+ * ⚠️ 整批声明、`ingest` 内部、哈希算不动时的兜底回报都只走这里 ——
+ * 分开写两遍，「没文件名时造的名字」与扩展名兜底迟早会漂开。
+ */
+export function attachmentNameOf(
+	request: Pick<IngestRequest, "name" | "mime">,
+	now: Date
+): { name: string; ext: string } {
+	const ext = resolveKeyExtension(request.name, request.mime);
+	const name = request.name ?? fallbackFileName(ext, now);
+	return { name, ext };
+}
+
+/**
+ * 由字节 + 请求推导出云端声明的引用。**身份判据只此一份**。
+ *
+ * 批量编排层在**任何 PUT 之前**调它攒整批引用（一次写进声明），
+ * `ingestAttachment` 内部也调它 —— 于是「声明里的名字」与
+ * 「key / 索引 / 显示名用的名字」不可能分叉。
+ */
+export async function planAttachmentRef(
+	bytes: Uint8Array,
+	request: Pick<IngestRequest, "name" | "mime">,
+	options: { hashBytes?: (bytes: Uint8Array) => Promise<string>; now?: () => Date } = {}
+): Promise<AttachmentRef> {
+	const now = options.now?.() ?? new Date();
+	const { name, ext } = attachmentNameOf(request, now);
+	const hash = await (options.hashBytes ?? sha256Hex)(bytes);
+	return { hash, name, ext };
 }
 
 
@@ -435,10 +498,17 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 	const isMigration = existingPath !== "";
 
 	// ── 1. 算出 key 与本地缓存路径（纯逻辑，先做完，避免"上传了才发现路径不合法"）──
-	const ext = resolveKeyExtension(request.name, request.mime);
-	// 文件名也是**一次算定**：key 渲染、落盘、显示名、索引都共用它。
-	// 分成两处算会让"没文件名时造的名字"出现两个不同时间戳（截图粘贴的常态）。
-	const fileName = request.name ?? fallbackFileName(ext, now);
+	// ⚠️ 名字 / 扩展名 / 内容哈希的推导只有 `planAttachmentRef` 一份：批量上传在
+	// 「整批一次写声明」阶段也调它，于是声明里的名字不可能与这里分叉。
+	let ref: AttachmentRef;
+	try {
+		ref = await planAttachmentRef(bytes, request, { hashBytes, now: () => now });
+	} catch (error) {
+		// 内容哈希算不动 ⇒ 放弃这次上传；名字/扩展名仍按**同一份**规则回报
+		const identity = attachmentNameOf(request, now);
+		return { status: "fallback", key: "", ext: identity.ext, name: identity.name, displayName: identity.name, remoteUrl: "", localPath: "", etag: "", error: asError(error) };
+	}
+	const { hash: contentHash, name: fileName, ext } = ref;
 	/**
 	 * 链接里该显示的名字（见 {@link IngestResult.displayName}）：从 key 反推，
 	 * 取不到（key 为空，或不是默认形状）时退回调用方给的文件名。
@@ -455,10 +525,7 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 	 * 非空 = 这一份是重复副本，调用方可在链接改写成功、它已零引用之后删掉它。
 	 */
 	let twinPath: string | null = null;
-	/** 内容哈希：算 key 与"这份内容传过吗"共用一次。 */
-	let contentHash = "";
 	try {
-		contentHash = await hashBytes(bytes);
 		// ⭐ 2026-10-14：宿主为撞名另落的那一份（`照片 1.png`）要能认出**主干**那份 ——
 		// 它的 `twinPath` 决定后面要不要先问一句云端（第 2c 步），`keyName` 决定显示名。
 		const normalized = await nameForHostDuplicate(deps, fileName, contentHash, hashBytes, existingPath);
@@ -480,7 +547,7 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 		//（`photo 1.png` ⇒ `photo.png`），而不是宿主给的序号名。
 		displayFallback = normalized.keyName || fileName;
 	} catch (error) {
-		// `objectKeyFor` 是纯函数、不该抛；真抛了说明**哈希那一步**出了问题
+		// 撞名副本归一化要读磁盘；读不动就放弃（字节仍在本机，绝不丢图）
 		return { status: "fallback", key: "", ext, name: fileName, displayName: fileName, remoteUrl: "", localPath: "", etag: "", error: asError(error) };
 	}
 
@@ -640,10 +707,17 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 	// ⚠️ 只问"索引里没有这条 key"的：索引命中的那些会走 `decide` 的复用分支，零请求。
 	// ⚠️ 探测抛错仍当作"不在"（多一次 PUT 是幂等的，反过来会留下打不开的图）。
 	if (!reuseCloudObject && request.preflight && !index.get(key)) {
-		const probedEtag = await askCloud();
-		if (probedEtag !== null) {
-			reuseCloudObject = true;
-			etag = probedEtag;
+		if (request.remoteHashes) {
+			// ⭐ 调用方已批量盘过云端（列桶 → 内容哈希集合）⇒ 查表即可，零网络。
+			// etag 拿不到（列桶不返回）⇒ 留空，见 `IngestRequest.remoteHashes` 的说明。
+			if (request.remoteHashes.has(contentHash)) reuseCloudObject = true;
+		} else {
+			// 没做批量盘点（列桶拿不到权限 / 翻不完）⇒ 退回逐文件 HEAD。
+			const probedEtag = await askCloud();
+			if (probedEtag !== null) {
+				reuseCloudObject = true;
+				etag = probedEtag;
+			}
 		}
 	}
 
@@ -671,7 +745,10 @@ export async function ingestAttachment(deps: IngestDeps, request: IngestRequest)
 	//
 	// ⚠️ 复用分支（对象已在云端）也要登记：声明的语义是"本库当前引用了哪些内容"，
 	// 与"这次有没有 PUT"无关 —— 漏掉它，换设备后第一次看图就不会被保护。
-	if (deps.declareRef && contentHash) {
+	// ⚠️ `declaredHashes` 命中 = 编排层已在**任何 PUT 之前**把整批引用一次写完
+	//（见 `maintenance/run.ts` 的整批声明阶段）⇒ 这里不再逐文件重复一次读-改-写。
+	// 按 hash 查表而不是按路径：文件在阶段一之后被改动时会自动退回逐文件，不会漏保护。
+	if (deps.declareRef && contentHash && !request.declaredHashes?.has(contentHash)) {
 		const declared = await deps.declareRef({ hash: contentHash, name: fileName, ext });
 		if (!declared) {
 			// 声明写不进去 ⇒ 这一份不传。字节已经在附件目录里（或本来就在用户的库里），

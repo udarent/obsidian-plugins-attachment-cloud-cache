@@ -147,16 +147,13 @@ await runMutations({
 			to: "() => {}",
 			expect: "引用消失了 ⇒ 必须出声",
 		},
-		{
-			// ⭐ 上传前的云端探测**没接线**（用户 2026-10-14 报的第二件事）。
-			// 后果：撞名副本照样把整份字节重传一遍（"并不需要上传，只要更新链接"）——
-			// 而模块层的套件照样全绿：`ingest.ts` 那条路是对的，只是**没人给它这个能力**。
-			// 这正是"层坏了"与"没人调用"必须分开盯的例子（本项目踩过多次）。
-			name: "★ 上传前不问云端（撞名副本把整份字节又传一遍）",
-			from: "\t\t\t\t\t\tprobeRemote: (key) => this.probeRemoteObject(key),\n",
-			to: "\t\t\t\t\t\t// 变异：不接云端探测\n",
-			expect: "一个字节都不许重传",
-		},
+		// ⚠️ 这里原有「上传前不问云端（撞名副本把整份字节又传一遍）」的锚点（删 `probeRemote`
+		// 接线），2026-11-04 随「批量预检换成列桶」一并移除：
+		// 撞名副本复用现在有**两条路**（2c 步的 HEAD 预检 + 2d 步的列桶查表）互为兜底，
+		// 删掉 `probeRemote` 一条，另一条（`listRemoteHashes`）照常兜住 ⇒ 不再有「重传」这个
+		// 可观察后果，锚点自然漏过。守「问云端」这条判据的职责已经落在模块层
+		// （`ingest-suite` 的撞名副本用例 + `mutate-ingest` 的「撞名副本不再问云端 /
+		// 列桶命中却被忽略」两条锚点），入口接线层不再重复盯它。
 		// ⚠️ 这里原有两条盯着"存量清理的两条准入判据"（台账 / 带远端链接）的锚点 ——
 		// 2026-10-13（A1 第四批）它们随 `localSpaceSelection` 搬进
 		// `src/plugin/release-space-flow.ts` 时**一并搬走了**（见 `mutate-release-space-flow.mjs`）。
@@ -222,6 +219,16 @@ await runMutations({
 			from: "\t\t\t\tconst moved = this.currentIndex().moveCachePath(oldPath, file.path, {\n\t\t\t\t\tincludeDescendants: file instanceof TFolder,\n\t\t\t\t});\n",
 			to: "\t\t\t\tconst moved = 0;\n",
 			expect: "cachePath 必须跟着搬到新路径",
+		},
+
+		{
+			// 后果：整批声明恒失败 ⇒ 编排层退回逐文件写 ⇒ N 个新文件产生 N 次声明 PUT。
+			// 这是「层对了但没人调用」的另一种形态：`run.ts` 的批量逻辑没问题，
+			// 只是入口这一句没把结果交回来。多文件验收断言会直接数出来。
+			name: "★★ 入口不接整批声明（每文件又各写一次，1s/文件照旧）",
+			from: "return rememberReferences(this.flowContext(), client, refs, { silent: true });",
+			to: "return false;",
+			expect: "整批一次声明：3 个新文件只该有 1 次声明 PUT",
 		},
 	],
 });

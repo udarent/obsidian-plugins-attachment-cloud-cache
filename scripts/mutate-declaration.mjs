@@ -56,5 +56,29 @@ await runMutations({
 			to: '\t\tif (typeof object.lastModified === "string") {',
 			expect: "指纹与输入顺序无关",
 		},
+		{
+			// 后果：整批声明阶段把「本批全部候选」再登记一次 ⇒ head.json 每轮无条件重写
+			// （多一次 PUT ＋ 传后校验 HEAD）。真机 D-57「零上传」就是这样红的：
+			// 对象一个字节没重传，却平白多了一次声明写入。
+			name: "★★ 重复确认不幂等（head.json 每轮无条件重写）",
+			from: "\t\tif (sameRef(headRefs[hash], ref)) continue;",
+			to: "\t\t// 变异：重复确认也重写",
+			expect: "★ 重复确认同一条引用 ⇒ 零写入（不重写 head.json）",
+		},
+		{
+			// 后果：已经封存进段的引用，每次重复确认都把整段重写一遍（几十 KB）。
+			name: "★ 段里重复确认不幂等（重写整段）",
+			from: "\t\t\tif (sameRef(owner.refs[hash], ref)) continue; // 幂等：不重写这一段",
+			to: "\t\t\t// 变异：段里重复确认也重写",
+			expect: "★ 段里的重复确认也不重写那一段",
+		},
+		{
+			// 后果：把 addedAt 算进比较（或干脆拆掉判据）⇒ 每次登记都判「变了」，
+			// 与上面两条是同一类失效，但守的是**判据内容**而不是某一条 continue。
+			name: "★★ 幂等判据被拆掉（重复登记恒判为变更）",
+			from: "\tconst sameRef = (a: DeclarationRef | undefined, b: DeclarationRef): boolean =>\n\t\ta !== undefined && a.name === b.name && a.ext === b.ext;",
+			to: "\tconst sameRef = (): boolean => false;",
+			expect: "★ 重复确认同一条引用 ⇒ 零写入（不重写 head.json）",
+		},
 	],
 });
