@@ -224,5 +224,27 @@ await runMutations({
 			to: "\treturn true;",
 			expect: "后缀不像文件类型（分支名 / 版本号 / 无后缀）",
 		},
+		{
+			// 后果：名字里的 `]` 提前闭合 alt、换行把一条链接拆成两条 ——
+			// 这是「显示得不好」里少数的「语法直接坏掉」（D-105 共用的清洗口径）。
+			name: "★★ 链接显示文字不清洗结构字符（名字带 `]` 就把链接写坏）",
+			from: '\t\t.replace(/[[\\]]/g, " ")',
+			to: "\t\t// 变异：不清洗方括号",
+			expect: "★ 方括号不能留",
+		},
+		{
+			// 后果：换行把一条链接拆成两条，整段 Markdown 语法废掉。
+			name: "★★ 显示文字不清洗换行（一条链接被拆成两条）",
+			from: '\t\t.replace(/[\\r\\n]+/g, " ")',
+			to: '\t\t.replace(/[\\r\\n]+/g, "\\n")',
+			expect: "★ 换行不能留",
+		},
+		{
+			// 后果：非字符串被 String(...) 渲染成 [object Object] 塞进用户笔记。
+			name: "★★ 非字符串显示名被字符串化（渲染出 [object Object]）",
+			from: '\tif (typeof candidate !== "string") return "";',
+			to: '\tif (typeof candidate !== "string") return String(candidate ?? "");',
+			expect: "对象也当空串",
+		},
 	],
 });

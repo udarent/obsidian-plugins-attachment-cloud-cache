@@ -135,22 +135,14 @@ await runMutations({
 			expect: "百分号编码必须原样保留",
 		},
 		{
-			name: "alt 里的方括号不清（⭐ 会提前闭合 alt，整段语法废掉）",
-			from: "\treturn alt\n\t\t.replace(/[[\\]]/g, \" \")",
-			to: "\treturn alt",
-			expect: "方括号必须清掉",
-		},
-		{
-			name: "alt 里的换行不清（一条链接被拆成两条）",
-			from: "\t\t.replace(/[\\r\\n]+/g, \" \")",
-			to: "\t\t.replace(/[\\r\\n]+/g, \"\\n\")",
-			expect: "换行必须清掉",
-		},
-		{
-			name: "非字符串 alt 被字符串化（渲染出 [object Object]）",
-			from: '\tif (typeof alt !== "string") return "";',
-			to: "\tif (false) return \"\";",
-			expect: "必须被当成空串",
+			// ⚠️ 2026-11-09（D-105）：清洗实现搬进了 `vault-files.ts::cleanLinkText`
+			//（四条链共用一份），那三条**实现**锚点随之迁到 `mutate-vault-files.mjs`。
+			// 这里留下的是**接线**：buildRemoteLink 必须真的调用那份共用实现，
+			// 否则 `[object Object]` / 方括号 / 换行会重新进用户的笔记。
+			name: "★ 远端链接不走全库共用的显示文字清洗（方括号提前闭合 alt）",
+			from: "\tconst text = cleanLinkText(name);",
+			to: "\tconst text = String(name ?? \"\");",
+			expect: "显示名里的方括号必须清掉",
 		},
 		{
 			// ⚠️ 这条原本锚在"alt 只取主干"上（1.1.0 起显示名改为**原文件名**，

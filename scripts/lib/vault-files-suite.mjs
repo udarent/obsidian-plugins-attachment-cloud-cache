@@ -26,6 +26,7 @@ const sameFolderApp = hostApp("./");
 export async function runVaultFilesSuite(mod) {
 	const {
 		cleanFolderPath,
+		cleanLinkText,
 		contentTypeForExtension,
 		DEFAULT_CONTENT_TYPE,
 		embedKindFor,
@@ -640,6 +641,17 @@ export async function runVaultFilesSuite(mod) {
 	assert.equal(cleanFolderPath("/"), "", "`/` 表示没指定目录");
 	assert.equal(cleanFolderPath("/a/b/"), "a/b", "首尾斜杠要剥掉");
 	assert.equal(cleanFolderPath(42), "", "非字符串当作没填（`String(对象)` 会造出一个怪目录名）");
+
+	// ── 链接显示位的**唯一**清洗口径（D-105）──
+	// 这四处都用它：插入新链接、wikilink 换形态、空显示位补名、字面替换。
+	// `]` 会提前闭合 alt、换行会把一条链接拆成两条 ⇒ 都不是"名字难看"，是语法坏掉。
+	assert.equal(cleanLinkText("报告.pdf"), "报告.pdf", "正常名字原样");
+	assert.equal(cleanLinkText("照片[1].png"), "照片 1 .png", "★ 方括号不能留（会提前闭合显示位）");
+	assert.equal(cleanLinkText("第一行\n第二行.png"), "第一行 第二行.png", "★ 换行不能留（会把链接拆成两条）");
+	assert.equal(cleanLinkText("  季度   报告.pdf  "), "季度 报告.pdf", "多余空白收掉、首尾去掉");
+	assert.equal(cleanLinkText("]"), "", "全是结构字符 ⇒ 空串（宁可不补，也不写坏链接）");
+	assert.equal(cleanLinkText(undefined), "", "★ 非字符串当空串，绝不产出 `[object Object]`");
+	assert.equal(cleanLinkText({ name: "x" }), "", "对象也当空串");
 
 	return {
 		extensionCases: 12 + 9 + 6 + 9 + 6,

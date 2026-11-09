@@ -98,5 +98,13 @@ await runMutations({
 			to: "\t\t\t\tmaxBytes: Number.MAX_SAFE_INTEGER,",
 			expect: "先量后读",
 		},
+		{
+			// 后果：本机文件常写成 `![](file:///…)` ⇒ 上传后只换了地址，空显示位
+			// 配上纯哈希地址 = 一条完全无名的链接（2026-11-09 用户报的）。
+			name: "★★ 改写时不把真实名字接进去（本机文件传完还是无名链接）",
+			from: "\t\t\t\trewriteLiteralUrl(original, url, remoteUrl, cleanLinkText(ingested.displayName))",
+			to: "\t\t\t\trewriteLiteralUrl(original, url, remoteUrl, \"\")",
+			expect: "★ 空显示位要用声明里的真实文件名补上",
+		},
 	],
 });

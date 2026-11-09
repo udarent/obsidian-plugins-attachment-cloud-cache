@@ -28,7 +28,7 @@
  */
 
 import type { PluginSettings } from "../types";
-import { extensionOfName, isEmbeddable, isNoteLikeExtension } from "../vault-files";
+import { cleanLinkText, extensionOfName, isEmbeddable, isNoteLikeExtension } from "../vault-files";
 
 /** 文件的最小形状。用结构化类型而不是 DOM 的 `File`，便于穷举测试。 */
 export interface TransferFileLike {
@@ -303,7 +303,7 @@ function refuse(reason: string): TransferPlan {
  * 这也正是"只编码一次"那条纪律的附带好处：链接天然是 Markdown 安全的。
  */
 export function buildRemoteLink(url: string, name: string, ext: unknown): string {
-	const text = escapeAltText(name);
+	const text = cleanLinkText(name);
 	const bang = isEmbeddable(ext) ? "!" : "";
 	return `${bang}[${text}](${String(url ?? "").trim()})`;
 }
@@ -354,27 +354,6 @@ function stripEmbedPrefix(generated: string | null | undefined): string {
 function fallbackLocalLink(vaultPath: string): string {
 	const path = String(vaultPath ?? "").replace(/\\/g, "/").replace(/^\/+/, "").trim();
 	return path ? `[[${path}]]` : "";
-}
-
-/**
- * 清掉会**破坏 Markdown 结构**的字符。
- *
- * 文件名是用户数据，可能含 `]` `[` 或换行：
- * - `]` 会提前闭合 alt，后面的内容变成正文；
- * - 换行会把一条链接拆成两条，整段语法就废了。
- * 这里选择替换而不是转义：alt 只是说明文字，替换成空格完全够用，
- * 而转义的规则（哪些字符可以反斜杠转义）在 Markdown 方言间并不一致。
- *
- * ⚠️ 非字符串一律当空串，**不能** `String(alt)`：那会把一个对象渲染成
- * `[object Object]` 并塞进用户可见的链接文字里。
- */
-function escapeAltText(alt: unknown): string {
-	if (typeof alt !== "string") return "";
-	return alt
-		.replace(/[[\]]/g, " ")
-		.replace(/[\r\n]+/g, " ")
-		.replace(/\s{2,}/g, " ")
-		.trim();
 }
 
 /** 从文件名里取链接的显示名（**原文件名**，含扩展名；只去掉目录部分）。 */

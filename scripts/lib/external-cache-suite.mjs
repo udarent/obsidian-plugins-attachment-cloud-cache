@@ -470,6 +470,10 @@ export async function runExternalCacheSuite(mod) {
 			assert.ok(!note.includes(url), "★ 原来的站外链接必须被换掉");
 			assert.ok(note.includes(outcome.remoteUrl), "★ 必须换上自己存储的地址");
 			assert.ok(note.includes("# 标题"), "★ 笔记的其它内容必须原样保留");
+			assert.ok(
+				note.includes(`![x](${outcome.remoteUrl})`),
+				"★ 用户写过的显示文字一个字都不动（D-105 只补空位）"
+			);
 
 			assert.ok(h.notices.includes("externalCached"), `应给出成功提示（实际 ${JSON.stringify(h.notices)}）`);
 		} finally {
@@ -518,6 +522,35 @@ export async function runExternalCacheSuite(mod) {
 			);
 		} finally {
 			await rm(outsideDir, { recursive: true, force: true });
+			await h.close();
+		}
+	}
+
+	// ---------- 2.1c ⭐ D-105：本机文件常写成 `![](file:///…)`，显示位是空的 ----------
+	//
+	// 1.12.0 起新地址是纯哈希 ⇒ 只换 URL 会留下 `![](…/<哈希>.png)`，
+	// 用户完全看不出是哪个文件（2026-11-09 报的正是它）。补的是声明里的
+	// **真实文件名**，不是从地址反推的哈希名。
+	{
+		const h = await makeHarness();
+		const outsideDir2 = join(h.root, "..", "acc-local-outside-empty-alt");
+		try {
+			await mkdir(outsideDir2, { recursive: true });
+			const outside = join(outsideDir2, "企业微信截图_空显示位.png");
+			await writeFile(outside, IMAGE_BYTES);
+			const fileUrl = "file:///" + outside.split("\\").join("/");
+
+			await h.writeNote(NOTE, `![](${fileUrl})\n`);
+			const outcome = await h.cache(fileUrl, NOTE);
+
+			assert.equal(outcome.status, "cached", `应成功（实际 ${outcome.status}）`);
+			assert.equal(
+				await h.readNote(NOTE),
+				`![企业微信截图_空显示位.png](${outcome.remoteUrl})\n`,
+				"★ 空显示位要用声明里的真实文件名补上（不是留空、更不是哈希名）"
+			);
+		} finally {
+			await rm(outsideDir2, { recursive: true, force: true });
 			await h.close();
 		}
 	}

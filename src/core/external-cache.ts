@@ -34,6 +34,16 @@
  * 代价如实写在这里：若笔记里的 URL 被 HTML 转义过（`&amp;` 之类）或
  * 带了额外的查询串，字面就匹配不上 —— 那时如实报 `cached-no-rewrite`，
  * 而不是谎报成功。
+ *
+ * ## ⭐ 空显示位要顺手补上真实名字（D-105）
+ *
+ * 本机文件在笔记里几乎总写成 `![](file:///D:/…/企业微信截图_1.png)` —— 显示位
+ * 是空的。字面替换（只换 URL）会把空位原样留下，而 1.12.0 起新地址是纯哈希
+ * ⇒ 上传完用户拿到 `![](…/<哈希>.png)`，**完全看不出是哪个文件**。
+ * 所以 `[](${url})` / `![](${url})` 这两种字面形态额外换成 `[名字](${新地址})`，
+ * 名字取 `IngestResult.displayName`（声明里的真实名字），清洗口径与全库共用
+ * （`vault-files.ts::cleanLinkText`）。用户写过的显示文字（`![我的图](…)`）、
+ * 行内 HTML、尖括号形态一律只换地址 —— 字面匹配的安全性不受影响。
  */
 
 import type { App, RequestUrlParam, RequestUrlResponse } from "obsidian";
@@ -49,7 +59,7 @@ import { decideLocalFile, readLocalFileBytes } from "../local-file";
 import type { LocalFileReader } from "../local-file";
 import { keyFromUrl } from "../render/render-target";
 import { hostOf, isBlockedHost } from "../render/external-decide";
-import { extensionFromUrl } from "../vault-files";
+import { cleanLinkText, extensionFromUrl } from "../vault-files";
 import { describeError } from "../error-text";
 import { notifyUser } from "../notify-user";
 import type { NotifySink } from "../notify-user";
@@ -595,7 +605,10 @@ export function createExternalCacher(deps: ExternalCacherDeps): ExternalCacher {
 		}
 
 		try {
-			await deps.app.vault.modify(file, original.split(url).join(remoteUrl));
+			await deps.app.vault.modify(
+				file,
+				rewriteLiteralUrl(original, url, remoteUrl, cleanLinkText(ingested.displayName))
+			);
 		} catch (error) {
 			// 上传成功了但没改成 —— 半成品。绝不能谎报 `cached`
 			say("cached-no-rewrite", { error: describeError(error) });
@@ -610,4 +623,21 @@ export function createExternalCacher(deps: ExternalCacherDeps): ExternalCacher {
 		else say("cached", { host });
 		return { ...uploaded, status: "cached" };
 	};
+}
+
+/**
+ * 字面换地址，并给**空**显示位补上真实名字（D-105）。
+ *
+ * 只认 `[](${url})` / `![](${url})` 两种字面串：写过的 alt（`![我的图](${url})`）、
+ * 行内 HTML、尖括号形态都不匹配 ⇒ 落到末尾那条纯字面替换，行为与以前逐字相同。
+ * ⚠️ 顺序不能反：带 `!` 的形态里**包含**不带 `!` 的那一串，先替普通的会在
+ * `!` 后面留一个空显示位。
+ * ⚠️ `display` 为空（规则里没给真实名字）时整段跳过 —— 绝不从地址反推哈希名。
+ */
+function rewriteLiteralUrl(original: string, url: string, remoteUrl: string, display: string): string {
+	if (display === "") return original.split(url).join(remoteUrl);
+	const empty = `[](${url})`;
+	const named = `[${display}](${remoteUrl})`;
+	const withImages = original.split(`!${empty}`).join(`!${named}`);
+	return withImages.split(empty).join(named).split(url).join(remoteUrl);
 }

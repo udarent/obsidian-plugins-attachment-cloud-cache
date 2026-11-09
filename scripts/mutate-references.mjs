@@ -215,7 +215,9 @@ await runMutations({
 			name: "★★ 引用式链接的定义行不被认作引用",
 			from: "\tfor (const match of text.matchAll(REFERENCE_DEFINITION)) {",
 			to: "\tfor (const match of text.matchAll(/$^/gm)) {",
-			expect: "取对路径段",
+			// ⚠️ 2026-11-09：D-105 在那条「取对路径段」之前补了一条引用式改写断言，
+			// 于是它成了**最先说话**的那条；因果不变（定义行没被认 ⇒ 改写没发生）。
+			expect: "★ 引用式链接只换定义行的地址",
 		},
 		{
 			// 后果：**代码块 / 行内代码 / `%%注释%%` 里的 Markdown 地址仍被当成链接**（D-62）。
@@ -260,6 +262,14 @@ await runMutations({
 			from: "\t\tif (span.inFrontmatter) continue;",
 			to: "\t\tif (false) continue;",
 			expect: "属性区里的一律不碰",
+		},
+		{
+			// 后果：1.12.0 起新地址是纯哈希 ⇒ 空显示位不补名，用户拿到
+			// `![](…/<哈希>.png)`，完全看不出是哪个文件（2026-11-09 报的正是它）。
+			name: "★★ 空显示位不补名（纯哈希地址 + 空 alt = 无名链接）",
+			from: "\t\t\tconst filled = span.kind === \"markdown\" ? fillEmptyAlt(head, cleanLinkText(resolved.display)) : head;",
+			to: "\t\t\tconst filled = head; // 变异：空显示位不补名",
+			expect: "★ 空显示位要用规则给的真实名字补上",
 		},
 	],
 });

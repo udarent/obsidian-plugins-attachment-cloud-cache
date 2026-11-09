@@ -141,9 +141,10 @@ export async function runMaintenanceSuite(mod) {
 		"[包.zip](https://img.example.com/aa.zip)",
 		"★ 不可预览的类型：换形态时**必须去掉**原文的 `!`，产出普通链接"
 	);
-	// ⚠️ 这条的 alt 是空的（`![]` 原本就没写 alt）⇒ 结果是 `[](url)`，一个空链接。
-	// 这是**刻意的**：补名字只能补出哈希名（`a1b2….zip`），比空更误导 ——
-	// 与 R25「取不到名字就显示 key，绝不编造」同一条口径。
+	// ⚠️ 这条的 alt 是空的（`![]` 原本就没写 alt），**而且规则没给 `display`**
+	// ⇒ 仍是 `[](url)`，一个空链接。这是**刻意的**：此时补名字只能补出哈希名
+	//（`a1b2….zip`），比空更误导 —— 与 R25「取不到名字绝不编造」同一条口径。
+	// ⭐ 规则给了真实名字时不再留空，见下面 D-105 那一组（2026-11-09 重评）。
 	const zipMd = planLinkRewrites("![](包.zip)", ZIP_RULES);
 	assert.equal(
 		zipMd.text,
@@ -195,6 +196,45 @@ export async function runMaintenanceSuite(mod) {
 		"★ 没给名字就用原文件名（老行为，不许因为新增字段而变）"
 	);
 
+	// ── D-105：Markdown 的「空显示位」要用规则给的真实名字补上（2026-11-09 重评）──
+	//
+	// 老判据是「一律留空」，理由是补出来只能是哈希名。1.12.0 起 key 变成纯哈希，
+	// 于是空位 + 纯哈希地址 = 一条完全看不出是什么文件的链接；而规则里的 `display`
+	// 来自声明中的**真实文件名** ⇒ 老理由不再成立。只补**用户没写过字**的空位，
+	// 写过的（上面 `userAlt`）一个字都不动。
+	const namedEmpty = planLinkRewrites("![](包.zip)", [
+		{ from: "包.zip", to: "https://img.example.com/aa.zip", display: "季度报告.zip" },
+	]);
+	assert.equal(
+		namedEmpty.text,
+		"[季度报告.zip](https://img.example.com/aa.zip)",
+		"★ 空显示位要用规则给的真实名字补上（降级去 `!` 与补名同时生效）"
+	);
+	const blankAlt = planLinkRewrites("![ ](attachments/照片 1.png)", [
+		{ from: "照片 1.png", to: "https://img.example.com/照片-abc.png", display: "照片.png" },
+	]);
+	assert.equal(
+		blankAlt.text,
+		"![照片.png](https://img.example.com/照片-abc.png)",
+		"★ 只写了空格也算空显示位（判据是 trim 之后有没有字）"
+	);
+	const noName = planLinkRewrites("![](attachments/照片 1.png)", [
+		{ from: "照片 1.png", to: "https://img.example.com/照片-abc.png" },
+	]);
+	assert.equal(
+		noName.text,
+		"![](https://img.example.com/照片-abc.png)",
+		"★ 规则没给名字就留空 —— 绝不从地址反推哈希名（R25）"
+	);
+	const refStyle = planLinkRewrites("![][ref]\n\n[ref]: attachments/照片 1.png", [
+		{ from: "照片 1.png", to: "https://img.example.com/照片-abc.png", display: "照片.png" },
+	]);
+	assert.equal(
+		refStyle.text,
+		"![][ref]\n\n[ref]: https://img.example.com/照片-abc.png",
+		"★ 引用式链接只换定义行的地址，不硬补显示位（显示位在另一处，够不着）"
+	);
+
 	// ⭐ 同一个 `from` 上挂两条目标相同、显示名不同的规则（"主干"与"重复副本"指向同一地址）：
 	// 这**不是**同名歧义 —— 歧义判据只看目标（把显示名也算进去会让链接整条改写失败）。
 	const twinRules = [
@@ -215,8 +255,8 @@ export async function runMaintenanceSuite(mod) {
 	const spaceyMd = planLinkRewrites("![](attachments/照片 1.png)", spaceyRule);
 	assert.equal(
 		spaceyMd.text,
-		"![](https://img.example.com/照片-abc.png)",
-		"★ 含空格的 Markdown 目标必须整段认出来（不能截成 `attachments/照片`）"
+		"![照片.png](https://img.example.com/照片-abc.png)",
+		"★ 含空格的 Markdown 目标必须整段认出来（不能截成 `attachments/照片`）；空显示位顺手补名"
 	);
 	assert.equal(spaceyMd.count, 1, "★ 而且必须真的改写它");
 
@@ -224,8 +264,8 @@ export async function runMaintenanceSuite(mod) {
 	const spaceyTitle = planLinkRewrites('![](attachments/照片 1.png "标题")', spaceyRule);
 	assert.equal(
 		spaceyTitle.text,
-		'![](https://img.example.com/照片-abc.png "标题")',
-		"★ 含空格的目标 + 标题：只换目标那一段，标题原样留着"
+		'![照片.png](https://img.example.com/照片-abc.png "标题")',
+		"★ 含空格的目标 + 标题：只换目标那一段，标题原样留着；空显示位补名"
 	);
 
 	// 含空格的路径 + 尖括号（Markdown 规范写法）也必须认。
@@ -234,8 +274,8 @@ export async function runMaintenanceSuite(mod) {
 	const angle = planLinkRewrites("![](<attachments/照片 1.png>)", spaceyRule);
 	assert.equal(
 		angle.text,
-		"![](<https://img.example.com/照片-abc.png>)",
-		"★ 尖括号形式的含空格目标：只换路径、尖括号留着"
+		"![照片.png](<https://img.example.com/照片-abc.png>)",
+		"★ 尖括号形式的含空格目标：只换路径、尖括号留着；空显示位补名"
 	);
 
 	// ⭐ 同一个解析器还管着"这份文件还有人引用吗"（`stillMentionsPath`）——

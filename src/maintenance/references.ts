@@ -82,7 +82,7 @@
  *    唯一会动用户内容的地方；属性区"认但不改"。
  */
 
-import { PLAUSIBLE_EXTENSION, extensionOfName, isEmbeddable } from "../vault-files";
+import { PLAUSIBLE_EXTENSION, cleanLinkText, extensionOfName, isEmbeddable } from "../vault-files";
 
 /** 一处待替换的链接：`start`/`end` 是**路径部分**在原文中的下标（左闭右开）。 */
 export interface LinkSpan {
@@ -686,9 +686,15 @@ export interface RewriteRule {
 	 * （`…/照片-<哈希>.png`）⇒ 同一个链接里两个名字不一样。用户 2026-10-14 报了它。
 	 * 调用方（知道 key 的那一层）把 `IngestResult.displayName` 填进来即可。
 	 *
-	 * ⚠️ **只影响"整条换形态"那一路**：原文本来就是 Markdown 形态
-	 * （`![我的名字](attachments/x.png)`）时，`[]` 里那串是**用户自己写的**显示文字，
-	 * 我们只换路径段、一个字都不动它。
+	 * ⚠️ **只影响"整条换形态"那一路 + 显示位为空的那一种**：原文本来就是 Markdown
+	 * 形态且 `[]` 里**写了字**（`![我的名字](attachments/x.png)`）时，那串是用户自己写的
+	 * 显示文字，只换路径段、一个字都不动它。`[]` 里是空的（用户没写）才用本字段补上。
+	 *
+	 * ⭐ 为什么"空的才补"而不是一律补（D-105）：1.12.0 起 key 是纯哈希，URL 里
+	 * 再没有可读名字。空显示位留着 ⇒ 上传后用户拿到一条 `![](…/<哈希>.png)`，
+	 * 完全看不出是哪个文件。而 `display` 来自声明里的**真实文件名**，不是从地址
+	 * 反推出来的哈希名 ⇒ 补它不违反 R25「取不到名字绝不编造」。规则没给 `display`
+	 * 时仍留空，保持老行为。
 	 */
 	display?: string;
 }
@@ -767,16 +773,19 @@ export function planLinkRewrites(text: string, rules: readonly RewriteRule[]): R
 			// 取不到扩展名一律不动 —— 擅自去掉 `!` 会把用户的图片嵌入变成一行链接。
 			// ⚠️ `html` 的 `embed` 恒为 true（那是标签、不是 `!`）⇒ 必须排除，
 			// 否则 `linkStart + 1` 会把标签的 `<` 吃掉。
+			// ⚠️ 不能只把 `from` 往前挪一格：`linkStart + 1` 会连 `[alt](` 一起吞掉
+			// （`![](a.zip)` 会变成 `!https://…`）。要的是"去掉首个 `!`、其余原样" ——
+			// 所以把 `linkStart..start` 这段（`![]( ` 的前半）作为一个整体，切掉第一个字符再拼。
+			const head = text.slice(span.linkStart, span.start);
+			// ⭐ 空显示位补名（D-105）：只认 `![](` 这种「用户没写过显示文字」的头，
+			// 且只在规则给了真实名字时动手；写过的文字一个字都不碰。
+			const filled = span.kind === "markdown" ? fillEmptyAlt(head, cleanLinkText(resolved.display)) : head;
 			const newExt = extensionOfName(replacement);
 			const dropBang = span.kind !== "html" && span.embed && newExt !== "" && !isEmbeddable(newExt);
 			if (dropBang) {
-				// ⚠️ 不能只把 `from` 往前挪一格：`linkStart + 1` 会连 `[alt](` 一起吞掉
-				// （`![](a.zip)` 会变成 `!https://…`）。要的是"去掉首个 `!`、其余原样" ——
-				// 所以把 `linkStart..start` 这段（`![]( ` 的前半）作为一个整体，切掉第一个字符再拼。
-				const head = text.slice(span.linkStart, span.start);
-				out += text.slice(cursor, span.linkStart) + head.replace(/^!/, "") + replacement;
+				out += text.slice(cursor, span.linkStart) + filled.replace(/^!/, "") + replacement;
 			} else {
-				out += text.slice(cursor, span.start) + replacement;
+				out += text.slice(cursor, span.linkStart) + filled + replacement;
 			}
 			cursor = span.end;
 		}
@@ -855,6 +864,24 @@ export function hasScheme(target: string): boolean {
 }
 
 /**
+ * 只换路径那一段时，给**空的**显示位补上规则给的真实名字（D-105）。
+ *
+ * `head` 是 `linkStart..start` 那一段，形如 `![](` / `![我的照片](` /
+ * `![](<` / `[](  `。只认「方括号里 trim 后为空」的头 ⇒ 用户写过的文字
+ * （包括 `![ ](…)` 里那个空格之外的任何字）一律原样返回。
+ *
+ * ⚠️ 引用式链接（`![][ref]` + 定义行）的定义行头是 `[ref]: `，不含 `](`，
+ * 这里不匹配 ⇒ 保持原样。它那种形态的显示位在**另一处**，字面替换够不着，
+ * 硬补反而会把定义行写坏（代价如实记在 D-105）。
+ */
+function fillEmptyAlt(head: string, display: string): string {
+	if (display === "") return head;
+	const match = /^(!?\[)([^\]\n]*)(\]\(<?[ \t]*)$/.exec(head);
+	if (!match || match[2].trim() !== "") return head;
+	return `${match[1]}${display}${match[3]}`;
+}
+
+/**
  * 把一条 wikilink 改写成 Markdown 形态：`![[a.png|600]]` → `![600](https://…/a.png)`。
  *
  * ⚠️ 别名（`|` 之后）落在 **alt 位**：Markdown 没有"显示尺寸"这个概念，
@@ -866,9 +893,9 @@ function wikilinkToMarkdown(span: LinkSpan, url: string, display?: string): stri
 	// alt 里出现 `]` 会把链接提前闭合，去掉（alt 是给人看的，不是数据）
 	// 显示位：用户显式写的别名优先；否则用改写**规则给的**名字（= 链接目标里的名字），
 	// 规则没给才退回原路径最后一段（老行为，供不关心名字的调用方使用）。
-	const named = (display ?? "").trim();
+	const named = cleanLinkText(display);
 	const fallback = named === "" ? baseNameOf(span.raw) : named;
-	const alt = (alias === "" ? fallback : alias).replace(/[[\]]/g, "");
+	const alt = cleanLinkText(alias === "" ? fallback : alias);
 	const target = span.subpath === null || span.subpath === "" ? url : `${url}#${span.subpath}`;
 	// ⭐ `!` 要**两个条件同时成立**才保留：原文写了 `!`，**且**这个类型宿主真能预览
 	//（判据与插入那条链同源：`isEmbeddable`，也就是 `buildRemoteLink` 用的同一张表）。

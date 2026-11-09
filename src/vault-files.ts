@@ -658,6 +658,26 @@ export function looksLikeFileName(name: unknown): boolean {
 	return base.lastIndexOf(".") > 0;
 }
 
+/**
+ * 链接显示位（`![这里](…)`）的**唯一清洗口径**。
+ *
+ * 插入新链接（`editor-hooks`）、整条换形态、给空显示位补名（`references`）、
+ * 站外/本机文件的字面替换（`external-cache`）都只走这里 —— 四份写法迟早会
+ * 在「名字里有 `]` 怎么办」上分叉，而那正是会把一条链接截成两段的字符。
+ *
+ * ⚠️ 非字符串一律当空串，**不能** `String(alt)`：那会把一个对象渲染成
+ * `[object Object]` 并塞进用户可见的链接文字里。
+ * ⚠️ 这里只清洗，**绝不从地址反推名字**（R25：取不到就留空，不编造哈希名）。
+ */
+export function cleanLinkText(candidate: unknown): string {
+	if (typeof candidate !== "string") return "";
+	return candidate
+		.replace(/[[\]]/g, " ")
+		.replace(/[\r\n]+/g, " ")
+		.replace(/\s{2,}/g, " ")
+		.trim();
+}
+
 /** 由 MIME 推扩展名；推不出返回空串（由调用方决定兜底）。 */
 export function extensionFromMime(mime: unknown): string {
 	if (typeof mime !== "string") return "";
