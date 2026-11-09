@@ -176,6 +176,15 @@ Reproduce: `npm run verify:real-storage` (storage), `node scripts/verify-connect
 
 ## Upgrading
 
+- **1.13.0 — batch uploads are faster, and empty link labels get a name.**
+  - **A batch writes its cloud reference declaration once** instead of once per file, and uploads up to **four
+    files at a time**. Results are still committed in order, so notes and counters look exactly as before. If that
+    one declaration fails, the batch falls back to per-file declarations and **stays serial** — never a
+    half-protected upload. The "list the whole bucket first" pre-check is gone: it cost a full listing and never
+    helped genuinely new files.
+  - **An empty link label now shows the real file name.** `![](attachments/photo.png)` becomes
+    `![photo.png](https://…)`, for both in-vault links and local `file:///` / off-site links. A label you wrote
+    yourself is never touched. Already-written empty links in old notes are left as they are.
 - **1.12.0 — two settings are gone, and neither needs any action from you.**
   - **Shared bucket** is no longer a switch: recording what this vault uses (and checking other devices before a cloud
     delete) now happens **always**. That is a safety change — with it off, a cleanup could delete an object another
@@ -368,6 +377,12 @@ MinIO、Backblaze B2、自建服务），笔记里留下链接，文件留在库
 
 ## 从旧版本升级
 
+- **1.13.0 —— 批量上传更快了，空的链接文字也补上了文件名。**
+  - **一整批只写一次云端引用声明**（原来每个文件写一次），并且**最多 4 个文件同时上传**；结果仍按顺序提交，
+    所以笔记和计数与以前完全一致。整批声明写失败时会退回逐文件声明、并**保持串行**，不会出现「保护写了一半」。
+    另外撤掉了「先列整个桶」的预检：它要付一次全桶列举，对真正的新文件没有任何帮助。
+  - **空的 `[]` 会补上真实文件名**：`![](attachments/photo.png)` → `![photo.png](https://…)`，库内链接与
+    本机 `file:///`／站外链接两条路都补。你自己写过的显示文字一个字不动；**老笔记里已经写好的空链接不会回填**。
 - **1.12.0 —— 两个设置项没了，都不需要你动手。**
   - **共享桶** 不再是一个开关：上传前记下本库引用了什么、删除云端前先看别的设备的记录，现在**一直生效**。
     这是安全修正 —— 关着的时候一次清理可能删掉另一台设备还在用的对象。⚠️ 它需要 `ListBucket`；

@@ -172,6 +172,18 @@ function noteTextFor(entries) {
 	return ["# 确认路径", "", ...entries.map(([label, file]) => `[${label}](assets/${file})`), ""].join("\n");
 }
 
+/**
+ * D-105 的夹具：**显示位本来就是空的**。
+ *
+ * 用户报的现象就是「本地文件上传后 `[]` 里没有文件名」。这里故意把第二次
+ * （D-57 零上传 / 只差改链接）的原文写成空 alt —— 那一趟走的正是
+ * `planLinkRewrites` 的「只换路径」分支，于是真机能同时盯住两件事：
+ * ① 空显示位被声明里的真实文件名补上；② 一个字节都不重传。
+ */
+function emptyAltNoteFor(file) {
+	return ["# 确认路径", "", `[](assets/${file})`, ""].join("\n");
+}
+
 async function main() {
 	log("═".repeat(84));
 	log(`真机探针：点「确认」之后（库=${VAULT_DIR}，port=${PORT}）`);
@@ -387,11 +399,17 @@ async function main() {
 			typeof afterFirst === "string" && afterFirst.includes(endpoint) && !afterFirst.includes("%20(1).pdf"),
 			(afterFirst ?? "(读不到笔记)").split("\n").filter((line) => line.includes("](")).join(" | ")
 		);
+		check(
+			"★ 用户写过的显示文字一字不动（D-105）",
+			/\[括号\]\(/.test(afterFirst ?? ""),
+			(afterFirst ?? "").split("\n").filter((line) => line.includes(endpoint)).join(" | ")
+		);
 
 		check("关掉完成态窗口", await closeDialog(client));
 
 		// ── 2) 改回本地再传一次：应当**零上传**（§5.4 第 2 条 / D-57）──
-		await writeNote(client, NOTE, noteTextFor([["括号", BRACKET]]));
+		// ⚠️ 夹具写成**空显示位**：这一趟同时是 D-105「只换路径分支补名」的真机判据。
+		await writeNote(client, NOTE, emptyAltNoteFor(BRACKET));
 		const localAgain = await readNote(client, NOTE);
 		check(
 			"夹具已改回本地链接",
@@ -434,6 +452,16 @@ async function main() {
 			"链接被改回远端地址",
 			typeof afterSecond === "string" && afterSecond.includes(endpoint),
 			(afterSecond ?? "").split("\n").filter((line) => line.includes("](")).join(" | ")
+		);
+		// ⭐ D-105：原文是 `[](assets/…)`，改写后显示位必须有**真实文件名**。
+		// 判据看结构不看某个字符串还在：解析 `[…](` 里的那一段，要求非空、
+		// 不是 64 位 hash 开头（绝不从纯哈希 key 反推名字）、且仍像文件名。
+		const rewrittenLine = (afterSecond ?? "").split("\n").find((line) => line.includes(endpoint)) ?? "";
+		const alt = /!?\[([^\]\n]*)\]\(/.exec(rewrittenLine)?.[1] ?? "";
+		check(
+			"★ 空显示位补上真实文件名，绝不补成哈希名（D-105，真机）",
+			alt.trim() !== "" && !/^[0-9a-f]{64}/i.test(alt.trim()) && alt.includes(".pdf"),
+			rewrittenLine.trim() || "(读不到改写后的链接)"
 		);
 		// ⚠️ 「已存在 N 个」出现在**通知**里（`taskProgressFinished` 只报 完成/跳过/失败，
 		// 不带 reused 之分）⇒ 断言要读 `.notice`，读进度行会稳定失败。
@@ -711,6 +739,73 @@ async function main() {
 				deniedNotice || "(没有通知)"
 			);
 			await closeDialog(client).catch(() => false);
+		}
+
+		// ══════════════════════════════════════════════════════════════════
+		// §10 D-105 第二条链：本机 `file:///` 链接的**字面替换**也要补空显示位
+		// ══════════════════════════════════════════════════════════════════
+		//
+		// §8 那趟走 `planLinkRewrites` 的「只换路径」；本机 / 站外文件走的是
+		// `external-cache` 里 `split(url).join(remoteUrl)` 的字面替换，D-105 在
+		// 那边单独补了一次空 alt ⇒ 两条链各要一条真机判据，少一条就是假绿。
+		{
+			const NOTE_LOCAL = `${DIR}/local.md`;
+			const LOCAL_FILE = "local.png";
+			const prepared = await evaluate(
+				client,
+				`(async () => {
+					try {
+						const plugin = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}];
+						const base = String(app.vault.adapter.getBasePath() ?? "").replace(/\\\\/g, "/");
+						if (!base) return { error: "拿不到库的绝对路径（非桌面适配器）" };
+						const path = ${JSON.stringify(ASSETS)} + "/" + ${JSON.stringify(LOCAL_FILE)};
+						const existing = app.vault.getAbstractFileByPath(path);
+						if (existing) await app.vault.delete(existing, true);
+						await app.vault.createBinary(path, new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).buffer);
+						const url = "file:///" + base + "/" + path;
+						const text = "# 本机文件\\n\\n[](" + url + ")\\n";
+						const note = app.vault.getAbstractFileByPath(${JSON.stringify(NOTE_LOCAL)});
+						if (note) await app.vault.modify(note, text);
+						else await app.vault.create(${JSON.stringify(NOTE_LOCAL)}, text);
+						// ⚠️ runUploadAttachments 是**全库**扫描：把主夹具笔记收干净，
+						// 否则它剩下的云端链接会被当成"已存在"再走一遍改写。
+						const main = app.vault.getAbstractFileByPath(${JSON.stringify(NOTE)});
+						if (main) await app.vault.modify(main, "# 已收尾\\n");
+						plugin.settings.uploadLocalFiles = true;
+						plugin.settings.externalImageCache = false;
+						return { ok: true, url };
+					} catch (error) {
+						return { error: String(error?.stack ?? error) };
+					}
+				})()`
+			);
+			if (prepared?.error) throw new Error(`本机文件夹具准备失败：${prepared.error}`);
+			const openedLocal = await openNote(client, NOTE_LOCAL);
+			check("D-105：本机文件笔记已打开", openedLocal === NOTE_LOCAL, openedLocal);
+
+			await startUpload(client);
+			const localAsked = await waitForConfirm(client, 20_000);
+			check("D-105：本机文件也弹了确认框", Boolean(localAsked));
+			if (localAsked) await clickModalCta(client);
+			let localText = "";
+			const localDeadline = Date.now() + 120_000;
+			while (Date.now() < localDeadline) {
+				localText = (await readNote(client, NOTE_LOCAL)) ?? "";
+				if (localText.includes(endpoint)) break;
+				await delay(300);
+			}
+			const localLine = localText.split("\n").find((line) => line.includes(endpoint)) ?? "";
+			const localAlt = /!?\[([^\]\n]*)\]\(/.exec(localLine)?.[1] ?? "";
+			check(
+				"★ 本机 file:/// 链接的空显示位补上真实文件名（D-105，真机）",
+				localAlt.trim() !== "" && !/^[0-9a-f]{64}/i.test(localAlt.trim()) && localAlt.includes(".png"),
+				localLine.trim() || "(读不到改写后的链接)"
+			);
+			await closeDialog(client).catch(() => false);
+			await evaluate(
+				client,
+				`(() => { const p = app.plugins.plugins[${JSON.stringify(PLUGIN_ID)}]; p.settings.uploadLocalFiles = false; return true; })()`
+			);
 		}
 
 		// 夹具按前缀兜底删（中途失败也不留垃圾）
